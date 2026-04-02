@@ -1,0 +1,182 @@
+[
+  {
+    "name": "record_price_quote",
+    "description": "Call this function when the supplier mentions specific product prices. Extract the product name, price per unit, and unit of measurement (kg, ton, etc.)",
+    "webhook_url": "https://your-app.com/api/webhooks/record-price",
+    "parameters": [
+      {
+        "name": "product_name",
+        "type": "string",
+        "description": "Name of the product being quoted (e.g., 'морковь', 'картофель', 'лук')",
+        "required": true
+      },
+      {
+        "name": "price_per_unit",
+        "type": "number",
+        "description": "Price per unit in rubles (just the number, e.g. 45.50)",
+        "required": true
+      },
+      {
+        "name": "unit",
+        "type": "string",
+        "description": "Unit of measurement (e.g., 'kg', 'ton', 'piece', 'box')",
+        "required": true
+      },
+      {
+        "name": "currency",
+        "type": "string",
+        "description": "Currency (default 'RUB')",
+        "required": false
+      },
+      {
+        "name": "notes",
+        "type": "string",
+        "description": "Any additional notes about the price (e.g., 'includes delivery', 'bulk discount')",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "record_availability",
+    "description": "Call this when supplier confirms product availability and quantities. Extract all available products with their quantities.",
+    "webhook_url": "https://your-app.com/api/webhooks/record-availability",
+    "parameters": [
+      {
+        "name": "products",
+        "type": "array",
+        "description": "Array of product names that are available",
+        "required": true
+      },
+      {
+        "name": "quantities",
+        "type": "array",
+        "description": "Array of quantities corresponding to each product (e.g., ['500 kg', '2 tons'])",
+        "required": true
+      },
+      {
+        "name": "available_from",
+        "type": "string",
+        "description": "When products are available from (date or relative time like 'завтра', 'сейчас')",
+        "required": false
+      },
+      {
+        "name": "location",
+        "type": "string",
+        "description": "Storage or pickup location if mentioned",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "schedule_callback",
+    "description": "Call this when supplier requests a callback or asks to be contacted. Extract preferred time and reason.",
+    "webhook_url": "https://your-app.com/api/webhooks/schedule-callback",
+    "parameters": [
+      {
+        "name": "preferred_time",
+        "type": "string",
+        "description": "When they want to be called (e.g., 'завтра в 14:00', 'через час', 'в любое время')",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "description": "Why they want to be called (e.g., 'обсудить условия', 'уточнить детали')",
+        "required": false
+      },
+      {
+        "name": "urgency",
+        "type": "string",
+        "description": "Urgency level: 'low', 'medium', 'high'",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "record_delivery_info",
+    "description": "Call this when supplier provides delivery information including dates, locations, or conditions.",
+    "webhook_url": "https://your-app.com/api/webhooks/record-delivery",
+    "parameters": [
+      {
+        "name": "delivery_date",
+        "type": "string",
+        "description": "Expected delivery date (ISO format or natural language)",
+        "required": false
+      },
+      {
+        "name": "delivery_location",
+        "type": "string",
+        "description": "Delivery address or location",
+        "required": false
+      },
+      {
+        "name": "delivery_cost",
+        "type": "number",
+        "description": "Delivery cost in rubles if mentioned",
+        "required": false
+      },
+      {
+        "name": "delivery_terms",
+        "type": "string",
+        "description": "Special delivery terms or conditions",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "record_payment_terms",
+    "description": "Call this when supplier mentions payment terms, payment methods, or invoice details.",
+    "webhook_url": "https://your-app.com/api/webhooks/record-payment",
+    "parameters": [
+      {
+        "name": "payment_method",
+        "type": "string",
+        "description": "Payment method (e.g., 'наличные', 'безнал', 'карта', 'перевод')",
+        "required": false
+      },
+      {
+        "name": "payment_terms",
+        "type": "string",
+        "description": "Payment terms (e.g., 'предоплата 50%', 'оплата при доставке', 'отсрочка 14 дней')",
+        "required": false
+      },
+      {
+        "name": "invoice_required",
+        "type": "boolean",
+        "description": "Whether invoice/счет is required",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "record_order_confirmation",
+    "description": "Call this when supplier confirms or places an order with specific products and quantities.",
+    "webhook_url": "https://your-app.com/api/webhooks/record-order",
+    "parameters": [
+      {
+        "name": "products",
+        "type": "array",
+        "description": "List of products being ordered",
+        "required": true
+      },
+      {
+        "name": "quantities",
+        "type": "array",
+        "description": "Quantities for each product",
+        "required": true
+      },
+      {
+        "name": "order_number",
+        "type": "string",
+        "description": "Order/reference number if provided",
+        "required": false
+      },
+      {
+        "name": "notes",
+        "type": "string",
+        "description": "Additional order notes or requirements",
+        "required": false
+      }
+    ]
+  }
+]

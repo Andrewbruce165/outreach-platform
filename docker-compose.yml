@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16
+    container_name: telegram-api-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: telegram_user
+      POSTGRES_PASSWORD: telegram_secure_pass_2025
+      POSTGRES_DB: telegram_followup
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telegram_user -d telegram_followup"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    environment:
+      DATABASE_URL: postgresql+asyncpg://telegram_user:telegram_secure_pass_2025@db:5432/telegram_followup
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      API_KEY: ${API_KEY}
+      DECODO_HOST: ${DECODO_HOST}
+      DECODO_USERNAME: ${DECODO_USERNAME}
+      DECODO_PASSWORD: ${DECODO_PASSWORD}
+      DECODO_PORTS: ${DECODO_PORTS}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  listener:
+    build:
+      context: .
+      dockerfile: Dockerfile.listener
+    container_name: telegram-listener
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://telegram_user:telegram_secure_pass_2025@db:5432/telegram_followup
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      API_KEY: ${API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

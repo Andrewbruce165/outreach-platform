@@ -1,0 +1,28 @@
+# FastAPI
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Telegram
+telethon==1.42.0
+PySocks==1.7.1
+
+# Security
+cryptography==42.0.0
+python-jose[cryptography]==3.3.0
+
+# Validation
+pydantic>=2.8,<3.0
+pydantic-settings>=2.3,<3.0
+email-validator==2.1.0
+
+# Utils
+python-dotenv==1.0.0
+httpx==0.26.0
+openai>=1.40.0,<2.0.0
+qrcode[pil]==7.4.2

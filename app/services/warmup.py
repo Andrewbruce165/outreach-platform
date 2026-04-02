@@ -1,0 +1,550 @@
+"""
+Warmup Worker Service
+Автоматический прогрев Telegram-аккаунтов через AI-диалоги между своими аккаунтами.
+
+Запускается как asyncio background task внутри API-процесса (аналогично QueueWorker).
+Тикает каждые 30 секунд. Работает только в 09:00–20:00 МСК.
+Уровень прогрева определяется автоматически по количеству дней с момента добавления в пул.
+"""
+
+import asyncio
+import logging
+import random
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+from openai import AsyncOpenAI, APIError
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from telethon.errors import FloodWaitError, UserIsBlockedError, RPCError
+
+from app.config import get_settings
+from app.database import AsyncSessionLocal
+from app.services.telegram import telegram_service
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+# ─── Константы ────────────────────────────────────────────────────────────────
+
+MOSCOW_OFFSET = 3  # UTC+3
+
+# Уровни: (min_day, max_day_exclusive, min_msgs_day, max_msgs_day)
+LEVEL_CONFIG = [
+    (0,  3,  5,  10),   # Уровень 1: дни 0–3
+    (3,  7,  10, 25),   # Уровень 2: дни 3–7
+    (7,  14, 25, 50),   # Уровень 3: дни 7–14
+    (14, 21, 50, 80),   # Уровень 4: дни 14–21
+    (21, 9999, 80, 120), # Уровень 5: дни 21+
+]
+
+WARMUP_TOPICS = [
+    "планы на выходные",
+    "любимые фильмы или сериалы",
+    "спорт и активный отдых",
+    "путешествия и куда хочется съездить",
+    "еда и рецепты",
+    "любимая музыка",
+    "погода и время года",
+    "книги и чтение",
+    "хобби и увлечения",
+    "новые гаджеты и технологии",
+    "работа и усталость от неё",
+    "домашние животные",
+    "рестораны и кафе в городе",
+    "видеоигры или настольные игры",
+    "здоровый образ жизни",
+    "природа и прогулки",
+    "онлайн-шопинг и находки",
+    "летние или зимние планы",
+    "любимые места в городе",
+    "готовка дома",
+    "детские воспоминания",
+    "сериалы которые сейчас смотришь",
+    "планы на ближайший месяц",
+    "новости которые удивили",
+]
+
+WARMUP_SYSTEM_PROMPT = """Ты участвуешь в обычной переписке в Telegram на русском языке.
+Тема разговора: {topic}
+
+Правила:
+- Пиши как обычный человек, 1–3 коротких предложения
+- Разговорный стиль, можно сокращения и редкие эмодзи
+- Поддерживай тему, иногда задавай вопросы
+- Никакого официального или делового тона
+- Только одно сообщение, без подписей и пояснений"""
+
+
+# ─── Worker ───────────────────────────────────────────────────────────────────
+
+class WarmupWorker:
+    """
+    Воркер прогрева аккаунтов.
+
+    Организует AI-диалоги между аккаунтами из warmup_pool.
+    Каждый тик: обрабатывает сессии с наступившим next_message_at,
+    затем создаёт новые сессии для свободных пар.
+    """
+
+    TICK_INTERVAL = 30        # секунд между тиками
+    MIN_DELAY = 5 * 60        # минимальная пауза между сообщениями (5 мин)
+    MAX_DELAY = 120 * 60      # максимальная пауза (2 часа)
+
+    def __init__(self):
+        self._task: Optional[asyncio.Task] = None
+        self._running = False
+        self._openai = AsyncOpenAI()  # api_key читается из OPENAI_API_KEY
+
+    # ─── Lifecycle ────────────────────────────────────────────────────────────
+
+    def start(self):
+        """Запустить воркер как фоновый asyncio task."""
+        self._running = True
+        self._task = asyncio.create_task(self._run(), name="warmup_worker")
+        logger.info("🔥 Warmup worker запущен")
+
+    async def stop(self):
+        """Graceful shutdown."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("🛑 Warmup worker остановлен")
+
+    # ─── Main loop ────────────────────────────────────────────────────────────
+
+    async def _run(self):
+        """Главный цикл воркера."""
+        while self._running:
+            try:
+                await self._tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"❌ Ошибка в warmup tick: {e}", exc_info=True)
+            await asyncio.sleep(self.TICK_INTERVAL)
+
+    async def _tick(self):
+        """Один тик: обработать активные сессии + создать новые."""
+        if not self._is_working_hours():
+            return
+
+        async with AsyncSessionLocal() as db:
+            await self._process_due_sessions(db)
+            await self._create_new_sessions(db)
+
+    # ─── Helpers ──────────────────────────────────────────────────────────────
+
+    def _is_working_hours(self) -> bool:
+        """Рабочее время 09:00–20:00 МСК (UTC+3)."""
+        moscow_hour = (datetime.now(timezone.utc).hour + MOSCOW_OFFSET) % 24
+        return 9 <= moscow_hour < 20
+
+    def _get_level(self, enrolled_days: int) -> int:
+        """Уровень прогрева по количеству дней с начала."""
+        for i, (start, end, *_) in enumerate(LEVEL_CONFIG, 1):
+            if start <= enrolled_days < end:
+                return i
+        return 5
+
+    def _get_daily_limit(self, enrolled_days: int) -> int:
+        """Случайный дневной лимит для данного уровня."""
+        for start, end, min_m, max_m in LEVEL_CONFIG:
+            if start <= enrolled_days < end:
+                return random.randint(min_m, max_m)
+        return random.randint(80, 120)
+
+    # ─── Pool ─────────────────────────────────────────────────────────────────
+
+    async def _get_active_pool(self, db: AsyncSession) -> list[dict]:
+        """Активные участники пула с данными sender'а."""
+        result = await db.execute(text("""
+            SELECT wp.sender_id, wp.enrolled_at,
+                   s.slug, s.phone, s.session_string
+            FROM warmup_pool wp
+            JOIN senders s ON s.id = wp.sender_id
+            WHERE wp.is_active = true
+              AND s.is_active = true
+              AND s.role = 'sender'
+        """))
+        rows = result.fetchall()
+        now = datetime.now(timezone.utc)
+        return [
+            {
+                "sender_id":     str(r[0]),
+                "enrolled_at":   r[1],
+                "slug":          r[2],
+                "phone":         r[3],
+                "session_string": r[4],
+                "enrolled_days": max(0, (now - r[1]).days),
+            }
+            for r in rows
+        ]
+
+    async def _count_sent_today(self, db: AsyncSession, sender_id: str) -> int:
+        """Сколько warmup-сообщений отправлено сегодня этим аккаунтом."""
+        result = await db.execute(
+            text("""
+                SELECT COUNT(*) FROM warmup_messages
+                WHERE from_sender_id = :sid
+                  AND sent_at >= CURRENT_DATE
+            """),
+            {"sid": sender_id}
+        )
+        return result.scalar() or 0
+
+    # ─── Session processing ───────────────────────────────────────────────────
+
+    async def _process_due_sessions(self, db: AsyncSession):
+        """Обработать сессии с наступившим next_message_at."""
+        result = await db.execute(text("""
+            SELECT id, sender_a_id, sender_b_id, topic,
+                   messages_sent, target_messages, last_sender_id
+            FROM warmup_sessions
+            WHERE status = 'active'
+              AND next_message_at <= NOW()
+            ORDER BY next_message_at
+            LIMIT 10
+        """))
+        sessions = result.fetchall()
+
+        for row in sessions:
+            session = {
+                "id":              str(row[0]),
+                "sender_a_id":     str(row[1]),
+                "sender_b_id":     str(row[2]),
+                "topic":           row[3],
+                "messages_sent":   row[4],
+                "target_messages": row[5],
+                "last_sender_id":  str(row[6]) if row[6] else None,
+            }
+            try:
+                await self._process_session(db, session)
+            except Exception as e:
+                logger.error(
+                    f"❌ Ошибка обработки warmup сессии {session['id'][:8]}: {e}",
+                    exc_info=True
+                )
+
+    async def _process_session(self, db: AsyncSession, session: dict):
+        """Отправить следующее сообщение в сессии."""
+        # Чередуем отправителя
+        if session["last_sender_id"] == session["sender_a_id"]:
+            from_id = session["sender_b_id"]
+            to_id   = session["sender_a_id"]
+        else:
+            from_id = session["sender_a_id"]
+            to_id   = session["sender_b_id"]
+
+        # Загружаем данные обоих аккаунтов
+        result = await db.execute(
+            text("""
+                SELECT id, slug, phone, session_string, is_active
+                FROM senders WHERE id = ANY(:ids)
+            """),
+            {"ids": [from_id, to_id]}
+        )
+        senders_map = {
+            str(r[0]): {
+                "id": str(r[0]), "slug": r[1],
+                "phone": r[2], "session_string": r[3], "is_active": r[4]
+            }
+            for r in result.fetchall()
+        }
+
+        if from_id not in senders_map or to_id not in senders_map:
+            logger.warning(f"🔥 Warmup сессия {session['id'][:8]}: sender недоступен, пропускаем")
+            return
+
+        from_sender = senders_map[from_id]
+        to_sender   = senders_map[to_id]
+
+        if not from_sender["is_active"] or not to_sender["is_active"]:
+            logger.warning(f"🔥 Warmup {session['id'][:8]}: один из аккаунтов неактивен")
+            return
+
+        # Проверяем дневной лимит отправителя
+        enrolled_result = await db.execute(
+            text("SELECT EXTRACT(DAY FROM (NOW() - enrolled_at))::int FROM warmup_pool WHERE sender_id = :sid"),
+            {"sid": from_id}
+        )
+        enrolled_days = enrolled_result.scalar() or 0
+        sent_today    = await self._count_sent_today(db, from_id)
+        daily_limit   = self._get_daily_limit(enrolled_days)
+
+        if sent_today >= daily_limit:
+            logger.info(
+                f"🔥 {from_sender['slug']}: дневной лимит {daily_limit} исчерпан "
+                f"(уровень {self._get_level(enrolled_days)}), откладываем до завтра"
+            )
+            # Откладываем на следующий день 09:00–09:30 МСК
+            tomorrow_utc = (
+                datetime.now(timezone.utc).replace(hour=6, second=0, microsecond=0)
+                + timedelta(days=1, minutes=random.randint(0, 30))
+            )
+            await db.execute(
+                text("UPDATE warmup_sessions SET next_message_at = :t, updated_at = NOW() WHERE id = :sid"),
+                {"t": tomorrow_utc, "sid": session["id"]}
+            )
+            await db.commit()
+            return
+
+        # Загружаем историю сессии для контекста GPT
+        hist_result = await db.execute(
+            text("""
+                SELECT from_sender_id, message_text FROM warmup_messages
+                WHERE session_id = :sid ORDER BY sent_at LIMIT 20
+            """),
+            {"sid": session["id"]}
+        )
+        history = [{"from_id": str(r[0]), "text": r[1]} for r in hist_result.fetchall()]
+
+        # Генерируем сообщение
+        message_text = await self._generate_message(
+            topic=session["topic"],
+            history=history,
+            from_sender_id=from_id,
+        )
+        if not message_text:
+            logger.warning(f"🔥 GPT вернул None для сессии {session['id'][:8]}, пропускаем")
+            return
+
+        # Пишем в БД ДО отправки (listener проверяет по кэшу телефонов, это дополнительная страховка)
+        await db.execute(
+            text("""
+                INSERT INTO warmup_messages (session_id, from_sender_id, to_sender_id, message_text)
+                VALUES (:session_id, :from_id, :to_id, :text)
+            """),
+            {
+                "session_id": session["id"],
+                "from_id":    from_id,
+                "to_id":      to_id,
+                "text":       message_text,
+            }
+        )
+
+        # Обновляем сессию
+        new_sent   = session["messages_sent"] + 1
+        is_done    = new_sent >= session["target_messages"]
+        new_status = "completed" if is_done else "active"
+        delay_sec  = random.randint(self.MIN_DELAY, self.MAX_DELAY)
+        next_at    = datetime.now(timezone.utc) + timedelta(seconds=delay_sec)
+
+        await db.execute(
+            text("""
+                UPDATE warmup_sessions
+                SET messages_sent   = :msgs,
+                    status          = :status,
+                    next_message_at = :next_at,
+                    last_sender_id  = :last_sender,
+                    updated_at      = NOW()
+                WHERE id = :sid
+            """),
+            {
+                "msgs":        new_sent,
+                "status":      new_status,
+                "next_at":     next_at,
+                "last_sender": from_id,
+                "sid":         session["id"],
+            }
+        )
+        await db.commit()
+
+        # Отправляем через Telethon
+        success = await self._send_via_telethon(from_sender, to_sender["phone"], message_text)
+
+        if success:
+            logger.info(
+                f"🔥 Warmup [{from_sender['slug']} → {to_sender['slug']}] "
+                f"({new_sent}/{session['target_messages']}): {message_text[:60]}..."
+            )
+            if is_done:
+                logger.info(f"✅ Warmup сессия {session['id'][:8]} завершена")
+        else:
+            logger.warning(
+                f"⚠️ Warmup: Telethon не смог отправить от {from_sender['slug']}, "
+                f"запись в БД сохранена"
+            )
+            # При ошибке отправки откладываем сессию на 15 минут
+            retry_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+            async with AsyncSessionLocal() as db2:
+                await db2.execute(
+                    text("UPDATE warmup_sessions SET next_message_at = :t WHERE id = :sid"),
+                    {"t": retry_at, "sid": session["id"]}
+                )
+                await db2.commit()
+
+    # ─── Session creation ─────────────────────────────────────────────────────
+
+    async def _create_new_sessions(self, db: AsyncSession):
+        """Создать новые сессии для свободных пар в пуле."""
+        pool = await self._get_active_pool(db)
+        if len(pool) < 2:
+            return
+
+        # Кто уже в активных сессиях
+        busy_result = await db.execute(
+            text("SELECT sender_a_id, sender_b_id FROM warmup_sessions WHERE status = 'active'")
+        )
+        busy_ids: set[str] = set()
+        for row in busy_result.fetchall():
+            busy_ids.add(str(row[0]))
+            busy_ids.add(str(row[1]))
+
+        available = [s for s in pool if s["sender_id"] not in busy_ids]
+        if len(available) < 2:
+            return
+
+        random.shuffle(available)
+        pairs = [(available[i], available[i + 1]) for i in range(0, len(available) - 1, 2)]
+
+        for sender_a, sender_b in pairs:
+            topic  = random.choice(WARMUP_TOPICS)
+            target = random.randint(4, 10)
+            # Первое сообщение через 1–5 минут
+            first_at = datetime.now(timezone.utc) + timedelta(minutes=random.randint(1, 5))
+
+            await db.execute(
+                text("""
+                    INSERT INTO warmup_sessions
+                        (sender_a_id, sender_b_id, topic, target_messages, next_message_at)
+                    VALUES (:a, :b, :topic, :target, :first_at)
+                """),
+                {
+                    "a":        sender_a["sender_id"],
+                    "b":        sender_b["sender_id"],
+                    "topic":    topic,
+                    "target":   target,
+                    "first_at": first_at,
+                }
+            )
+            logger.info(
+                f"🔥 Новая warmup сессия: {sender_a['slug']} ↔ {sender_b['slug']} "
+                f"(тема: «{topic}», {target} сообщений)"
+            )
+
+        await db.commit()
+
+    # ─── AI generation ────────────────────────────────────────────────────────
+
+    async def _generate_message(
+        self,
+        topic: str,
+        history: list[dict],
+        from_sender_id: str,
+    ) -> Optional[str]:
+        """Сгенерировать следующее warmup-сообщение через GPT."""
+        try:
+            messages = [
+                {"role": "system", "content": WARMUP_SYSTEM_PROMPT.format(topic=topic)}
+            ]
+
+            # Строим историю: с точки зрения from_sender_id
+            # его сообщения — "assistant", чужие — "user"
+            for msg in history:
+                role = "assistant" if msg["from_id"] == from_sender_id else "user"
+                messages.append({"role": role, "content": msg["text"]})
+
+            # Первое сообщение в сессии
+            if not history:
+                messages.append({
+                    "role": "user",
+                    "content": f"Начни разговор на тему «{topic}». Напиши первое сообщение."
+                })
+
+            response = await self._openai.chat.completions.create(
+                model="gpt-5-mini-2025-08-07",
+                messages=messages,
+            )
+            return response.choices[0].message.content.strip()
+
+        except APIError as e:
+            logger.error(f"🔥 OpenAI ошибка при генерации warmup: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"🔥 Неожиданная ошибка при генерации warmup: {e}", exc_info=True)
+            return None
+
+    # ─── Telethon send ────────────────────────────────────────────────────────
+
+    async def _send_via_telethon(
+        self,
+        from_sender: dict,
+        to_phone: str,
+        message_text: str,
+    ) -> bool:
+        """Отправить warmup-сообщение через Telethon.
+
+        Переиспользует telegram_service.get_client() с локами — не конфликтует
+        с queue_worker, который использует ту же инфраструктуру.
+        """
+        from telethon.tl.types import InputPeerUser
+
+        client = None
+        try:
+            client = await telegram_service.get_client(
+                from_sender["slug"],
+                from_sender["session_string"]
+            )
+
+            # Резолвим получателя (кэш + ResolvePhoneRequest)
+            contact = await telegram_service.resolve_contact(
+                client,
+                from_sender["id"],
+                to_phone
+            )
+
+            if not contact.get("is_registered"):
+                logger.error(f"🔥 Warmup: {to_phone} не зарегистрирован в Telegram")
+                return False
+
+            tg_id       = contact["telegram_id"]
+            access_hash = contact.get("access_hash")
+            peer = InputPeerUser(tg_id, access_hash) if access_hash is not None else tg_id
+
+            await client.send_message(peer, message_text)
+            return True
+
+        except FloodWaitError as e:
+            logger.warning(f"⚠️ Warmup FloodWait {e.seconds}с для {from_sender['slug']}")
+            # Откладываем сессию на время FloodWait + небольшой буфер
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 60)
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    text("""
+                        UPDATE warmup_sessions
+                        SET next_message_at = :t, updated_at = NOW()
+                        WHERE sender_a_id = :sid OR sender_b_id = :sid
+                          AND status = 'active'
+                    """),
+                    {"t": retry_at, "sid": from_sender["id"]}
+                )
+                await db.commit()
+            return False
+
+        except UserIsBlockedError:
+            logger.warning(f"⚠️ Warmup: блокировка для {from_sender['slug']}")
+            return False
+
+        except RPCError as e:
+            logger.error(f"❌ Warmup RPC ошибка для {from_sender['slug']}: {e}")
+            return False
+
+        except Exception as e:
+            logger.error(
+                f"❌ Warmup Telethon ошибка для {from_sender['slug']}: {e}",
+                exc_info=True
+            )
+            return False
+
+        finally:
+            if client:
+                await telegram_service.disconnect_client(client)
+
+
+# Глобальный экземпляр (импортируется в main.py)
+warmup_worker = WarmupWorker()
