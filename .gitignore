@@ -9,6 +9,5 @@ dist/
 build/
 .venv/
 venv/
-.planning/
 *.log
 .DS_Store
