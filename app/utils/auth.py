@@ -23,7 +23,8 @@ from uuid import UUID
 
 import bcrypt
 from fastapi import Depends, Header, HTTPException
-from jose import ExpiredSignatureError, JWTClaimsError, JWTError, jwt
+from jose import jwt
+from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -9,7 +9,7 @@ from app.services.telegram import telegram_service  # noqa: F401  (kept for star
 from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
 from app.services.onboarding_state import onboarding_cleanup_worker
-from app.routers import folders, health, onboarding, senders, workspace
+from app.routers import contacts, folders, health, onboarding, senders, workspace
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +70,7 @@ app.include_router(health.router)
 app.include_router(workspace.router)
 app.include_router(senders.router)
 app.include_router(folders.router)
+app.include_router(contacts.router)
 app.include_router(onboarding.router)
 
 
