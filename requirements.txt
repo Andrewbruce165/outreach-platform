@@ -15,6 +15,7 @@ PySocks==1.7.1
 # Security
 cryptography==42.0.0
 python-jose[cryptography]==3.3.0
+bcrypt>=4.1.0,<5.0
 
 # Validation
 pydantic>=2.8,<3.0
@@ -26,3 +27,7 @@ python-dotenv==1.0.0
 httpx==0.26.0
 openai>=1.40.0,<2.0.0
 qrcode[pil]==7.4.2
+
+# Testing (Phase 1 Wave 0)
+pytest>=8.0
+pytest-asyncio>=0.23
