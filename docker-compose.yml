@@ -1,16 +1,16 @@
 services:
   db:
     image: postgres:16
-    container_name: telegram-api-db
+    container_name: outreach-platform-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: telegram_user
-      POSTGRES_PASSWORD: telegram_secure_pass_2025
-      POSTGRES_DB: telegram_followup
+      POSTGRES_USER: outreach_user
+      POSTGRES_PASSWORD: outreach_secure_pass_2026
+      POSTGRES_DB: outreach_platform
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U telegram_user -d telegram_followup"]
+      test: ["CMD-SHELL", "pg_isready -U outreach_user -d outreach_platform"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -19,7 +19,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: telegram-api
+    container_name: outreach-platform-api
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -27,7 +27,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     user: root
     environment:
-      DATABASE_URL: postgresql+asyncpg://telegram_user:telegram_secure_pass_2025@db:5432/telegram_followup
+      DATABASE_URL: postgresql+asyncpg://outreach_user:outreach_secure_pass_2026@db:5432/outreach_platform
       TELEGRAM_API_ID: ${TELEGRAM_API_ID}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
@@ -45,10 +45,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.listener
-    container_name: telegram-listener
+    container_name: outreach-platform-listener
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://telegram_user:telegram_secure_pass_2025@db:5432/telegram_followup
+      DATABASE_URL: postgresql+asyncpg://outreach_user:outreach_secure_pass_2026@db:5432/outreach_platform
       TELEGRAM_API_ID: ${TELEGRAM_API_ID}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
