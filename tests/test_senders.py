@@ -512,8 +512,27 @@ async def test_patch_rate_limit_just_at_hard_cap_ok(
 # ─── Phase 3 (plan 03-01 Task 7) — senders cleanup tests ─────────────────────
 
 
-@pytest.mark.skip(reason="pending: filled by Task 7 of plan 03-01")
-async def test_response_has_no_ai_context_id():
-    """TODO(03-01 Task 7): SenderResponse must not contain ai_context_id / ai_context_name."""
-    pass
+async def test_response_has_no_ai_context_id(async_db_session, test_sender_factory):
+    """Phase 3 C-05: SenderResponse больше не содержит ai_context_id / ai_context_name.
+
+    Direct schema check — без HTTP round-trip — потому что Phase 1 lazy-create
+    через AuthDep даёт каждому JWT свежий workspace, а sender уже создан в
+    test_workspace через factory. Проверяем форму ответа напрямую через
+    _sender_to_response (исключения / AttributeError были бы здесь видны).
+    """
+    from app.routers.senders import _sender_to_response
+
+    sender = await test_sender_factory(
+        slug="phase3-resp-test", lifecycle_status="active", auth_status="ok"
+    )
+
+    response = _sender_to_response(sender)
+    dump = response.model_dump()
+    assert "ai_context_id" not in dump, \
+        f"ai_context_id leaked into SenderResponse: {dump}"
+    assert "ai_context_name" not in dump, \
+        f"ai_context_name leaked into SenderResponse: {dump}"
+    # Sanity: required fields still present
+    assert dump["slug"] == "phase3-resp-test"
+    assert dump["status"] == "active"
 

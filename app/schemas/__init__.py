@@ -89,7 +89,8 @@ class SenderCreate(BaseModel):
     name: str = Field(..., max_length=100)
     phone: str = Field(..., max_length=20)
     session_string: str
-    ai_context_id: Optional[UUID] = Field(None, description="ID контекста AI для этого sender")
+    # NB: ai_context_id field dropped (Phase 3 C-05) — sender больше не «знает»
+    # агента, связь через Campaign в Phase 4.
     role: Literal["sender", "checker"] = Field(
         "sender", description="'sender' = отправщик, 'checker' = проверщик номеров"
     )
@@ -109,7 +110,7 @@ class SenderUpdate(BaseModel):
     rate_per_min: Optional[int] = Field(None, ge=1, le=10)
     rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
     rate_per_day: Optional[int] = Field(None, ge=1, le=300)
-    ai_context_id: Optional[UUID] = None
+    # NB: ai_context_id field dropped (Phase 3 C-05).
     role: Optional[Literal["sender", "checker"]] = None
     proxy: Optional[ProxyConfig] = None
 
@@ -128,8 +129,9 @@ class SenderResponse(BaseModel):
     rate_limits: RateLimits
     role: str = "sender"
     proxy: Optional[ProxyConfig] = None
-    ai_context_id: Optional[UUID] = None
-    ai_context_name: Optional[str] = None
+    # NB: ai_context_id / ai_context_name fields dropped (Phase 3 C-05) —
+    # without this, Pydantic from_attributes=True would crash on
+    # AttributeError because Sender ORM no longer has ai_context_id (RESEARCH Pitfall 4).
     last_used_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 

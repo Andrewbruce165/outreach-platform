@@ -31,7 +31,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Sender, ProxyPool
@@ -77,7 +76,11 @@ def _derive_status(sender: Sender) -> str:
 
 
 def _sender_to_response(sender: Sender) -> SenderResponse:
-    """Build SenderResponse с derived status + nested RateLimits."""
+    """Build SenderResponse с derived status + nested RateLimits.
+
+    Phase 3 C-05: ai_context_id / ai_context_name fields removed — sender
+    больше не «знает» агента, связь через Campaign в Phase 4.
+    """
     return SenderResponse(
         id=sender.id,
         slug=sender.slug,
@@ -93,8 +96,6 @@ def _sender_to_response(sender: Sender) -> SenderResponse:
         ),
         role=sender.role,
         proxy=ProxyConfig(**sender.proxy) if sender.proxy else None,
-        ai_context_id=sender.ai_context_id,
-        ai_context_name=sender.ai_context.name if sender.ai_context else None,
         last_used_at=sender.last_used_at,
         created_at=sender.created_at,
     )
@@ -147,14 +148,16 @@ def _validate_rate_limits(
 async def _load_sender_by_slug(
     db: AsyncSession, ctx: AuthCtx, slug: str
 ) -> Sender:
-    """Workspace-scoped SELECT по slug с подгрузкой ai_context.
+    """Workspace-scoped SELECT по slug.
+
+    Phase 3 C-05: больше не selectinload(Sender.ai_context) — relationship
+    дропнут вместе с senders.ai_context_id колонкой (D-04).
 
     404 без раскрытия "not yours" vs "not found" (security: same response
     как и в Phase 1 workspace.py).
     """
     result = await db.execute(
         select(Sender)
-        .options(selectinload(Sender.ai_context))
         .where(
             Sender.slug == slug,
             Sender.workspace_id == ctx.workspace_id,
@@ -179,9 +182,9 @@ async def list_senders(
     db: AsyncSession = Depends(get_db),
 ):
     """List all senders in current workspace."""
+    # Phase 3 C-05: selectinload(Sender.ai_context) удалён — relationship дропнут.
     result = await db.execute(
         select(Sender)
-        .options(selectinload(Sender.ai_context))
         .where(Sender.workspace_id == ctx.workspace_id)
         # TODO(v2-rls): replaced by RLS policy
         .order_by(Sender.name)
@@ -228,7 +231,7 @@ async def create_sender(
         session_string=encrypted_session,
         role=request.role or "sender",
         proxy=request.proxy.model_dump() if request.proxy else None,
-        ai_context_id=request.ai_context_id,
+        # Phase 3 C-05: ai_context_id removed from constructor — column dropped.
     )
     if request.rate_per_min is not None:
         sender.rate_per_min = request.rate_per_min
@@ -241,13 +244,7 @@ async def create_sender(
     await db.commit()
     await db.refresh(sender)
 
-    # Reload with ai_context relationship eager-loaded.
-    result = await db.execute(
-        select(Sender)
-        .options(selectinload(Sender.ai_context))
-        .where(Sender.id == sender.id)
-    )
-    sender = result.scalar_one()
+    # Phase 3 C-05: no longer reload with ai_context — relationship dropped.
 
     # Auto-assign free proxy from workspace pool (D-22). Skip if user passed proxy explicitly.
     if not sender.proxy:
@@ -326,8 +323,7 @@ async def update_sender(
         sender.rate_per_hour = request.rate_per_hour
     if request.rate_per_day is not None:
         sender.rate_per_day = request.rate_per_day
-    if request.ai_context_id is not None:
-        sender.ai_context_id = request.ai_context_id
+    # Phase 3 C-05: ai_context_id setter removed — column dropped.
     if request.role is not None:
         sender.role = request.role
     if request.proxy is not None:
@@ -336,13 +332,7 @@ async def update_sender(
     await db.commit()
     await db.refresh(sender)
 
-    # Reload with relationships.
-    result = await db.execute(
-        select(Sender)
-        .options(selectinload(Sender.ai_context))
-        .where(Sender.id == sender.id)
-    )
-    sender = result.scalar_one()
+    # Phase 3 C-05: no longer reload with ai_context — relationship dropped.
 
     logger.info(
         f"[senders] updated workspace={ctx.workspace_id} slug={sender.slug} "
@@ -432,13 +422,7 @@ async def assign_proxy(
     await db.commit()
     await db.refresh(sender)
 
-    # Reload with relationships.
-    result = await db.execute(
-        select(Sender)
-        .options(selectinload(Sender.ai_context))
-        .where(Sender.id == sender.id)
-    )
-    sender = result.scalar_one()
+    # Phase 3 C-05: no longer reload with ai_context — relationship dropped.
 
     logger.info(
         f"[senders] assign-proxy workspace={ctx.workspace_id} slug={slug} "
