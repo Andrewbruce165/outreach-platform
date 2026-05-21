@@ -68,23 +68,25 @@ Plans:
 
 ### Phase 02.1: Multi-tenant Worker Hardening
 
-**Goal:** Закрыть BLOCKER findings code-review Phase 2 — все унаследованные worker'ы (queue, listener, warmup, rotation) пишут с `workspace_id`; reauth flow работает на повторе; `/health` под auth и workspace-scoped; ContactCheckWorker использует `FOR UPDATE SKIP LOCKED`; `_verify_api_key` кэширован.
+**Goal:** Закрыть 9 BLOCKER findings code-review Phase 2 (CR-01..CR-09) — все унаследованные worker'ы (queue, listener, warmup, rotation) пишут с `workspace_id`; reauth flow корректно UPDATE'ит существующего sender'а; `/health` не раскрывает per-tenant aggregates; ContactCheckWorker использует `FOR UPDATE SKIP LOCKED`; `_verify_api_key` кэширован.
 **Depends on:** Phase 2
 **Requirements**: TENT-01 (multi-tenant isolation), SNDR-01 (sender lifecycle), ONBD-01 (onboarding incl. reauth)
 **Success Criteria** (what must be TRUE):
 
-1. Все INSERT в `messages_log`, `conversations`, `context_contact_assignments`, `warmup_*` содержат `workspace_id`; нет `NotNullViolation` при отправке/входящем/warmup/ротации
-2. Warmup-парирование контактов изолировано по workspace_id (sender из workspace A не может парироваться с sender из workspace B)
-3. Reauth flow работает на повторе для того же sender_slug — нет `IntegrityError` по UNIQUE constraint
-4. `GET /api/v1/health` требует JWT и возвращает только данные текущего workspace
-5. ContactCheckWorker безопасен при горизонтальном масштабе — race-conditions отсутствуют (`FOR UPDATE SKIP LOCKED`)
-6. `_verify_api_key` кэширован (LRU/TTL) — n8n push с тем же ключом не делает bcrypt на каждом запросе
+1. Все INSERT в `messages_log`, `conversations`, `context_contact_assignments`, `warmup_*` содержат `workspace_id`; нет `NotNullViolation` при отправке/входящем/warmup/ротации (CR-01, CR-02, CR-03, CR-04, CR-06)
+2. Warmup-парирование контактов изолировано по workspace_id (sender из workspace A не может парироваться с sender из workspace B) (CR-04 issue 3)
+3. Reauth flow работает на повторе для того же sender_slug — нет `IntegrityError`; per-workspace UNIQUE (workspace_id, slug) (CR-05, WR-02)
+4. `GET /api/v1/health` (public, без auth) не раскрывает per-tenant aggregates — возвращает только {status, database, version, uptime_seconds} (CR-07)
+5. ContactCheckWorker безопасен при горизонтальном масштабе — `FOR UPDATE OF c SKIP LOCKED` + `tg_checked_at` claim (CR-08)
+6. `_verify_api_key` кэширован (LRU/TTL 5 мин) + `hmac.compare_digest` + `datetime.now(timezone.utc)` — n8n push с тем же ключом не делает bcrypt на каждом запросе (CR-09)
 
-**Plans:** TBD (run /gsd-plan-phase 02.1 --gaps to break down)
+**Plans:** 3 plans
 
 Plans:
 
-- [ ] TBD
+- [ ] 02.1-01: Worker workspace_id sweep (queue/listener/warmup/rotation) + warmup partitioning + SQL precedence fix — CR-01, CR-02, CR-03, CR-04, CR-06
+- [ ] 02.1-02: Reauth flow rewrite + migration 014 (slug per-workspace UNIQUE + onboarding_sessions.original_sender_id) — CR-05, WR-02
+- [ ] 02.1-03: Health lockdown + ContactCheckWorker SKIP LOCKED + _verify_api_key LRU cache — CR-07, CR-08, CR-09
 
 ### Phase 3: Agents (AI Templates)
 
@@ -182,11 +184,12 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Workspace Foundation | 0/3 | Not started | - |
-| 2. TG Accounts & Contacts | 0/5 | Not started | - |
+| 1. Workspace Foundation | 3/3 | Complete | 2026-05-21 |
+| 2. TG Accounts & Contacts | 5/5 | Verified (gaps_found → 02.1) | 2026-05-21 |
+| 02.1. Worker Hardening | 0/3 | Planned | - |
 | 3. Agents (AI Templates) | 0/2 | Not started | - |
 | 4. Campaigns | 0/5 | Not started | - |
 | 5. Inbox & Analytics | 0/4 | Not started | - |
 | 6. Admin Master Bot | 0/2 | Not started | - |
 
-**Total: 6 phases, 21 plans, 59 requirements mapped, 0 unmapped ✓**
+**Total: 7 phases (incl. 02.1 hardening), 24 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
