@@ -44,8 +44,8 @@
 
 ### Contact Folders (Phase 2)
 
-- [ ] **FLDR-01**: Контакты группируются по папкам внутри workspace; каждый контакт принадлежит одной папке
-- [ ] **FLDR-02**: Пользователь создаёт / переименовывает / удаляет папки
+- [x] **FLDR-01**: Контакты группируются по папкам внутри workspace; каждый контакт принадлежит одной папке
+- [x] **FLDR-02**: Пользователь создаёт / переименовывает / удаляет папки
 - [ ] **FLDR-03**: При импорте CSV или push через API выбирается целевая папка (создаётся если не существует)
 
 ### Agents — AI Templates (Phase 3)
@@ -154,8 +154,8 @@
 | CONT-03 | Phase 2 | Pending |
 | CONT-04 | Phase 2 | Pending |
 | CONT-05 | Phase 2 | Pending |
-| FLDR-01 | Phase 2 | Pending |
-| FLDR-02 | Phase 2 | Pending |
+| FLDR-01 | Phase 2 | Complete |
+| FLDR-02 | Phase 2 | Complete |
 | FLDR-03 | Phase 2 | Pending |
 | AGNT-01 | Phase 3 | Pending |
 | AGNT-02 | Phase 3 | Pending |
