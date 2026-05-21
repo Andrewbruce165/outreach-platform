@@ -36,12 +36,13 @@ logger = logging.getLogger(__name__)
 # Randomised interval between sends (human-like behaviour, avoids fixed-pattern detection)
 MIN_SEND_INTERVAL = 20            # seconds — minimum pause between two sends
 MAX_SEND_INTERVAL = 55            # seconds — maximum pause between two sends
-# Fatigue factor: as msgs_last_hour approaches MAX_MSGS_PER_HOUR, interval grows by up to 50%
+# Fatigue factor: as msgs_last_hour approaches sender.rate_per_hour, interval grows by up to 50%
 SEND_INTERVAL_FATIGUE = 0.5
 
-MAX_MSGS_PER_MINUTE = 4
-MAX_MSGS_PER_HOUR = 20            # conservative: Telegram bans at ~30/h to new contacts
-MAX_MSGS_PER_DAY = 150            # daily ceiling across the 24-hour rolling window
+# Per-sender rate limits live on senders.rate_per_min/hour/day columns (Phase 2 D-13).
+# The same empirically-tuned 4/20/150 "green corridor" remains as DB server_default.
+# NB: Other rate constants (MIN_SEND_INTERVAL, LONG_PAUSE_*, FLOOD_HARD_THRESHOLD,
+#     WORK_HOUR_*) — NOT TOUCHED per CLAUDE.md (deferred to Phase 4 per-campaign).
 MAX_NEW_CONTACTS_PER_HOUR = 15
 MAX_ATTEMPTS = 3                  # retry failed items up to N times
 RETRY_DELAY_SECONDS = 60          # wait before retrying a failed item
@@ -223,11 +224,42 @@ class QueueWorker:
         await self._send_item(item_id)
 
     async def _check_rate_limits(self, db: AsyncSession, sender_id) -> bool:
-        """Return False if the sender has hit any rate limit."""
+        """Return False if the sender has hit any rate limit.
+
+        Phase 2 (D-13): rate limits живут per-sender в senders.rate_per_min/hour/day.
+        Sender row читаем один раз в начале tick'а, глобальные константы выпилены.
+        """
         now = datetime.now(timezone.utc)
         one_minute_ago = now - timedelta(minutes=1)
         one_hour_ago = now - timedelta(hours=1)
         one_day_ago = now - timedelta(hours=24)
+
+        # Phase 2 D-13: read per-sender rate limits from DB (once per tick).
+        # Если sender удалён concurrently — пропускаем тик (вернёт False).
+        sender_row = (await db.execute(
+            text("""
+                SELECT rate_per_min, rate_per_hour, rate_per_day,
+                       lifecycle_status, auth_status
+                FROM senders WHERE id = :sid
+            """),
+            {"sid": str(sender_id)},
+        )).fetchone()
+
+        if not sender_row:
+            logger.warning(f"Sender {sender_id}: row missing — skipping tick")
+            return False
+
+        # Phase 2 D-11/D-12: derived 'error' / paused — пропускаем.
+        if sender_row.lifecycle_status != "active" or sender_row.auth_status != "ok":
+            logger.debug(
+                f"Sender {sender_id}: not eligible "
+                f"(lifecycle={sender_row.lifecycle_status} auth={sender_row.auth_status})"
+            )
+            return False
+
+        max_per_min = sender_row.rate_per_min
+        max_per_hour = sender_row.rate_per_hour
+        max_per_day = sender_row.rate_per_day
 
         # Messages sent in last minute
         r = await db.execute(
@@ -240,8 +272,8 @@ class QueueWorker:
             {"sid": str(sender_id), "since": one_minute_ago}
         )
         msgs_last_minute = r.scalar()
-        if msgs_last_minute >= MAX_MSGS_PER_MINUTE:
-            logger.info(f"Sender {sender_id}: per-minute limit reached ({msgs_last_minute}/{MAX_MSGS_PER_MINUTE}), pausing")
+        if msgs_last_minute >= max_per_min:
+            logger.info(f"Sender {sender_id}: per-minute limit reached ({msgs_last_minute}/{max_per_min}), pausing")
             return False
 
         # Messages sent in last hour
@@ -255,9 +287,9 @@ class QueueWorker:
             {"sid": str(sender_id), "since": one_hour_ago}
         )
         msgs_last_hour = r.scalar()
-        if msgs_last_hour >= MAX_MSGS_PER_HOUR:
+        if msgs_last_hour >= max_per_hour:
             logger.warning(
-                f"Sender {sender_id}: per-hour limit reached ({msgs_last_hour}/{MAX_MSGS_PER_HOUR}), "
+                f"Sender {sender_id}: per-hour limit reached ({msgs_last_hour}/{max_per_hour}), "
                 f"pausing until hour window slides"
             )
             return False
@@ -291,9 +323,9 @@ class QueueWorker:
             {"sid": str(sender_id), "since": one_day_ago}
         )
         msgs_today = r.scalar()
-        if msgs_today >= MAX_MSGS_PER_DAY:
+        if msgs_today >= max_per_day:
             logger.warning(
-                f"Sender {sender_id}: daily limit reached ({msgs_today}/{MAX_MSGS_PER_DAY}), "
+                f"Sender {sender_id}: daily limit reached ({msgs_today}/{max_per_day}), "
                 f"pausing until 24h window slides"
             )
             return False
@@ -313,7 +345,7 @@ class QueueWorker:
         if last_row and last_row[0]:
             elapsed = (now - last_row[0]).total_seconds()
             # Fatigue: interval grows as we approach the hourly limit
-            fatigue = 1.0 + (msgs_last_hour / MAX_MSGS_PER_HOUR) * SEND_INTERVAL_FATIGUE
+            fatigue = 1.0 + (msgs_last_hour / max_per_hour) * SEND_INTERVAL_FATIGUE
             required_interval = random.uniform(MIN_SEND_INTERVAL, MAX_SEND_INTERVAL) * fatigue
             if elapsed < required_interval:
                 logger.debug(
@@ -347,8 +379,16 @@ class QueueWorker:
 
             r2 = await db.execute(select(Sender).where(Sender.id == item.sender_id))
             sender: Sender = r2.scalar_one_or_none()
-            if not sender or not sender.is_active:
-                await self._fail_item(db, item, "Sender not found or inactive")
+            # Phase 2 D-11/D-12: derived 'error' / paused — fail the item.
+            if not sender:
+                await self._fail_item(db, item, "Sender not found")
+                return
+            if sender.lifecycle_status != "active" or sender.auth_status != "ok":
+                await self._fail_item(
+                    db, item,
+                    f"Sender not eligible (lifecycle={sender.lifecycle_status} "
+                    f"auth={sender.auth_status})"
+                )
                 return
 
             client = None
@@ -545,10 +585,9 @@ class QueueWorker:
                     f"deactivating sender and failing all pending tasks"
                 )
                 async with AsyncSessionLocal() as db2:
-                    await db2.execute(text("""
-                        UPDATE senders SET is_active = false
-                        WHERE slug = :slug
-                    """), {"slug": sender.slug})
+                    # Phase 2 D-11/D-12: больше не пишем is_active=false.
+                    # auth_status уже выставлен (listener / SessionAuthError).
+                    # Derived status='error' computed at read-time из auth_status.
                     await db2.execute(text("""
                         UPDATE message_queue
                         SET status = 'failed', error_message = :err, finished_at = NOW()

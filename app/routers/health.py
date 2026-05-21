@@ -27,14 +27,19 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     except Exception:
         db_status = "disconnected"
     
-    # Get senders stats
+    # Get senders stats.
+    # Phase 2 (D-11/D-12): senders.is_active dropped — derived "active" =
+    # lifecycle_status == 'active' AND auth_status == 'ok'.
     total = 0
     active = 0
     try:
         result = await db.execute(select(Sender))
         senders = result.scalars().all()
         total = len(senders)
-        active = sum(1 for s in senders if s.is_active)
+        active = sum(
+            1 for s in senders
+            if s.lifecycle_status == "active" and s.auth_status == "ok"
+        )
     except Exception:
         pass
     

@@ -43,9 +43,11 @@ async def get_or_assign_sender(
     ctx_str = str(context_id)
 
     # Step 1: check existing assignment
+    # Phase 2 (D-11/D-12): senders.is_active dropped → "eligible" = lifecycle_status='active' AND auth_status='ok'.
     row = (await db.execute(
         text("""
-            SELECT cca.sender_id, s.is_active
+            SELECT cca.sender_id,
+                   (s.lifecycle_status = 'active' AND s.auth_status = 'ok') AS is_eligible
             FROM context_contact_assignments cca
             JOIN senders s ON s.id = cca.sender_id
             WHERE cca.context_id = :ctx_id
@@ -55,16 +57,16 @@ async def get_or_assign_sender(
     )).fetchone()
 
     if row is not None:
-        assigned_sender_id, is_active = row[0], row[1]
+        assigned_sender_id, is_eligible = row[0], row[1]
 
-        if is_active:
-            # Happy path: existing assignment, sender still active
+        if is_eligible:
+            # Happy path: existing assignment, sender still eligible
             result = await db.execute(select(Sender).where(Sender.id == assigned_sender_id))
             return result.scalar_one()
 
         # Assigned sender went inactive — pick a replacement
         logger.info(
-            "Rotation: sender %s for contact %s (context %s) is inactive, reassigning",
+            "Rotation: sender %s for contact %s (context %s) is not eligible, reassigning",
             assigned_sender_id, contact_phone, ctx_str[:8],
         )
         new_sender = await _pick_best_sender(db, context_id)
@@ -135,6 +137,7 @@ async def _pick_best_sender(db: AsyncSession, context_id: UUID) -> Sender | None
     Single SQL query — no N+1. Tie-break: oldest sender (longest idle).
     Only senders with role='sender' are considered (excludes checkers).
     """
+    # Phase 2 (D-11/D-12): senders.is_active dropped → lifecycle_status + auth_status.
     row = (await db.execute(
         text("""
             SELECT s.id
@@ -144,7 +147,8 @@ async def _pick_best_sender(db: AsyncSession, context_id: UUID) -> Sender | None
                 AND mq.status = 'sent'
                 AND mq.finished_at >= NOW() - INTERVAL '24 hours'
             WHERE s.ai_context_id = :ctx_id
-              AND s.is_active = true
+              AND s.lifecycle_status = 'active'
+              AND s.auth_status = 'ok'
               AND s.role = 'sender'
             GROUP BY s.id, s.created_at
             ORDER BY COUNT(mq.id) ASC, s.created_at ASC

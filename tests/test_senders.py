@@ -1,0 +1,509 @@
+"""
+Integration tests для senders router (Phase 2 — SNDR-01, SNDR-02, SNDR-03).
+
+Покрывает:
+- Workspace-isolation (cross-tenant 404).
+- Derived `status` field (D-11): error > lifecycle_status.
+- Rate-limit warnings (D-14): soft cap → 200 + warnings[]; hard cap → 422.
+- Lifecycle transitions (D-12): paused/active/warmup.
+- Proxy pool CRUD (D-22) + assign-proxy.
+"""
+
+import uuid
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+async def _create_workspace_via_jwt(async_client, valid_supabase_jwt, sub: str):
+    """Bootstrap новый workspace через JWT POST /auth/me. Возвращает (token, workspace_id)."""
+    token = valid_supabase_jwt(sub=sub, email=f"{sub}@test.com")
+    r = await async_client.post(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    return token, r.json()["workspace_id"]
+
+
+async def _insert_sender_raw(
+    db: AsyncSession,
+    workspace_id: str,
+    slug: str,
+    *,
+    role: str = "sender",
+    lifecycle_status: str = "active",
+    auth_status: str = "ok",
+    rate_per_min: int = 4,
+    rate_per_hour: int = 20,
+    rate_per_day: int = 150,
+    phone: str | None = None,
+) -> str:
+    """Прямой INSERT в senders. Возвращает sender_id."""
+    sid = str(uuid.uuid4())
+    phone = phone or f"+7900{sid[:7]}"
+    await db.execute(
+        text("""
+            INSERT INTO senders
+                (id, workspace_id, slug, name, phone, session_string, role,
+                 lifecycle_status, auth_status, rate_per_min, rate_per_hour, rate_per_day)
+            VALUES
+                (:id, :wid, :slug, :name, :phone, 'encrypted_stub', :role,
+                 :lifecycle, :auth, :rmin, :rhour, :rday)
+        """),
+        {
+            "id": sid, "wid": workspace_id, "slug": slug, "name": slug,
+            "phone": phone, "role": role,
+            "lifecycle": lifecycle_status, "auth": auth_status,
+            "rmin": rate_per_min, "rhour": rate_per_hour, "rday": rate_per_day,
+        }
+    )
+    await db.commit()
+    return sid
+
+
+# ─── 401: no auth ────────────────────────────────────────────────────────────
+
+
+async def test_list_senders_no_auth_returns_401(async_client):
+    """GET /senders без auth → 401 AUTH_REQUIRED."""
+    response = await async_client.get("/api/v1/senders")
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "AUTH_REQUIRED"
+
+
+# ─── Workspace isolation ─────────────────────────────────────────────────────
+
+
+async def test_list_senders_workspace_isolated(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """A видит только своих sender'ов; B-sender невидим для A."""
+    token_a, ws_a = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="iso-a"
+    )
+    token_b, ws_b = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="iso-b"
+    )
+
+    await _insert_sender_raw(async_db_session, ws_a, "sender-a-1")
+    await _insert_sender_raw(async_db_session, ws_b, "sender-b-1")
+
+    # A видит только своего.
+    r = await async_client.get(
+        "/api/v1/senders", headers={"Authorization": f"Bearer {token_a}"}
+    )
+    assert r.status_code == 200, r.text
+    slugs = {s["slug"] for s in r.json()["senders"]}
+    assert "sender-a-1" in slugs
+    assert "sender-b-1" not in slugs
+
+
+async def test_get_sender_cross_tenant_returns_404(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """Sender workspace B не видим из workspace A → 404, не 403."""
+    token_a, ws_a = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="cross-a"
+    )
+    _token_b, ws_b = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="cross-b"
+    )
+
+    await _insert_sender_raw(async_db_session, ws_b, "private-b")
+
+    r = await async_client.get(
+        "/api/v1/senders/private-b",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "SENDER_NOT_FOUND"
+
+
+# ─── Derived status (D-11) ───────────────────────────────────────────────────
+
+
+async def test_get_sender_derived_status_active(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """auth_status=ok, lifecycle=active → derived status='active'."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="derived-ok"
+    )
+    await _insert_sender_raw(
+        async_db_session, ws, "derived-active",
+        auth_status="ok", lifecycle_status="active",
+    )
+    r = await async_client.get(
+        "/api/v1/senders/derived-active",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "active"
+    assert body["auth_status"] == "ok"
+    assert body["lifecycle_status"] == "active"
+
+
+async def test_get_sender_derived_status_error_when_auth_expired(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """auth_status='session_expired' → derived 'error' независимо от lifecycle."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="derived-err"
+    )
+    await _insert_sender_raw(
+        async_db_session, ws, "derived-error",
+        auth_status="session_expired", lifecycle_status="active",
+    )
+    r = await async_client.get(
+        "/api/v1/senders/derived-error",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "error"
+    assert body["auth_status"] == "session_expired"
+    # Raw lifecycle всё равно отдаётся в tooltip.
+    assert body["lifecycle_status"] == "active"
+
+
+async def test_get_sender_derived_status_paused(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """lifecycle=paused, auth=ok → status='paused'."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="derived-paused"
+    )
+    await _insert_sender_raw(
+        async_db_session, ws, "derived-paused",
+        lifecycle_status="paused", auth_status="ok",
+    )
+    r = await async_client.get(
+        "/api/v1/senders/derived-paused",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "paused"
+
+
+# ─── Rate limit warnings (D-14) ──────────────────────────────────────────────
+
+
+async def test_patch_sender_rate_limit_soft_returns_warnings(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """rate_per_min=7 (между soft cap 4 и hard cap 10) → 200 + warnings[]."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="rl-soft"
+    )
+    await _insert_sender_raw(async_db_session, ws, "rl-soft-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/rl-soft-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"rate_per_min": 7},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sender"]["rate_limits"]["per_minute"] == 7
+    warnings = body["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["field"] == "rate_per_min"
+    assert warnings[0]["value"] == 7
+    assert warnings[0]["recommended_max"] == 4
+    assert warnings[0]["severity"] == "warning"
+
+
+async def test_patch_sender_rate_limit_hard_cap_422(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """rate_per_min=15 (>hard cap 10) → 422 RATE_LIMIT_EXCEEDS_HARD_CAP.
+
+    Pydantic срабатывает раньше нашего helper'а (Field(le=10)) — поэтому статус
+    422 пришёл от FastAPI validation, не от ручного raise. Это OK — главное что
+    запрос отбит.
+    """
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="rl-hard"
+    )
+    await _insert_sender_raw(async_db_session, ws, "rl-hard-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/rl-hard-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"rate_per_min": 15},
+    )
+    assert r.status_code == 422
+
+
+async def test_patch_sender_within_green_corridor_no_warnings(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """rate_per_min=3 (<=soft cap 4) → 200 + warnings=[]."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="rl-green"
+    )
+    await _insert_sender_raw(async_db_session, ws, "rl-green-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/rl-green-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"rate_per_min": 3},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["sender"]["rate_limits"]["per_minute"] == 3
+    assert body["warnings"] == []
+
+
+# ─── Lifecycle transitions (D-12) ────────────────────────────────────────────
+
+
+async def test_patch_sender_lifecycle_status_pause(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """PATCH lifecycle_status='paused' → derived status='paused'."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="lc-pause"
+    )
+    await _insert_sender_raw(async_db_session, ws, "lc-pause-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/lc-pause-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"lifecycle_status": "paused"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sender"]["lifecycle_status"] == "paused"
+    assert body["sender"]["status"] == "paused"
+
+
+async def test_patch_sender_lifecycle_invalid_value_422(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """lifecycle_status='garbage' → 422 (Pydantic Literal)."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="lc-invalid"
+    )
+    await _insert_sender_raw(async_db_session, ws, "lc-invalid-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/lc-invalid-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"lifecycle_status": "garbage"},
+    )
+    assert r.status_code == 422
+
+
+# ─── Proxy pool CRUD (D-22) ──────────────────────────────────────────────────
+
+
+async def test_workspace_proxies_crud(
+    async_client, valid_supabase_jwt
+):
+    """POST /workspace/proxies → GET → DELETE."""
+    token, _ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="proxy-crud"
+    )
+    # Create
+    r = await async_client.post(
+        "/api/v1/workspace/proxies",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"host": "10.0.0.1", "port": 1080, "type": "socks5", "username": "u", "password": "p"},
+    )
+    assert r.status_code == 201, r.text
+    proxy_id = r.json()["id"]
+
+    # List
+    r2 = await async_client.get(
+        "/api/v1/workspace/proxies",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["total"] == 1
+    assert r2.json()["proxies"][0]["host"] == "10.0.0.1"
+
+    # Delete
+    r3 = await async_client.delete(
+        f"/api/v1/workspace/proxies/{proxy_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r3.status_code == 204
+
+
+async def test_workspace_proxies_cross_tenant_isolation(
+    async_client, valid_supabase_jwt
+):
+    """A's proxy не видим для B."""
+    token_a, _ws_a = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="proxy-iso-a"
+    )
+    token_b, _ws_b = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="proxy-iso-b"
+    )
+
+    # A creates proxy
+    ra = await async_client.post(
+        "/api/v1/workspace/proxies",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"host": "10.99.0.1", "port": 5555, "type": "socks5", "username": "u"},
+    )
+    assert ra.status_code == 201
+    a_proxy_id = ra.json()["id"]
+
+    # B can't see it.
+    rb_list = await async_client.get(
+        "/api/v1/workspace/proxies",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert rb_list.status_code == 200
+    assert all(p["id"] != a_proxy_id for p in rb_list.json()["proxies"])
+
+    # B can't delete it → 404.
+    rb_del = await async_client.delete(
+        f"/api/v1/workspace/proxies/{a_proxy_id}",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert rb_del.status_code == 404
+
+
+async def test_assign_proxy_from_workspace_pool(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """POST /senders/{slug}/assign-proxy назначает прокси sender'у."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="assign-ok"
+    )
+    await _insert_sender_raw(async_db_session, ws, "assignee-1")
+    # Create proxy
+    rp = await async_client.post(
+        "/api/v1/workspace/proxies",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"host": "1.2.3.4", "port": 1080, "type": "socks5", "username": "u", "password": "p"},
+    )
+    assert rp.status_code == 201
+    proxy_id = rp.json()["id"]
+
+    r = await async_client.post(
+        "/api/v1/senders/assignee-1/assign-proxy",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"proxy_id": proxy_id},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["proxy"]["host"] == "1.2.3.4"
+    assert body["proxy"]["port"] == 1080
+    assert body["proxy"]["type"] == "socks5"
+
+
+async def test_assign_proxy_cross_tenant_returns_404(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """B назначает A's proxy → 404 PROXY_NOT_FOUND."""
+    token_a, _ws_a = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="cross-proxy-a"
+    )
+    token_b, ws_b = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="cross-proxy-b"
+    )
+    # A creates proxy
+    ra = await async_client.post(
+        "/api/v1/workspace/proxies",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"host": "9.9.9.9", "port": 1111, "type": "socks5", "username": "u"},
+    )
+    a_proxy_id = ra.json()["id"]
+    # B has a sender
+    await _insert_sender_raw(async_db_session, ws_b, "b-sender-1")
+
+    r = await async_client.post(
+        "/api/v1/senders/b-sender-1/assign-proxy",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"proxy_id": a_proxy_id},
+    )
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "PROXY_NOT_FOUND"
+
+
+# ─── Sender create with warnings ─────────────────────────────────────────────
+
+
+async def test_create_sender_above_soft_cap_returns_warnings(
+    async_client, valid_supabase_jwt
+):
+    """POST /senders с rate_per_min=8 → 201 + warnings=[rate_per_min]."""
+    token, _ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="create-warn"
+    )
+    r = await async_client.post(
+        "/api/v1/senders",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "slug": "create-with-warn-1",
+            "name": "Test",
+            "phone": "+79009999991",
+            "session_string": "fake-session-string-stub",
+            "role": "sender",
+            "rate_per_min": 8,
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["sender"]["rate_limits"]["per_minute"] == 8
+    assert len(body["warnings"]) == 1
+    assert body["warnings"][0]["field"] == "rate_per_min"
+    assert body["warnings"][0]["value"] == 8
+
+
+async def test_create_sender_defaults_rate_limits(
+    async_client, valid_supabase_jwt
+):
+    """POST /senders без rate_per_* → defaults 4/20/150, без warnings."""
+    token, _ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="create-default"
+    )
+    r = await async_client.post(
+        "/api/v1/senders",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "slug": "create-default-1",
+            "name": "Test",
+            "phone": "+79009999992",
+            "session_string": "fake-session-string-stub",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["sender"]["rate_limits"] == {
+        "per_minute": 4, "per_hour": 20, "per_day": 150,
+    }
+    assert body["warnings"] == []
+    assert body["sender"]["status"] == "active"
+
+
+# ─── Update with hard cap ────────────────────────────────────────────────────
+
+
+async def test_patch_rate_limit_just_at_hard_cap_ok(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """rate_per_min=10 (=hard cap, не >) → 200 + warning (т.к. >soft cap=4)."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="rl-edge"
+    )
+    await _insert_sender_raw(async_db_session, ws, "rl-edge-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/rl-edge-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"rate_per_min": 10, "rate_per_hour": 50, "rate_per_day": 300},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # 10/50/300 — на hard cap, не превышают его → warnings все три (т.к. > soft cap).
+    assert len(body["warnings"]) == 3

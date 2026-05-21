@@ -8,7 +8,7 @@ from app.database import init_db, engine
 from app.services.telegram import telegram_service  # noqa: F401  (kept for startup-side warmup of module)
 from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
-from app.routers import health, workspace
+from app.routers import health, workspace, senders
 
 # Configure logging
 logging.basicConfig(
@@ -59,10 +59,12 @@ app.add_middleware(
     allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
 )
 
-# Include routers (D-14: only health + workspace in Phase 1; old business routers
-# will be rewritten on top of workspace_id in Phase 2-4).
+# Include routers.
+#   Phase 1: health, workspace (D-14 lockdown)
+#   Phase 2: senders (workspace-scoped, replaces legacy senders.py)
 app.include_router(health.router)
 app.include_router(workspace.router)
+app.include_router(senders.router)
 
 
 @app.get("/")

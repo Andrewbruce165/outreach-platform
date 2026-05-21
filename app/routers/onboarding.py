@@ -201,7 +201,9 @@ async def _auto_save_reauth(session_data: dict, session_string: str) -> None:
         if sender:
             sender.session_string = encrypt_session(session_string)
             sender.auth_status = "ok"
-            sender.is_active = True
+            # Phase 2 (D-11): is_active dropped — derived 'active' from
+            # lifecycle_status='active' AND auth_status='ok'. Lifecycle сами
+            # не трогаем (пользователь мог явно поставить 'paused').
             await db.commit()
             logger.info(f"🔄 Реавторизация: session обновлён для {reauth_slug}, auth_status -> ok")
 

@@ -162,13 +162,16 @@ class WarmupWorker:
 
     async def _get_active_pool(self, db: AsyncSession) -> list[dict]:
         """Активные участники пула с данными sender'а."""
+        # Phase 2 (D-11/D-12): senders.is_active dropped → lifecycle_status + auth_status.
+        # warmup_pool.is_active — отдельная колонка (другая модель), остаётся.
         result = await db.execute(text("""
             SELECT wp.sender_id, wp.enrolled_at,
                    s.slug, s.phone, s.session_string
             FROM warmup_pool wp
             JOIN senders s ON s.id = wp.sender_id
             WHERE wp.is_active = true
-              AND s.is_active = true
+              AND s.lifecycle_status = 'active'
+              AND s.auth_status = 'ok'
               AND s.role = 'sender'
         """))
         rows = result.fetchall()
@@ -241,9 +244,10 @@ class WarmupWorker:
             to_id   = session["sender_b_id"]
 
         # Загружаем данные обоих аккаунтов
+        # Phase 2 (D-11/D-12): "eligible" = lifecycle_status='active' AND auth_status='ok'.
         result = await db.execute(
             text("""
-                SELECT id, slug, phone, session_string, is_active
+                SELECT id, slug, phone, session_string, lifecycle_status, auth_status
                 FROM senders WHERE id = ANY(:ids)
             """),
             {"ids": [from_id, to_id]}
@@ -251,7 +255,9 @@ class WarmupWorker:
         senders_map = {
             str(r[0]): {
                 "id": str(r[0]), "slug": r[1],
-                "phone": r[2], "session_string": r[3], "is_active": r[4]
+                "phone": r[2], "session_string": r[3],
+                "lifecycle_status": r[4], "auth_status": r[5],
+                "is_eligible": (r[4] == "active" and r[5] == "ok"),
             }
             for r in result.fetchall()
         }
@@ -263,8 +269,12 @@ class WarmupWorker:
         from_sender = senders_map[from_id]
         to_sender   = senders_map[to_id]
 
-        if not from_sender["is_active"] or not to_sender["is_active"]:
-            logger.warning(f"🔥 Warmup {session['id'][:8]}: один из аккаунтов неактивен")
+        if not from_sender["is_eligible"] or not to_sender["is_eligible"]:
+            logger.warning(
+                f"🔥 Warmup {session['id'][:8]}: один из аккаунтов не eligible "
+                f"(from lifecycle={from_sender['lifecycle_status']} auth={from_sender['auth_status']}, "
+                f"to lifecycle={to_sender['lifecycle_status']} auth={to_sender['auth_status']})"
+            )
             return
 
         # Проверяем дневной лимит отправителя

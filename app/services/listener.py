@@ -142,15 +142,21 @@ class TelegramListener:
         self._warmup_cache_ts: float = 0.0
 
     async def _set_auth_status(self, sender_id: str, slug: str, auth_status: str):
-        """Update sender auth_status in DB."""
+        """Update sender auth_status in DB.
+
+        Phase 2 (D-11/D-12): is_active column dropped — derived status='error'
+        is computed at read-time from auth_status (queue.py, senders router).
+        """
         try:
             async with AsyncSessionLocal() as db:
                 await db.execute(
-                    text("UPDATE senders SET auth_status = :status, is_active = false WHERE id = :sid"),
+                    text("UPDATE senders SET auth_status = :status WHERE id = :sid"),
                     {"status": auth_status, "sid": sender_id}
                 )
                 await db.commit()
-            logger.warning(f"auth_status for {slug} -> {auth_status}, deactivated")
+            logger.warning(
+                f"auth_status for {slug} -> {auth_status} (derived status: error)"
+            )
         except Exception as e:
             logger.error(f"Failed to update auth_status for {slug}: {e}")
 
@@ -324,11 +330,14 @@ class TelegramListener:
         Checker-аккаунты (role='checker') не должны слушать входящие сообщения.
         """
         async with AsyncSessionLocal() as session:
+            # Phase 2 (D-11/D-12): is_active dropped — filter by lifecycle_status + auth_status.
             result = await session.execute(
                 text("""
                     SELECT id, slug, phone, session_string, ai_context_id, proxy
                     FROM senders
-                    WHERE is_active = true AND role = 'sender'
+                    WHERE role = 'sender'
+                      AND lifecycle_status = 'active'
+                      AND auth_status = 'ok'
                 """)
             )
             rows = result.fetchall()
@@ -467,11 +476,16 @@ class TelegramListener:
             return
         try:
             async with AsyncSessionLocal() as session:
+                # Phase 2: senders.is_active dropped → lifecycle_status + auth_status.
+                # warmup_pool.is_active — отдельная колонка (другая модель), остаётся.
                 result = await session.execute(text("""
                     SELECT s.phone, s.telegram_id, s.id
                     FROM warmup_pool wp
                     JOIN senders s ON s.id = wp.sender_id
-                    WHERE wp.is_active = true AND s.is_active = true AND s.role = 'sender'
+                    WHERE wp.is_active = true
+                      AND s.lifecycle_status = 'active'
+                      AND s.auth_status = 'ok'
+                      AND s.role = 'sender'
                 """))
                 rows = result.fetchall()
                 self._warmup_phones       = {r[0] for r in rows if r[0]}
