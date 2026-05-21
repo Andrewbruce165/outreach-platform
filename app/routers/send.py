@@ -68,7 +68,8 @@ async def send_message(
                 AIContext.is_active == True,
             )
         )
-        if ctx_result.scalar_one_or_none() is None:
+        ctx = ctx_result.scalar_one_or_none()
+        if ctx is None:
             return EnqueueResponse(
                 success=False,
                 queued=False,
@@ -80,10 +81,12 @@ async def send_message(
             )
 
         try:
+            # Phase 02.1 CR-03: pass workspace_id from AIContext.
             sender = await get_or_assign_sender(
                 db=db,
                 context_id=request.ai_context_id,
                 contact_phone=request.recipient_phone,
+                workspace_id=ctx.workspace_id,
             )
         except ValueError as e:
             return EnqueueResponse(
