@@ -23,9 +23,9 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    user: root
+    # Phase 2 (D-18): host socket mount removed — listener auto-reconciles
+    # via app/services/listener.py::_reconcile_loop. No more
+    # subprocess.run(['docker','restart','telegram-listener']) in API code.
     environment:
       DATABASE_URL: postgresql+asyncpg://outreach_user:outreach_secure_pass_2026@db:5432/outreach_platform
       TELEGRAM_API_ID: ${TELEGRAM_API_ID}
