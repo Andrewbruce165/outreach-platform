@@ -10,7 +10,7 @@
 
 - [x] **Phase 1: Workspace Foundation** — мультитенантная схема БД + auth middleware + новый API-скелет (completed 2026-05-21)
 - [ ] **Phase 2: TG Accounts & Contacts** — онбординг TG-аккаунтов в workspace + база контактов с папками + проверка в TG
-- [ ] **Phase 02.1: Multi-tenant Worker Hardening** — закрыть BLOCKER findings code-review (queue/listener/warmup/rotation без workspace_id, reauth, /health, SKIP LOCKED)
+- [x] **Phase 02.1: Multi-tenant Worker Hardening** — закрыть BLOCKER findings code-review (queue/listener/warmup/rotation без workspace_id, reauth, /health, SKIP LOCKED) (completed 2026-05-21)
 - [ ] **Phase 3: Agents (AI Templates)** — переиспользуемые AI-агенты на уровне workspace
 - [ ] **Phase 4: Campaigns** — модель кампании + расписание + сигналы + webhook/tools + рерайт очереди
 - [ ] **Phase 5: Inbox & Analytics** — inbox с фильтром по кампании + ручник + метрики + лог LLM-запросов
@@ -80,13 +80,13 @@ Plans:
 5. ContactCheckWorker безопасен при горизонтальном масштабе — `FOR UPDATE OF c SKIP LOCKED` + `tg_checked_at` claim (CR-08)
 6. `_verify_api_key` кэширован (LRU/TTL 5 мин) + `hmac.compare_digest` + `datetime.now(timezone.utc)` — n8n push с тем же ключом не делает bcrypt на каждом запросе (CR-09)
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 
-- [ ] 02.1-01: Worker workspace_id sweep (queue/listener/warmup/rotation) + warmup partitioning + SQL precedence fix — CR-01, CR-02, CR-03, CR-04, CR-06
-- [ ] 02.1-02: Reauth flow rewrite + migration 014 (slug per-workspace UNIQUE + onboarding_sessions.original_sender_id) — CR-05, WR-02
-- [ ] 02.1-03: Health lockdown + ContactCheckWorker SKIP LOCKED + _verify_api_key LRU cache — CR-07, CR-08, CR-09
+- [x] 02.1-01: Worker workspace_id sweep (queue/listener/warmup/rotation) + warmup partitioning + SQL precedence fix — CR-01, CR-02, CR-03, CR-04, CR-06
+- [x] 02.1-02: Reauth flow rewrite + migration 014 (slug per-workspace UNIQUE + onboarding_sessions.original_sender_id) — CR-05, WR-02
+- [x] 02.1-03: Health lockdown + ContactCheckWorker SKIP LOCKED + _verify_api_key LRU cache — CR-07, CR-08, CR-09
 
 ### Phase 3: Agents (AI Templates)
 
@@ -186,7 +186,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Workspace Foundation | 3/3 | Complete | 2026-05-21 |
 | 2. TG Accounts & Contacts | 5/5 | Verified (gaps_found → 02.1) | 2026-05-21 |
-| 02.1. Worker Hardening | 0/3 | Planned | - |
+| 02.1. Worker Hardening | 3/3 | Complete   | 2026-05-21 |
 | 3. Agents (AI Templates) | 0/2 | Not started | - |
 | 4. Campaigns | 0/5 | Not started | - |
 | 5. Inbox & Analytics | 0/4 | Not started | - |

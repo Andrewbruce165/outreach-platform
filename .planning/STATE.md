@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
+status: executing
 stopped_at: Completed 02-05-PLAN.md — Phase 2 closed (CONT-04 final)
-last_updated: "2026-05-21T18:36:47.955Z"
-last_activity: 2026-05-21
+last_updated: "2026-05-21T20:38:15.290Z"
+last_activity: 2026-05-21 -- Phase 02.1 execution started
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 2
-  total_plans: 8
+  total_plans: 11
   completed_plans: 8
-  percent: 100
+  percent: 73
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 02 — tg-accounts-contacts
+**Current focus:** Phase 02.1 — worker-hardening
 
 ## Current Position
 
-Phase: 02 (tg-accounts-contacts) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
-Last activity: 2026-05-21
+Phase: 02.1 (worker-hardening) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 02.1
+Last activity: 2026-05-21 -- Phase 02.1 execution started
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
