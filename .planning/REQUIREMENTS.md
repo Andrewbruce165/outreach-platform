@@ -22,11 +22,11 @@
 
 ### TG Account Onboarding (Phase 2)
 
-- [ ] **ONBD-01**: Пользователь добавляет Telegram-аккаунт через телефон + SMS-код
-- [ ] **ONBD-02**: Поддерживается 2FA (пароль Telegram) при онбординге
-- [ ] **ONBD-03**: Поддерживается QR-вход как альтернатива SMS
-- [ ] **ONBD-04**: Добавленный аккаунт привязан к workspace пользователя
-- [ ] **ONBD-05**: Пользователь видит список своих аккаунтов со статусом
+- [x] **ONBD-01**: Пользователь добавляет Telegram-аккаунт через телефон + SMS-код
+- [x] **ONBD-02**: Поддерживается 2FA (пароль Telegram) при онбординге
+- [x] **ONBD-03**: Поддерживается QR-вход как альтернатива SMS
+- [x] **ONBD-04**: Добавленный аккаунт привязан к workspace пользователя
+- [x] **ONBD-05**: Пользователь видит список своих аккаунтов со статусом
 
 ### TG Account Settings (Phase 2)
 
@@ -141,11 +141,11 @@
 | AUTH-02 | Phase 1 | Pending |
 | AUTH-03 | Phase 1 | Pending |
 | AUTH-04 | Phase 1 | Pending |
-| ONBD-01 | Phase 2 | Pending |
-| ONBD-02 | Phase 2 | Pending |
-| ONBD-03 | Phase 2 | Pending |
-| ONBD-04 | Phase 2 | Pending |
-| ONBD-05 | Phase 2 | Pending |
+| ONBD-01 | Phase 2 | Complete |
+| ONBD-02 | Phase 2 | Complete |
+| ONBD-03 | Phase 2 | Complete |
+| ONBD-04 | Phase 2 | Complete |
+| ONBD-05 | Phase 2 | Complete |
 | SNDR-01 | Phase 2 | Complete |
 | SNDR-02 | Phase 2 | Complete |
 | SNDR-03 | Phase 2 | Complete |
