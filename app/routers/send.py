@@ -97,8 +97,12 @@ async def send_message(
             )
 
     try:
+        # Phase 02.1 CR-01: pass workspace_id (NOT NULL on message_queue).
+        # TODO(02.1-03): send.py legacy — needs full AuthCtx migration to derive
+        # workspace_id from the caller's API key; for now we use sender.workspace_id.
         info = await enqueue_message(
             db=db,
+            workspace_id=sender.workspace_id,
             sender_id=sender.id,
             sender_slug=sender.slug,
             recipient_phone=request.recipient_phone,
@@ -212,8 +216,10 @@ async def send_file(
             )
 
     try:
+        # Phase 02.1 CR-01: pass workspace_id (NOT NULL on message_queue).
         info = await enqueue_file(
             db=db,
+            workspace_id=sender.workspace_id,
             sender_id=sender.id,
             sender_slug=sender.slug,
             recipient_phone=request.recipient_phone,
@@ -298,8 +304,10 @@ async def send_batch(
     queued = 0
     for recipient in request.recipients:
         try:
+            # Phase 02.1 CR-01: pass workspace_id (NOT NULL on message_queue).
             info = await enqueue_message(
                 db=db,
+                workspace_id=sender.workspace_id,
                 sender_id=sender.id,
                 sender_slug=sender.slug,
                 recipient_phone=recipient.phone,

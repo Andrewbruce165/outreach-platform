@@ -405,13 +405,26 @@ class TelegramListener:
                 return conv_data
 
             # Создаём новый
+            # Phase 02.1 CR-02: conversations.workspace_id NOT NULL после миграции 012 —
+            # подтягиваем workspace_id из senders (источник правды для tenant-привязки).
+            ws_row = await session.execute(
+                text("SELECT workspace_id FROM senders WHERE id = :sid"),
+                {"sid": sender_id}
+            )
+            ws_result = ws_row.fetchone()
+            if not ws_result:
+                raise SQLAlchemyError(
+                    f"Sender {sender_id} not found — cannot create conversation"
+                )
+            workspace_id = str(ws_result[0])
+
             result = await session.execute(
                 text("""
-                    INSERT INTO conversations (sender_id, contact_phone, contact_name, contact_telegram_id, ai_enabled, ai_context_id)
-                    VALUES (:sender_id, :phone, :name, :tg_id, true, :ai_context_id)
+                    INSERT INTO conversations (workspace_id, sender_id, contact_phone, contact_name, contact_telegram_id, ai_enabled, ai_context_id)
+                    VALUES (:wid, :sender_id, :phone, :name, :tg_id, true, :ai_context_id)
                     RETURNING id
                 """),
-                {"sender_id": sender_id, "phone": contact_phone, "name": contact_name, "tg_id": contact_telegram_id, "ai_context_id": ai_context_id}
+                {"wid": workspace_id, "sender_id": sender_id, "phone": contact_phone, "name": contact_name, "tg_id": contact_telegram_id, "ai_context_id": ai_context_id}
             )
             await session.commit()
             row = result.fetchone()

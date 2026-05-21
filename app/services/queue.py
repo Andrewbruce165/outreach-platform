@@ -431,7 +431,10 @@ class QueueWorker:
                     )
 
                     # Write to messages_log
+                    # Phase 02.1 CR-01: workspace_id NOT NULL after migration 012 —
+                    # propagate from sender to avoid NotNullViolation on first send.
                     log_entry = MessageLog(
+                        workspace_id=sender.workspace_id,
                         sender_id=sender.id,
                         recipient_phone=item.recipient_phone,
                         recipient_name=item.recipient_name,
@@ -649,7 +652,10 @@ class QueueWorker:
         )
 
         if new_status == QueueItemStatus.failed:
+            # Phase 02.1 CR-01: workspace_id NOT NULL — derive from queue item
+            # (which was tagged with workspace_id at enqueue time).
             log_entry = MessageLog(
+                workspace_id=item.workspace_id,
                 sender_id=item.sender_id,
                 recipient_phone=item.recipient_phone,
                 recipient_name=item.recipient_name,
@@ -681,14 +687,17 @@ class QueueWorker:
             if conv_row:
                 conversation_id = str(conv_row[0])
             else:
+                # Phase 02.1 CR-01: workspace_id NOT NULL on conversations after
+                # migration 012 — derive from sender (single source of truth).
                 r2 = await db.execute(
                     text("""
                         INSERT INTO conversations
-                            (sender_id, contact_phone, contact_name, contact_telegram_id, ai_enabled, ai_context_id)
-                        VALUES (:sid, :phone, :name, :tg_id, true, :ai_ctx)
+                            (workspace_id, sender_id, contact_phone, contact_name, contact_telegram_id, ai_enabled, ai_context_id)
+                        VALUES (:wid, :sid, :phone, :name, :tg_id, true, :ai_ctx)
                         RETURNING id
                     """),
                     {
+                        "wid": str(sender.workspace_id),
                         "sid": str(sender.id),
                         "phone": item.recipient_phone,
                         "name": recipient_name,
@@ -761,6 +770,7 @@ queue_worker = QueueWorker()
 
 async def enqueue_message(
     db: AsyncSession,
+    workspace_id,
     sender_id,
     sender_slug: str,
     recipient_phone: str,
@@ -771,8 +781,14 @@ async def enqueue_message(
     priority: int = 0,
     callback_url: Optional[str] = None,
 ) -> dict:
-    """Add a message to the queue. Returns queue info dict."""
+    """Add a message to the queue. Returns queue info dict.
+
+    Phase 02.1 CR-01: workspace_id is required (message_queue.workspace_id
+    NOT NULL after migration 012). Callers must pass the workspace_id from
+    AuthCtx or the sender's workspace_id.
+    """
     item = MessageQueue(
+        workspace_id=workspace_id,
         sender_id=sender_id,
         item_type=QueueItemType.message,
         recipient_phone=recipient_phone,
@@ -799,6 +815,7 @@ async def enqueue_message(
 
 async def enqueue_file(
     db: AsyncSession,
+    workspace_id,
     sender_id,
     sender_slug: str,
     recipient_phone: str,
@@ -810,8 +827,13 @@ async def enqueue_file(
     priority: int = 0,
     callback_url: Optional[str] = None,
 ) -> dict:
-    """Add a file send to the queue. Returns queue info dict."""
+    """Add a file send to the queue. Returns queue info dict.
+
+    Phase 02.1 CR-01: workspace_id is required (message_queue.workspace_id
+    NOT NULL after migration 012).
+    """
     item = MessageQueue(
+        workspace_id=workspace_id,
         sender_id=sender_id,
         item_type=QueueItemType.file,
         recipient_phone=recipient_phone,
