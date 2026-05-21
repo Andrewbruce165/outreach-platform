@@ -77,7 +77,9 @@ class Sender(Base):
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
-    slug = Column(String(50), unique=True, nullable=False, index=True)
+    # Phase 02.1 (WR-02): slug per-workspace UNIQUE via idx_senders_workspace_slug
+    # in migration 014. Globally unique constraint removed.
+    slug = Column(String(50), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     phone = Column(String(20), nullable=False)
     session_string = Column(Text, nullable=False)  # Encrypted
@@ -414,6 +416,12 @@ class OnboardingSession(Base):
     proxy = Column(JSONB, nullable=True)
     # CHECK ('code_sent','awaiting_2fa','completed','failed') in migration 013
     status = Column(String(20), nullable=False)
+    # Phase 02.1 (CR-05): reauth marker. NULL = обычный onboarding (INSERT new sender).
+    # NOT NULL = reauth существующего sender'а (UPDATE session_string + auth_status).
+    # Migration 014 добавляет колонку + partial index.
+    original_sender_id = Column(UUID(as_uuid=True),
+                                ForeignKey("senders.id", ondelete="CASCADE"),
+                                nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
