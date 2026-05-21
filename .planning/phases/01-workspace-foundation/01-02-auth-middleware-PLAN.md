@@ -13,6 +13,7 @@ files_modified:
   - tests/test_migration_012.py
   - tests/test_auth_dep.py
   - app/utils/auth.py
+  - app/config.py
 autonomous: true
 requirements:
   - AUTH-02
@@ -197,14 +198,16 @@ markers = [
 **Часть D — создать `tests/conftest.py`** с фикстурами:
 
 ```python
-"""
-Pytest fixtures для Phase 1 (auth_dep + workspace router тесты).
+"""pytest-фикстуры для outreach-platform."""
 
-Стратегия:
-- async_db_session: каждый тест в своей транзакции, rollback на teardown — изоляция.
-- async_client: httpx.AsyncClient + ASGITransport(app) — in-process FastAPI без сети.
-- valid_supabase_jwt: фабрика, генерирует HS256 JWT с тестовым SUPABASE_JWT_SECRET.
-"""
+import os
+
+# Выставляем env vars ДО любого импорта app.* — иначе pydantic Settings
+# упадёт с ValidationError на module-level get_settings() в app/utils/auth.py.
+os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-for-pytest-only-do-not-use-in-prod")
+os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
+os.environ.setdefault("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/outreach_test")
 
 import logging
 from typing import AsyncGenerator, Callable
@@ -214,9 +217,10 @@ from httpx import ASGITransport, AsyncClient
 from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.database import AsyncSessionLocal, init_db, engine, Base
-from app.main import app
+# Только теперь — импорты app:
+from app.config import get_settings  # noqa: E402
+from app.database import AsyncSessionLocal, init_db, engine, Base  # noqa: E402
+from app.main import app  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -224,24 +228,18 @@ logger = logging.getLogger(__name__)
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def _setup_database():
     """Создаёт схему перед всеми тестами и применяет миграцию 012."""
-    import os
-    from sqlalchemy import text
+    import pathlib
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        # apply migration 012 (raw SQL)
-        migration_path = os.path.join(
-            os.path.dirname(__file__), "..", "migrations", "012_workspace.sql"
-        )
-        with open(migration_path) as f:
-            sql = f.read()
-        # Удаляем BEGIN/COMMIT — engine.begin() уже даёт транзакцию
-        sql_no_tx = sql.replace("BEGIN;", "").replace("COMMIT;", "")
-        for statement in sql_no_tx.split(";"):
-            stmt = statement.strip()
-            if stmt:
-                await conn.execute(text(stmt))
+        # Применяем миграцию целиком через exec_driver_sql (не split по ";" —
+        # partial-индексы WHERE revoked_at IS NULL и CHECK с запятыми ломают наивный сплиттер).
+        # BEGIN/COMMIT в миграции уже есть, но run_sync даёт нам autocommit-engine для setup,
+        # поэтому оставляем как есть — Postgres выполнит транзакцию как одну statement-batch.
+        PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+        sql = (PROJECT_ROOT / "migrations" / "012_workspace.sql").read_text()
+        await conn.exec_driver_sql(sql)
 
     yield
 
@@ -336,6 +334,8 @@ grep -q "pytest_asyncio.fixture" tests/conftest.py
 - Все async фикстуры декорированы `@pytest_asyncio.fixture` (НЕ `@pytest.fixture`)
 - Импорт `from app.main import app` присутствует
 - НЕТ упоминания `pytest-postgresql` или `requirements-dev.txt` (minimum viable infra)
+- conftest.py применяет миграцию через exec_driver_sql целиком, не split по ";" (B-1: защита от partial-индексов `WHERE revoked_at IS NULL` и CHECK с запятыми)
+- conftest.py использует os.environ.setdefault для SUPABASE_JWT_SECRET/SUPABASE_URL/CORS_ALLOWED_ORIGINS/DATABASE_URL ПЕРЕД import app.* (B-2: иначе pydantic Settings падает с ValidationError на module-level get_settings())
   </acceptance_criteria>
   <done>
 Pytest-инфраструктура установлена с нуля; bcrypt доступен для импорта; фикстуры готовы для тестов миграции и auth_dep в Task 3-4.
@@ -370,20 +370,20 @@ Pytest-инфраструктура установлена с нуля; bcrypt �
     - /Users/andrewbruce/Documents/outreach-platform/.planning/codebase/CONVENTIONS.md (§Error Handling — dict detail с code+message; §Logging — logger через __name__)
   </read_first>
   <action>
-**ВНИМАНИЕ:** Этот task зависит от того, что `app/config.py` уже содержит `supabase_jwt_secret: str` (это будет добавлено в плане 01-03 Task 1, но 01-03 в той же Wave 2). Чтобы избежать порядка-зависимости в Wave 2 — этот task **сам добавит обязательные поля в config.py**, если их нет. Это исключение из принципа exclusive ownership ради минимизации wave-depth.
+**ВНИМАНИЕ:** `app/config.py` мутируется и здесь (01-02 Task 2), и в плане 01-03 (Task 1). Чтобы избежать дрейфа — формулировка ниже даёт ЧЁТКУЮ минимальную мутацию.
 
-**Часть A — pre-flight: проверить и добавить minimum в app/config.py** (defensive):
+**Часть A — добавить ровно одно поле в `app/config.py`** (минимальная мутация):
 
-Прочитать `app/config.py`. Если поле `supabase_jwt_secret: str` ОТСУТСТВУЕТ — добавить в `Settings` класс:
+Открыть `app/config.py`. В классе `Settings` добавить ровно одно новое поле в подходящую секцию (создать секцию `# Supabase (Phase 1)` если её нет):
 
 ```python
     # Supabase (Phase 1)
-    supabase_jwt_secret: str
+    supabase_jwt_secret: str = Field(..., description="HS256 secret из Supabase project settings → API → JWT Settings")
 ```
 
-(Полная конфигурация — `supabase_url`, `cors_allowed_origins`, удаление `api_key` — это Task 1 плана 01-03. Здесь — минимум для работы auth.py.)
+НЕ удалять `api_key`, НЕ добавлять `supabase_url`/`cors_allowed_origins`/property — это сделает план 01-03 Task 1. Минимальная мутация, чтобы `app/utils/auth.py` мог импортироваться сейчас, а 01-03 расширит config дальше.
 
-Если поле ALREADY есть (план 01-03 завершён раньше) — не трогать config.py, перейти к части B.
+Если поле `supabase_jwt_secret: str` ALREADY есть (план 01-03 завершён раньше — но он зависит от 01-02, так что это unlikely) — не трогать config.py, перейти к части B.
 
 **Часть B — создать `app/utils/auth.py`** со следующей структурой (~150 строк):
 
@@ -689,6 +689,8 @@ python3 -c "from app.utils.auth import auth_dep, AuthCtx; from uuid import UUID;
 - НЕТ `print(` в файле; используется `logger = logging.getLogger(__name__)`
 - НЕ логируется полный `raw_token` или `token` — только prefix (`prefix={prefix}` или `supabase_user_id[:8]`)
 - `app/config.py` содержит `supabase_jwt_secret: str` (defensive added если ещё не было)
+- `grep 'supabase_jwt_secret' app/config.py` exits 0 (B-3: поле добавлено в этом плане)
+- `grep -c 'supabase_url\|cors_allowed_origins' app/config.py` == 0 (B-3: эти поля добавит план 01-03 Task 1, в 01-02 их быть НЕ должно)
 - Импортируется в Python: `python3 -c "from app.utils.auth import auth_dep, AuthCtx"` exit 0
   </acceptance_criteria>
   <done>
@@ -964,16 +966,33 @@ async def test_lazy_workspace_create_without_email(async_db_session: AsyncSessio
 
 
 async def test_repeated_request_finds_existing(async_db_session: AsyncSession):
-    """Повторный запрос с тем же sub → тот же workspace_id, без дубликата."""
+    """Повторный запрос с тем же sub → тот же workspace_id, без дубликата.
+
+    W-1 защита: между двумя вызовами _resolve_or_create_workspace явный flush()
+    гарантирует видимость INSERT'а для последующего SELECT (защита от identity
+    map / autoflush — без flush в редких race условиях SELECT может не увидеть
+    свежевставленный row).
+    """
     sub = "returning-user-uuid"
     email = "returning@example.com"
 
     ctx1 = await _resolve_or_create_workspace(async_db_session, sub, email)
+    # W-1: явный flush гарантирует видимость INSERT для последующего SELECT
+    await async_db_session.flush()
     ctx2 = await _resolve_or_create_workspace(async_db_session, sub, email)
 
     assert ctx1.workspace_id == ctx2.workspace_id
 
-    # В БД только одна запись user_workspaces
+    # В БД только одна запись user_workspaces — финальный raw COUNT,
+    # независимый от identity map
+    from sqlalchemy import text
+    count_result = await async_db_session.execute(
+        text("SELECT COUNT(*) FROM user_workspaces WHERE supabase_user_id = :s"),
+        {"s": sub},
+    )
+    assert count_result.scalar() == 1
+
+    # Дополнительно — через ORM
     result = await async_db_session.execute(
         select(UserWorkspace).where(UserWorkspace.supabase_user_id == sub)
     )

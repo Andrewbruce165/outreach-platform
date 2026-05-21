@@ -361,6 +361,7 @@ python3 -c "from app.models import Workspace, UserWorkspace, WorkspaceApiKey, Se
 - Все 11 `workspace_id` колонок имеют `ForeignKey("workspaces.id", ondelete="CASCADE")`
 - Не сломан импорт остальных моделей: `python3 -c "from app.models import Sender, MessageLog, ContactCache, AIContext, MessageQueue, Conversation, WarmupPool, WarmupSession, WarmupMessage, ProxyPool, ContextContactAssignment"` exit 0
 - НЕ добавлен `relationship("Workspace")` в существующие 11 моделей (избегаем circular imports — `grep -c 'relationship("Workspace")' app/models/__init__.py` == 2, только в UserWorkspace и WorkspaceApiKey)
+- Все 11 FK-определений `workspace_id` в `app/models/__init__.py` содержат `ondelete="CASCADE"` (синхронность с миграцией 012, защита от Pitfall 4 — orphan rows при удалении workspace). Команда проверки: `grep -c 'ondelete="CASCADE"' app/models/__init__.py` >= 11 (B-5)
   </acceptance_criteria>
   <done>
 ORM-модели синхронны с миграцией 012; импорт работает; все 11 моделей имеют NOT NULL workspace_id FK; 3 новые модели заиндексированы в barrel.

@@ -249,7 +249,7 @@ Config очищен: Supabase + CORS добавлены, api_key удалён (�
   <read_first>
     - /Users/andrewbruce/Documents/outreach-platform/app/routers/contexts.py (lines 1-260 — canonical CRUD pattern: header, inline schemas, GET list, POST create, PATCH partial update, DELETE soft-style)
     - /Users/andrewbruce/Documents/outreach-platform/app/routers/senders.py (lines 67-105 — POST + db.refresh pattern)
-    - /Users/andrewbruce/Documents/outreach-platform/app/routers/health.py (минимальный пример живого роутера)
+    - /Users/andrewbruce/Documents/outreach-platform/app/routers/health.py (минимальный пример живого роутера + проверить текущий prefix роутера для B-4 Часть F)
     - /Users/andrewbruce/Documents/outreach-platform/app/main.py (lines 11-14: импорты роутеров; 26-46: lifespan; 56-63: CORS; 66-75: include_router) — что выпилить
     - /Users/andrewbruce/Documents/outreach-platform/app/utils/auth.py (импорт auth_dep + AuthCtx)
     - /Users/andrewbruce/Documents/outreach-platform/app/models/__init__.py (Workspace, WorkspaceApiKey — для ORM-запросов)
@@ -627,7 +627,7 @@ async def revoke_api_key(
        CORSMiddleware,
        allow_origins=settings.cors_origins_list,
        allow_credentials=True,
-       allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+       allow_methods=["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight
        allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
    )
    ```
@@ -660,6 +660,16 @@ async def revoke_api_key(
 **Что НЕ делать в docker-compose:**
 - НЕ удалять `OPENAI_API_KEY`, `TELEGRAM_API_*`, `ENCRYPTION_KEY` — они нужны.
 - НЕ менять `volumes`, `networks`, `depends_on`.
+
+**Часть F — проверить prefix health-роутера (B-4):**
+
+Прочитать `app/routers/health.py`. Найти строку `router = APIRouter(...)`. Если `prefix` НЕ `/api/v1` (например `""` или `/health`) — добавить `prefix="/api/v1"` в APIRouter (либо альтернативно — в `include_router(health.router, prefix="/api/v1")` в `app/main.py`). Цель: итоговый health-endpoint = `GET /api/v1/health`. Если health.router уже имеет правильный prefix — ничего не менять.
+
+Команда быстрой проверки результата:
+```bash
+curl -sf http://localhost:8000/api/v1/health
+# → 200 OK
+```
   </action>
   <verify>
     <automated>
@@ -709,7 +719,9 @@ docker compose config -q 2>&1
   - Содержит `CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}` в `api` секции
   - НЕ содержит `API_KEY: ${API_KEY}` в `api` секции (но содержит в `listener` секции)
   - `docker compose config -q` exit 0
+- `app/main.py` CORSMiddleware `allow_methods` включает `HEAD` (W-2)
 - Python импорт целиком работает: `python3 -c "from app.main import app; from app.routers.workspace import router"` exit 0
+- `curl -sf http://localhost:8000/api/v1/health` возвращает 200 (B-4: health router имеет prefix `/api/v1` либо через `APIRouter(prefix=...)` либо через `include_router(..., prefix="/api/v1")`)
   </acceptance_criteria>
   <done>
 Скелет API готов: 6 endpoints зарегистрированы в FastAPI; main.py содержит только health + workspace; CORS lockdown; env vars в docker-compose; docker compose config валиден.
