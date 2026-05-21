@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-04-PLAN.md (contacts + CSV import + push API)
-last_updated: "2026-05-21T18:25:37.277Z"
+status: verifying
+stopped_at: Completed 02-05-PLAN.md — Phase 2 closed (CONT-04 final)
+last_updated: "2026-05-21T18:36:47.955Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
-  percent: 17
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 02 (tg-accounts-contacts) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-21
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -51,6 +51,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 02 P02-03 | 25min | 2 tasks | 3 files |
 | Phase 02 P02-01 | 25min | 3 tasks | 8 files |
 | Phase 02-tg-accounts-contacts P02-04 | 38min | 3 tasks | 6 files |
+| Phase 02 P05 | 35min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 02-tg-accounts-contacts]: Contacts API: two-step CSV import (preview→apply, 30-min BYTEA TTL), per-record ON CONFLICT dedup, FLDR-03 folder_name auto-create via get_or_create_by_name reuse
 - [Phase 02-tg-accounts-contacts]: D-20 has_checker check decided at INSERT time: tg_status='unchecked' fallback when workspace has no checker; plan 02-05 ContactCheckWorker filters WHERE tg_status='pending'
 - [Phase 02-tg-accounts-contacts]: Phone normalization: pure regex E.164 (no phonenumbers lib) + RU leading-8 heuristic gated by 11-digit + no leading +
+- [Phase 02]: Plan 02-05: ContactCheckWorker reuses CheckerService (no FloodWait/polite-delay duplication); JOIN LATERAL gates workspace isolation; recheck endpoint is workspace-scoped 202 Accepted; has_checker exposed for D-20 UI banner.
 
 ### Pending Todos
 
@@ -83,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-21T18:25:37.273Z
-Stopped at: Completed 02-04-PLAN.md (contacts + CSV import + push API)
+Last session: 2026-05-21T18:36:47.951Z
+Stopped at: Completed 02-05-PLAN.md — Phase 2 closed (CONT-04 final)
 Resume file: None

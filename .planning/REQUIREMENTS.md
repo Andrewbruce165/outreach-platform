@@ -39,7 +39,7 @@
 - [x] **CONT-01**: Пользователь загружает CSV с полями: телефон (обязательно), имя, компания, любые переменные
 - [x] **CONT-02**: Загруженные контакты привязаны к workspace
 - [x] **CONT-03**: Push-контакты через Workspace API (POST /api/v1/contacts)
-- [ ] **CONT-04**: При добавлении контакта проверяется наличие в Telegram через checker-аккаунт; результат сохраняется в поле статуса
+- [x] **CONT-04**: При добавлении контакта проверяется наличие в Telegram через checker-аккаунт; результат сохраняется в поле статуса
 - [x] **CONT-05**: Поля контакта: `phone, username, full_name, source, custom (JSONB)` — `custom` для произвольных переменных подстановки
 
 ### Contact Folders (Phase 2)
@@ -152,7 +152,7 @@
 | CONT-01 | Phase 2 | Complete |
 | CONT-02 | Phase 2 | Complete |
 | CONT-03 | Phase 2 | Complete |
-| CONT-04 | Phase 2 | Pending |
+| CONT-04 | Phase 2 | Complete |
 | CONT-05 | Phase 2 | Complete |
 | FLDR-01 | Phase 2 | Complete |
 | FLDR-02 | Phase 2 | Complete |
