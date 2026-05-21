@@ -51,6 +51,16 @@ async def _setup_database():
         sql_013 = (PROJECT_ROOT / "migrations" / "013_phase2.sql").read_text()
         await conn.exec_driver_sql(sql_013)
 
+        # Phase 02.1 hardening migration: per-workspace UNIQUE(slug) +
+        # onboarding_sessions.original_sender_id (CR-05, WR-02).
+        sql_014 = (PROJECT_ROOT / "migrations" / "014_phase2_1_hardening.sql").read_text()
+        await conn.exec_driver_sql(sql_014)
+
+        # Phase 3 migration: drop deprecated ai_contexts columns + drop senders.ai_context_id
+        # + UNIQUE (workspace_id, name).
+        sql_015 = (PROJECT_ROOT / "migrations" / "015_phase3.sql").read_text()
+        await conn.exec_driver_sql(sql_015)
+
     yield
 
     async with engine.begin() as conn:
@@ -105,7 +115,7 @@ def expired_supabase_jwt(valid_supabase_jwt: Callable[..., str]) -> str:
 # тестов Phase 1, и чтобы импорт ORM-моделей произошёл уже после
 # инициализации app/config через env vars выше.
 
-from app.models import Folder, Contact, Sender, Workspace  # noqa: E402
+from app.models import Folder, Contact, Sender, Workspace, AIContext  # noqa: E402
 
 
 @pytest_asyncio.fixture
@@ -167,6 +177,37 @@ async def test_folder(async_db_session: AsyncSession, test_workspace: Workspace)
     await async_db_session.commit()
     await async_db_session.refresh(f)
     return f
+
+
+@pytest_asyncio.fixture
+async def test_agent_factory(async_db_session: AsyncSession, test_workspace: Workspace):
+    """Factory for AIContext (agent) test fixtures. Phase 3 C-06.
+
+    Usage:
+        agent = await test_agent_factory(name="Sales", system_prompt="You are...")
+    """
+    counter = {"n": 0}
+
+    async def _make(**overrides) -> AIContext:
+        counter["n"] += 1
+        defaults = dict(
+            workspace_id=test_workspace.id,
+            name=f"Test Agent {counter['n']}",
+            system_prompt="You are a helpful sales agent.",
+            tone_of_voice="friendly",
+            rules="Always be polite.",
+            faq={},
+            company_info="Test Co.",
+            product_info="Test Product.",
+        )
+        defaults.update(overrides)
+        agent = AIContext(**defaults)
+        async_db_session.add(agent)
+        await async_db_session.commit()
+        await async_db_session.refresh(agent)
+        return agent
+
+    return _make
 
 
 @pytest_asyncio.fixture

@@ -507,3 +507,13 @@ async def test_patch_rate_limit_just_at_hard_cap_ok(
     body = r.json()
     # 10/50/300 — на hard cap, не превышают его → warnings все три (т.к. > soft cap).
     assert len(body["warnings"]) == 3
+
+
+# ─── Phase 3 (plan 03-01 Task 7) — senders cleanup tests ─────────────────────
+
+
+@pytest.mark.skip(reason="pending: filled by Task 7 of plan 03-01")
+async def test_response_has_no_ai_context_id():
+    """TODO(03-01 Task 7): SenderResponse must not contain ai_context_id / ai_context_name."""
+    pass
+
