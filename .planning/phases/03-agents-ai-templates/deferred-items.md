@@ -4,6 +4,10 @@
 
 ### app/routers/contexts.py — legacy AI contexts CRUD router
 
+**Resolved in plan 03-02 Task 4:** file deleted via `git rm`. Replaced by
+new workspace-scoped `app/routers/agents.py` under `/api/v1/agents` (D-02).
+No follow-up needed.
+
 **Found during:** Plan 03-01 final verification (Task 7 post-check)
 **Status:** UNREGISTERED in app/main.py — dead code, no runtime impact
 **Issue:** Router still references dropped columns (`is_active`, `max_message_length`, `response_delay_seconds`, `webhook_functions`, `document_webhook_url`) + dropped FK (`senders.ai_context_id`) in SELECT/INSERT/UPDATE statements + legacy `UPDATE senders SET ai_context_id = NULL` in DELETE handler.
@@ -24,6 +28,11 @@
 This is recorded per scope boundary of GSD deviation rules — out-of-scope discovery logged, not fixed.
 
 ### app/routers/send.py — legacy send router
+
+**Resolved in plan 03-02 Task 4:** file fully rewritten under AuthDep with
+explicit `ai_context_id` parameter (D-06). `AIContext.is_active` filter dropped,
+sender check uses `lifecycle_status=='active' AND auth_status=='ok'`.
+Registered in `app/main.py` in Task 5.
 
 **Found during:** Plan 03-01 final verification
 **Status:** UNREGISTERED in app/main.py + not imported anywhere — dead code, no runtime impact
