@@ -11,11 +11,13 @@ from app.services.warmup import warmup_worker
 from app.services.onboarding_state import onboarding_cleanup_worker
 from app.services.contact_check_worker import contact_check_worker
 from app.routers import (
+    agents,
     check_contacts,
     contacts,
     folders,
     health,
     onboarding,
+    send,
     senders,
     workspace,
 )
@@ -61,8 +63,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Outreach Platform API",
-    description="Multi-tenant Telegram outreach SaaS (Phase 1: workspace foundation)",
-    version="2.0.0-phase1",
+    description="Multi-tenant Telegram outreach SaaS (Phase 3: agents + send)",
+    version="2.0.0-phase3",
     lifespan=lifespan
 )
 
@@ -78,6 +80,7 @@ app.add_middleware(
 # Include routers.
 #   Phase 1: health, workspace (D-14 lockdown)
 #   Phase 2: senders, folders (workspace-scoped, replaces legacy routers)
+#   Phase 3: agents (CRUD AI templates), send (rewrite under AuthDep)
 app.include_router(health.router)
 app.include_router(workspace.router)
 app.include_router(senders.router)
@@ -85,6 +88,8 @@ app.include_router(folders.router)
 app.include_router(contacts.router)
 app.include_router(check_contacts.router)
 app.include_router(onboarding.router)
+app.include_router(agents.router)
+app.include_router(send.router)
 
 
 @app.get("/")
@@ -92,12 +97,14 @@ async def root():
     """Root endpoint."""
     return {
         "service": "Outreach Platform API",
-        "version": "2.0.0-phase1",
+        "version": "2.0.0-phase3",
         "docs": "/docs",
         "health": "/api/v1/health",
         "endpoints": {
             "auth_me": "POST /api/v1/auth/me",
             "workspace": "/api/v1/workspace",
             "api_keys": "/api/v1/workspace/api-keys",
+            "agents": "/api/v1/agents",  # Phase 3
+            "send": "POST /api/v1/send",  # Phase 3
         }
     }
