@@ -69,10 +69,9 @@ class AIEngine:
         try:
             result = await session.execute(
                 text("""
-                    SELECT system_prompt, tone_of_voice, rules, company_info,
-                           max_message_length, webhook_functions
+                    SELECT system_prompt, tone_of_voice, rules, company_info
                     FROM ai_contexts
-                    WHERE id = :id AND is_active = true
+                    WHERE id = :id
                 """),
                 {"id": context_id}
             )
@@ -84,8 +83,12 @@ class AIEngine:
                     "tone_of_voice": row[1] or "",
                     "rules": row[2] or "",
                     "company_info": row[3] or "",
-                    "max_message_length": row[4] or 500,
-                    "webhook_functions": row[5] or []
+                    # Phase 3 D-01: max_message_length / webhook_functions / is_active columns
+                    # dropped — provide defaults so build_system_prompt + build_tools keep working.
+                    # TODO(phase-4): max_message_length moves to Campaign; webhook_functions
+                    # moves to Campaign tools (CAMP-15).
+                    "max_message_length": 500,
+                    "webhook_functions": []
                 }
                 self._context_cache[context_id] = (ctx, time.time())
                 return ctx
