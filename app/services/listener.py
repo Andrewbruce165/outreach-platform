@@ -141,6 +141,15 @@ class TelegramListener:
         self._warmup_sender_ids: set[str] = set()
         self._warmup_cache_ts: float = 0.0
 
+        # Phase 2 (D-18): periodic reconcile loop replaces docker-restart.
+        # Diff'аем desired senders в БД с currently_connected каждые N секунд.
+        self.reconcile_interval = int(os.environ.get("LISTENER_RECONCILE_INTERVAL", "30"))
+        self._reconcile_task: Optional[asyncio.Task] = None
+        self._connected_sender_ids: set[str] = set()   # sender uuid str
+        self._proxy_snapshot: dict[str, Optional[dict]] = {}
+        self._sender_id_to_slug: dict[str, str] = {}
+        self._stop_event: Optional[asyncio.Event] = None
+
     async def _set_auth_status(self, sender_id: str, slug: str, auth_status: str):
         """Update sender auth_status in DB.
 
@@ -1030,6 +1039,10 @@ class TelegramListener:
                     await self.handle_outgoing_message(event, sender_info)
 
                 self.clients[sender_info["slug"]] = client
+                # Phase 2 (D-18): track for reconcile diff.
+                self._connected_sender_ids.add(str(sender_info["id"]))
+                self._proxy_snapshot[str(sender_info["id"])] = sender_info.get("proxy")
+                self._sender_id_to_slug[str(sender_info["id"])] = sender_info["slug"]
 
                 me = await client.get_me()
                 logger.info(f"✅ {sender_info['slug']} ({me.first_name}) — слушаем сообщения")
@@ -1073,11 +1086,19 @@ class TelegramListener:
             except AUTH_ERRORS as e:
                 logger.critical(f"❌ {sender_info['slug']}: auth error (session dead) — {e}")
                 await self._set_auth_status(sender_info["id"], sender_info["slug"], "session_expired")
+                # Phase 2 (D-18): drop from reconcile bookkeeping so next tick
+                # can re-attempt after reauth.
+                self._connected_sender_ids.discard(str(sender_info["id"]))
+                self._proxy_snapshot.pop(str(sender_info["id"]), None)
+                self.clients.pop(sender_info["slug"], None)
                 return  # no reconnect — session is dead
 
             except UserDeactivatedBanError as e:
                 logger.critical(f"❌ {sender_info['slug']}: account banned — {e}")
                 await self._set_auth_status(sender_info["id"], sender_info["slug"], "banned")
+                self._connected_sender_ids.discard(str(sender_info["id"]))
+                self._proxy_snapshot.pop(str(sender_info["id"]), None)
+                self.clients.pop(sender_info["slug"], None)
                 return  # no reconnect — account is banned
 
             except Exception as e:
@@ -1097,29 +1118,145 @@ class TelegramListener:
             logger.info(f"🔄 Реконнект {sender_info['slug']} через {delay}с...")
             await asyncio.sleep(delay)
     
+    # ─── Phase 2 (D-18): periodic reconcile loop ─────────────────────────────
+
+    async def _disconnect_sender(self, sender_id: str) -> None:
+        """Disconnect a sender's Telethon client and clear reconcile bookkeeping."""
+        slug = self._sender_id_to_slug.get(sender_id)
+        client = self.clients.pop(slug, None) if slug else None
+        if client is not None:
+            try:
+                if client.is_connected():
+                    await client.disconnect()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"🔄 [reconcile] disconnect error for {slug}: {e}")
+        self._connected_sender_ids.discard(sender_id)
+        self._proxy_snapshot.pop(sender_id, None)
+        self._sender_id_to_slug.pop(sender_id, None)
+
+    async def _reconcile_tick(self) -> dict:
+        """One reconcile pass — diff desired vs currently-connected senders.
+
+        Public-ish (single underscore) so unit tests can drive it directly
+        without spinning up the background loop. Returns counts for tests/logging.
+        """
+        desired_list = await self.get_active_senders()
+        desired = {str(s["id"]): s for s in desired_list}
+        current = set(self._connected_sender_ids)
+
+        added = 0
+        removed = 0
+        reproxied = 0
+
+        # NEW desired senders → connect.
+        for sid in set(desired.keys()) - current:
+            s = desired[sid]
+            logger.info(
+                f"🔄 [reconcile] connecting sender={s['slug']} sid={sid[:8]}"
+            )
+            asyncio.create_task(self.start_client(s))
+            added += 1
+
+        # REMOVED / paused / errored → disconnect.
+        for sid in current - set(desired.keys()):
+            slug = self._sender_id_to_slug.get(sid, "?")
+            logger.info(
+                f"🔄 [reconcile] disconnecting sender={slug} sid={sid[:8]} "
+                f"(no longer in desired set)"
+            )
+            await self._disconnect_sender(sid)
+            removed += 1
+
+        # PROXY CHANGED → disconnect; next tick will reconnect via NEW branch.
+        for sid in current & set(desired.keys()):
+            desired_proxy = desired[sid].get("proxy")
+            snapshot = self._proxy_snapshot.get(sid)
+            if desired_proxy != snapshot:
+                slug = self._sender_id_to_slug.get(sid, "?")
+                logger.info(
+                    f"🔄 [reconcile] proxy changed for sender={slug} sid={sid[:8]}, "
+                    f"will reconnect on next tick"
+                )
+                await self._disconnect_sender(sid)
+                reproxied += 1
+
+        logger.debug(
+            f"🔄 [reconcile] tick: +{added} -{removed} ~proxy={reproxied} "
+            f"total={len(self.clients)}"
+        )
+        return {
+            "added": added,
+            "removed": removed,
+            "reproxied": reproxied,
+            "total": len(self.clients),
+        }
+
+    async def _reconcile_loop(self):
+        """Periodic reconcile (D-18) — every ``reconcile_interval`` seconds."""
+        logger.info(
+            f"🔄 Reconcile loop started (interval={self.reconcile_interval}s)"
+        )
+        while self.running:
+            try:
+                await asyncio.sleep(self.reconcile_interval)
+                if not self.running:
+                    break
+                await self._reconcile_tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ [reconcile] error: {e}", exc_info=True)
+        logger.info("🛑 Reconcile loop stopped")
+
     async def run(self):
         """Запуск всех клиентов"""
         logger.info("🚀 Запуск Telegram Listener с AI Engine...")
-        
+
         senders = await self.get_active_senders()
-        
+
         if not senders:
             logger.warning("⚠️ Нет активных отправителей")
-            return
-        
+            # Phase 2 (D-18): still start the reconcile loop so newly-onboarded
+            # senders are picked up without restarting the container.
+
         logger.info(f"📋 Найдено {len(senders)} отправителей")
-        
-        # Запускаем клиенты параллельно
-        tasks = [self.start_client(s) for s in senders]
-        await asyncio.gather(*tasks)
-    
+
+        # Initial connect — fire-and-forget so we can also run reconcile in parallel.
+        for s in senders:
+            asyncio.create_task(self.start_client(s))
+
+        # Phase 2 (D-18): periodic reconcile loop.
+        self._stop_event = asyncio.Event()
+        self._reconcile_task = asyncio.create_task(
+            self._reconcile_loop(), name="listener-reconcile"
+        )
+
+        # Block until stop() flips the event.
+        await self._stop_event.wait()
+
     async def stop(self):
         """Остановка всех клиентов"""
         logger.info("🛑 Останавливаем клиенты...")
         self.running = False
-        for slug, client in self.clients.items():
-            await client.disconnect()
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._reconcile_task and not self._reconcile_task.done():
+            self._reconcile_task.cancel()
+            try:
+                await self._reconcile_task
+            except asyncio.CancelledError:
+                pass
+        for slug, client in list(self.clients.items()):
+            try:
+                if client.is_connected():
+                    await client.disconnect()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"disconnect error for {slug}: {e}")
             logger.info(f"  - {slug} отключён")
+        self.clients.clear()
+        self._connected_sender_ids.clear()
+        self._proxy_snapshot.clear()
+        self._sender_id_to_slug.clear()
 
 
 async def main():
