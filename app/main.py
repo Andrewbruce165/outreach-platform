@@ -8,7 +8,7 @@ from app.database import init_db, engine
 from app.services.telegram import telegram_service  # noqa: F401  (kept for startup-side warmup of module)
 from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
-from app.routers import health, workspace, senders
+from app.routers import folders, health, senders, workspace
 
 # Configure logging
 logging.basicConfig(
@@ -61,10 +61,11 @@ app.add_middleware(
 
 # Include routers.
 #   Phase 1: health, workspace (D-14 lockdown)
-#   Phase 2: senders (workspace-scoped, replaces legacy senders.py)
+#   Phase 2: senders, folders (workspace-scoped, replaces legacy routers)
 app.include_router(health.router)
 app.include_router(workspace.router)
 app.include_router(senders.router)
+app.include_router(folders.router)
 
 
 @app.get("/")
