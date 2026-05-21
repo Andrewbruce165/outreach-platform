@@ -10,6 +10,7 @@
 
 - [x] **Phase 1: Workspace Foundation** — мультитенантная схема БД + auth middleware + новый API-скелет (completed 2026-05-21)
 - [ ] **Phase 2: TG Accounts & Contacts** — онбординг TG-аккаунтов в workspace + база контактов с папками + проверка в TG
+- [ ] **Phase 02.1: Multi-tenant Worker Hardening** — закрыть BLOCKER findings code-review (queue/listener/warmup/rotation без workspace_id, reauth, /health, SKIP LOCKED)
 - [ ] **Phase 3: Agents (AI Templates)** — переиспользуемые AI-агенты на уровне workspace
 - [ ] **Phase 4: Campaigns** — модель кампании + расписание + сигналы + webhook/tools + рерайт очереди
 - [ ] **Phase 5: Inbox & Analytics** — inbox с фильтром по кампании + ручник + метрики + лог LLM-запросов
@@ -64,6 +65,26 @@ Plans:
 - [x] 02-05: Contact check via checker on import — async pipeline marks contacts with Telegram presence status
 
 ---
+
+### Phase 02.1: Multi-tenant Worker Hardening
+
+**Goal:** Закрыть BLOCKER findings code-review Phase 2 — все унаследованные worker'ы (queue, listener, warmup, rotation) пишут с `workspace_id`; reauth flow работает на повторе; `/health` под auth и workspace-scoped; ContactCheckWorker использует `FOR UPDATE SKIP LOCKED`; `_verify_api_key` кэширован.
+**Depends on:** Phase 2
+**Requirements**: TENT-01 (multi-tenant isolation), SNDR-01 (sender lifecycle), ONBD-01 (onboarding incl. reauth)
+**Success Criteria** (what must be TRUE):
+
+1. Все INSERT в `messages_log`, `conversations`, `context_contact_assignments`, `warmup_*` содержат `workspace_id`; нет `NotNullViolation` при отправке/входящем/warmup/ротации
+2. Warmup-парирование контактов изолировано по workspace_id (sender из workspace A не может парироваться с sender из workspace B)
+3. Reauth flow работает на повторе для того же sender_slug — нет `IntegrityError` по UNIQUE constraint
+4. `GET /api/v1/health` требует JWT и возвращает только данные текущего workspace
+5. ContactCheckWorker безопасен при горизонтальном масштабе — race-conditions отсутствуют (`FOR UPDATE SKIP LOCKED`)
+6. `_verify_api_key` кэширован (LRU/TTL) — n8n push с тем же ключом не делает bcrypt на каждом запросе
+
+**Plans:** TBD (run /gsd-plan-phase 02.1 --gaps to break down)
+
+Plans:
+
+- [ ] TBD
 
 ### Phase 3: Agents (AI Templates)
 
