@@ -93,12 +93,12 @@ class Sender(Base):
     rate_per_day = Column(Integer, nullable=False, server_default='150')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), onupdate=func.now())
-    ai_context_id = Column(UUID(as_uuid=True), ForeignKey("ai_contexts.id", ondelete="SET NULL"), nullable=True)
-    
+    # NB: ai_context_id dropped (Phase 3 D-04). Sender больше не «знает» агента —
+    # связь идёт через Campaign в Phase 4.
+
     # Relationships
     messages = relationship("MessageLog", back_populates="sender")
     contacts = relationship("ContactCache", back_populates="sender")
-    ai_context = relationship("AIContext", back_populates="senders")
 
 
 class MessageLog(Base):
@@ -157,15 +157,11 @@ class AIContext(Base):
     company_info = Column(Text, nullable=True)
     product_info = Column(Text, nullable=True)
     faq = Column(JSONB, default={})
-    max_message_length = Column(BigInteger, default=500)
-    response_delay_seconds = Column(BigInteger, default=5)
-    auto_pause_triggers = Column(JSONB, default=[])
-    is_active = Column(Boolean, default=True, server_default='true')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    # Relationships
-    senders = relationship("Sender", back_populates="ai_context")
+    # NB: max_message_length, response_delay_seconds, auto_pause_triggers, is_active dropped
+    # (Phase 3 D-01) — концерны кампании, переезжают в Phase 4 (CAMP-10/CAMP-12/CAMP-14/CAMP-15).
+    # NB: senders relationship dropped (Phase 3 D-04) — связь sender↔agent больше не через FK.
 
 
 class MessageQueue(Base):
