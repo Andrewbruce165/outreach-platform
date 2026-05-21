@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 3 context gathered
-last_updated: "2026-05-21T22:46:51.439Z"
-last_activity: 2026-05-21 -- Phase 02.1 execution started
+stopped_at: Completed 03-01-agent-model-decoupling-PLAN.md
+last_updated: "2026-05-21T23:35:35.955Z"
+last_activity: 2026-05-21
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
-  percent: 100
+  total_plans: 13
+  completed_plans: 12
+  percent: 17
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 02.1 — worker-hardening
+**Current focus:** Phase 03 — agents-ai-templates
 
 ## Current Position
 
-Phase: 02.1 (worker-hardening) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 02.1
-Last activity: 2026-05-21 -- Phase 02.1 execution started
+Phase: 03 (agents-ai-templates) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-05-21
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
@@ -52,6 +52,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 02 P02-01 | 25min | 3 tasks | 8 files |
 | Phase 02-tg-accounts-contacts P02-04 | 38min | 3 tasks | 6 files |
 | Phase 02 P05 | 35min | 2 tasks | 6 files |
+| Phase 03-agents-ai-templates P01 | 25min | 7 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 02-tg-accounts-contacts]: D-20 has_checker check decided at INSERT time: tg_status='unchecked' fallback when workspace has no checker; plan 02-05 ContactCheckWorker filters WHERE tg_status='pending'
 - [Phase 02-tg-accounts-contacts]: Phone normalization: pure regex E.164 (no phonenumbers lib) + RU leading-8 heuristic gated by 11-digit + no leading +
 - [Phase 02]: Plan 02-05: ContactCheckWorker reuses CheckerService (no FloodWait/polite-delay duplication); JOIN LATERAL gates workspace isolation; recheck endpoint is workspace-scoped 202 Accepted; has_checker exposed for D-20 UI banner.
+- [Phase 03-agents-ai-templates]: Phase 3 plan 01: migration 015 — DROP 6 ai_contexts columns + senders.ai_context_id + UNIQUE(workspace_id, name); ORM AIContext reduced to D-02 fields; 5 worker-services adapted (ai_engine/listener/rotation/queue/senders router); 7 TODO(phase-4) markers left for Campaign-level reconnection
 
 ### Pending Todos
 
@@ -85,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-21T22:46:51.422Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-agents-ai-templates/03-CONTEXT.md
+Last session: 2026-05-21T23:35:35.946Z
+Stopped at: Completed 03-01-agent-model-decoupling-PLAN.md
+Resume file: None
