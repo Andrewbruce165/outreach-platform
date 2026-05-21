@@ -38,8 +38,13 @@ async def _setup_database():
         # BEGIN/COMMIT в миграции уже есть, но run_sync даёт нам autocommit-engine для setup,
         # поэтому оставляем как есть — Postgres выполнит транзакцию как одну statement-batch.
         PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
-        sql = (PROJECT_ROOT / "migrations" / "012_workspace.sql").read_text()
-        await conn.exec_driver_sql(sql)
+        sql_012 = (PROJECT_ROOT / "migrations" / "012_workspace.sql").read_text()
+        await conn.exec_driver_sql(sql_012)
+
+        # Phase 2 migration: folders, contacts, onboarding_sessions, csv_imports
+        # + senders extension (lifecycle_status, rate_per_*, role CHECK) - is_active.
+        sql_013 = (PROJECT_ROOT / "migrations" / "013_phase2.sql").read_text()
+        await conn.exec_driver_sql(sql_013)
 
     yield
 
