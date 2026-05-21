@@ -8,7 +8,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Workspace Foundation** — мультитенантная схема БД + auth middleware + новый API-скелет
+- [x] **Phase 1: Workspace Foundation** — мультитенантная схема БД + auth middleware + новый API-скелет (completed 2026-05-21)
 - [ ] **Phase 2: TG Accounts & Contacts** — онбординг TG-аккаунтов в workspace + база контактов с папками + проверка в TG
 - [ ] **Phase 3: Agents (AI Templates)** — переиспользуемые AI-агенты на уровне workspace
 - [ ] **Phase 4: Campaigns** — модель кампании + расписание + сигналы + webhook/tools + рерайт очереди
@@ -34,9 +34,9 @@
 
 Plans:
 
-- [ ] 01-01: DB migration — add workspaces table, workspace_id FK to all core tables
-- [ ] 01-02: Auth middleware — Supabase JWT verification, workspace context injection
-- [ ] 01-03: API skeleton rewrite — new router structure, workspace API key endpoint
+- [x] 01-01: DB migration — add workspaces table, workspace_id FK to all core tables
+- [x] 01-02: Auth middleware — Supabase JWT verification, workspace context injection
+- [x] 01-03: API skeleton rewrite — new router structure, workspace API key endpoint
 
 ---
 

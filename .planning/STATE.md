@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Roadmap revised — 6 phases with Campaign entity
+stopped_at: Phase 01 complete (workspace foundation)
 last_updated: "2026-05-21T12:21:34.442Z"
 last_activity: 2026-05-21
 progress:
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 01 — workspace-foundation
+**Current focus:** Phase 02 — TG Accounts & Contacts (next; Phase 01 complete)
 
 ## Current Position
 
-Phase: 2
+Phase: 2 — TG Accounts & Contacts (next)
 Plan: Not started
-Status: Executing Phase 01
+Status: Phase 01 complete (verification passed 28/28 must_haves); ready for Phase 2 discuss/plan
 Last activity: 2026-05-21
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
 ## Performance Metrics
 
