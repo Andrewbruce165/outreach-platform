@@ -51,6 +51,12 @@
 - **D-14:** Старый `verify_api_key` (X-API-Key) **полностью удаляется**. Все 11 старых роутеров **выпиливаются из `app/main.py`** (файлы можно оставить как заготовки для рерайта в Phase 2-4, но `include_router` убирается). После Phase 1 продукт не отвечает на бизнес-запросы — только на новые workspace/auth-эндпоинты. Это сознательное решение: внешних клиентов ещё нет, AGS Foods продолжает работать в `/root/apps/telegram-api/` независимо.
 - **D-15:** `app/services/` (бизнес-логика — queue.py, listener.py, telegram.py, ai_engine.py и т.д.) **не трогается** в Phase 1. Когда роутеры будут переписываться в Phase 2-4, в каждый service-вызов добавится фильтр `workspace_id`.
 
+### Тесты, runtime изоляция (добавлено после research 2026-05-21)
+
+- **D-16:** Supabase JWT алгоритм — **HS256** (D-05 подтверждён). У клиента legacy-проект Supabase или JWT-настройки переключены на HS256 в dashboard. `SUPABASE_JWT_SECRET` берётся из Settings → API. PyJWT/JWKS не нужны.
+- **D-17:** Phase 1 включает **Wave 0: установка pytest-инфраструктуры с нуля**. Добавить `pytest`, `pytest-asyncio`, `httpx` (для AsyncClient тестов FastAPI) в `requirements.txt` (либо `requirements-dev.txt` если planner предпочтёт разделить). Создать `tests/conftest.py` с фикстурами: `async_db_session` (изолированная транзакция per-test), `valid_supabase_jwt` (фабрика, генерирует JWT с заданными claims через `python-jose` + `SUPABASE_JWT_SECRET`), `async_client` (`httpx.AsyncClient` с тестовым FastAPI app). Покрытие — миграция 012 (smoke + все 11 таблиц имеют `workspace_id`) + auth_dep (валидный JWT / невалидный JWT / отсутствие заголовка / валидный API-ключ / отозванный API-ключ / lazy-create workspace при первом входе).
+- **D-18:** `docker-compose.yml` outreach-platform — **container_name переименовать** на `outreach-platform-db`, `outreach-platform-api`, `outreach-platform-listener`. Имена `telegram-api-*` заняты прод-сервисом в `/root/apps/telegram-api/`; запуск outreach-platform с теми же именами на том же VPS убъёт прод. Сервисные имена в `docker-compose.yml` (`services:` ключи) тоже стоит переименовать для консистентности.
+
 ### Claude's Discretion
 
 - **C-01:** Точное имя нового AuthCtx/AuthDep файла (`app/utils/auth.py` рекомендовано) — planner может выбрать другое имя в рамках конвенций кодбазы.
