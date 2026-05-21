@@ -9,6 +9,7 @@ from app.services.telegram import telegram_service  # noqa: F401  (kept for star
 from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
 from app.services.onboarding_state import onboarding_cleanup_worker
+from app.services.contact_check_worker import contact_check_worker
 from app.routers import contacts, folders, health, onboarding, senders, workspace
 
 # Configure logging
@@ -35,11 +36,14 @@ async def lifespan(app: FastAPI):
     logger.info("Warmup worker started")
     onboarding_cleanup_worker.start()
     logger.info("Onboarding cleanup worker started")
+    contact_check_worker.start()
+    logger.info("Contact check worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await contact_check_worker.stop()
     await onboarding_cleanup_worker.stop()
     await queue_worker.stop()
     await warmup_worker.stop()
