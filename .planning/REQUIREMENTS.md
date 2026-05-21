@@ -36,17 +36,17 @@
 
 ### Contacts (Phase 2)
 
-- [ ] **CONT-01**: Пользователь загружает CSV с полями: телефон (обязательно), имя, компания, любые переменные
-- [ ] **CONT-02**: Загруженные контакты привязаны к workspace
-- [ ] **CONT-03**: Push-контакты через Workspace API (POST /api/v1/contacts)
+- [x] **CONT-01**: Пользователь загружает CSV с полями: телефон (обязательно), имя, компания, любые переменные
+- [x] **CONT-02**: Загруженные контакты привязаны к workspace
+- [x] **CONT-03**: Push-контакты через Workspace API (POST /api/v1/contacts)
 - [ ] **CONT-04**: При добавлении контакта проверяется наличие в Telegram через checker-аккаунт; результат сохраняется в поле статуса
-- [ ] **CONT-05**: Поля контакта: `phone, username, full_name, source, custom (JSONB)` — `custom` для произвольных переменных подстановки
+- [x] **CONT-05**: Поля контакта: `phone, username, full_name, source, custom (JSONB)` — `custom` для произвольных переменных подстановки
 
 ### Contact Folders (Phase 2)
 
 - [x] **FLDR-01**: Контакты группируются по папкам внутри workspace; каждый контакт принадлежит одной папке
 - [x] **FLDR-02**: Пользователь создаёт / переименовывает / удаляет папки
-- [ ] **FLDR-03**: При импорте CSV или push через API выбирается целевая папка (создаётся если не существует)
+- [x] **FLDR-03**: При импорте CSV или push через API выбирается целевая папка (создаётся если не существует)
 
 ### Agents — AI Templates (Phase 3)
 
@@ -149,14 +149,14 @@
 | SNDR-01 | Phase 2 | Complete |
 | SNDR-02 | Phase 2 | Complete |
 | SNDR-03 | Phase 2 | Complete |
-| CONT-01 | Phase 2 | Pending |
-| CONT-02 | Phase 2 | Pending |
-| CONT-03 | Phase 2 | Pending |
+| CONT-01 | Phase 2 | Complete |
+| CONT-02 | Phase 2 | Complete |
+| CONT-03 | Phase 2 | Complete |
 | CONT-04 | Phase 2 | Pending |
-| CONT-05 | Phase 2 | Pending |
+| CONT-05 | Phase 2 | Complete |
 | FLDR-01 | Phase 2 | Complete |
 | FLDR-02 | Phase 2 | Complete |
-| FLDR-03 | Phase 2 | Pending |
+| FLDR-03 | Phase 2 | Complete |
 | AGNT-01 | Phase 3 | Pending |
 | AGNT-02 | Phase 3 | Pending |
 | AGNT-03 | Phase 3 | Pending |
