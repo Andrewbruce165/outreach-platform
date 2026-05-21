@@ -104,8 +104,8 @@ Plans:
 
 Plans:
 
-- [ ] 03-01: Agent model decoupling — отвязать `ai_contexts` от sender_id, привязать к workspace_id, миграция данных
-- [ ] 03-02: Agent CRUD API & UI contract — endpoints для создания / редактирования / списка / дубликата / удаления
+- [ ] 03-01-agent-model-decoupling-PLAN.md — миграция 015 (DROP 6 ai_contexts columns + senders.ai_context_id + UNIQUE workspace_name) + ORM cleanup + 5 worker adapters (ai_engine/listener/rotation/queue/senders.py) [Wave 1]
+- [ ] 03-02-agent-crud-api-and-ui-contract-PLAN.md — новый /api/v1/agents router (CRUD + duplicate) + рерайт /api/v1/send под AuthDep с explicit ai_context_id + регистрация в main.py [Wave 1, depends_on: 03-01]
 
 ---
 
@@ -187,7 +187,7 @@ Plans:
 | 1. Workspace Foundation | 3/3 | Complete | 2026-05-21 |
 | 2. TG Accounts & Contacts | 5/5 | Verified (gaps_found → 02.1) | 2026-05-21 |
 | 02.1. Worker Hardening | 3/3 | Complete   | 2026-05-21 |
-| 3. Agents (AI Templates) | 0/2 | Not started | - |
+| 3. Agents (AI Templates) | 0/2 | Planned (2 plans, both Wave 1) | - |
 | 4. Campaigns | 0/5 | Not started | - |
 | 5. Inbox & Analytics | 0/4 | Not started | - |
 | 6. Admin Master Bot | 0/2 | Not started | - |
