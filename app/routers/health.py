@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
-from datetime import datetime, timezone
 from app.database import get_db
 from app.models import Sender
 from app.schemas import HealthResponse, SendersHealth
-from app.routers.auth import verify_api_key
+# NOTE(phase-1, D-14): legacy verify_api_key removed. /health/detailed is
+# disabled in Phase 1 — it will be re-introduced behind auth_dep in Phase 2-4
+# alongside the rewrite of business routers.
 import time
 
 router = APIRouter(prefix="/api/v1", tags=["health"])
@@ -52,29 +53,6 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/health/detailed")
-async def detailed_health(
-    db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
-):
-    """Per-sender queue statistics and account state."""
-    now = datetime.now(timezone.utc)
-    rows = await db.execute(text("""
-        SELECT s.slug, s.is_active, s.role,
-               COUNT(q.id) FILTER (WHERE q.status = 'pending')                              AS pending,
-               COUNT(q.id) FILTER (WHERE q.status = 'processing')                           AS processing,
-               COUNT(q.id) FILTER (WHERE q.status = 'sent'
-                   AND q.finished_at >= NOW() - INTERVAL '1 hour')                          AS sent_last_hour,
-               COUNT(q.id) FILTER (WHERE q.status = 'sent'
-                   AND q.finished_at >= NOW() - INTERVAL '24 hours')                        AS sent_last_day,
-               MAX(q.finished_at) FILTER (WHERE q.status = 'sent')                          AS last_sent_at,
-               COUNT(q.id) FILTER (WHERE q.error_message LIKE 'FloodWait%'
-                   AND q.finished_at >= NOW() - INTERVAL '1 hour')                          AS flood_waits_last_hour
-        FROM senders s
-        LEFT JOIN message_queue q ON q.sender_id = s.id
-        WHERE s.is_active = true
-        GROUP BY s.id, s.slug, s.is_active, s.role
-        ORDER BY s.slug
-    """))
-    senders = [dict(r._mapping) for r in rows.fetchall()]
-    return {"senders": senders, "timestamp": now.isoformat()}
+# NOTE(phase-1, D-14): /health/detailed temporarily removed — it depended on
+# legacy verify_api_key (now deleted). To be re-added behind auth_dep with
+# workspace_id scoping when senders router is rewritten in Phase 2.

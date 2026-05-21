@@ -32,7 +32,9 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      API_KEY: ${API_KEY}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      SUPABASE_URL: ${SUPABASE_URL}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       DECODO_HOST: ${DECODO_HOST}
       DECODO_USERNAME: ${DECODO_USERNAME}
       DECODO_PASSWORD: ${DECODO_PASSWORD}
@@ -53,7 +55,11 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      API_KEY: ${API_KEY}
+      # Listener загружает тот же app.config.Settings, поэтому Supabase env
+      # обязательны (Required fields) — иначе ValidationError на старте (D-15
+      # запрещает менять services, но env vars прокинуть необходимо).
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      SUPABASE_URL: ${SUPABASE_URL}
     depends_on:
       db:
         condition: service_healthy
