@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
+milestone_name: First External Client
 status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-05-21T09:14:38.160Z"
-last_activity: 2026-04-02 — Project initialized, ROADMAP.md created
+stopped_at: Roadmap revised — 6 phases with Campaign entity
+last_updated: "2026-05-21T11:30:00.000Z"
+last_activity: 2026-05-21 — Scope restructured into 6 phases (Campaign entity, agent decoupled, admin bot)
 progress:
-  total_phases: 4
+  total_phases: 6
   completed_phases: 0
-  total_plans: 0
+  total_plans: 21
   completed_plans: 0
   percent: 0
 ---
@@ -18,17 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-02)
+See: .planning/PROJECT.md (updated 2026-05-21)
 
-**Core value:** Клиент подключил аккаунт и через 10 минут первое сообщение ушло — без программистов, без DevOps, без настройки серверов.
+**Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
 **Current focus:** Phase 1 — Workspace Foundation
 
 ## Current Position
 
-Phase: 1 of 4 (Workspace Foundation)
+Phase: 1 of 6 (Workspace Foundation)
 Plan: 0 of 3 in current phase
 Status: Ready to plan
-Last activity: 2026-04-02 — Project initialized, ROADMAP.md created
+Last activity: 2026-05-21 — Scope restructured into 6 phases (Campaign entity, agent decoupled, admin bot)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -54,10 +54,15 @@ Progress: [░░░░░░░░░░] 0%
 
 See full log: PROJECT.md → Key Decisions
 
-- Auth: Magic link via Supabase (не email/password — проще для клиента, нативно в Lovable)
-- Per-agent настройки: rate limits / расписание / прокси / AI-контекст на уровне агента, не workspace
+- Auth: Magic link via Supabase (нативно в Lovable)
+- **Campaign как первичная сущность** (объект-обёртка над рассылкой со статусом, расписанием, сигналами)
+- **Agent отвязан от sender'а** — workspace-level AI-шаблон, переиспользуется между кампаниями
+- **Webhook + tools на уровне кампании, не агента** (агент = как говорить, кампания = куда передавать данные)
+- **Сигналы (лид/менеджер/финиш) на уровне кампании**, передаются в LLM-промпт вместе с агентским контекстом
+- **Rate limits per-sender** (Telegram anti-spam смотрит на аккаунт), **расписание per-campaign** (бизнес-параметр рассылки)
+- **Папки в базе контактов** — таргет кампании
 - API: полный рерайт — старые эндпоинты остаются в telegram-api (prod), пишем новые с нуля
-- Brownfield: бизнес-логика не трогается, добавляем workspace_id поверх
+- Brownfield: бизнес-логика не трогается, добавляем workspace_id + campaign-модель поверх
 
 ### Pending Todos
 
@@ -65,10 +70,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- Нужно согласовать параметры страницы агента детально перед Phase 2 (упомянуто при инициализации)
+- Phase 4 первым планом — аудит существующего webhook + function calling (вынести с уровня sender/AIContext на уровень кампании)
 
 ## Session Continuity
 
-Last session: 2026-05-21T09:14:38.149Z
-Stopped at: Phase 1 context gathered
+Last session: 2026-05-21T11:30:00.000Z
+Stopped at: Roadmap revised — 6 phases with Campaign entity
 Resume file: .planning/phases/01-workspace-foundation/01-CONTEXT.md
