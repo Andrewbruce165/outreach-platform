@@ -5,13 +5,10 @@ import logging
 
 from app.config import get_settings
 from app.database import init_db, engine
-from app.services.telegram import telegram_service
+from app.services.telegram import telegram_service  # noqa: F401  (kept for startup-side warmup of module)
 from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
-from app.routers import send, senders, health, conversations, contexts, onboarding, check_contacts
-from app.routers import queue as queue_router
-from app.routers import warmup as warmup_router
-from app.routers import proxy_pool as proxy_pool_router
+from app.routers import health, workspace
 
 # Configure logging
 logging.basicConfig(
@@ -27,7 +24,7 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
-    logger.info("Starting Telegram Followup API...")
+    logger.info("Starting Outreach Platform API...")
     await init_db()
     logger.info("Database initialized")
     await recover_stuck_jobs()
@@ -47,46 +44,38 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Telegram Followup API",
-    description="API для отправки follow-up сообщений в Telegram и AI-ассистент",
-    version="1.1.0",
+    title="Outreach Platform API",
+    description="Multi-tenant Telegram outreach SaaS (Phase 1: workspace foundation)",
+    version="2.0.0-phase1",
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware — Phase 1 lockdown (D-14): explicit origins, no wildcard.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight
+    allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
 )
 
-# Include routers
-app.include_router(send.router)
-app.include_router(senders.router)
+# Include routers (D-14: only health + workspace in Phase 1; old business routers
+# will be rewritten on top of workspace_id in Phase 2-4).
 app.include_router(health.router)
-app.include_router(conversations.router)
-app.include_router(contexts.router)
-app.include_router(onboarding.router)
-app.include_router(queue_router.router)
-app.include_router(check_contacts.router)
-app.include_router(warmup_router.router)
-app.include_router(proxy_pool_router.router)
+app.include_router(workspace.router)
 
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {
-        "service": "Telegram Followup API",
-        "version": "1.1.0",
+        "service": "Outreach Platform API",
+        "version": "2.0.0-phase1",
         "docs": "/docs",
         "health": "/api/v1/health",
         "endpoints": {
-            "send": "/api/v1/send",
-            "senders": "/api/v1/senders",
-            "conversations": "/api/v1/conversations",
-            "contexts": "/api/v1/contexts"
+            "auth_me": "POST /api/v1/auth/me",
+            "workspace": "/api/v1/workspace",
+            "api_keys": "/api/v1/workspace/api-keys",
         }
     }
