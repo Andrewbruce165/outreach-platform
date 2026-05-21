@@ -93,42 +93,76 @@ class ContactCheckWorker:
             await asyncio.sleep(self.poll_interval)
 
     async def _tick(self) -> int:
-        """Один tick: подобрать pending → resolve → update. Returns processed count."""
+        """Один tick: подобрать pending → resolve → update. Returns processed count.
+
+        Phase 02.1 (CR-08): двойная защита от race между двумя ContactCheckWorker
+        экземплярами (горизонтальный масштаб или ошибочный запуск).
+
+        1. ``FOR UPDATE OF c SKIP LOCKED`` — в открытой транзакции row-lock
+           держится до commit'а; другой worker, выполняющий тот же SELECT
+           параллельно, пропустит lock'нутые rows.
+        2. ``tg_checked_at`` claim window — после SELECT'а мы UPDATE'им
+           ``tg_checked_at = NOW()`` (без смены ``tg_status`` — CHECK constraint
+           не разрешает 'processing'). Фильтр SELECT'а отсекает контакты,
+           заклеймленные менее 5 минут назад. Это переживает commit и защищает
+           от второго worker'а, пришедшего на **следующем тике**.
+
+        Stale claim (worker упал между SELECT и _apply_results) автоматически
+        восстанавливается: через 5 минут фильтр снова допустит contact.
+        """
         async with AsyncSessionLocal() as db:
             # JOIN LATERAL: для каждого pending контакта подтягиваем checker
             # из ЕГО workspace (workspace isolation). Если в workspace нет
             # checker'а — контакт пропускается (JOIN LATERAL без match → строка
             # выпадает). D-20 ``unchecked`` контакты тут не выбираются по
             # ``tg_status='pending'`` фильтру.
-            result = await db.execute(
-                text(
-                    """
-                    SELECT c.id AS contact_id,
-                           c.workspace_id,
-                           c.phone,
-                           c.username,
-                           s.id AS checker_id,
-                           s.slug AS checker_slug,
-                           s.session_string,
-                           s.proxy
-                    FROM contacts c
-                    JOIN LATERAL (
-                        SELECT id, slug, session_string, proxy
-                        FROM senders
-                        WHERE workspace_id = c.workspace_id
-                          AND role = 'checker'
-                          AND auth_status = 'ok'
-                        LIMIT 1
-                    ) s ON TRUE
-                    WHERE c.tg_status = 'pending'
-                      AND c.phone IS NOT NULL
-                    ORDER BY c.created_at ASC
-                    LIMIT :n
-                    """
-                ),
-                {"n": self.batch_size},
-            )
-            rows = result.fetchall()
+            async with db.begin():
+                result = await db.execute(
+                    text(
+                        """
+                        SELECT c.id AS contact_id,
+                               c.workspace_id,
+                               c.phone,
+                               c.username,
+                               s.id AS checker_id,
+                               s.slug AS checker_slug,
+                               s.session_string,
+                               s.proxy
+                        FROM contacts c
+                        JOIN LATERAL (
+                            SELECT id, slug, session_string, proxy
+                            FROM senders
+                            WHERE workspace_id = c.workspace_id
+                              AND role = 'checker'
+                              AND auth_status = 'ok'
+                            LIMIT 1
+                        ) s ON TRUE
+                        WHERE c.tg_status = 'pending'
+                          AND c.phone IS NOT NULL
+                          AND (c.tg_checked_at IS NULL
+                               OR c.tg_checked_at < NOW() - INTERVAL '5 minutes')
+                        ORDER BY c.created_at ASC
+                        LIMIT :n
+                        FOR UPDATE OF c SKIP LOCKED
+                        """
+                    ),
+                    {"n": self.batch_size},
+                )
+                rows = result.fetchall()
+
+                if rows:
+                    # Claim: tg_checked_at = NOW() — другой worker увидит < 5min
+                    # и пропустит на следующем тике. Без смены tg_status
+                    # (CHECK constraint не позволяет 'processing').
+                    contact_ids = [str(r.contact_id) for r in rows]
+                    await db.execute(
+                        text(
+                            "UPDATE contacts SET tg_checked_at = NOW() "
+                            "WHERE id = ANY(:ids)"
+                        ),
+                        {"ids": contact_ids},
+                    )
+                # commit при выходе из async with db.begin()
 
         if not rows:
             return 0
