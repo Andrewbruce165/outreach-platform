@@ -55,10 +55,11 @@ Brownfield-проект: базовая механика (очередь, rate l
 - [ ] Поля контакта: phone, username, full_name, source, custom (JSONB)
 - [ ] Загрузка CSV + push через Workspace API
 
-**Agents (Phase 3):**
-- [ ] Агент как переиспользуемый AI-шаблон workspace-level
-- [ ] Настройка агента: контекст, задача, тон, FAQ
-- [ ] CRUD списка агентов workspace
+**Agents (Phase 3): ✓ Complete (2026-05-21)**
+- [x] Агент как переиспользуемый AI-шаблон workspace-level
+- [x] Настройка агента: контекст, задача, тон, FAQ
+- [x] CRUD списка агентов workspace
+  - Validated in Phase 3: migration 015 cleaned `ai_contexts` schema (D-02), `app/routers/agents.py` exposes 6 workspace-scoped endpoints under `/api/v1/agents` (incl. duplicate + hard delete), `app/routers/send.py` rewritten under AuthDep with explicit `ai_context_id` in body. Phase 4 carry-overs: real `campaign_count` query and DELETE-block on active-campaign attachment (Phase 4 Campaign FK).
 
 **Campaigns (Phase 4):**
 - [ ] Модель Campaign: agent + senders + folder + status
@@ -162,4 +163,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-21 after milestone v1.0 scope revision — added Campaign sentity, restructured into 6 phases*
+*Last updated: 2026-05-21 — Phase 3 (Agents) complete: ai_contexts schema clean, workspace-scoped /api/v1/agents CRUD live, send.py rewritten under AuthDep*
