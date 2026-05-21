@@ -166,18 +166,24 @@ async def _pick_best_sender(
     workspace_id: UUID,
 ) -> Sender | None:
     """
-    Return the active sender linked to context_id with the fewest messages
-    sent in the last 24 hours, scoped to the given workspace. Returns None
-    if no active senders exist.
+    Return the active sender within `workspace_id` with the fewest messages
+    sent in the last 24 hours. Returns None if no active senders exist.
 
-    Phase 02.1 (CR-03): workspace_id guard added — defence-in-depth against
-    AIContext.workspace_id / Sender.workspace_id divergence (the model layer
-    does not enforce that link via FK).
+    Phase 3 D-04: sender больше не «знает» агента (senders.ai_context_id dropped) —
+    выбор идёт по всему workspace pool. `context_id` параметр сохраняется в
+    сигнатуре для обратной совместимости с get_or_assign_sender (который
+    продолжает писать context_contact_assignments per D-05) — но в SQL filter
+    больше не используется.
+
+    Phase 02.1 (CR-03): workspace_id guard сохранён — defence-in-depth.
+
+    TODO(phase-4): selection по campaign_id когда появится Campaign.sender_lock.
 
     Single SQL query — no N+1. Tie-break: oldest sender (longest idle).
     Only senders with role='sender' are considered (excludes checkers).
     """
     # Phase 2 (D-11/D-12): senders.is_active dropped → lifecycle_status + auth_status.
+    # Phase 3 D-04: больше нет фильтра по s.ai_context_id — workspace-only выбор.
     row = (await db.execute(
         text("""
             SELECT s.id
@@ -186,8 +192,7 @@ async def _pick_best_sender(
                 ON mq.sender_id = s.id
                 AND mq.status = 'sent'
                 AND mq.finished_at >= NOW() - INTERVAL '24 hours'
-            WHERE s.ai_context_id = :ctx_id
-              AND s.workspace_id = :wid
+            WHERE s.workspace_id = :wid
               AND s.lifecycle_status = 'active'
               AND s.auth_status = 'ok'
               AND s.role = 'sender'
@@ -195,7 +200,7 @@ async def _pick_best_sender(
             ORDER BY COUNT(mq.id) ASC, s.created_at ASC
             LIMIT 1
         """),
-        {"ctx_id": str(context_id), "wid": str(workspace_id)},
+        {"wid": str(workspace_id)},
     )).fetchone()
 
     if row is None:
