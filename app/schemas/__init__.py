@@ -15,20 +15,15 @@ class ProxyConfig(BaseModel):
 
 # === Send Message ===
 class SendMessageRequest(BaseModel):
-    sender: Optional[str] = Field(None, description="Slug отправителя. Если не указан — обязателен ai_context_id")
-    ai_context_id: Optional[UUID] = Field(None, description="ID AI-контекста для авто-выбора аккаунта (ротация)")
+    """Phase 3 rewrite (D-06): ai_context_id REQUIRED (no derive from sender)."""
+    ai_context_id: UUID = Field(..., description="Agent ID (workspace-scoped validation)")
+    sender_slug: Optional[str] = Field(None, description="Explicit sender; if None, rotation picks one")
     recipient_phone: str = Field(..., description="Номер получателя с кодом страны")
     recipient_name: Optional[str] = Field(None, description="Имя получателя")
     message: str = Field(..., max_length=4096, description="Текст сообщения")
     as_draft: bool = Field(False, description="Сохранить как черновик")
     metadata: Optional[dict] = Field(default_factory=dict, description="Дополнительные данные")
-    callback_url: Optional[str] = Field(None, description="URL для webhook-уведомления после отправки")
-
-    @model_validator(mode="after")
-    def sender_or_context_required(self) -> "SendMessageRequest":
-        if not self.sender and not self.ai_context_id:
-            raise ValueError("Either 'sender' or 'ai_context_id' must be provided")
-        return self
+    callback_url: Optional[str] = Field(None, description="Webhook-уведомление после отправки")
 
 
 class RecipientInfo(BaseModel):
@@ -399,3 +394,55 @@ class HealthResponse(BaseModel):
     senders: SendersHealth
     version: str
     uptime_seconds: int
+
+
+# === Agents (Phase 3 — AGNT-01..04) ===
+
+class FaqItem(BaseModel):
+    """Single FAQ Q&A pair. C-01 resolution: array of objects (over dict)."""
+    question: str = Field(..., max_length=500)
+    answer: str = Field(..., max_length=2000)
+
+
+class AgentCreate(BaseModel):
+    """POST /api/v1/agents body (D-02)."""
+    name: str = Field(..., min_length=1, max_length=100)
+    system_prompt: Optional[str] = None
+    rules: Optional[str] = None
+    tone_of_voice: Optional[str] = None
+    faq: List[FaqItem] = Field(default_factory=list)
+    company_info: Optional[str] = None
+    product_info: Optional[str] = None
+
+
+class AgentUpdate(BaseModel):
+    """PATCH /api/v1/agents/{id} body. Partial PATCH (C-03 Phase 2 convention)."""
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    system_prompt: Optional[str] = None
+    rules: Optional[str] = None
+    tone_of_voice: Optional[str] = None
+    # None = leave unchanged; [] = clear FAQ; [...] = full replace (Pitfall 7)
+    faq: Optional[List[FaqItem]] = None
+    company_info: Optional[str] = None
+    product_info: Optional[str] = None
+
+
+class AgentResponse(BaseModel):
+    """GET / POST / PATCH response body. D-10: campaign_count hardcoded 0 в Phase 3."""
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    system_prompt: Optional[str]
+    rules: Optional[str]
+    tone_of_voice: Optional[str]
+    faq: List[FaqItem] = []
+    company_info: Optional[str]
+    product_info: Optional[str]
+    campaign_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentListResponse(BaseModel):
+    agents: List[AgentResponse]
+    total: int
