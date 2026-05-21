@@ -8,6 +8,11 @@ os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-for-pytest-only-do-not
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/outreach_test")
+# Phase 2 fixture-level env vars: app.config requires these for Settings.__init__
+os.environ.setdefault("TELEGRAM_API_ID", "1")
+os.environ.setdefault("TELEGRAM_API_HASH", "test-api-hash-for-pytest-only")
+os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-for-pytest-only-do-not-use-in-prod-32b")
+os.environ.setdefault("OPENAI_API_KEY", "sk-test-pytest-only")
 
 import logging
 from typing import AsyncGenerator, Callable
