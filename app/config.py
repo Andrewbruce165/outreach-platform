@@ -1,4 +1,4 @@
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Optional
@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Security
     api_key: str
     encryption_key: str
+
+    # Supabase (Phase 1)
+    supabase_jwt_secret: str = Field(..., description="HS256 secret из Supabase project settings → API → JWT Settings")
 
     # App settings
     log_level: str = "INFO"
