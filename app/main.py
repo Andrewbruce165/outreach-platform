@@ -8,6 +8,7 @@ from app.database import init_db, engine
 from app.services.telegram import telegram_service  # noqa: F401  (kept for startup-side warmup of module)
 from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
+from app.services.onboarding_state import onboarding_cleanup_worker
 from app.routers import folders, health, senders, workspace
 
 # Configure logging
@@ -32,11 +33,14 @@ async def lifespan(app: FastAPI):
     logger.info("Queue worker started")
     warmup_worker.start()
     logger.info("Warmup worker started")
+    onboarding_cleanup_worker.start()
+    logger.info("Onboarding cleanup worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await onboarding_cleanup_worker.stop()
     await queue_worker.stop()
     await warmup_worker.stop()
     await engine.dispose()
