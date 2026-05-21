@@ -245,7 +245,13 @@ class TelegramListener:
         await self._send_to_ai(conversation_id, combined_text, context)
 
     async def _send_to_ai(self, conversation_id: str, message_text: str, context: dict):
-        """Отправить сообщение на AI и ответить пользователю"""
+        """Отправить сообщение на AI и ответить пользователю.
+
+        TODO(phase-4): pull ai_context_id from conversation.campaign_id via JOIN.
+        В Phase 3 ai_context_id приходит из conversation.ai_context_id (D-05) —
+        может быть NULL для conversations созданных через listener без явного
+        контекста (Phase 3 known regression — see RESEARCH Pitfall 5).
+        """
         ai_context_id = context.get("ai_context_id")
         contact_name = context.get("contact_name")
         client = context.get("client")
@@ -340,9 +346,11 @@ class TelegramListener:
         """
         async with AsyncSessionLocal() as session:
             # Phase 2 (D-11/D-12): is_active dropped — filter by lifecycle_status + auth_status.
+            # Phase 3 D-04: senders.ai_context_id dropped — больше не SELECT'им.
+            # TODO(phase-4): pull ai_context_id from conversation.campaign_id via JOIN.
             result = await session.execute(
                 text("""
-                    SELECT id, slug, phone, session_string, ai_context_id, proxy
+                    SELECT id, slug, phone, session_string, proxy
                     FROM senders
                     WHERE role = 'sender'
                       AND lifecycle_status = 'active'
@@ -356,8 +364,9 @@ class TelegramListener:
                     "slug": r[1],
                     "phone": r[2],
                     "session_string": r[3],
-                    "ai_context_id": str(r[4]) if r[4] else None,
-                    "proxy": r[5]
+                    # Phase 3 D-04: ai_context_id больше не на sender'е — agent_id придёт
+                    # через conversation.campaign_id JOIN в Phase 4.
+                    "proxy": r[4]
                 }
                 for r in rows
             ]
@@ -692,57 +701,14 @@ class TelegramListener:
                 conversation_id = conv["id"]
                 ai_context_id = conv["ai_context_id"]
 
-                # Получаем webhook URL из контекста
-                document_webhook_url = None
-                if ai_context_id:
-                    async with AsyncSessionLocal() as session:
-                        result = await session.execute(
-                            text("SELECT document_webhook_url FROM ai_contexts WHERE id = :id"),
-                            {"id": ai_context_id}
-                        )
-                        row = result.fetchone()
-                        if row and row[0]:
-                            document_webhook_url = row[0]
-                            logger.info(f"📎 document_webhook_url найден: {document_webhook_url}")
-                        else:
-                            logger.info(f"📎 document_webhook_url не настроен для контекста {ai_context_id}")
-
-                # Скачиваем и отправляем на webhook если URL настроен
-                if document_webhook_url:
-                    tmp_path = None
-                    try:
-                        # Определяем расширение
-                        ext = os.path.splitext(file_name)[1] or ".bin"
-                        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_file:
-                            tmp_path = tmp_file.name
-
-                        await event.message.download_media(file=tmp_path)
-                        logger.info(f"📥 Медиа скачано: {tmp_path}")
-
-                        # Fire-and-forget отправка на webhook
-                        asyncio.create_task(
-                            self.send_document_to_webhook(
-                                file_path=tmp_path,
-                                file_name=file_name,
-                                file_type=file_type,
-                                conversation_id=conversation_id,
-                                contact_name=name,
-                                contact_telegram_id=sender.id,
-                                webhook_url=document_webhook_url
-                            )
-                        )
-                        # Удалим файл после небольшой задержки (даём время на отправку)
-                        asyncio.create_task(self._delayed_file_cleanup(tmp_path, delay=60))
-
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка скачивания медиа от {name}: {e}", exc_info=True)
-                        if tmp_path:
-                            try:
-                                os.unlink(tmp_path)
-                            except Exception:
-                                pass
-                else:
-                    logger.info(f"ℹ️ document_webhook_url не настроен, документ не отправлен на обработку")
+                # Phase 3 D-01: document_webhook_url column dropped from ai_contexts.
+                # Document-webhook feature пауза до Phase 4 (CAMP-14) где webhook
+                # перейдёт на уровень кампании. В Phase 3 — no-op.
+                # TODO(phase-4): pull document_webhook_url from conversation.campaign_id.
+                logger.info(
+                    "ℹ️ document_webhook (Phase 3): функция отключена до миграции "
+                    "на Campaign в Phase 4 (CAMP-14)"
+                )
 
                 # Текст для сохранения — метка о документе + caption если есть
                 caption = event.message.message or ""
