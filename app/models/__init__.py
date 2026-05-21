@@ -26,10 +26,57 @@ class QueueItemType(enum.Enum):
     file = "file"
 
 
+# ─── Multi-tenant foundation (Phase 1 — TENT-01..04) ─────────────────────────
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class UserWorkspace(Base):
+    __tablename__ = "user_workspaces"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    supabase_user_id = Column(Text, nullable=False, index=True)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    role = Column(String(20), nullable=False, server_default="owner")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    workspace = relationship("Workspace")
+
+
+class WorkspaceApiKey(Base):
+    __tablename__ = "workspace_api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    prefix = Column(String(12), nullable=False)
+    bcrypt_hash = Column(Text, nullable=False)
+    name = Column(String(50), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    workspace = relationship("Workspace")
+
+
+# ─── Tenant-scoped models (workspace_id added per Phase 1) ───────────────────
+
 class Sender(Base):
     __tablename__ = "senders"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     slug = Column(String(50), unique=True, nullable=False, index=True)
     name = Column(String(100), nullable=False)
     phone = Column(String(20), nullable=False)
@@ -50,8 +97,11 @@ class Sender(Base):
 
 class MessageLog(Base):
     __tablename__ = "messages_log"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id"), nullable=False)
     recipient_phone = Column(String(20), nullable=False)
     recipient_name = Column(String(100))
@@ -68,8 +118,11 @@ class MessageLog(Base):
 
 class ContactCache(Base):
     __tablename__ = "contacts_cache"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id"), nullable=False)
     phone = Column(String(20), nullable=False, index=True)
     telegram_id = Column(BigInteger)
@@ -86,8 +139,11 @@ class ContactCache(Base):
 
 class AIContext(Base):
     __tablename__ = "ai_contexts"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     name = Column(String(100), nullable=False)
     system_prompt = Column(Text, nullable=True)
     tone_of_voice = Column(Text, nullable=True)
@@ -111,6 +167,9 @@ class MessageQueue(Base):
     __tablename__ = "message_queue"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"), nullable=False)
     item_type = Column(SQLEnum(QueueItemType), nullable=False, default=QueueItemType.message)
     status = Column(SQLEnum(QueueItemStatus), nullable=False, default=QueueItemStatus.pending, index=True)
@@ -157,6 +216,9 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"), nullable=False)
     contact_phone = Column(String(20), nullable=False)
     contact_name = Column(String(100), nullable=True)
@@ -181,6 +243,9 @@ class WarmupPool(Base):
     __tablename__ = "warmup_pool"
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
     sender_id   = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
                          nullable=False, unique=True)
     is_active   = Column(Boolean, nullable=False, default=True, server_default='true')
@@ -194,6 +259,9 @@ class WarmupSession(Base):
     __tablename__ = "warmup_sessions"
 
     id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id    = Column(UUID(as_uuid=True),
+                             ForeignKey("workspaces.id", ondelete="CASCADE"),
+                             nullable=False)
     sender_a_id     = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
                              nullable=False)
     sender_b_id     = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
@@ -218,6 +286,9 @@ class WarmupMessage(Base):
     __tablename__ = "warmup_messages"
 
     id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id   = Column(UUID(as_uuid=True),
+                            ForeignKey("workspaces.id", ondelete="CASCADE"),
+                            nullable=False)
     session_id     = Column(UUID(as_uuid=True), ForeignKey("warmup_sessions.id", ondelete="CASCADE"),
                             nullable=False)
     from_sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
@@ -239,6 +310,9 @@ class ProxyPool(Base):
     __tablename__ = "proxy_pool"
 
     id                    = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id          = Column(UUID(as_uuid=True),
+                                   ForeignKey("workspaces.id", ondelete="CASCADE"),
+                                   nullable=False)
     host                  = Column(String(255), nullable=False)
     port                  = Column(Integer, nullable=False)
     username              = Column(String(100), nullable=False)
@@ -256,6 +330,9 @@ class ContextContactAssignment(Base):
     __tablename__ = "context_contact_assignments"
 
     id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id  = Column(UUID(as_uuid=True),
+                           ForeignKey("workspaces.id", ondelete="CASCADE"),
+                           nullable=False)
     context_id    = Column(UUID(as_uuid=True), ForeignKey("ai_contexts.id", ondelete="CASCADE"), nullable=False)
     contact_phone = Column(String(20), nullable=False)
     sender_id     = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"), nullable=False)

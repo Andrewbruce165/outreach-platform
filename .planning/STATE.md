@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: First External Client
-status: planning
+milestone_name: milestone
+status: executing
 stopped_at: Roadmap revised — 6 phases with Campaign entity
-last_updated: "2026-05-21T11:30:00.000Z"
-last_activity: 2026-05-21 — Scope restructured into 6 phases (Campaign entity, agent decoupled, admin bot)
+last_updated: "2026-05-21T10:29:24.511Z"
+last_activity: 2026-05-21 -- Phase 01 execution started
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 21
+  total_plans: 3
   completed_plans: 0
   percent: 0
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 1 — Workspace Foundation
+**Current focus:** Phase 01 — workspace-foundation
 
 ## Current Position
 
-Phase: 1 of 6 (Workspace Foundation)
-Plan: 0 of 3 in current phase
-Status: Ready to plan
-Last activity: 2026-05-21 — Scope restructured into 6 phases (Campaign entity, agent decoupled, admin bot)
+Phase: 01 (workspace-foundation) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 01
+Last activity: 2026-05-21 -- Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
