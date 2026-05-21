@@ -30,9 +30,9 @@
 
 ### TG Account Settings (Phase 2)
 
-- [ ] **SNDR-01**: Per-account rate limits: сообщений в минуту / час / день (с предупреждением при выходе за рекомендованный «зелёный коридор» 4/20/150)
-- [ ] **SNDR-02**: Per-account прокси (или выбор из workspace-пула)
-- [ ] **SNDR-03**: Статус аккаунта: активен / прогрев / пауза / ошибка
+- [x] **SNDR-01**: Per-account rate limits: сообщений в минуту / час / день (с предупреждением при выходе за рекомендованный «зелёный коридор» 4/20/150)
+- [x] **SNDR-02**: Per-account прокси (или выбор из workspace-пула)
+- [x] **SNDR-03**: Статус аккаунта: активен / прогрев / пауза / ошибка
 
 ### Contacts (Phase 2)
 
@@ -146,9 +146,9 @@
 | ONBD-03 | Phase 2 | Pending |
 | ONBD-04 | Phase 2 | Pending |
 | ONBD-05 | Phase 2 | Pending |
-| SNDR-01 | Phase 2 | Pending |
-| SNDR-02 | Phase 2 | Pending |
-| SNDR-03 | Phase 2 | Pending |
+| SNDR-01 | Phase 2 | Complete |
+| SNDR-02 | Phase 2 | Complete |
+| SNDR-03 | Phase 2 | Complete |
 | CONT-01 | Phase 2 | Pending |
 | CONT-02 | Phase 2 | Pending |
 | CONT-03 | Phase 2 | Pending |

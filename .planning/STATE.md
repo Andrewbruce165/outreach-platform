@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 2 context gathered
-last_updated: "2026-05-21T13:21:50.882Z"
+status: executing
+stopped_at: Completed 02-02 — Wave 1 (02-03 + 02-04) can start in parallel
+last_updated: "2026-05-21T17:47:45.333Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  total_plans: 8
+  completed_plans: 4
+  percent: 50
 ---
 
 # Project State
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 02 — TG Accounts & Contacts (next; Phase 01 complete)
+**Current focus:** Phase 02 — tg-accounts-contacts
 
 ## Current Position
 
-Phase: 2 — TG Accounts & Contacts (next)
-Plan: Not started
-Status: Phase 01 complete (verification passed 28/28 must_haves); ready for Phase 2 discuss/plan
+Phase: 02 (tg-accounts-contacts) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
 Last activity: 2026-05-21
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -47,6 +47,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | 01 | 3 | - | - |
 
 *Updated after each plan completion*
+| Phase 02 P02-02 | 50min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,7 @@ See full log: PROJECT.md → Key Decisions
 - **Папки в базе контактов** — таргет кампании
 - API: полный рерайт — старые эндпоинты остаются в telegram-api (prod), пишем новые с нуля
 - Brownfield: бизнес-логика не трогается, добавляем workspace_id + campaign-модель поверх
+- [Phase 02]: Plan 02-02 closes SNDR-01..03: derived status (D-11), rate-limit warnings (D-14), per-sender DB-stored rate_per_min/hour/day (D-13), assign-proxy + workspace proxy CRUD (D-22). Migration 013 drops senders.is_active; all 14 hidden call-sites swept across listener/warmup/rotation/health/queue/onboarding.
 
 ### Pending Todos
 
@@ -74,6 +76,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-21T13:21:50.877Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-tg-accounts-contacts/02-CONTEXT.md
+Last session: 2026-05-21T17:47:45.328Z
+Stopped at: Completed 02-02 — Wave 1 (02-03 + 02-04) can start in parallel
+Resume file: None

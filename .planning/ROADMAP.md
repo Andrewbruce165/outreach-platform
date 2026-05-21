@@ -58,7 +58,7 @@ Plans:
 Plans:
 
 - [ ] 02-01: Wire onboarding flow to workspace — scope sessions and senders to workspace_id, expose status
-- [ ] 02-02: Per-sender settings model & API — rate limits, proxy, status fields with workspace scoping
+- [x] 02-02: Per-sender settings model & API — rate limits, proxy, status fields with workspace scoping
 - [ ] 02-03: Contact folders model — folders table, contact.folder_id FK, CRUD endpoints
 - [ ] 02-04: Contact model & CSV import — fields (phone/username/full_name/source/custom JSONB), CSV parser with folder target
 - [ ] 02-05: Contact check via checker on import — async pipeline marks contacts with Telegram presence status
