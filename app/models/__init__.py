@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Integer, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Integer, LargeBinary, ForeignKey, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -81,10 +81,14 @@ class Sender(Base):
     name = Column(String(100), nullable=False)
     phone = Column(String(20), nullable=False)
     session_string = Column(Text, nullable=False)  # Encrypted
-    is_active = Column(Boolean, default=True, server_default='true')
-    role = Column(String(20), nullable=False, server_default='sender')  # 'sender' or 'checker'
+    role = Column(String(20), nullable=False, server_default='sender')  # 'sender' or 'checker' (CHECK in migration 013)
     proxy = Column(JSONB, nullable=True)  # {"type": "socks5", "host": "...", "port": 1080, ...}
     auth_status = Column(String(30), nullable=False, server_default='ok')  # ok, session_expired, session_revoked, deactivated, banned
+    # Phase 2 (D-11/D-13): lifecycle_status replaces is_active; rate limits live per-sender.
+    lifecycle_status = Column(String(20), nullable=False, server_default='active')  # 'active' | 'warmup' | 'paused'
+    rate_per_min = Column(Integer, nullable=False, server_default='4')
+    rate_per_hour = Column(Integer, nullable=False, server_default='20')
+    rate_per_day = Column(Integer, nullable=False, server_default='150')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), onupdate=func.now())
     ai_context_id = Column(UUID(as_uuid=True), ForeignKey("ai_contexts.id", ondelete="SET NULL"), nullable=True)
@@ -341,3 +345,91 @@ class ContextContactAssignment(Base):
 
     context = relationship("AIContext")
     sender  = relationship("Sender")
+
+
+# ─── Phase 2: Folders, Contacts, Onboarding sessions, CSV imports ─────────────
+
+class Folder(Base):
+    """Папка контактов внутри workspace (FLDR-01, D-05)."""
+    __tablename__ = "folders"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class Contact(Base):
+    """Workspace-level контакт (CONT-01..05, D-01).
+
+    NB: НЕ ПУТАТЬ с ContactCache (per-sender Telegram-resolve cache из Phase 0):
+    ContactCache хранит telegram_id + access_hash для отправки, Contact — это
+    запись в адресной книге клиента, привязанная к папке.
+    """
+    __tablename__ = "contacts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    folder_id = Column(UUID(as_uuid=True),
+                       ForeignKey("folders.id", ondelete="CASCADE"),
+                       nullable=False)
+    phone = Column(String(20), nullable=True)
+    username = Column(String(50), nullable=True)
+    full_name = Column(String(200), nullable=True)
+    source = Column(String(100), nullable=True)
+    custom = Column(JSONB, nullable=False, server_default='{}')
+    # CHECK ('pending','registered','not_registered','error','unchecked') in migration 013
+    tg_status = Column(String(20), nullable=False, server_default='pending')
+    tg_telegram_id = Column(BigInteger, nullable=True)
+    tg_username_resolved = Column(String(50), nullable=True)
+    tg_error = Column(Text, nullable=True)
+    tg_checked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    folder = relationship("Folder")
+
+
+class OnboardingSession(Base):
+    """Persistent state онбординга TG-аккаунта (D-16/D-17).
+
+    Заменяет in-memory `_onboarding_sessions: dict` в старом onboarding.py.
+    """
+    __tablename__ = "onboarding_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    phone = Column(String(20), nullable=False)
+    phone_code_hash = Column(Text, nullable=False)
+    encrypted_session_string = Column(Text, nullable=False)
+    # CHECK ('sender','checker') in migration 013
+    role = Column(String(20), nullable=False, server_default='sender')
+    proxy = Column(JSONB, nullable=True)
+    # CHECK ('code_sent','awaiting_2fa','completed','failed') in migration 013
+    status = Column(String(20), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class CsvImport(Base):
+    """CSV-импорт preview blob (D-07, C-02 Option B — DB-blob)."""
+    __tablename__ = "csv_imports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    columns = Column(JSONB, nullable=False)
+    suggested_mapping = Column(JSONB, nullable=False)
+    encoding = Column(String(20), nullable=True)
+    delimiter = Column(String(5), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)

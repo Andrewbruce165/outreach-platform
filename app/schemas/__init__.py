@@ -67,37 +67,66 @@ class SendFileRequest(BaseModel):
         return self
 
 
-# === Senders ===
+# === Senders (Phase 2 — D-11/D-13/D-14) ===
+
+class RateLimits(BaseModel):
+    """Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20/150."""
+    per_minute: int = 4
+    per_hour: int = 20
+    per_day: int = 150
+
+
+class WarningItem(BaseModel):
+    """D-14: warn-only, когда значения превышают soft cap, но в пределах hard cap."""
+    field: str
+    value: int
+    recommended_max: int
+    severity: Literal["warning"] = "warning"
+
+
 class SenderCreate(BaseModel):
     slug: str = Field(..., min_length=2, max_length=50)
     name: str = Field(..., max_length=100)
     phone: str = Field(..., max_length=20)
     session_string: str
     ai_context_id: Optional[UUID] = Field(None, description="ID контекста AI для этого sender")
-    role: Optional[str] = Field("sender", description="'sender' = отправщик, 'checker' = проверщик номеров")
+    role: Literal["sender", "checker"] = Field(
+        "sender", description="'sender' = отправщик, 'checker' = проверщик номеров"
+    )
     proxy: Optional[ProxyConfig] = Field(None, description="Прокси для подключения к Telegram")
+    # Optional per-sender rate-limit overrides (with hard cap, D-14).
+    rate_per_min: Optional[int] = Field(None, ge=1, le=10)
+    rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
+    rate_per_day: Optional[int] = Field(None, ge=1, le=300)
 
 
 class SenderUpdate(BaseModel):
+    """PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50, day<=300."""
     name: Optional[str] = None
     phone: Optional[str] = None
     session_string: Optional[str] = None
-    is_active: Optional[bool] = None
+    lifecycle_status: Optional[Literal["active", "warmup", "paused"]] = None
+    rate_per_min: Optional[int] = Field(None, ge=1, le=10)
+    rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
+    rate_per_day: Optional[int] = Field(None, ge=1, le=300)
     ai_context_id: Optional[UUID] = None
-    role: Optional[str] = Field(None, description="'sender' или 'checker'")
+    role: Optional[Literal["sender", "checker"]] = None
     proxy: Optional[ProxyConfig] = None
 
 
 class SenderResponse(BaseModel):
+    """D-11: derived `status` = 'error' если auth_status!='ok', иначе lifecycle_status."""
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     slug: str
     name: str
     phone: str
-    is_active: bool
+    status: Literal["active", "warmup", "paused", "error"]   # derived
+    auth_status: str
+    lifecycle_status: Literal["active", "warmup", "paused"]
+    rate_limits: RateLimits
     role: str = "sender"
-    auth_status: str = "ok"
     proxy: Optional[ProxyConfig] = None
     ai_context_id: Optional[UUID] = None
     ai_context_name: Optional[str] = None
@@ -105,8 +134,164 @@ class SenderResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class SenderCreateResponse(BaseModel):
+    """Возврат create/update sender'а с warnings[] (D-14)."""
+    sender: SenderResponse
+    warnings: List[WarningItem] = []
+
+
 class SenderListResponse(BaseModel):
     senders: list[SenderResponse]
+
+
+class AssignProxyRequest(BaseModel):
+    """POST /senders/{id}/assign-proxy (D-22)."""
+    proxy_id: UUID
+
+
+class ProxyPoolItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    host: str
+    port: int
+    type: str = "socks5"
+    username: Optional[str] = None
+    assigned_to_sender_id: Optional[UUID] = None
+
+
+class ProxyPoolCreate(BaseModel):
+    host: str
+    port: int = Field(..., ge=1, le=65535)
+    type: Literal["socks5", "socks4", "http"] = "socks5"
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class ProxyPoolListResponse(BaseModel):
+    proxies: List[ProxyPoolItem]
+    total: int
+
+
+# === Phase 2: Folders ===
+
+class FolderCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class FolderUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class FolderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    contact_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class FolderListResponse(BaseModel):
+    folders: List[FolderResponse]
+    total: int
+
+
+# === Phase 2: Contacts ===
+
+class ContactBase(BaseModel):
+    phone: Optional[str] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    source: Optional[str] = None
+    custom: dict = {}
+
+
+class ContactCreate(ContactBase):
+    folder_id: Optional[UUID] = None
+    folder_name: Optional[str] = None
+
+    @model_validator(mode="after")
+    def folder_or_name(self):
+        if not self.folder_id and not self.folder_name:
+            raise ValueError("Either folder_id or folder_name required")
+        if not self.phone and not self.username:
+            raise ValueError("Either phone or username required")
+        return self
+
+
+class ContactBatchPush(BaseModel):
+    contacts: List[ContactCreate] = Field(..., min_length=1, max_length=1000)
+
+
+class ContactResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    folder_id: UUID
+    phone: Optional[str]
+    username: Optional[str]
+    full_name: Optional[str]
+    source: Optional[str]
+    custom: dict
+    tg_status: str
+    tg_telegram_id: Optional[int]
+    tg_username_resolved: Optional[str]
+    tg_checked_at: Optional[datetime]
+    created_at: datetime
+
+
+class ContactImportRequest(BaseModel):
+    """POST /contacts/import — applies stored CSV preview blob with user mapping."""
+    import_id: UUID
+    folder_id: Optional[UUID] = None
+    folder_name: Optional[str] = None
+    # mapping: {"0": "phone", "1": "full_name", "2": "custom.company"}
+    mapping: dict[str, str]
+    on_duplicate: Literal["skip"] = "skip"
+
+    @model_validator(mode="after")
+    def has_folder_target(self):
+        if not self.folder_id and not self.folder_name:
+            raise ValueError("Either folder_id or folder_name required")
+        return self
+
+
+class ContactImportPreviewResponse(BaseModel):
+    import_id: UUID
+    columns: List[str]
+    sample_rows: List[dict]
+    suggested_mapping: dict[str, str]
+    encoding: Optional[str]
+    delimiter: Optional[str]
+    looks_like_no_header: bool = False
+
+
+class ContactImportSummary(BaseModel):
+    """202 Accepted body for /contacts/import + /contacts (push)."""
+    total: int
+    imported: int
+    skipped_duplicates: int
+    skipped_invalid: int
+    skipped_phones: List[str] = []
+
+
+class MoveContactRequest(BaseModel):
+    folder_id: UUID
+
+
+class MoveContactBatchRequest(BaseModel):
+    contact_ids: List[UUID] = Field(..., min_length=1)
+    folder_id: UUID
+
+
+class RecheckRequest(BaseModel):
+    contact_ids: Optional[List[UUID]] = None
+    folder_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def one_required(self):
+        if not self.contact_ids and not self.folder_id:
+            raise ValueError("Either contact_ids or folder_id required")
+        return self
 
 
 # === Check Contact ===

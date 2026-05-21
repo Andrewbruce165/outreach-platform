@@ -92,3 +92,103 @@ def valid_supabase_jwt() -> Callable[..., str]:
 def expired_supabase_jwt(valid_supabase_jwt: Callable[..., str]) -> str:
     """Истёкший JWT для теста TOKEN_EXPIRED."""
     return valid_supabase_jwt(exp=1)  # 1970-01-01
+
+
+# ─── Phase 2 fixtures: Workspace / Sender / Folder / Contact factories ───────
+
+# Локальные импорты ниже, чтобы не платить за них при collection-time
+# тестов Phase 1, и чтобы импорт ORM-моделей произошёл уже после
+# инициализации app/config через env vars выше.
+
+from app.models import Folder, Contact, Sender, Workspace  # noqa: E402
+
+
+@pytest_asyncio.fixture
+async def test_workspace(async_db_session: AsyncSession) -> Workspace:
+    """Создаёт workspace для теста (Phase 2 fixture)."""
+    ws = Workspace(name="Test Workspace Phase 2")
+    async_db_session.add(ws)
+    await async_db_session.commit()
+    await async_db_session.refresh(ws)
+    return ws
+
+
+@pytest_asyncio.fixture
+async def test_sender_factory(async_db_session: AsyncSession, test_workspace: Workspace):
+    """Фабрика sender'ов.
+
+    Usage:
+        sender = await test_sender_factory(role='checker', slug='my-checker')
+    """
+    counter = {"n": 0}
+
+    async def _make(**overrides) -> Sender:
+        counter["n"] += 1
+        n = counter["n"]
+        defaults = dict(
+            workspace_id=test_workspace.id,
+            slug=f"test-sender-{n}",
+            name=f"Test Sender {n}",
+            phone=f"+7900000{n:04d}",
+            session_string="encrypted_stub",
+            role="sender",
+            auth_status="ok",
+            lifecycle_status="active",
+            rate_per_min=4,
+            rate_per_hour=20,
+            rate_per_day=150,
+        )
+        defaults.update(overrides)
+        s = Sender(**defaults)
+        async_db_session.add(s)
+        await async_db_session.commit()
+        await async_db_session.refresh(s)
+        return s
+
+    return _make
+
+
+@pytest_asyncio.fixture
+async def test_checker(test_sender_factory) -> Sender:
+    """Checker-аккаунт для теста."""
+    return await test_sender_factory(role="checker", slug="test-checker")
+
+
+@pytest_asyncio.fixture
+async def test_folder(async_db_session: AsyncSession, test_workspace: Workspace) -> Folder:
+    """Папка контактов для теста."""
+    f = Folder(workspace_id=test_workspace.id, name="Test Folder")
+    async_db_session.add(f)
+    await async_db_session.commit()
+    await async_db_session.refresh(f)
+    return f
+
+
+@pytest_asyncio.fixture
+async def test_contacts_factory(
+    async_db_session: AsyncSession,
+    test_workspace: Workspace,
+    test_folder: Folder,
+):
+    """Фабрика контактов в test_folder. Возвращает Contact или list[Contact]."""
+
+    async def _make(count: int = 1, tg_status: str = "pending", **overrides):
+        contacts = []
+        for i in range(count):
+            c = Contact(
+                workspace_id=test_workspace.id,
+                folder_id=test_folder.id,
+                phone=f"+7901000{i:04d}",
+                full_name=f"Contact {i}",
+                source="test",
+                tg_status=tg_status,
+                **overrides,
+            )
+            async_db_session.add(c)
+            contacts.append(c)
+        await async_db_session.commit()
+        for c in contacts:
+            await async_db_session.refresh(c)
+        return contacts if count > 1 else contacts[0]
+
+    return _make
