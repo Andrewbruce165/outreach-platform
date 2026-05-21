@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from app.database import get_db
-from app.models import Workspace, WorkspaceApiKey
+from app.models import Sender, Workspace, WorkspaceApiKey
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,8 @@ class WorkspaceResponse(BaseModel):
     name: str
     created_at: datetime
     updated_at: datetime
+    # D-20: UI рендерит баннер "Add a dedicated checker account" если false.
+    has_checker: bool = False
 
 
 class WorkspaceUpdate(BaseModel):
@@ -97,6 +99,23 @@ def _require_jwt(ctx: AuthCtx) -> None:
                 "message": "This endpoint requires JWT auth (not API key)",
             },
         )
+
+
+async def _workspace_has_checker(db: AsyncSession, workspace_id: UUID) -> bool:
+    """D-20: existence-check для sender'а с role='checker' AND auth_status='ok'.
+
+    UI читает этот флаг из GET /workspace и рендерит баннер "Add a dedicated
+    checker account to verify phone presence in Telegram" если false.
+    """
+    result = await db.execute(
+        select(func.count(Sender.id)).where(
+            Sender.workspace_id == workspace_id,
+            Sender.role == "checker",
+            Sender.auth_status == "ok",
+            # TODO(v2-rls): app-level filter replaced by RLS policy
+        )
+    )
+    return (result.scalar() or 0) > 0
 
 
 # === Endpoints ===
@@ -153,11 +172,14 @@ async def get_workspace(
             detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"},
         )
 
+    has_checker = await _workspace_has_checker(db, ctx.workspace_id)
+
     return WorkspaceResponse(
         id=workspace.id,
         name=workspace.name,
         created_at=workspace.created_at,
         updated_at=workspace.updated_at,
+        has_checker=has_checker,
     )
 
 
@@ -193,11 +215,14 @@ async def update_workspace(
 
     logger.info(f"[workspace] renamed id={workspace.id} to '{workspace.name}'")
 
+    has_checker = await _workspace_has_checker(db, ctx.workspace_id)
+
     return WorkspaceResponse(
         id=workspace.id,
         name=workspace.name,
         created_at=workspace.created_at,
         updated_at=workspace.updated_at,
+        has_checker=has_checker,
     )
 
 

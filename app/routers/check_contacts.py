@@ -1,125 +1,123 @@
-"""
-POST /api/v1/check-contacts
+"""Check contacts router (Phase 2 — CONT-04 recheck endpoint).
 
-Bulk phone-number verification via a dedicated checker Telegram account.
-Results are cached in contacts_cache so main sender accounts can skip
-ResolvePhoneRequest for unregistered numbers, protecting them from Telegram bans.
+Workspace-scoped rewrite of the legacy ``check_contacts.py`` (which imported
+the removed ``app.routers.auth.verify_api_key`` shim and was unhookable).
+
+Endpoints:
+  POST /api/v1/contacts/recheck  — UPDATE tg_status='pending' batch →
+                                   ContactCheckWorker подберёт на след. tick.
+
+Payload (``RecheckRequest``):
+  * ``contact_ids: list[UUID]`` — конкретные контакты этого workspace, либо
+  * ``folder_id: UUID`` — все контакты папки этого workspace.
+
+При наличии folder_id мы предварительно проверяем что folder принадлежит
+workspace'у (cross-tenant guard выдаёт 404, не 403, чтобы не раскрывать
+существование folder'а в другом тенанте).
+
+При наличии только contact_ids — фильтр ``workspace_id = :wid`` в UPDATE сам
+закрывает изоляцию: контакты другого workspace'а в счётчик не попадают
+(``marked_pending`` будет меньше длины массива).
+
+Возвращает ``202 Accepted`` + ``{marked_pending: N}`` — операция асинхронная,
+сам resolve делает ``ContactCheckWorker`` (см. ``app/services/contact_check_worker.py``).
 """
-import re
+
 import logging
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Sender
-from app.routers.auth import verify_api_key
-from app.services.checker import checker_service
+from app.schemas import RecheckRequest
+from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/check-contacts", tags=["check-contacts"])
-
-PHONE_RE = re.compile(r"^\+\d{7,15}$")
+router = APIRouter(prefix="/api/v1/contacts", tags=["contact-check"])
 
 
-# === Schemas ===
-
-class CheckContactsRequest(BaseModel):
-    phones: List[str] = Field(
-        ...,
-        min_length=1,
-        max_length=20,
-        description="Список номеров для проверки (формат: +7XXXXXXXXXX). Максимум 20 за раз.",
-    )
-    checker_slug: str = Field(..., description="Slug checker-аккаунта (role='checker')")
-
-    @field_validator("phones")
-    @classmethod
-    def validate_phone_format(cls, v: List[str]) -> List[str]:
-        for phone in v:
-            if not PHONE_RE.match(phone):
-                raise ValueError(
-                    f"Invalid phone format: '{phone}'. Expected international format, e.g. +79001234567"
-                )
-        return v
-
-
-class PhoneCheckResult(BaseModel):
-    phone: str
-    is_registered: bool
-    telegram_id: Optional[int] = None
-    from_cache: bool
-
-
-class CheckContactsResponse(BaseModel):
-    checked: int
-    registered: int
-    not_registered: int
-    flood_wait_hit: bool
-    results: List[PhoneCheckResult]
-
-
-# === Endpoint ===
-
-@router.post("", response_model=CheckContactsResponse)
-async def check_contacts(
-    request: CheckContactsRequest,
+@router.post("/recheck", status_code=202)
+async def recheck_contacts(
+    payload: RecheckRequest,
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key),
 ):
-    """
-    Check whether phone numbers are registered in Telegram.
+    """Помечает контакты как ``tg_status='pending'`` → ContactCheckWorker переоценит.
 
-    Uses a dedicated checker account (role='checker') to call ResolvePhoneRequest.
-    Results are cached in contacts_cache. Subsequent calls for the same numbers
-    return immediately from cache.
-
-    Main sender accounts consult this cache before sending — numbers with
-    is_registered=false are rejected without any Telegram API call, protecting
-    main accounts from spam detection.
+    Поддерживает либо ``contact_ids`` (subset), либо ``folder_id`` (вся папка).
+    Pydantic ``model_validator`` гарантирует наличие одного из них (см.
+    ``RecheckRequest.one_required``).
     """
-    # 1. Resolve checker account
-    result = await db.execute(
-        select(Sender).where(
-            Sender.slug == request.checker_slug,
-            Sender.role == "checker",
-            Sender.is_active.is_(True),
+    if payload.contact_ids:
+        result = await db.execute(
+            text(
+                """
+                UPDATE contacts
+                SET tg_status = 'pending',
+                    tg_error = NULL,
+                    updated_at = NOW()
+                WHERE id = ANY(:ids)
+                  AND workspace_id = :wid
+                  AND phone IS NOT NULL
+                """
+            ),
+            {
+                "ids": [str(cid) for cid in payload.contact_ids],
+                "wid": str(ctx.workspace_id),
+            },
         )
-    )
-    checker = result.scalar_one_or_none()
-
-    if checker is None:
+    elif payload.folder_id:
+        # Workspace-scoped folder check — 404 не раскрывает cross-tenant.
+        folder_check = await db.execute(
+            text(
+                """
+                SELECT 1 FROM folders
+                WHERE id = :fid AND workspace_id = :wid
+                """
+            ),
+            {
+                "fid": str(payload.folder_id),
+                "wid": str(ctx.workspace_id),
+            },
+        )
+        if folder_check.scalar() is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "FOLDER_NOT_FOUND", "message": "Folder not found"},
+            )
+        result = await db.execute(
+            text(
+                """
+                UPDATE contacts
+                SET tg_status = 'pending',
+                    tg_error = NULL,
+                    updated_at = NOW()
+                WHERE folder_id = :fid
+                  AND workspace_id = :wid
+                  AND phone IS NOT NULL
+                """
+            ),
+            {
+                "fid": str(payload.folder_id),
+                "wid": str(ctx.workspace_id),
+            },
+        )
+    else:
+        # Не должно случаться — Pydantic model_validator уже отверг бы запрос.
         raise HTTPException(
-            status_code=404,
+            status_code=422,
             detail={
-                "error": f"Checker account '{request.checker_slug}' not found or inactive. "
-                         "Make sure the sender exists with role='checker' and is_active=true.",
-                "code": "CHECKER_NOT_FOUND",
+                "code": "MISSING_TARGET",
+                "message": "Either contact_ids or folder_id required",
             },
         )
 
+    marked = result.rowcount or 0
+    await db.commit()
     logger.info(
-        f"[check-contacts] Starting batch: checker={request.checker_slug}, "
-        f"phones={len(request.phones)}"
+        f"[recheck] workspace={ctx.workspace_id} source={ctx.source} "
+        f"marked_pending={marked}"
     )
-
-    # 2. Run batch check (Lock is held inside checker_service.check_phones)
-    summary = await checker_service.check_phones(
-        checker_id=str(checker.id),
-        checker_slug=checker.slug,
-        encrypted_session=checker.session_string,
-        phones=request.phones,
-        proxy=checker.proxy,
-    )
-
-    return CheckContactsResponse(
-        checked=summary["checked"],
-        registered=summary["registered"],
-        not_registered=summary["not_registered"],
-        flood_wait_hit=summary["flood_wait_hit"],
-        results=[PhoneCheckResult(**r) for r in summary["results"]],
-    )
+    return {"marked_pending": marked}
