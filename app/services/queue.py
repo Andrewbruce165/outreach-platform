@@ -19,6 +19,7 @@ import random
 from datetime import datetime, timezone, timedelta
 import zoneinfo
 from typing import Optional
+from uuid import UUID
 
 import httpx
 from sqlalchemy import select, update, func, and_
@@ -702,7 +703,10 @@ class QueueWorker:
                         "phone": item.recipient_phone,
                         "name": recipient_name,
                         "tg_id": recipient_tg_id,
-                        "ai_ctx": str(sender.ai_context_id) if sender.ai_context_id else None,
+                        # Phase 3 D-06: senders.ai_context_id dropped — ai_context_id
+                        # приходит через extra_data, заполняется enqueue_message().
+                        # TODO(phase-4): pull from conversation.campaign_id JOIN.
+                        "ai_ctx": (item.extra_data or {}).get("ai_context_id"),
                     }
                 )
                 conversation_id = str(r2.fetchone()[0])
@@ -780,13 +784,23 @@ async def enqueue_message(
     metadata: Optional[dict] = None,
     priority: int = 0,
     callback_url: Optional[str] = None,
+    ai_context_id: Optional[UUID] = None,
 ) -> dict:
     """Add a message to the queue. Returns queue info dict.
 
     Phase 02.1 CR-01: workspace_id is required (message_queue.workspace_id
     NOT NULL after migration 012). Callers must pass the workspace_id from
     AuthCtx or the sender's workspace_id.
+
+    Phase 3 D-06: ai_context_id is now an explicit parameter (sender больше
+    не «знает» агента, senders.ai_context_id dropped). When set, it is stored
+    in extra_data["ai_context_id"] and propagated to conversations.ai_context_id
+    by _upsert_conversation.
     """
+    extra_data = dict(metadata or {})
+    if ai_context_id is not None:
+        extra_data["ai_context_id"] = str(ai_context_id)
+
     item = MessageQueue(
         workspace_id=workspace_id,
         sender_id=sender_id,
@@ -795,7 +809,7 @@ async def enqueue_message(
         recipient_name=recipient_name,
         message_text=message_text,
         as_draft=as_draft,
-        extra_data=metadata or {},
+        extra_data=extra_data,
         priority=priority,
         callback_url=callback_url,
     )
@@ -831,6 +845,9 @@ async def enqueue_file(
 
     Phase 02.1 CR-01: workspace_id is required (message_queue.workspace_id
     NOT NULL after migration 012).
+
+    TODO(phase-4): apply same ai_context_id propagation as enqueue_message —
+    file-flow not in Phase 3 send-path so left as legacy (D-06 partial).
     """
     item = MessageQueue(
         workspace_id=workspace_id,
