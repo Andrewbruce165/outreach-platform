@@ -105,7 +105,7 @@ Plans:
 Plans:
 
 - [x] 03-01-agent-model-decoupling-PLAN.md — миграция 015 (DROP 6 ai_contexts columns + senders.ai_context_id + UNIQUE workspace_name) + ORM cleanup + 5 worker adapters (ai_engine/listener/rotation/queue/senders.py) [Wave 1]
-- [ ] 03-02-agent-crud-api-and-ui-contract-PLAN.md — новый /api/v1/agents router (CRUD + duplicate) + рерайт /api/v1/send под AuthDep с explicit ai_context_id + регистрация в main.py [Wave 1, depends_on: 03-01]
+- [x] 03-02-agent-crud-api-and-ui-contract-PLAN.md — новый /api/v1/agents router (CRUD + duplicate) + рерайт /api/v1/send под AuthDep с explicit ai_context_id + регистрация в main.py [Wave 1, depends_on: 03-01]
 
 ---
 

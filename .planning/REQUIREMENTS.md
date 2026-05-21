@@ -50,10 +50,10 @@
 
 ### Agents — AI Templates (Phase 3)
 
-- [ ] **AGNT-01**: Пользователь создаёт агента (AI-шаблон) с именем — workspace-level
+- [x] **AGNT-01**: Пользователь создаёт агента (AI-шаблон) с именем — workspace-level
 - [x] **AGNT-02**: Задаёт настройки агента: контекст (промпт), задача, тон, FAQ
 - [x] **AGNT-03**: Агент переиспользуется между несколькими кампаниями
-- [ ] **AGNT-04**: Список агентов workspace с CRUD (создать / редактировать / удалить, дубликат)
+- [x] **AGNT-04**: Список агентов workspace с CRUD (создать / редактировать / удалить, дубликат)
 
 ### Campaigns (Phase 4)
 
@@ -157,10 +157,10 @@
 | FLDR-01 | Phase 2 | Complete |
 | FLDR-02 | Phase 2 | Complete |
 | FLDR-03 | Phase 2 | Complete |
-| AGNT-01 | Phase 3 | Pending |
+| AGNT-01 | Phase 3 | Complete |
 | AGNT-02 | Phase 3 | Complete |
 | AGNT-03 | Phase 3 | Complete |
-| AGNT-04 | Phase 3 | Pending |
+| AGNT-04 | Phase 3 | Complete |
 | CAMP-01 | Phase 4 | Pending |
 | CAMP-02 | Phase 4 | Pending |
 | CAMP-03 | Phase 4 | Pending |

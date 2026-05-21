@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 03-01-agent-model-decoupling-PLAN.md
-last_updated: "2026-05-21T23:35:35.955Z"
+status: verifying
+stopped_at: Completed 03-02-agent-crud-api-and-ui-contract-PLAN.md
+last_updated: "2026-05-21T23:46:04.114Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 13
-  completed_plans: 12
+  completed_plans: 13
   percent: 17
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 03 (agents-ai-templates) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-21
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -53,6 +53,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 02-tg-accounts-contacts P02-04 | 38min | 3 tasks | 6 files |
 | Phase 02 P05 | 35min | 2 tasks | 6 files |
 | Phase 03-agents-ai-templates P01 | 25min | 7 tasks | 14 files |
+| Phase 03-agents-ai-templates P02 | 6min | 6 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 02-tg-accounts-contacts]: Phone normalization: pure regex E.164 (no phonenumbers lib) + RU leading-8 heuristic gated by 11-digit + no leading +
 - [Phase 02]: Plan 02-05: ContactCheckWorker reuses CheckerService (no FloodWait/polite-delay duplication); JOIN LATERAL gates workspace isolation; recheck endpoint is workspace-scoped 202 Accepted; has_checker exposed for D-20 UI banner.
 - [Phase 03-agents-ai-templates]: Phase 3 plan 01: migration 015 — DROP 6 ai_contexts columns + senders.ai_context_id + UNIQUE(workspace_id, name); ORM AIContext reduced to D-02 fields; 5 worker-services adapted (ai_engine/listener/rotation/queue/senders router); 7 TODO(phase-4) markers left for Campaign-level reconnection
+- [Phase 03-agents-ai-templates]: Phase 3 plan 02: workspace-scoped /api/v1/agents (6 endpoints) + /api/v1/send rewrite under AuthDep with explicit ai_context_id (D-06); hard delete via FK cascades (D-08); duplicate auto-name with retry-on-IntegrityError (Pitfall 2); campaign_count=0 hardcoded (D-10); legacy contexts.py deleted, send-file/send-batch dropped (С-04)
 
 ### Pending Todos
 
@@ -87,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-21T23:35:35.946Z
-Stopped at: Completed 03-01-agent-model-decoupling-PLAN.md
+Last session: 2026-05-21T23:46:04.111Z
+Stopped at: Completed 03-02-agent-crud-api-and-ui-contract-PLAN.md
 Resume file: None
