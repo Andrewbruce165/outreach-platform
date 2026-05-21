@@ -161,14 +161,25 @@ class WarmupWorker:
     # ─── Pool ─────────────────────────────────────────────────────────────────
 
     async def _get_active_pool(self, db: AsyncSession) -> list[dict]:
-        """Активные участники пула с данными sender'а."""
+        """Активные участники пула с данными sender'а.
+
+        Phase 02.1 (CR-04 issue 3): workspace_id возвращается, чтобы
+        _create_new_sessions мог партиционировать пары — sender'ы из разных
+        workspace'ов НЕ должны парироваться (cross-tenant pair leak).
+
+        JOIN дополнительно требует s.workspace_id = wp.workspace_id, чтобы
+        даже при ручной правке БД (sender перенесён в другой workspace,
+        warmup_pool остался) мы не отдавали неконсистентные строки.
+        """
         # Phase 2 (D-11/D-12): senders.is_active dropped → lifecycle_status + auth_status.
         # warmup_pool.is_active — отдельная колонка (другая модель), остаётся.
         result = await db.execute(text("""
-            SELECT wp.sender_id, wp.enrolled_at,
+            SELECT wp.sender_id, wp.workspace_id, wp.enrolled_at,
                    s.slug, s.phone, s.session_string
             FROM warmup_pool wp
-            JOIN senders s ON s.id = wp.sender_id
+            JOIN senders s
+              ON s.id = wp.sender_id
+             AND s.workspace_id = wp.workspace_id
             WHERE wp.is_active = true
               AND s.lifecycle_status = 'active'
               AND s.auth_status = 'ok'
@@ -179,11 +190,12 @@ class WarmupWorker:
         return [
             {
                 "sender_id":     str(r[0]),
-                "enrolled_at":   r[1],
-                "slug":          r[2],
-                "phone":         r[3],
-                "session_string": r[4],
-                "enrolled_days": max(0, (now - r[1]).days),
+                "workspace_id":  str(r[1]),
+                "enrolled_at":   r[2],
+                "slug":          r[3],
+                "phone":         r[4],
+                "session_string": r[5],
+                "enrolled_days": max(0, (now - r[2]).days),
             }
             for r in rows
         ]
@@ -245,9 +257,10 @@ class WarmupWorker:
 
         # Загружаем данные обоих аккаунтов
         # Phase 2 (D-11/D-12): "eligible" = lifecycle_status='active' AND auth_status='ok'.
+        # Phase 02.1 (CR-04 issue 1): workspace_id из senders для INSERT warmup_messages.
         result = await db.execute(
             text("""
-                SELECT id, slug, phone, session_string, lifecycle_status, auth_status
+                SELECT id, slug, phone, session_string, lifecycle_status, auth_status, workspace_id
                 FROM senders WHERE id = ANY(:ids)
             """),
             {"ids": [from_id, to_id]}
@@ -257,6 +270,7 @@ class WarmupWorker:
                 "id": str(r[0]), "slug": r[1],
                 "phone": r[2], "session_string": r[3],
                 "lifecycle_status": r[4], "auth_status": r[5],
+                "workspace_id": str(r[6]),
                 "is_eligible": (r[4] == "active" and r[5] == "ok"),
             }
             for r in result.fetchall()
@@ -324,12 +338,14 @@ class WarmupWorker:
             return
 
         # Пишем в БД ДО отправки (listener проверяет по кэшу телефонов, это дополнительная страховка)
+        # Phase 02.1 (CR-04 issue 1): warmup_messages.workspace_id NOT NULL после миграции 012.
         await db.execute(
             text("""
-                INSERT INTO warmup_messages (session_id, from_sender_id, to_sender_id, message_text)
-                VALUES (:session_id, :from_id, :to_id, :text)
+                INSERT INTO warmup_messages (workspace_id, session_id, from_sender_id, to_sender_id, message_text)
+                VALUES (:wid, :session_id, :from_id, :to_id, :text)
             """),
             {
+                "wid":        from_sender["workspace_id"],
                 "session_id": session["id"],
                 "from_id":    from_id,
                 "to_id":      to_id,
@@ -391,12 +407,19 @@ class WarmupWorker:
     # ─── Session creation ─────────────────────────────────────────────────────
 
     async def _create_new_sessions(self, db: AsyncSession):
-        """Создать новые сессии для свободных пар в пуле."""
+        """Создать новые сессии для свободных пар в пуле.
+
+        Phase 02.1 (CR-04 issue 3): пары формируются ВНУТРИ workspace_id —
+        sender'ы из разных tenant'ов не должны общаться через warmup
+        (cross-tenant Telegram leak).
+        """
+        from itertools import groupby
+
         pool = await self._get_active_pool(db)
         if len(pool) < 2:
             return
 
-        # Кто уже в активных сессиях
+        # Кто уже в активных сессиях (busy_ids global — sender уже занят в своём workspace)
         busy_result = await db.execute(
             text("SELECT sender_a_id, sender_b_id FROM warmup_sessions WHERE status = 'active'")
         )
@@ -409,22 +432,37 @@ class WarmupWorker:
         if len(available) < 2:
             return
 
-        random.shuffle(available)
-        pairs = [(available[i], available[i + 1]) for i in range(0, len(available) - 1, 2)]
+        # ── CR-04 issue 3 FIX: партиционируем по workspace_id ─────────────────
+        # groupby требует отсортированного входа.
+        available_sorted = sorted(available, key=lambda s: s["workspace_id"])
+        pairs: list[tuple[dict, dict]] = []
+        for _wsid, group_iter in groupby(available_sorted, key=lambda s: s["workspace_id"]):
+            ws_group = list(group_iter)
+            if len(ws_group) < 2:
+                continue
+            random.shuffle(ws_group)
+            for i in range(0, len(ws_group) - 1, 2):
+                pairs.append((ws_group[i], ws_group[i + 1]))
 
         for sender_a, sender_b in pairs:
+            # Защита-в-глубину: после partitioning оба sender'а из одного workspace.
+            assert sender_a["workspace_id"] == sender_b["workspace_id"], \
+                "Cross-tenant warmup pair attempted — partitioning bug!"
+
             topic  = random.choice(WARMUP_TOPICS)
             target = random.randint(4, 10)
             # Первое сообщение через 1–5 минут
             first_at = datetime.now(timezone.utc) + timedelta(minutes=random.randint(1, 5))
 
+            # Phase 02.1 (CR-04 issue 1): warmup_sessions.workspace_id NOT NULL.
             await db.execute(
                 text("""
                     INSERT INTO warmup_sessions
-                        (sender_a_id, sender_b_id, topic, target_messages, next_message_at)
-                    VALUES (:a, :b, :topic, :target, :first_at)
+                        (workspace_id, sender_a_id, sender_b_id, topic, target_messages, next_message_at)
+                    VALUES (:wid, :a, :b, :topic, :target, :first_at)
                 """),
                 {
+                    "wid":      sender_a["workspace_id"],
                     "a":        sender_a["sender_id"],
                     "b":        sender_b["sender_id"],
                     "topic":    topic,
@@ -433,7 +471,8 @@ class WarmupWorker:
                 }
             )
             logger.info(
-                f"🔥 Новая warmup сессия: {sender_a['slug']} ↔ {sender_b['slug']} "
+                f"🔥 Новая warmup сессия (workspace={sender_a['workspace_id'][:8]}): "
+                f"{sender_a['slug']} ↔ {sender_b['slug']} "
                 f"(тема: «{topic}», {target} сообщений)"
             )
 
@@ -524,11 +563,14 @@ class WarmupWorker:
             # Откладываем сессию на время FloodWait + небольшой буфер
             retry_at = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 60)
             async with AsyncSessionLocal() as db:
+                # Phase 02.1 (CR-04 issue 2): скобки вокруг OR, чтобы AND status='active'
+                # применялся к ОБОИМ условиям. Без скобок AND связывается только с
+                # последним OR, и UPDATE задевал completed-сессии sender_b.
                 await db.execute(
                     text("""
                         UPDATE warmup_sessions
                         SET next_message_at = :t, updated_at = NOW()
-                        WHERE sender_a_id = :sid OR sender_b_id = :sid
+                        WHERE (sender_a_id = :sid OR sender_b_id = :sid)
                           AND status = 'active'
                     """),
                     {"t": retry_at, "sid": from_sender["id"]}
