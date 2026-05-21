@@ -17,7 +17,10 @@ Lazy workspace creation (D-08, TENT-02):
 """
 
 import asyncio
+import hmac
 import logging
+import time as _time
+from datetime import datetime, timezone
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -28,7 +31,6 @@ from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql import func
 
 from app.config import get_settings
 from app.database import get_db
@@ -36,6 +38,46 @@ from app.models import UserWorkspace, Workspace, WorkspaceApiKey
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+# ─── Phase 02.1 (CR-09): in-process token cache ──────────────────────────────
+# Before Phase 02.1 every X-Workspace-Key request burned ~100ms CPU on bcrypt
+# (12 rounds). On n8n push at 100 RPS that hits 100% CPU on a single api
+# container. In-process LRU-ish cache holds successfully-validated tokens for
+# 5 minutes — second and subsequent calls with the same raw_token are
+# effectively free.
+#
+# Caveats:
+# - Cache is per-process (not shared between containers) — each container
+#   warms its own cache on first requests (acceptable).
+# - Revoke does NOT invalidate cache immediately — old ctx lives up to TTL.
+#   Acceptable in v1 (revoke is rare, 5-min lag tolerable). v2 will need
+#   Redis pubsub or periodic DB poll for immediate invalidation.
+
+_TOKEN_CACHE: dict[str, tuple["AuthCtx", float]] = {}
+_TOKEN_CACHE_TTL_SECONDS: float = 300.0  # 5 минут
+_TOKEN_CACHE_MAX_SIZE: int = 1024         # bounded — eviction = oldest 10%
+
+
+def _cache_get(raw_token: str) -> Optional["AuthCtx"]:
+    entry = _TOKEN_CACHE.get(raw_token)
+    if entry is None:
+        return None
+    ctx, expires_at = entry
+    if expires_at < _time.time():
+        _TOKEN_CACHE.pop(raw_token, None)
+        return None
+    return ctx
+
+
+def _cache_put(raw_token: str, ctx: "AuthCtx") -> None:
+    # Bounded eviction: при переполнении дропаем ~10% самых старых entries
+    if len(_TOKEN_CACHE) >= _TOKEN_CACHE_MAX_SIZE:
+        sorted_keys = sorted(_TOKEN_CACHE.items(), key=lambda kv: kv[1][1])
+        drop = max(1, _TOKEN_CACHE_MAX_SIZE // 10)
+        for k, _v in sorted_keys[:drop]:
+            _TOKEN_CACHE.pop(k, None)
+    _TOKEN_CACHE[raw_token] = (ctx, _time.time() + _TOKEN_CACHE_TTL_SECONDS)
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
@@ -189,15 +231,25 @@ async def _resolve_or_create_workspace(
 
 
 async def _verify_api_key(db: AsyncSession, raw_token: str) -> AuthCtx:
-    """
-    Verify wsk_<...> token: парсим prefix → SELECT активных кандидатов
-    → bcrypt verify в asyncio.to_thread (Pitfall 3 — bcrypt sync блокирует loop).
+    """Verify wsk_<...> token. Phase 02.1 (CR-09) hardening.
+
+    - **issue 1 (timing)**: prefix sring-equality через ``hmac.compare_digest``
+      (constant-time defence-in-depth поверх SQL prefix-фильтра).
+    - **issue 2 (CPU)**: in-process LRU cache 5-min TTL — повторный вызов с
+      тем же raw_token не делает bcrypt.
+    - **issue 3 (anti-pattern)**: ``last_used_at = datetime.now(timezone.utc)``
+      вместо ``func.now()`` (Python attribute, не SQL-expression).
     """
     if len(raw_token) < 12:
         raise HTTPException(
             status_code=401,
             detail={"code": "API_KEY_INVALID", "message": "Malformed workspace key"},
         )
+
+    # ─── Fast path: cache hit ─────────────────────────────────────────────
+    cached_ctx = _cache_get(raw_token)
+    if cached_ctx is not None:
+        return cached_ctx
 
     prefix = raw_token[:12]  # 'wsk_' + 8 chars = 12 (C-02 resolved)
 
@@ -211,6 +263,11 @@ async def _verify_api_key(db: AsyncSession, raw_token: str) -> AuthCtx:
     candidates = result.scalars().all()
 
     for candidate in candidates:
+        # CR-09 issue 1: constant-time prefix string-equality. SQL уже
+        # отфильтровал по `prefix = :prefix`, но повторяем compare_digest
+        # для защиты-в-глубину против side-channel в Python.
+        if not hmac.compare_digest(prefix.encode(), candidate.prefix.encode()):
+            continue
         # Pitfall 3: bcrypt sync — обернуть в to_thread
         match = await asyncio.to_thread(
             bcrypt.checkpw,
@@ -218,20 +275,24 @@ async def _verify_api_key(db: AsyncSession, raw_token: str) -> AuthCtx:
             candidate.bcrypt_hash.encode(),
         )
         if match:
-            # Best-effort update last_used_at (не блокируем основной flow)
-            candidate.last_used_at = func.now()
+            # CR-09 issue 3: clean Python datetime, не SQL func.now()
+            candidate.last_used_at = datetime.now(timezone.utc)
             await db.commit()
 
-            logger.info(
-                f"[auth] api_key matched workspace={candidate.workspace_id} "
-                f"prefix={prefix} key_id={str(candidate.id)[:8]}..."
-            )
-            return AuthCtx(
+            ctx = AuthCtx(
                 workspace_id=candidate.workspace_id,
                 user_id=None,
                 source="api_key",
                 role=None,
             )
+            # CR-09 issue 2: populate cache (5-min TTL)
+            _cache_put(raw_token, ctx)
+
+            logger.info(
+                f"[auth] api_key matched workspace={candidate.workspace_id} "
+                f"prefix={prefix} key_id={str(candidate.id)[:8]}..."
+            )
+            return ctx
 
     logger.warning(
         f"[auth] api_key lookup failed prefix={prefix} "
