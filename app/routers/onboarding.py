@@ -199,6 +199,87 @@ async def _safe_disconnect(client: Optional[TelegramClient]) -> None:
         logger.warning(f"[onboarding] disconnect error: {e}")
 
 
+async def _load_existing_sender(
+    db: AsyncSession,
+    sender_id: UUID,
+    workspace_id: UUID,
+) -> Optional[Sender]:
+    """Phase 02.1 (CR-05) — reauth helper.
+
+    Загружаем sender с workspace-guard'ом, чтобы не было cross-tenant обращений
+    к чужому sender'у через манипуляцию original_sender_id в onboarding_sessions.
+    Возвращает None если sender не найден или принадлежит другому workspace
+    (caller сам решает: fallback на create или 404).
+    """
+    result = await db.execute(
+        select(Sender).where(
+            Sender.id == sender_id,
+            Sender.workspace_id == workspace_id,
+            # TODO(v2-rls): replaced by RLS policy app.workspace_id
+        )
+    )
+    return result.scalars().first()
+
+
+async def _refresh_sender_session(
+    db: AsyncSession,
+    sender: Sender,
+    client: TelegramClient,
+    session_row: OnboardingSession,
+) -> Sender:
+    """Phase 02.1 (CR-05) — reauth: UPDATE существующего sender'а вместо INSERT.
+
+    Обновляем session_string + auth_status='ok'. Slug/name/role/workspace_id/phone
+    остаются неизменными — это всё ещё тот же физический Telegram-аккаунт, просто
+    с обновлённой сессией. Proxy обновляется если она передана через onboarding
+    (пользователь мог сменить proxy_id при reauth).
+
+    Возвращает обновлённого Sender'а после commit + refresh.
+    """
+    sender.session_string = encrypt_session(client.session.save())
+    sender.auth_status = "ok"
+    if session_row.proxy is not None:
+        sender.proxy = session_row.proxy
+    await db.commit()
+    await db.refresh(sender)
+    logger.info(
+        f"[onboarding] sender refreshed (reauth) slug={sender.slug} "
+        f"workspace={str(sender.workspace_id)[:8]} sender_id={str(sender.id)[:8]}"
+    )
+    return sender
+
+
+async def _finalize_onboarding_or_reauth(
+    db: AsyncSession,
+    ctx: AuthCtx,
+    session_row: OnboardingSession,
+    client: TelegramClient,
+    name: Optional[str] = None,
+) -> Sender:
+    """Phase 02.1 (CR-05) — единая ветка финализации для verify-code/verify-2fa.
+
+    Если session_row.original_sender_id NOT NULL — это reauth: пробуем найти
+    существующего sender'а и UPDATE'нуть его сессию. Если sender был удалён пока
+    шёл reauth (edge case) — fallback на обычный create, чтобы не блокировать юзера.
+    Иначе — обычный onboarding (INSERT new sender).
+    """
+    if session_row.original_sender_id is not None:
+        existing = await _load_existing_sender(
+            db, session_row.original_sender_id, ctx.workspace_id
+        )
+        if existing is None:
+            logger.warning(
+                f"[onboarding] reauth: original_sender_id="
+                f"{str(session_row.original_sender_id)[:8]} not found in workspace "
+                f"{str(ctx.workspace_id)[:8]}, falling back to create"
+            )
+            return await _create_sender_from_session(
+                db, ctx, session_row, client, name=name
+            )
+        return await _refresh_sender_session(db, existing, client, session_row)
+    return await _create_sender_from_session(db, ctx, session_row, client, name=name)
+
+
 async def _create_sender_from_session(
     db: AsyncSession,
     ctx: AuthCtx,
@@ -444,7 +525,8 @@ async def verify_code(
             detail={"code": "TELETHON_ERROR", "message": str(e)},
         )
 
-    sender = await _create_sender_from_session(
+    # Phase 02.1 (CR-05): reauth vs create branching через original_sender_id.
+    sender = await _finalize_onboarding_or_reauth(
         db, ctx, session_row, client, name=request.name
     )
     await update_status(db, session_row.id, "completed")
@@ -499,7 +581,8 @@ async def verify_2fa(
             detail={"code": "TELETHON_ERROR", "message": str(e)},
         )
 
-    sender = await _create_sender_from_session(
+    # Phase 02.1 (CR-05): reauth vs create branching через original_sender_id.
+    sender = await _finalize_onboarding_or_reauth(
         db, ctx, session_row, client, name=request.name
     )
     await update_status(db, session_row.id, "completed")
@@ -607,13 +690,16 @@ async def _wait_for_qr(
             ).scalars().first()
             if row is None:
                 return
-            # Mini-AuthCtx stand-in (workspace_id is all _create_sender_from_session
-            # actually reads).
+            # Mini-AuthCtx stand-in (workspace_id is all the finalize helpers
+            # actually read).
             class _Ctx:
                 def __init__(self, wid: UUID):
                     self.workspace_id = wid
 
-            await _create_sender_from_session(db, _Ctx(workspace_id), row, client)
+            # Phase 02.1 (CR-05): reauth vs create branching for QR flow too.
+            await _finalize_onboarding_or_reauth(
+                db, _Ctx(workspace_id), row, client
+            )
             await update_status(db, session_id, "completed")
             await delete_session(db, session_id)
     except Exception as e:  # noqa: BLE001
@@ -741,6 +827,8 @@ async def reauth_start(
         )
 
     session_string = client.session.save()
+    # Phase 02.1 (CR-05): pass original_sender_id so verify-code/verify-2fa
+    # take the UPDATE branch (_refresh_sender_session) instead of INSERT.
     session_id = await save_state(
         db,
         workspace_id=ctx.workspace_id,
@@ -749,11 +837,12 @@ async def reauth_start(
         session_string=session_string,
         role=sender.role,
         proxy=sender.proxy,
+        original_sender_id=sender.id,
     )
     _in_process_clients[str(session_id)] = client
     logger.info(
         f"[onboarding] reauth started session={str(session_id)[:8]} "
-        f"sender_slug={sender_slug}"
+        f"sender_slug={sender_slug} original_sender_id={str(sender.id)[:8]}"
     )
     return StartResponse(session_id=session_id, status="code_sent", phone=phone)
 
@@ -788,6 +877,8 @@ async def reauth_qr(
         )
 
     session_string = client.session.save()
+    # Phase 02.1 (CR-05): pass original_sender_id so _wait_for_qr takes the
+    # UPDATE branch (_refresh_sender_session) instead of INSERT.
     session_id = await save_state(
         db,
         workspace_id=ctx.workspace_id,
@@ -796,6 +887,7 @@ async def reauth_qr(
         session_string=session_string,
         role=sender.role,
         proxy=sender.proxy,
+        original_sender_id=sender.id,
     )
     _in_process_clients[str(session_id)] = client
     asyncio.create_task(

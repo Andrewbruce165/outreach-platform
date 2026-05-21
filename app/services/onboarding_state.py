@@ -54,12 +54,18 @@ async def save_state(
     session_string: str,
     role: str = "sender",
     proxy: Optional[dict] = None,
+    original_sender_id: Optional[UUID] = None,
 ) -> UUID:
     """Insert an ``onboarding_sessions`` row and return its id.
 
     ``session_string`` is encrypted via ``encrypt_session`` before persistence.
     Initial ``status`` = ``'code_sent'``, ``expires_at`` = now + TTL.
     Raises ``ValueError`` if ``role`` is not one of ``('sender', 'checker')``.
+
+    Phase 02.1 (CR-05): ``original_sender_id`` маркирует reauth-flow. Если NOT NULL,
+    то verify-code/verify-2fa/_wait_for_qr должны UPDATE'ить существующего sender'а
+    (через ``_refresh_sender_session``), а не INSERT'ить нового. NULL = обычный
+    onboarding (default).
     """
     if role not in _VALID_ROLES:
         raise ValueError(f"Invalid role: {role}")
@@ -73,15 +79,22 @@ async def save_state(
         role=role,
         proxy=proxy,
         status="code_sent",
+        original_sender_id=original_sender_id,
         expires_at=expires_at,
     )
     db.add(row)
     await db.commit()
     await db.refresh(row)
     phone_masked = (phone[:6] + "***") if phone else "<empty>"
+    reauth_marker = (
+        f" reauth_of={str(original_sender_id)[:8]}"
+        if original_sender_id is not None
+        else ""
+    )
     logger.info(
         f"[onboarding-state] saved id={str(row.id)[:8]} "
         f"phone={phone_masked} role={role} workspace={str(workspace_id)[:8]}"
+        f"{reauth_marker}"
     )
     return row.id
 
