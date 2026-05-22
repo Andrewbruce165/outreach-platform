@@ -13,6 +13,7 @@ from app.services.contact_check_worker import contact_check_worker
 from app.services.campaign_enqueue import campaign_enqueue_worker  # Phase 4 D-17
 from app.routers import (
     agents,
+    analytics,  # Phase 5 — new (4 read-only endpoints)
     campaigns,
     check_contacts,
     contacts,
@@ -98,6 +99,7 @@ app.include_router(agents.router)
 app.include_router(send.router)
 app.include_router(campaigns.router)  # Phase 4
 app.include_router(conversations.router)  # Phase 5 — inbox + manager mode
+app.include_router(analytics.router)  # Phase 5 — analytics (4 endpoints)
 
 
 @app.get("/")
