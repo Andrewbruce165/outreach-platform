@@ -57,20 +57,20 @@
 
 ### Campaigns (Phase 4)
 
-- [ ] **CAMP-01**: Создание кампании с именем и описанием
-- [ ] **CAMP-02**: Выбор агента-шаблона из списка workspace
-- [ ] **CAMP-03**: Выбор папки контактов как таргета кампании
-- [ ] **CAMP-04**: Выбор TG-аккаунтов (senders) — с каких аккаунтов идёт рассылка; sender блокируется за активной кампанией
+- [x] **CAMP-01**: Создание кампании с именем и описанием
+- [x] **CAMP-02**: Выбор агента-шаблона из списка workspace
+- [x] **CAMP-03**: Выбор папки контактов как таргета кампании
+- [x] **CAMP-04**: Выбор TG-аккаунтов (senders) — с каких аккаунтов идёт рассылка; sender блокируется за активной кампанией
 - [ ] **CAMP-05**: Расписание кампании: рабочие часы и дни (заменяет глобальные 09–20 МСК)
 - [ ] **CAMP-06**: Старт и стоп даты кампании (опционально)
-- [ ] **CAMP-07**: Статусы кампании: draft / running / paused / done
-- [ ] **CAMP-08**: Пользователь запускает / паузит / останавливает кампанию
+- [x] **CAMP-07**: Статусы кампании: draft / running / paused / done
+- [x] **CAMP-08**: Пользователь запускает / паузит / останавливает кампанию
 - [ ] **CAMP-09**: Контакты досыпаются в активную кампанию через папку (добавление в папку = добавление в очередь кампании)
 - [ ] **CAMP-10**: Переменные `{{имя}}, {{username}}, {{source}}, {{custom.X}}` подставляются из контакта в текст сообщения
 - [ ] **CAMP-11**: Сигнал «передать лид» — паттерн/фраза; срабатывание помечает диалог как лид и триггерит webhook
 - [ ] **CAMP-12**: Сигнал «передать на менеджера» — заменяет старый auto_pause_triggers, AI замолкает, диалог помечается
 - [ ] **CAMP-13**: Сигнал «финиш диалога» — диалог закрывается, AI замолкает, triggerит webhook
-- [ ] **CAMP-14**: Webhook кампании — 3 отдельных URL на типы событий: `lead_webhook_url`, `handoff_webhook_url`, `finish_webhook_url`. Любой может быть NULL (тогда событие не вызывает webhook, но `conversation.status` всё равно обновляется). Pre-Phase-4 формулировка «один webhook на кампанию» обновлена по итогам discuss-phase (D-13) — клиент предпочёл явное разделение endpoint'ов под разные интеграции
+- [x] **CAMP-14**: Webhook кампании — 3 отдельных URL на типы событий: `lead_webhook_url`, `handoff_webhook_url`, `finish_webhook_url`. Любой может быть NULL (тогда событие не вызывает webhook, но `conversation.status` всё равно обновляется). Pre-Phase-4 формулировка «один webhook на кампанию» обновлена по итогам discuss-phase (D-13) — клиент предпочёл явное разделение endpoint'ов под разные интеграции
 - [x] **CAMP-15**: Tools кампании — спецификация function calling, передаётся в LLM вместе с агентским промптом
 - [x] **CAMP-16**: Сигналы + tools передаются в LLM-промпт вместе с агентским контекстом при каждом ответе
 - [x] **CAMP-17**: Очередь сообщений учитывает `campaign_id` — каждое сообщение принадлежит кампании
@@ -161,20 +161,20 @@
 | AGNT-02 | Phase 3 | Complete |
 | AGNT-03 | Phase 3 | Complete |
 | AGNT-04 | Phase 3 | Complete |
-| CAMP-01 | Phase 4 | Pending |
-| CAMP-02 | Phase 4 | Pending |
-| CAMP-03 | Phase 4 | Pending |
-| CAMP-04 | Phase 4 | Pending |
+| CAMP-01 | Phase 4 | Complete |
+| CAMP-02 | Phase 4 | Complete |
+| CAMP-03 | Phase 4 | Complete |
+| CAMP-04 | Phase 4 | Complete |
 | CAMP-05 | Phase 4 | Pending |
 | CAMP-06 | Phase 4 | Pending |
-| CAMP-07 | Phase 4 | Pending |
-| CAMP-08 | Phase 4 | Pending |
+| CAMP-07 | Phase 4 | Complete |
+| CAMP-08 | Phase 4 | Complete |
 | CAMP-09 | Phase 4 | Pending |
 | CAMP-10 | Phase 4 | Pending |
 | CAMP-11 | Phase 4 | Pending |
 | CAMP-12 | Phase 4 | Pending |
 | CAMP-13 | Phase 4 | Pending |
-| CAMP-14 | Phase 4 | Pending |
+| CAMP-14 | Phase 4 | Complete |
 | CAMP-15 | Phase 4 | Complete |
 | CAMP-16 | Phase 4 | Complete |
 | CAMP-17 | Phase 4 | Complete |
