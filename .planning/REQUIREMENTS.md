@@ -89,10 +89,10 @@
 
 ### Analytics (Phase 5)
 
-- [ ] **ANLX-01**: Метрики workspace: карточки отправлено / отвечено / лидов / финишей
-- [ ] **ANLX-02**: Метрики кампании: те же карточки в разрезе одной кампании
-- [ ] **ANLX-03**: Метрики TG-аккаунта (sender): отправлено / отвечено / ошибки в разрезе аккаунта
-- [ ] **ANLX-04**: Метрики агента: использование в кампаниях, агрегированные ответы / лиды
+- [x] **ANLX-01**: Метрики workspace: карточки отправлено / отвечено / лидов / финишей
+- [x] **ANLX-02**: Метрики кампании: те же карточки в разрезе одной кампании
+- [x] **ANLX-03**: Метрики TG-аккаунта (sender): отправлено / отвечено / ошибки в разрезе аккаунта
+- [x] **ANLX-04**: Метрики агента: использование в кампаниях, агрегированные ответы / лиды
 - [ ] **ANLX-05**: Лог запросов в OpenAI на уровне диалога — какие промпты ушли и какие пришли ответы
 
 ### Admin Master Bot (Phase 6)
@@ -184,10 +184,10 @@
 | INBX-04 | Phase 5 | Complete |
 | INBX-05 | Phase 5 | Complete |
 | AIRC-04 | Phase 5 | Complete |
-| ANLX-01 | Phase 5 | Pending |
-| ANLX-02 | Phase 5 | Pending |
-| ANLX-03 | Phase 5 | Pending |
-| ANLX-04 | Phase 5 | Pending |
+| ANLX-01 | Phase 5 | Complete |
+| ANLX-02 | Phase 5 | Complete |
+| ANLX-03 | Phase 5 | Complete |
+| ANLX-04 | Phase 5 | Complete |
 | ANLX-05 | Phase 5 | Pending |
 | ADMN-01 | Phase 6 | Pending |
 | ADMN-02 | Phase 6 | Pending |

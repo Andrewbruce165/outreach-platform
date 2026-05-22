@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-05-22T14:44:31.724Z"
+stopped_at: Completed 05-02-analytics-router-PLAN.md
+last_updated: "2026-05-22T14:53:36.394Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 21
-  completed_plans: 19
+  completed_plans: 20
   percent: 17
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 05 (inbox-analytics) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-05-22
 
@@ -60,6 +60,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 04 P04 | 10min | 5 tasks | 13 files |
 | Phase 04 P05 | 9min | 3 tasks | 8 files |
 | Phase 05 P01 | 13min | 3 tasks | 12 files |
+| Phase 05 P02 | 5min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 04]: Plan 04-05: built-in OpenAI function tools (mark_as_lead/transfer_to_manager/finish_conversation per C-04) ВСЕГДА инжектятся даже когда campaigns.tools=[] (D-12); restrictive default descriptions (Pitfall 7) — Use ONLY/Do not mark — снижают false-positive over-triggering на casual greetings; priority dispatch (Pitfall 1): _BUILTIN_PRIORITY = {finish:0, handoff:1, lead:2}, sorted descending → последний UPDATE = highest-priority; Q3 farewell semantic — text_content возвращается перед status flip когда finish/handoff parallel с text (без second LLM call для tool-result summary); M3 legacy fallback — campaign_id NULL → ai_context_id direct path, get_context_for_conversation НЕ raises; custom tools источник = campaigns.tools JSONB (D-14), webhook_functions путь mortuus; no HMAC на webhook payload (deferred v2); _handle_antispam_signal preserved as safety net; document_webhook_url НЕ восстановлен (custom tool с file param)
 - [Phase 04]: Phase 4 B1 finalized: 0 TODO(phase-4) markers в app/ — все 10 AUDIT.md Section 1 markers закрыты (agents.py:49+246, folders.py:248, queue.py:708+849, rotation.py:180, ai_engine.py:88, listener.py:250+350+707). Phase 4 готов к verification.
 - [Phase 05]: Plan 05-01: migration 017 defensive messages CREATE TABLE (DDL lost in brownfield fork — IF NOT EXISTS no-op on prod); ANTISPAM_BOT_IDS at module level for D-08 delegation from new bot filter; D-03 fix — enable-ai NEVER touches status; pre-send guard in queue.py one extra SELECT (CLAUDE.md empirical intervals untouched)
+- [Phase 05]: [Phase 05]: Plan 05-02: analytics endpoints — sent source = messages JOIN conversations (C-01 covers manager-send D-04 unlike messages_log/message_queue); replied = one SELECT with COUNT(DISTINCT) + COUNT(*) per D-15; _ALLOWED_SCOPE_COLUMNS whitelist + :scope_val bind for safe scope composition; Pitfall 8 — bot_ignored excluded from every COUNT; Pitfall 9 — leads strict EQ; D-13 — no background workers added (lifespan still 5)
 
 ### Pending Todos
 
@@ -103,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-22T14:44:23.620Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-05-22T14:53:36.391Z
+Stopped at: Completed 05-02-analytics-router-PLAN.md
 Resume file: None
