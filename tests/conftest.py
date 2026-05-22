@@ -61,6 +61,12 @@ async def _setup_database():
         sql_015 = (PROJECT_ROOT / "migrations" / "015_phase3.sql").read_text()
         await conn.exec_driver_sql(sql_015)
 
+        # Phase 4 migration: campaigns + campaign_senders + cca + +columns;
+        # DROP context_contact_assignments; extend conversations.status CHECK;
+        # +message_queue.campaign_id (NULLable per AUDIT Q1).
+        sql_016 = (PROJECT_ROOT / "migrations" / "016_phase4.sql").read_text()
+        await conn.exec_driver_sql(sql_016)
+
     yield
 
     async with engine.begin() as conn:
@@ -236,5 +242,146 @@ async def test_contacts_factory(
         for c in contacts:
             await async_db_session.refresh(c)
         return contacts if count > 1 else contacts[0]
+
+    return _make
+
+
+# ─── Phase 4 fixtures: Campaign factories ────────────────────────────────────
+
+@pytest_asyncio.fixture
+async def test_campaign_factory(
+    async_db_session: AsyncSession,
+    test_workspace: Workspace,
+    test_agent_factory,
+    test_folder: Folder,
+):
+    """Factory creates draft campaign in workspace.
+
+    Usage:
+        c = await test_campaign_factory(name="Camp", message_template="Hello {{name}}")
+        c = await test_campaign_factory(status="running")  # explicit override
+    """
+    from sqlalchemy import text as _t
+    import json
+
+    counter = {"n": 0}
+
+    async def _make(
+        name: str | None = None,
+        agent_id=None,
+        folder_id=None,
+        message_template: str = "Hello {{name}}!",
+        timezone: str = "Europe/Moscow",
+        work_hour_start: int = 9,
+        work_hour_end: int = 20,
+        work_days_mask: int = 31,
+        start_date=None,
+        stop_date=None,
+        lead_webhook_url: str | None = None,
+        handoff_webhook_url: str | None = None,
+        finish_webhook_url: str | None = None,
+        lead_trigger_hint: str | None = None,
+        handoff_trigger_hint: str | None = None,
+        finish_trigger_hint: str | None = None,
+        tools=None,
+        status: str = "draft",
+        description: str | None = None,
+    ) -> dict:
+        counter["n"] += 1
+        if name is None:
+            name = f"Test Campaign {counter['n']}"
+        if agent_id is None:
+            agent = await test_agent_factory()
+            agent_id = agent.id
+        if folder_id is None:
+            folder_id = test_folder.id
+
+        row = (await async_db_session.execute(_t("""
+            INSERT INTO campaigns (
+                workspace_id, agent_id, folder_id, name, description, status,
+                timezone, work_hour_start, work_hour_end, work_days_mask,
+                start_date, stop_date, message_template,
+                lead_webhook_url, handoff_webhook_url, finish_webhook_url,
+                lead_trigger_hint, handoff_trigger_hint, finish_trigger_hint,
+                tools
+            ) VALUES (
+                :wid, :aid, :fid, :name, :desc, :status,
+                :tz, :wstart, :wend, :wmask,
+                :sd, :stop, :tpl,
+                :lwurl, :hwurl, :fwurl,
+                :lhint, :hhint, :fhint,
+                CAST(:tools AS JSONB)
+            ) RETURNING id, workspace_id, agent_id, folder_id, name, status,
+                       timezone, work_hour_start, work_hour_end, work_days_mask,
+                       message_template, created_at
+        """), {
+            "wid": str(test_workspace.id),
+            "aid": str(agent_id),
+            "fid": str(folder_id),
+            "name": name,
+            "desc": description,
+            "status": status,
+            "tz": timezone,
+            "wstart": work_hour_start,
+            "wend": work_hour_end,
+            "wmask": work_days_mask,
+            "sd": start_date,
+            "stop": stop_date,
+            "tpl": message_template,
+            "lwurl": lead_webhook_url,
+            "hwurl": handoff_webhook_url,
+            "fwurl": finish_webhook_url,
+            "lhint": lead_trigger_hint,
+            "hhint": handoff_trigger_hint,
+            "fhint": finish_trigger_hint,
+            "tools": json.dumps(tools or []),
+        })).first()
+        await async_db_session.commit()
+        return {
+            "id": row[0],
+            "workspace_id": row[1],
+            "agent_id": row[2],
+            "folder_id": row[3],
+            "name": row[4],
+            "status": row[5],
+            "timezone": row[6],
+            "work_hour_start": row[7],
+            "work_hour_end": row[8],
+            "work_days_mask": row[9],
+            "message_template": row[10],
+            "created_at": row[11],
+        }
+
+    return _make
+
+
+@pytest_asyncio.fixture
+async def attach_sender_to_campaign(async_db_session: AsyncSession, test_workspace: Workspace):
+    """Attach an existing sender to an existing campaign (campaign_senders row)."""
+    from sqlalchemy import text as _t
+
+    async def _attach(campaign_id, sender_id, workspace_id=None):
+        wid = workspace_id or test_workspace.id
+        await async_db_session.execute(_t("""
+            INSERT INTO campaign_senders (campaign_id, sender_id, workspace_id)
+            VALUES (:cid, :sid, :wid)
+            ON CONFLICT DO NOTHING
+        """), {"cid": str(campaign_id), "sid": str(sender_id), "wid": str(wid)})
+        await async_db_session.commit()
+
+    return _attach
+
+
+@pytest_asyncio.fixture
+async def test_running_campaign_factory(test_campaign_factory, test_sender_factory, attach_sender_to_campaign):
+    """Factory creates a running campaign with N senders attached."""
+
+    async def _make(name: str | None = None, sender_count: int = 1, **kwargs):
+        kwargs.setdefault("status", "running")
+        camp = await test_campaign_factory(name=name, **kwargs)
+        senders = [await test_sender_factory() for _ in range(sender_count)]
+        for s in senders:
+            await attach_sender_to_campaign(camp["id"], s.id)
+        return camp, senders
 
     return _make
