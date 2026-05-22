@@ -96,6 +96,10 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 05]: [Phase 05]: Plan 05-02: analytics endpoints — sent source = messages JOIN conversations (C-01 covers manager-send D-04 unlike messages_log/message_queue); replied = one SELECT with COUNT(DISTINCT) + COUNT(*) per D-15; _ALLOWED_SCOPE_COLUMNS whitelist + :scope_val bind for safe scope composition; Pitfall 8 — bot_ignored excluded from every COUNT; Pitfall 9 — leads strict EQ; D-13 — no background workers added (lifespan still 5)
 - [Phase 05]: Plan 05-03: inline await log_llm_call (Open Question #3) — deterministic + testable; +1-3ms latency acceptable for v1; D-12 preserved (warmup.py has 0 references); T-05-03-PROMPT-LEAK guard verified via grep (0 matches for logger.*prompt in llm_logger.py + ai_engine.py); defence-in-depth on GET /llm-calls endpoint (prequery + WHERE workspace_id); Phase 5 complete (3 plans, ANLX-05 closed alongside INBX-01..05 + AIRC-04 + ANLX-01..04)
 
+### Roadmap Evolution
+
+- Phase 05.1 inserted after Phase 5: Lovable UI v1 — auth + onboarding + TG accounts + contacts + agents + campaigns + inbox + analytics + settings (URGENT — closes Core Value + 7 HUMAN-UAT items from Phase 5)
+
 ### Pending Todos
 
 None yet.

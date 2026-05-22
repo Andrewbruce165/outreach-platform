@@ -159,6 +159,16 @@ Plans:
 
 ---
 
+### Phase 05.1: Lovable UI v1 (INSERTED)
+
+**Goal:** Клиент через UI Lovable проходит весь v1-флоу — регистрируется (Supabase), создаёт workspace, подключает TG-аккаунт, загружает контакты, настраивает агента, запускает кампанию и смотрит inbox + analytics. Закрывает Core Value ("за 10 минут запустил кампанию") и 7 пунктов HUMAN-UAT, открытых после Phase 5.
+**Requirements**: TBD (gather via /gsd:ui-phase)
+**Depends on:** Phase 5
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:ui-phase 05.1 first → /gsd:plan-phase 05.1 to break down)
+
 ### Phase 6: Admin Master Bot
 
 **Goal**: Workspace имеет свой Telegram-бот, который шлёт админу уведомления при срабатывании ручника и при ошибках TG-аккаунтов.
