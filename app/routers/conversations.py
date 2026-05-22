@@ -13,6 +13,7 @@ Endpoints (all under Depends(auth_dep) + workspace-scope):
     POST   /api/v1/conversations/{id}/enable-ai        — AI back on (INBX-04, D-03)
     POST   /api/v1/conversations/{id}/send             — manager sends UI (INBX-04, D-04)
     DELETE /api/v1/conversations/{id}                  — hard delete (CASCADE)
+    GET    /api/v1/conversations/{id}/llm-calls        — LLM audit log (ANLX-05)
 
 D-17: list endpoint hides status='bot_ignored' by default; explicit
 ?status=bot_ignored returns them.
@@ -41,6 +42,8 @@ from app.schemas import (
     ConversationListResponse,
     ConversationResponse,
     ConversationUpdate,
+    LLMCallListResponse,
+    LLMCallResponse,
     MessageListResponse,
     MessageResponse,
     SendMessageFromUIRequest,
@@ -499,3 +502,57 @@ async def delete_conversation(
     """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
     await db.commit()
     return None
+
+
+# ── ANLX-05: LLM audit log per conversation ──────────────────────────────────
+
+
+@router.get("/{conversation_id}/llm-calls", response_model=LLMCallListResponse)
+async def get_llm_calls(
+    conversation_id: UUID,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> LLMCallListResponse:
+    """ANLX-05 — LLM call audit log per conversation (inbox-debug UI).
+
+    Defense-in-depth workspace isolation (T-05-03-WS-ISOLATION):
+      1) _load_conversation_or_404 prequery returns 404 on cross-workspace.
+      2) SELECT llm_calls also filters WHERE workspace_id = :wid.
+    Result is sorted DESC created_at (newest first).
+    """
+    # Defense-in-depth #1: prequery conversation in workspace
+    await _load_conversation_or_404(db, ctx, conversation_id)
+
+    # Defense-in-depth #2: explicit workspace_id filter on llm_calls SELECT
+    rows = (await db.execute(text("""
+        SELECT id, workspace_id, conversation_id, campaign_id, agent_id, sender_id,
+               model, prompt, response_text, tool_calls,
+               prompt_tokens, completion_tokens, total_tokens, latency_ms, error,
+               created_at
+        FROM llm_calls
+        WHERE conversation_id = :cid
+          AND workspace_id = :wid
+        -- TODO(v2-rls): replaced by RLS policy app.workspace_id
+        ORDER BY created_at DESC
+        LIMIT :limit OFFSET :offset
+    """), {
+        "cid": str(conversation_id),
+        "wid": str(ctx.workspace_id),
+        "limit": limit,
+        "offset": offset,
+    })).fetchall()
+
+    total = (await db.execute(text("""
+        SELECT COUNT(*) FROM llm_calls
+        WHERE conversation_id = :cid AND workspace_id = :wid
+    """), {
+        "cid": str(conversation_id),
+        "wid": str(ctx.workspace_id),
+    })).scalar() or 0
+
+    return LLMCallListResponse(
+        llm_calls=[LLMCallResponse(**dict(r._mapping)) for r in rows],
+        total=total,
+    )
