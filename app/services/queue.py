@@ -42,8 +42,10 @@ SEND_INTERVAL_FATIGUE = 0.5
 
 # Per-sender rate limits live on senders.rate_per_min/hour/day columns (Phase 2 D-13).
 # The same empirically-tuned 4/20/150 "green corridor" remains as DB server_default.
-# NB: Other rate constants (MIN_SEND_INTERVAL, LONG_PAUSE_*, FLOOD_HARD_THRESHOLD,
-#     WORK_HOUR_*) — NOT TOUCHED per CLAUDE.md (deferred to Phase 4 per-campaign).
+# NB: Other rate constants (MIN_SEND_INTERVAL, LONG_PAUSE_*, FLOOD_HARD_THRESHOLD)
+#     — NOT TOUCHED per CLAUDE.md. Working-hours globals MOSCOW_TZ /
+#     WORK_HOUR_START / WORK_HOUR_END were removed in Phase 4 Plan 04-03 —
+#     scheduling is now per-campaign (see `_campaign_in_working_window` below).
 MAX_NEW_CONTACTS_PER_HOUR = 15
 MAX_ATTEMPTS = 3                  # retry failed items up to N times
 RETRY_DELAY_SECONDS = 60          # wait before retrying a failed item
@@ -59,11 +61,51 @@ LONG_PAUSE_MAX_SECS = 600         # 10 minutes
 # At FLOOD_HARD_THRESHOLD seconds ALL pending tasks for the sender are rescheduled.
 FLOOD_HARD_THRESHOLD = 300        # seconds
 
-# ── Working hours (Moscow time) ────────────────────────────────────────────────
-MOSCOW_TZ = zoneinfo.ZoneInfo("Europe/Moscow")
-WORK_HOUR_START = 9   # 09:00 МСК
-WORK_HOUR_END = 20    # до 20:00 МСК (последняя отправка в 19:59)
+# ── Queue tick batch ───────────────────────────────────────────────────────────
+# Maximum pending items to inspect per tick (per-sender pick happens later).
+QUEUE_TICK_BATCH = 500
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _campaign_in_working_window(
+    *,
+    campaign_tz: str,
+    work_hour_start: int,
+    work_hour_end: int,
+    work_days_mask: int,
+    now: Optional[datetime] = None,
+) -> bool:
+    """Per-campaign working-hours check (Phase 4 D-08, D-09, D-10).
+
+    Args:
+        campaign_tz: IANA timezone name (e.g. ``'Europe/Moscow'``).
+        work_hour_start: 0-23, inclusive (start of daily send window).
+        work_hour_end: 1-24, exclusive (end of daily send window).
+        work_days_mask: bitmask Mo=1, Tu=2, We=4, Th=8, Fr=16, Sa=32, Su=64.
+        now: datetime to test, defaults to ``datetime.now(timezone.utc)``.
+
+    Returns True iff ``now`` (after conversion to ``campaign_tz``) falls into
+    the half-open hour interval and the weekday bit is set in the mask.
+    Invalid timezone → returns False (logged at WARNING).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        tz = zoneinfo.ZoneInfo(campaign_tz)
+    except zoneinfo.ZoneInfoNotFoundError as exc:
+        logger.warning(f"Invalid campaign timezone '{campaign_tz}': {exc}")
+        return False
+    except Exception as exc:  # safety net — any unexpected tz error
+        logger.warning(f"Failed to resolve campaign timezone '{campaign_tz}': {exc}")
+        return False
+
+    local_now = now.astimezone(tz)
+    weekday_bit = 1 << local_now.weekday()  # Mo=0 → 1, Tu=1 → 2, …, Su=6 → 64
+    if (work_days_mask & weekday_bit) == 0:
+        return False
+    if not (work_hour_start <= local_now.hour < work_hour_end):
+        return False
+    return True
 
 
 class QueueWorker:
@@ -108,45 +150,92 @@ class QueueWorker:
                 logger.error(f"Queue worker error: {exc}", exc_info=True)
             await asyncio.sleep(3)   # poll interval
 
-    @staticmethod
-    def _is_working_hours() -> bool:
-        """Return True if current Moscow time is within working hours."""
-        now_msk = datetime.now(MOSCOW_TZ)
-        return WORK_HOUR_START <= now_msk.hour < WORK_HOUR_END
-
-    @staticmethod
-    def _next_working_window() -> datetime:
-        """Return the next 09:00 MSK as UTC datetime."""
-        now_msk = datetime.now(MOSCOW_TZ)
-        next_open = now_msk.replace(hour=WORK_HOUR_START, minute=0, second=0, microsecond=0)
-        if now_msk.hour >= WORK_HOUR_END:
-            # After hours today — next window is tomorrow
-            next_open += timedelta(days=1)
-        return next_open.astimezone(timezone.utc)
-
     async def _tick(self):
-        """Pick one ready item per sender and process it."""
-        if not self._is_working_hours():
-            next_open = self._next_working_window()
-            logger.debug(
-                f"Outside working hours (MSK {WORK_HOUR_START}:00–{WORK_HOUR_END}:00), "
-                f"next window at {next_open.strftime('%H:%M UTC')}"
-            )
-            return
+        """Pick one ready item per eligible sender and process it.
 
+        Phase 4 (D-08..D-11, D-15): JOIN to ``campaigns`` and filter on the
+        campaign side instead of the old global MSK working-hours check.
+
+        WHERE conditions evaluated in SQL:
+          * ``mq.status = 'pending'``
+          * ``mq.scheduled_at <= NOW()``
+          * ``mq.campaign_id IS NOT NULL`` — defence-in-depth (INNER JOIN
+            already excludes NULL, kept explicit per H4 revision)
+          * ``c.status = 'running'``  — paused/done/draft campaigns skipped
+          * ``c.start_date IS NULL OR NOW() >= c.start_date``
+
+        Python-side post-filter (``zoneinfo`` is awkward in SQL):
+          * ``stop_date`` past → mark item as failed (D-11 soft skip).
+          * working-hours window per campaign timezone + work_days_mask.
+        """
         async with AsyncSessionLocal() as db:
-            # Get all senders that have pending work
             rows = await db.execute(
                 text("""
-                    SELECT DISTINCT sender_id
-                    FROM message_queue
-                    WHERE status = 'pending'
-                      AND scheduled_at <= NOW()
-                """)
+                    SELECT
+                        mq.id AS item_id,
+                        mq.sender_id AS sender_id,
+                        c.id AS c_id,
+                        c.timezone AS c_tz,
+                        c.work_hour_start AS c_whs,
+                        c.work_hour_end AS c_whe,
+                        c.work_days_mask AS c_wdm,
+                        c.stop_date AS c_stop
+                    FROM message_queue mq
+                    JOIN campaigns c ON c.id = mq.campaign_id
+                    WHERE mq.status = 'pending'
+                      AND mq.scheduled_at <= NOW()
+                      AND mq.campaign_id IS NOT NULL
+                      AND c.status = 'running'
+                      AND (c.start_date IS NULL OR NOW() >= c.start_date)
+                    ORDER BY mq.scheduled_at ASC
+                    LIMIT :batch
+                """),
+                {"batch": QUEUE_TICK_BATCH},
             )
-            sender_ids = [r[0] for r in rows.fetchall()]
+            fetched = rows.fetchall()
 
-        for sender_id in sender_ids:
+            now_utc = datetime.now(timezone.utc)
+            items_to_fail: list = []
+            eligible_sender_ids: list = []
+            seen_senders: set = set()
+
+            for r in fetched:
+                # D-11 (soft skip) — past stop_date → mark failed.
+                if r.c_stop is not None and now_utc >= r.c_stop:
+                    items_to_fail.append(r.item_id)
+                    continue
+                in_window = _campaign_in_working_window(
+                    campaign_tz=r.c_tz,
+                    work_hour_start=r.c_whs,
+                    work_hour_end=r.c_whe,
+                    work_days_mask=r.c_wdm,
+                    now=now_utc,
+                )
+                if not in_window:
+                    # SKIP — item stays pending, next tick will retry.
+                    continue
+                if r.sender_id not in seen_senders:
+                    seen_senders.add(r.sender_id)
+                    eligible_sender_ids.append(r.sender_id)
+
+            if items_to_fail:
+                await db.execute(
+                    text("""
+                        UPDATE message_queue
+                        SET status = 'failed',
+                            error_message = 'past_stop_date',
+                            finished_at = NOW()
+                        WHERE id = ANY(:ids)
+                    """),
+                    {"ids": [str(i) for i in items_to_fail]},
+                )
+                await db.commit()
+                logger.info(
+                    f"Marked {len(items_to_fail)} queue items as failed "
+                    f"(past campaign.stop_date)"
+                )
+
+        for sender_id in eligible_sender_ids:
             await self._process_next_for_sender(sender_id)
             # Small pause between different senders so we don't hammer PG
             await asyncio.sleep(0.5)
@@ -194,24 +283,68 @@ class QueueWorker:
             await asyncio.sleep(long_pause)
 
         async with AsyncSessionLocal() as db:
-            # Pick the next pending item (SKIP LOCKED prevents double-processing)
-            row = await db.execute(
+            # Pick the next pending item (SKIP LOCKED prevents double-processing).
+            # Phase 4 (D-08..D-11, D-15): per-campaign JOIN + working-window
+            # re-check at pick time — `_tick` may have decided this sender is
+            # eligible based on one campaign, but the actual SELECT picks the
+            # next item by (priority, created_at); we must re-verify the
+            # campaign of THAT item is still running/in-window.
+            rows = await db.execute(
                 text("""
-                    SELECT id FROM message_queue
-                    WHERE sender_id = :sid
-                      AND status = 'pending'
-                      AND scheduled_at <= NOW()
-                    ORDER BY priority DESC, created_at ASC
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
+                    SELECT
+                        mq.id AS item_id,
+                        c.timezone AS c_tz,
+                        c.work_hour_start AS c_whs,
+                        c.work_hour_end AS c_whe,
+                        c.work_days_mask AS c_wdm,
+                        c.stop_date AS c_stop
+                    FROM message_queue mq
+                    JOIN campaigns c ON c.id = mq.campaign_id
+                    WHERE mq.sender_id = :sid
+                      AND mq.status = 'pending'
+                      AND mq.scheduled_at <= NOW()
+                      AND mq.campaign_id IS NOT NULL
+                      AND c.status = 'running'
+                      AND (c.start_date IS NULL OR NOW() >= c.start_date)
+                    ORDER BY mq.priority DESC, mq.created_at ASC
+                    LIMIT 8
+                    FOR UPDATE OF mq SKIP LOCKED
                 """),
                 {"sid": str(sender_id)}
             )
-            item_row = row.fetchone()
-            if not item_row:
-                return
 
-            item_id = item_row[0]
+            now_utc = datetime.now(timezone.utc)
+            item_id = None
+            stop_date_failed_ids: list = []
+            for r in rows.fetchall():
+                if r.c_stop is not None and now_utc >= r.c_stop:
+                    stop_date_failed_ids.append(r.item_id)
+                    continue
+                if _campaign_in_working_window(
+                    campaign_tz=r.c_tz,
+                    work_hour_start=r.c_whs,
+                    work_hour_end=r.c_whe,
+                    work_days_mask=r.c_wdm,
+                    now=now_utc,
+                ):
+                    item_id = r.item_id
+                    break
+
+            if stop_date_failed_ids:
+                await db.execute(
+                    text("""
+                        UPDATE message_queue
+                        SET status = 'failed',
+                            error_message = 'past_stop_date',
+                            finished_at = NOW()
+                        WHERE id = ANY(:ids)
+                    """),
+                    {"ids": [str(i) for i in stop_date_failed_ids]},
+                )
+
+            if item_id is None:
+                await db.commit()
+                return
 
             # Mark as processing
             await db.execute(
