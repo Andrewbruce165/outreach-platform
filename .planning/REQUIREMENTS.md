@@ -71,9 +71,9 @@
 - [ ] **CAMP-12**: Сигнал «передать на менеджера» — заменяет старый auto_pause_triggers, AI замолкает, диалог помечается
 - [ ] **CAMP-13**: Сигнал «финиш диалога» — диалог закрывается, AI замолкает, triggerит webhook
 - [ ] **CAMP-14**: Webhook кампании — 3 отдельных URL на типы событий: `lead_webhook_url`, `handoff_webhook_url`, `finish_webhook_url`. Любой может быть NULL (тогда событие не вызывает webhook, но `conversation.status` всё равно обновляется). Pre-Phase-4 формулировка «один webhook на кампанию» обновлена по итогам discuss-phase (D-13) — клиент предпочёл явное разделение endpoint'ов под разные интеграции
-- [ ] **CAMP-15**: Tools кампании — спецификация function calling, передаётся в LLM вместе с агентским промптом
-- [ ] **CAMP-16**: Сигналы + tools передаются в LLM-промпт вместе с агентским контекстом при каждом ответе
-- [ ] **CAMP-17**: Очередь сообщений учитывает `campaign_id` — каждое сообщение принадлежит кампании
+- [x] **CAMP-15**: Tools кампании — спецификация function calling, передаётся в LLM вместе с агентским промптом
+- [x] **CAMP-16**: Сигналы + tools передаются в LLM-промпт вместе с агентским контекстом при каждом ответе
+- [x] **CAMP-17**: Очередь сообщений учитывает `campaign_id` — каждое сообщение принадлежит кампании
 
 ### Inbox (Phase 5)
 
@@ -175,9 +175,9 @@
 | CAMP-12 | Phase 4 | Pending |
 | CAMP-13 | Phase 4 | Pending |
 | CAMP-14 | Phase 4 | Pending |
-| CAMP-15 | Phase 4 | Pending |
-| CAMP-16 | Phase 4 | Pending |
-| CAMP-17 | Phase 4 | Pending |
+| CAMP-15 | Phase 4 | Complete |
+| CAMP-16 | Phase 4 | Complete |
+| CAMP-17 | Phase 4 | Complete |
 | INBX-01 | Phase 5 | Pending |
 | INBX-02 | Phase 5 | Pending |
 | INBX-03 | Phase 5 | Pending |

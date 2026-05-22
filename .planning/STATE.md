@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 4 context gathered
-last_updated: "2026-05-22T00:32:12.844Z"
-last_activity: 2026-05-21
+status: executing
+stopped_at: Completed 04-01-PLAN.md (audit)
+last_updated: "2026-05-22T08:14:23.536Z"
+last_activity: 2026-05-22
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 13
-  completed_plans: 13
+  total_plans: 18
+  completed_plans: 14
   percent: 17
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 03 — agents-ai-templates
+**Current focus:** Phase 04 — campaigns
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-05-21
+Phase: 04 (campaigns) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-05-22
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
@@ -54,6 +54,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 02 P05 | 35min | 2 tasks | 6 files |
 | Phase 03-agents-ai-templates P01 | 25min | 7 tasks | 14 files |
 | Phase 03-agents-ai-templates P02 | 6min | 6 tasks | 7 files |
+| Phase 04 P01 | 12min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 02]: Plan 02-05: ContactCheckWorker reuses CheckerService (no FloodWait/polite-delay duplication); JOIN LATERAL gates workspace isolation; recheck endpoint is workspace-scoped 202 Accepted; has_checker exposed for D-20 UI banner.
 - [Phase 03-agents-ai-templates]: Phase 3 plan 01: migration 015 — DROP 6 ai_contexts columns + senders.ai_context_id + UNIQUE(workspace_id, name); ORM AIContext reduced to D-02 fields; 5 worker-services adapted (ai_engine/listener/rotation/queue/senders router); 7 TODO(phase-4) markers left for Campaign-level reconnection
 - [Phase 03-agents-ai-templates]: Phase 3 plan 02: workspace-scoped /api/v1/agents (6 endpoints) + /api/v1/send rewrite under AuthDep with explicit ai_context_id (D-06); hard delete via FK cascades (D-08); duplicate auto-name with retry-on-IntegrityError (Pitfall 2); campaign_count=0 hardcoded (D-10); legacy contexts.py deleted, send-file/send-batch dropped (С-04)
+- [Phase 04]: Phase 4 Plan 01 (audit): Q1 message_queue.campaign_id NULLable + ON DELETE SET NULL (overrides CONTEXT.md D-16); Q6 campaigns.status VARCHAR(20)+CHECK (overrides D-04 SQLEnum) — PG ALTER TYPE ADD VALUE cannot run in transaction; webhook_functions internal shape recovered from init commit 54430ec (param array, not JSON Schema); 10 TODO(phase-4) markers inventoried with closure plan per marker
 
 ### Pending Todos
 
@@ -89,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-22T00:32:12.833Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-campaigns/04-CONTEXT.md
+Last session: 2026-05-22T08:14:16.888Z
+Stopped at: Completed 04-01-PLAN.md (audit)
+Resume file: None
