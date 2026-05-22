@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-03-PLAN.md (per-campaign scheduling — queue.py rewrite + 21 tests)
-last_updated: "2026-05-22T08:42:08.569Z"
+stopped_at: Completed 04-04-PLAN.md (template + CampaignEnqueueWorker + rotation/send/queue rewrite + 3 TODO(phase-4) markers closed)
+last_updated: "2026-05-22T08:57:47.471Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
   percent: 17
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 04 (campaigns) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-05-22
 
@@ -57,6 +57,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 04 P01 | 12min | 1 tasks | 1 files |
 | Phase 04 P02 | 75min | 3 tasks | 14 files |
 | Phase 04 P03 | 6min | 2 tasks | 3 files |
+| Phase 04 P04 | 10min | 5 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 04]: Phase 4 Plan 01 (audit): Q1 message_queue.campaign_id NULLable + ON DELETE SET NULL (overrides CONTEXT.md D-16); Q6 campaigns.status VARCHAR(20)+CHECK (overrides D-04 SQLEnum) — PG ALTER TYPE ADD VALUE cannot run in transaction; webhook_functions internal shape recovered from init commit 54430ec (param array, not JSON Schema); 10 TODO(phase-4) markers inventoried with closure plan per marker
 - [Phase 04]: Plan 04-02: campaigns.status VARCHAR+CHECK (Q6 override) — ALTER TYPE ADD VALUE blocks transactions; message_queue.campaign_id NULLable + SET NULL (Q1 override) — preserves queue history on hard delete of done campaigns; lifecycle as explicit POST endpoints; computed is_exhausted + attached_senders.locked_by_campaign_id at GET time; rotation.py reference to dropped context_contact_assignments deferred to 04-04 per AUDIT TODO #6
 - [Phase 04]: Plan 04-03: per-campaign scheduling — выпилены MOSCOW_TZ/WORK_HOUR_*/_is_working_hours/_next_working_window из queue.py; добавлен _campaign_in_working_window(tz, h_start, h_end, days_mask) helper; _tick + _process_next_for_sender JOIN на campaigns с фильтром status='running' + start_date/stop_date window + work hours (Python-side post-filter); past stop_date items → failed/past_stop_date (D-11); H4: explicit mq.campaign_id IS NOT NULL defence-in-depth; эмпирические rate-limit константы untouched (CLAUDE.md guard)
+- [Phase 04]: Plan 04-04: render_template Mustache regex with RU aliases (имя/юзернейм/телефон/источник/компания) + empty fallback (D-19); rotation.py rewritten with commit=False kwarg (M2) для worker savepoint; CampaignEnqueueWorker singleton + lifespan; enqueue_file accepts campaign_id (B1 file-flow синхронизирован с message-flow); 3 TODO(phase-4) markers закрыты (queue.py:705, queue.py:849, rotation.py); empirical constants untouched (CLAUDE.md guard)
 
 ### Pending Todos
 
@@ -96,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-22T08:42:08.564Z
-Stopped at: Completed 04-03-PLAN.md (per-campaign scheduling — queue.py rewrite + 21 tests)
+Last session: 2026-05-22T08:57:39.873Z
+Stopped at: Completed 04-04-PLAN.md (template + CampaignEnqueueWorker + rotation/send/queue rewrite + 3 TODO(phase-4) markers closed)
 Resume file: None
