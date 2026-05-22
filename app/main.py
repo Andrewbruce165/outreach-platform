@@ -16,6 +16,7 @@ from app.routers import (
     campaigns,
     check_contacts,
     contacts,
+    conversations,  # Phase 5 — re-register (was legacy, not previously wired)
     folders,
     health,
     onboarding,
@@ -96,6 +97,7 @@ app.include_router(onboarding.router)
 app.include_router(agents.router)
 app.include_router(send.router)
 app.include_router(campaigns.router)  # Phase 4
+app.include_router(conversations.router)  # Phase 5 — inbox + manager mode
 
 
 @app.get("/")

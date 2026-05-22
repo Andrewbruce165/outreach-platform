@@ -1,474 +1,501 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+"""Conversations / Inbox router — Phase 5 rewrite (INBX-01..05, AIRC-04).
+
+Workspace-scoped CRUD inbox с filters + manual manager mode (D-01..D-04).
+Заменяет legacy router (использовал устаревший верификатор API-ключа и
+выпиленную колонку senders, был НЕ зарегистрирован в main.py с Phase 1).
+
+Endpoints (all under Depends(auth_dep) + workspace-scope):
+    GET    /api/v1/conversations                       — list with filters (INBX-01, INBX-05)
+    GET    /api/v1/conversations/{id}                  — single (INBX-02)
+    GET    /api/v1/conversations/{id}/messages         — history with pagination (INBX-02)
+    PATCH  /api/v1/conversations/{id}                  — update ai_enabled/status/agent (INBX-03)
+    POST   /api/v1/conversations/{id}/disable-ai       — manual takeover (INBX-04, D-01/D-02)
+    POST   /api/v1/conversations/{id}/enable-ai        — AI back on (INBX-04, D-03)
+    POST   /api/v1/conversations/{id}/send             — manager sends UI (INBX-04, D-04)
+    DELETE /api/v1/conversations/{id}                  — hard delete (CASCADE)
+
+D-17: list endpoint hides status='bot_ignored' by default; explicit
+?status=bot_ignored returns them.
+
+D-03: enable-ai НЕ трогает status — preserves lead/handoff/finished/manual
+historic markers.
+
+D-04 auto-takeover: POST /send updates conversation (ai_enabled=false,
+status='manual', paused_reason='Manager sent message via UI'), cancels
+pending queue items for the recipient phone, THEN calls Telethon outside
+the transaction. Workspace + sender lifecycle/auth_status checked BEFORE
+the Telegram call.
+"""
+
+import logging
+import uuid
 from typing import Optional
-from datetime import datetime
-from pydantic import BaseModel
 from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.database import get_db
-from app.routers.auth import verify_api_key
+from app.schemas import (
+    ConversationListResponse,
+    ConversationResponse,
+    ConversationUpdate,
+    MessageListResponse,
+    MessageResponse,
+    SendMessageFromUIRequest,
+    SendMessageFromUIResponse,
+)
+from app.services import telegram as telegram_service
+from app.utils.auth import AuthCtx, auth_dep
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
 
 
-# === Schemas ===
-class ConversationResponse(BaseModel):
-    id: UUID
-    sender_slug: str
-    contact_phone: str
-    contact_name: Optional[str]
-    contact_telegram_id: Optional[int]
-    ai_enabled: bool
-    ai_context_id: Optional[UUID]
-    status: str
-    paused_at: Optional[datetime]
-    paused_reason: Optional[str]
-    created_at: datetime
-    updated_at: datetime
-    last_message: Optional[str] = None
-    last_message_at: Optional[datetime] = None
-    unread_count: int = 0
+# ── Workspace-scope helpers ───────────────────────────────────────────────────
 
 
-class ConversationUpdate(BaseModel):
-    ai_enabled: Optional[bool] = None
-    ai_context_id: Optional[UUID] = None
-    status: Optional[str] = None
+async def _load_conversation_or_404(
+    db: AsyncSession, ctx: AuthCtx, conversation_id: UUID
+) -> dict:
+    """Return conversation row or raise 404 (cross-workspace = 404, not 403)."""
+    row = (await db.execute(text("""
+        SELECT id, workspace_id, sender_id, contact_phone, contact_name,
+               contact_telegram_id, ai_enabled, ai_context_id, campaign_id,
+               status, paused_at, paused_reason, created_at, updated_at
+        FROM conversations
+        WHERE id = :cid AND workspace_id = :wid
+        -- TODO(v2-rls): replaced by RLS policy app.workspace_id
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONVERSATION_NOT_FOUND",
+                    "message": "Conversation not found"},
+        )
+    return dict(row._mapping)
 
 
-class MessageResponse(BaseModel):
-    id: UUID
-    direction: str
-    message_text: str
-    sent_by: str
-    telegram_message_id: Optional[int]
-    created_at: datetime
+# ── List / detail endpoints ───────────────────────────────────────────────────
 
 
-class ConversationListResponse(BaseModel):
-    conversations: list[ConversationResponse]
-    total: int
-
-
-class MessagesListResponse(BaseModel):
-    messages: list[MessageResponse]
-    total: int
-
-
-# === Endpoints ===
 @router.get("", response_model=ConversationListResponse)
 async def list_conversations(
-    status: Optional[str] = Query(None, description="Filter by status: active, paused, manual"),
-    ai_enabled: Optional[bool] = Query(None, description="Filter by AI status"),
-    limit: int = Query(50, le=100),
-    offset: int = Query(0),
+    campaign_id: Optional[UUID] = Query(None),
+    agent_id: Optional[UUID] = Query(None),
+    sender_id: Optional[UUID] = Query(None),
+    status: Optional[str] = Query(None),
+    ai_enabled: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(50, le=100, ge=1),
+    offset: int = Query(0, ge=0),
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
-    """Список всех диалогов с последним сообщением"""
-    
-    # Base query
-    query = """
+) -> ConversationListResponse:
+    """INBX-01 + INBX-05 — list workspace conversations with filters.
+
+    D-17: status=None → hide status='bot_ignored'.
+    Warmup-pair exclude preserved from legacy (workspace boundary added).
+    """
+    where_clauses = ["c.workspace_id = :wid"]
+    params: dict = {"wid": str(ctx.workspace_id), "limit": limit, "offset": offset}
+
+    # D-17: hide bot_ignored unless caller explicitly asks for it.
+    if status is None:
+        where_clauses.append("c.status != 'bot_ignored'")
+    else:
+        where_clauses.append("c.status = :status")
+        params["status"] = status
+
+    if campaign_id is not None:
+        where_clauses.append("c.campaign_id = :campaign_id")
+        params["campaign_id"] = str(campaign_id)
+    if agent_id is not None:
+        where_clauses.append("c.ai_context_id = :agent_id")
+        params["agent_id"] = str(agent_id)
+    if sender_id is not None:
+        where_clauses.append("c.sender_id = :sender_id")
+        params["sender_id"] = str(sender_id)
+    if ai_enabled is not None:
+        where_clauses.append("c.ai_enabled = :ai_enabled")
+        params["ai_enabled"] = ai_enabled
+    if search:
+        where_clauses.append(
+            "(c.contact_phone ILIKE :search OR c.contact_name ILIKE :search)"
+        )
+        params["search"] = f"%{search}%"
+
+    where_sql = " AND ".join(where_clauses)
+
+    list_query = text(f"""
         SELECT
-            c.id, s.slug as sender_slug, c.contact_phone, c.contact_name,
-            c.contact_telegram_id, c.ai_enabled, c.ai_context_id, c.status,
+            c.id, c.workspace_id, c.sender_id, s.slug AS sender_slug,
+            c.contact_phone, c.contact_name, c.contact_telegram_id,
+            c.ai_enabled, c.ai_context_id, c.campaign_id, c.status,
             c.paused_at, c.paused_reason, c.created_at, c.updated_at,
-            last_msg.message_text as last_message,
-            last_msg.created_at as last_message_at,
-            COALESCE(unread_sq.unread_count, 0) as unread_count
+            last_msg.message_text AS last_message,
+            last_msg.created_at   AS last_message_at,
+            COALESCE(unread_sq.unread_count, 0) AS unread_count
         FROM conversations c
         JOIN senders s ON c.sender_id = s.id
         LEFT JOIN LATERAL (
-            SELECT message_text, created_at
-            FROM messages
+            SELECT message_text, created_at FROM messages
             WHERE conversation_id = c.id
-            ORDER BY created_at DESC
-            LIMIT 1
+            ORDER BY created_at DESC LIMIT 1
         ) last_msg ON true
         LEFT JOIN LATERAL (
-            SELECT COUNT(*) as unread_count
-            FROM messages
-            WHERE conversation_id = c.id AND direction = 'inbound' AND sent_by = 'contact'
+            SELECT COUNT(*) AS unread_count FROM messages
+            WHERE conversation_id = c.id
+              AND direction = 'inbound'
+              AND sent_by = 'contact'
         ) unread_sq ON true
-        WHERE 1=1
-        AND NOT EXISTS (
-            SELECT 1 FROM senders s2
-            JOIN warmup_pool wp ON wp.sender_id = s2.id
-            WHERE s2.telegram_id = c.contact_telegram_id
-              AND s2.telegram_id IS NOT NULL
-        )
-    """
-    params = {}
-    
-    if status:
-        query += " AND c.status = :status"
-        params["status"] = status
-    
-    if ai_enabled is not None:
-        query += " AND c.ai_enabled = :ai_enabled"
-        params["ai_enabled"] = ai_enabled
-    
-    # Count total
-    count_query = f"SELECT COUNT(*) FROM ({query}) sub"
-    count_result = await db.execute(text(count_query), params)
-    total = count_result.scalar()
-    
-    # Get data with pagination
-    query += " ORDER BY c.updated_at DESC LIMIT :limit OFFSET :offset"
-    params["limit"] = limit
-    params["offset"] = offset
-    
-    result = await db.execute(text(query), params)
-    rows = result.fetchall()
-    
-    conversations = []
-    for row in rows:
-        conversations.append(ConversationResponse(
-            id=row[0],
-            sender_slug=row[1],
-            contact_phone=row[2],
-            contact_name=row[3],
-            contact_telegram_id=row[4],
-            ai_enabled=row[5],
-            ai_context_id=row[6],
-            status=row[7],
-            paused_at=row[8],
-            paused_reason=row[9],
-            created_at=row[10],
-            updated_at=row[11],
-            last_message=row[12][:50] + "..." if row[12] and len(row[12]) > 50 else row[12],
-            last_message_at=row[13],
-            unread_count=row[14] if row[14] is not None else 0
-        ))
-    
-    return ConversationListResponse(conversations=conversations, total=total)
+        WHERE {where_sql}
+          -- warmup-pair exclude (legacy preserved, workspace boundary added).
+          AND NOT EXISTS (
+              SELECT 1 FROM senders s2
+              WHERE s2.workspace_id = :wid
+                AND s2.telegram_id = c.contact_telegram_id
+                AND s2.telegram_id IS NOT NULL
+          )
+        ORDER BY c.updated_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+
+    count_query = text(f"""
+        SELECT COUNT(*) FROM conversations c
+        WHERE {where_sql}
+          AND NOT EXISTS (
+              SELECT 1 FROM senders s2
+              WHERE s2.workspace_id = :wid
+                AND s2.telegram_id = c.contact_telegram_id
+                AND s2.telegram_id IS NOT NULL
+          )
+    """)
+
+    rows = (await db.execute(list_query, params)).fetchall()
+    total = (await db.execute(count_query, params)).scalar() or 0
+
+    return ConversationListResponse(
+        conversations=[ConversationResponse(**dict(r._mapping)) for r in rows],
+        total=total,
+    )
 
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
-    """Получить детали диалога"""
-    
-    query = """
-        SELECT 
-            c.id, s.slug as sender_slug, c.contact_phone, c.contact_name, 
-            c.contact_telegram_id, c.ai_enabled, c.ai_context_id, c.status,
-            c.paused_at, c.paused_reason, c.created_at, c.updated_at
+) -> ConversationResponse:
+    """INBX-02 — single conversation with last_message preview."""
+    row = (await db.execute(text("""
+        SELECT
+            c.id, c.workspace_id, c.sender_id, s.slug AS sender_slug,
+            c.contact_phone, c.contact_name, c.contact_telegram_id,
+            c.ai_enabled, c.ai_context_id, c.campaign_id, c.status,
+            c.paused_at, c.paused_reason, c.created_at, c.updated_at,
+            last_msg.message_text AS last_message,
+            last_msg.created_at AS last_message_at,
+            COALESCE(unread_sq.unread_count, 0) AS unread_count
         FROM conversations c
         JOIN senders s ON c.sender_id = s.id
-        WHERE c.id = :id
+        LEFT JOIN LATERAL (
+            SELECT message_text, created_at FROM messages
+            WHERE conversation_id = c.id
+            ORDER BY created_at DESC LIMIT 1
+        ) last_msg ON true
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS unread_count FROM messages
+            WHERE conversation_id = c.id
+              AND direction = 'inbound'
+              AND sent_by = 'contact'
+        ) unread_sq ON true
+        WHERE c.id = :cid AND c.workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONVERSATION_NOT_FOUND",
+                    "message": "Conversation not found"},
+        )
+    return ConversationResponse(**dict(row._mapping))
+
+
+@router.get("/{conversation_id}/messages", response_model=MessageListResponse)
+async def get_messages(
+    conversation_id: UUID,
+    limit: int = Query(100, le=200, ge=1),
+    offset: int = Query(0, ge=0),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> MessageListResponse:
+    """INBX-02 — message history with pagination.
+
+    Workspace gate via JOIN on conversations. 404 if conversation not in workspace.
     """
-    
-    result = await db.execute(text(query), {"id": str(conversation_id)})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    return ConversationResponse(
-        id=row[0],
-        sender_slug=row[1],
-        contact_phone=row[2],
-        contact_name=row[3],
-        contact_telegram_id=row[4],
-        ai_enabled=row[5],
-        ai_context_id=row[6],
-        status=row[7],
-        paused_at=row[8],
-        paused_reason=row[9],
-        created_at=row[10],
-        updated_at=row[11]
+    exists = (await db.execute(text("""
+        SELECT 1 FROM conversations WHERE id = :cid AND workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).first()
+    if exists is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONVERSATION_NOT_FOUND",
+                    "message": "Conversation not found"},
+        )
+
+    rows = (await db.execute(text("""
+        SELECT m.id, m.conversation_id, m.direction, m.message_text,
+               m.sent_by, m.telegram_message_id, m.created_at
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.id = :cid AND c.workspace_id = :wid
+        ORDER BY m.created_at ASC
+        LIMIT :limit OFFSET :offset
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id),
+           "limit": limit, "offset": offset})).fetchall()
+
+    total = (await db.execute(text("""
+        SELECT COUNT(*) FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.id = :cid AND c.workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).scalar() or 0
+
+    return MessageListResponse(
+        messages=[MessageResponse(**dict(r._mapping)) for r in rows],
+        total=total,
     )
+
+
+# ── Mutating endpoints ────────────────────────────────────────────────────────
 
 
 @router.patch("/{conversation_id}", response_model=ConversationResponse)
 async def update_conversation(
     conversation_id: UUID,
-    update: ConversationUpdate,
+    payload: ConversationUpdate,
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
-    """Обновить настройки диалога (включить/выключить AI)"""
-    
-    # Build update query
-    updates = []
-    params = {"id": str(conversation_id)}
-    
-    if update.ai_enabled is not None:
+) -> ConversationResponse:
+    """Partial update of ai_enabled / status / ai_context_id.
+
+    `status` is validated against CONVERSATION_STATUSES in the Pydantic model.
+    """
+    await _load_conversation_or_404(db, ctx, conversation_id)
+
+    updates: list[str] = []
+    params: dict = {"cid": str(conversation_id), "wid": str(ctx.workspace_id)}
+    if payload.ai_enabled is not None:
         updates.append("ai_enabled = :ai_enabled")
-        params["ai_enabled"] = update.ai_enabled
-        
-        if update.ai_enabled:
-            updates.append("status = 'active'")
-            updates.append("paused_at = NULL")
-            updates.append("paused_reason = NULL")
-    
-    if update.ai_context_id is not None:
-        updates.append("ai_context_id = :ai_context_id")
-        params["ai_context_id"] = str(update.ai_context_id)
-    
-    if update.status is not None:
+        params["ai_enabled"] = payload.ai_enabled
+    if payload.status is not None:
         updates.append("status = :status")
-        params["status"] = update.status
-    
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    
-    updates.append("updated_at = NOW()")
-    
-    query = f"UPDATE conversations SET {', '.join(updates)} WHERE id = :id"
-    await db.execute(text(query), params)
-    await db.commit()
-    
-    # Return updated conversation
-    return await get_conversation(conversation_id, db, _)
+        params["status"] = payload.status
+    if payload.ai_context_id is not None:
+        updates.append("ai_context_id = :aid")
+        params["aid"] = str(payload.ai_context_id)
+
+    if updates:
+        updates.append("updated_at = NOW()")
+        await db.execute(text(f"""
+            UPDATE conversations SET {", ".join(updates)}
+            WHERE id = :cid AND workspace_id = :wid
+        """), params)
+        await db.commit()
+
+    return await get_conversation(conversation_id, ctx, db)
 
 
-@router.get("/{conversation_id}/messages", response_model=MessagesListResponse)
-async def get_messages(
-    conversation_id: UUID,
-    limit: int = Query(50, le=200),
-    offset: int = Query(0),
-    db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
-    """Получить историю сообщений диалога"""
-    
-    # Check conversation exists
-    check = await db.execute(
-        text("SELECT id FROM conversations WHERE id = :id"),
-        {"id": str(conversation_id)}
-    )
-    if not check.fetchone():
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Count total
-    count_result = await db.execute(
-        text("SELECT COUNT(*) FROM messages WHERE conversation_id = :id"),
-        {"id": str(conversation_id)}
-    )
-    total = count_result.scalar()
-    
-    # Get messages
-    result = await db.execute(
-        text("""
-            SELECT id, direction, message_text, sent_by, telegram_message_id, created_at
-            FROM messages
-            WHERE conversation_id = :id
-            ORDER BY created_at DESC
-            LIMIT :limit OFFSET :offset
-        """),
-        {"id": str(conversation_id), "limit": limit, "offset": offset}
-    )
-    rows = result.fetchall()
-    
-    messages = [
-        MessageResponse(
-            id=row[0],
-            direction=row[1],
-            message_text=row[2],
-            sent_by=row[3],
-            telegram_message_id=row[4],
-            created_at=row[5]
-        )
-        for row in rows
-    ]
-    
-    return MessagesListResponse(messages=messages, total=total)
-
-
-@router.post("/{conversation_id}/enable-ai")
-async def enable_ai(
-    conversation_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
-    """Быстрое включение AI для диалога"""
-    
-    await db.execute(
-        text("""
-            UPDATE conversations 
-            SET ai_enabled = true, status = 'active', paused_at = NULL, paused_reason = NULL, updated_at = NOW()
-            WHERE id = :id
-        """),
-        {"id": str(conversation_id)}
-    )
-    await db.commit()
-    
-    return {"success": True, "message": "AI enabled"}
-
-
-@router.post("/{conversation_id}/disable-ai")
+@router.post("/{conversation_id}/disable-ai", response_model=ConversationResponse)
 async def disable_ai(
     conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
-    """Быстрое выключение AI для диалога"""
-    
-    await db.execute(
-        text("""
-            UPDATE conversations 
-            SET ai_enabled = false, status = 'manual', paused_at = NOW(), paused_reason = 'Manually disabled', updated_at = NOW()
-            WHERE id = :id
-        """),
-        {"id": str(conversation_id)}
-    )
+) -> ConversationResponse:
+    """INBX-04 / D-01 / D-02 — manual switch to manager mode + cancel queue."""
+    await _load_conversation_or_404(db, ctx, conversation_id)
+
+    # D-01: conversation flipped to status='manual', AI off.
+    await db.execute(text("""
+        UPDATE conversations
+        SET ai_enabled = false,
+            status = 'manual',
+            paused_at = NOW(),
+            paused_reason = 'Manager took over',
+            updated_at = NOW()
+        WHERE id = :cid AND workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+
+    # D-02: cancel any pending queue items targeting this conversation's
+    # recipient_phone. Use 'failed' (not 'cancelled') consistent with
+    # _handle_antispam_signal — QueueItemStatus enum has 'failed' / 'cancelled'
+    # but Phase 4 production code only writes 'failed' for similar cancellations.
+    await db.execute(text("""
+        UPDATE message_queue
+        SET status = 'failed',
+            error_message = 'Conversation taken over manually',
+            finished_at = NOW()
+        WHERE workspace_id = :wid
+          AND recipient_phone = (
+              SELECT contact_phone FROM conversations WHERE id = :cid
+          )
+          AND status = 'pending'
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+
     await db.commit()
-    
-    return {"success": True, "message": "AI disabled"}
+    return await get_conversation(conversation_id, ctx, db)
 
 
-# === Send Message from UI ===
-class SendMessageFromUI(BaseModel):
-    message: str
+@router.post("/{conversation_id}/enable-ai", response_model=ConversationResponse)
+async def enable_ai(
+    conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> ConversationResponse:
+    """INBX-04 / D-03 — reverse switch. NEVER touches status.
 
+    Legacy bug fix: legacy router set status='active' here, which destroyed
+    'lead'/'finished'/'manual' markers. Phase 5 keeps the historic status
+    intact — UI may PATCH /{id} explicitly if a status change is desired.
+    """
+    await _load_conversation_or_404(db, ctx, conversation_id)
 
-class SendMessageFromUIResponse(BaseModel):
-    success: bool
-    message_id: Optional[UUID] = None
-    telegram_message_id: Optional[int] = None
-    error: Optional[str] = None
+    await db.execute(text("""
+        UPDATE conversations
+        SET ai_enabled = true,
+            paused_at = NULL,
+            paused_reason = NULL,
+            updated_at = NOW()
+        WHERE id = :cid AND workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+    await db.commit()
+    return await get_conversation(conversation_id, ctx, db)
 
 
 @router.post("/{conversation_id}/send", response_model=SendMessageFromUIResponse)
 async def send_message_from_ui(
     conversation_id: UUID,
-    request: SendMessageFromUI,
+    payload: SendMessageFromUIRequest,
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
-):
+) -> SendMessageFromUIResponse:
+    """INBX-04 / D-04 — auto-takeover send from inbox UI.
+
+    Workflow:
+      1. Load conversation + sender. Filter on workspace + sender lifecycle/auth.
+         (Phase 2 D-11 dropped the senders.active boolean — using
+         lifecycle_status + auth_status now.)
+      2. Auto-takeover: status='manual', ai_enabled=false, paused_reason set.
+      3. Cancel pending queue items for the recipient_phone (D-02 pattern).
+      4. Telethon send OUTSIDE the transaction (legacy pattern preserved).
+      5. INSERT message row with sent_by='human' on success.
     """
-    Отправить сообщение в существующий диалог от имени человека (не AI).
-    Используется когда менеджер берёт управление диалогом.
-    """
-    import uuid
-    from app.services.telegram import telegram_service
-    
-    # 1. Получаем данные диалога и sender
-    result = await db.execute(
-        text("""
-            SELECT
-                c.contact_telegram_id,
-                c.contact_name,
-                s.id as sender_id,
-                s.slug as sender_slug,
-                s.session_string,
-                s.proxy
-            FROM conversations c
-            JOIN senders s ON c.sender_id = s.id
-            WHERE c.id = :conv_id AND s.is_active = true
-        """),
-        {"conv_id": str(conversation_id)}
-    )
-    row = result.fetchone()
+    # 1. Load conversation + sender; workspace + sender-active gate.
+    row = (await db.execute(text("""
+        SELECT c.contact_telegram_id, c.contact_name,
+               s.id AS sender_id, s.slug AS sender_slug,
+               s.session_string, s.proxy
+        FROM conversations c
+        JOIN senders s ON c.sender_id = s.id
+        WHERE c.id = :cid
+          AND c.workspace_id = :wid
+          AND s.lifecycle_status = 'active'
+          AND s.auth_status = 'ok'
+        -- Phase 2 D-11: legacy senders boolean is DROPPED; using lifecycle_status + auth_status.
+        -- TODO(v2-rls): replaced by RLS policy
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).first()
 
-    if not row:
-        raise HTTPException(status_code=404, detail="Conversation not found or sender inactive")
-
-    contact_telegram_id = row[0]
-    contact_name = row[1]
-    sender_id = row[2]
-    sender_slug = row[3]
-    encrypted_session = row[4]
-    sender_proxy = row[5]
-
-    if not contact_telegram_id:
-        raise HTTPException(status_code=400, detail="Contact has no Telegram ID")
-
-    # 2. Отправляем сообщение через Telegram
-    try:
-        result = await telegram_service.send_message_by_telegram_id(
-            sender_slug=sender_slug,
-            encrypted_session=encrypted_session,
-            telegram_id=contact_telegram_id,
-            message=request.message,
-            proxy=sender_proxy
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONVERSATION_NOT_FOUND",
+                    "message": "Conversation not found or sender inactive"},
         )
-        
-        if not result["success"]:
-            return SendMessageFromUIResponse(
-                success=False,
-                error=result.get("error", "Failed to send message")
-            )
-        
-        telegram_message_id = result.get("telegram_message_id")
-        
-    except Exception as e:
-        return SendMessageFromUIResponse(
-            success=False,
-            error=str(e)
+    if row.contact_telegram_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NO_TELEGRAM_ID",
+                    "message": "Contact has no Telegram ID"},
         )
-    
-    # 3. Сохраняем сообщение в БД
-    message_id = uuid.uuid4()
-    await db.execute(
-        text("""
-            INSERT INTO messages (id, conversation_id, direction, message_text, sent_by, telegram_message_id)
-            VALUES (:id, :conv_id, 'outbound', :msg_text, 'human', :tg_msg_id)
-        """),
-        {
-            "id": str(message_id),
-            "conv_id": str(conversation_id),
-            "msg_text": request.message,
-            "tg_msg_id": telegram_message_id
-        }
-    )
 
-    # 4. Обновляем updated_at (НЕ отключаем AI - пользователь управляет через переключатель)
-    await db.execute(
-        text("""
-            UPDATE conversations
-            SET updated_at = NOW()
-            WHERE id = :conv_id
-        """),
-        {"conv_id": str(conversation_id)}
-    )
+    # 2. Auto-takeover UPDATE (D-04).
+    await db.execute(text("""
+        UPDATE conversations
+        SET ai_enabled = false,
+            status = 'manual',
+            paused_at = NOW(),
+            paused_reason = 'Manager sent message via UI',
+            updated_at = NOW()
+        WHERE id = :cid AND workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+
+    # 3. Cancel pending queue items (D-02 pattern).
+    await db.execute(text("""
+        UPDATE message_queue
+        SET status = 'failed',
+            error_message = 'Conversation taken over manually',
+            finished_at = NOW()
+        WHERE workspace_id = :wid
+          AND recipient_phone = (
+              SELECT contact_phone FROM conversations WHERE id = :cid
+          )
+          AND status = 'pending'
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
 
     await db.commit()
-    
+
+    # 4. Telethon send OUTSIDE transaction.
+    result = await telegram_service.send_message_by_telegram_id(
+        sender_slug=row.sender_slug,
+        encrypted_session=row.session_string,
+        telegram_id=row.contact_telegram_id,
+        message=payload.message,
+        proxy=row.proxy,
+    )
+
+    if not result.get("success"):
+        return SendMessageFromUIResponse(
+            success=False,
+            error=result.get("error", "Telegram send failed"),
+        )
+
+    telegram_message_id = result.get("telegram_message_id")
+
+    # 5. INSERT messages row after Telethon success.
+    message_id = uuid.uuid4()
+    await db.execute(text("""
+        INSERT INTO messages (id, workspace_id, conversation_id, direction,
+                              message_text, sent_by, telegram_message_id)
+        VALUES (:id, :wid, :cid, 'outbound', :txt, 'human', :tg_mid)
+        ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+    """), {
+        "id": str(message_id),
+        "wid": str(ctx.workspace_id),
+        "cid": str(conversation_id),
+        "txt": payload.message,
+        "tg_mid": telegram_message_id,
+    })
+    await db.commit()
+
     return SendMessageFromUIResponse(
         success=True,
         message_id=message_id,
-        telegram_message_id=telegram_message_id
+        telegram_message_id=telegram_message_id,
     )
 
 
 @router.delete("/{conversation_id}", status_code=204)
 async def delete_conversation(
     conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(verify_api_key)
 ):
-    """
-    Удалить диалог и все его сообщения.
-    ВНИМАНИЕ: Это полное удаление (hard delete), данные нельзя восстановить!
-    """
-    
-    # Проверяем существование
-    result = await db.execute(
-        text("SELECT id FROM conversations WHERE id = :id"),
-        {"id": str(conversation_id)}
-    )
-    if not result.fetchone():
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Удаляем сообщения диалога
-    await db.execute(
-        text("DELETE FROM messages WHERE conversation_id = :id"),
-        {"id": str(conversation_id)}
-    )
-    
-    # Удаляем диалог
-    await db.execute(
-        text("DELETE FROM conversations WHERE id = :id"),
-        {"id": str(conversation_id)}
-    )
-    
+    """Hard delete. FK CASCADE removes messages + llm_calls. 404 на cross-workspace."""
+    await _load_conversation_or_404(db, ctx, conversation_id)
+    await db.execute(text("""
+        DELETE FROM conversations
+        WHERE id = :cid AND workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
     await db.commit()
-    
     return None
