@@ -12,6 +12,7 @@ from app.services.onboarding_state import onboarding_cleanup_worker
 from app.services.contact_check_worker import contact_check_worker
 from app.routers import (
     agents,
+    campaigns,
     check_contacts,
     contacts,
     folders,
@@ -90,6 +91,7 @@ app.include_router(check_contacts.router)
 app.include_router(onboarding.router)
 app.include_router(agents.router)
 app.include_router(send.router)
+app.include_router(campaigns.router)  # Phase 4
 
 
 @app.get("/")
@@ -97,7 +99,7 @@ async def root():
     """Root endpoint."""
     return {
         "service": "Outreach Platform API",
-        "version": "2.0.0-phase3",
+        "version": "2.0.0-phase4",
         "docs": "/docs",
         "health": "/api/v1/health",
         "endpoints": {
@@ -106,5 +108,6 @@ async def root():
             "api_keys": "/api/v1/workspace/api-keys",
             "agents": "/api/v1/agents",  # Phase 3
             "send": "POST /api/v1/send",  # Phase 3
+            "campaigns": "/api/v1/campaigns",  # Phase 4
         }
     }

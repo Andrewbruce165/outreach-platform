@@ -1,5 +1,5 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing import Literal, Optional, List
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, constr, model_validator
+from typing import Any, Literal, Optional, List
 from datetime import datetime
 from uuid import UUID
 
@@ -445,4 +445,137 @@ class AgentResponse(BaseModel):
 
 class AgentListResponse(BaseModel):
     agents: List[AgentResponse]
+    total: int
+
+
+# === Phase 4: Campaigns (CAMP-01..17) =========================================
+
+class ToolParamSpec(BaseModel):
+    """Single param spec inside a custom tool's parameters[] array.
+
+    Shape recovered from `ai_engine.build_tools()` (Phase 4 AUDIT Section 4):
+    flat array of {name, type, description, required} — NOT a JSON Schema object.
+    """
+    name: constr(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$", max_length=64)
+    type: Literal["string", "number", "integer", "boolean"] = "string"
+    description: Optional[str] = Field(default=None, max_length=1024)
+    required: bool = False
+
+
+class ToolSpec(BaseModel):
+    """Pydantic validation для campaigns.tools JSONB items (CAMP-15, C-10).
+
+    Shape matches the internal `webhook_functions` form (AUDIT Section 4).
+    NOT OpenAI's JSON Schema form — `ai_engine.build_tools()` converts at runtime.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    name: constr(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$", max_length=64)
+    description: constr(max_length=1024)
+    parameters: List[ToolParamSpec] = Field(default_factory=list)
+    webhook_url: HttpUrl
+    webhook_method: Literal["POST", "GET"] = "POST"
+
+
+class CampaignSenderAttach(BaseModel):
+    """Read-only sender entry inside CampaignResponse.attached_senders[].
+
+    locked_by_campaign_id / locked_by_campaign_name populated when the sender
+    is currently attached to a DIFFERENT running campaign in the same workspace.
+    """
+    sender_id: UUID
+    locked_by_campaign_id: Optional[UUID] = None
+    locked_by_campaign_name: Optional[str] = None
+
+
+class CampaignCreate(BaseModel):
+    """POST /api/v1/campaigns body."""
+    model_config = ConfigDict(from_attributes=True)
+
+    name: constr(min_length=1, max_length=150)
+    description: Optional[str] = None
+    agent_id: UUID
+    folder_id: UUID
+    sender_ids: List[UUID] = Field(default_factory=list)
+    message_template: constr(min_length=1)
+    timezone: str = "Europe/Moscow"
+    work_hour_start: int = Field(default=9, ge=0, le=23)
+    work_hour_end: int = Field(default=20, ge=1, le=24)
+    work_days_mask: int = Field(default=31, ge=1, le=127)
+    start_date: Optional[datetime] = None
+    stop_date: Optional[datetime] = None
+    lead_webhook_url: Optional[HttpUrl] = None
+    handoff_webhook_url: Optional[HttpUrl] = None
+    finish_webhook_url: Optional[HttpUrl] = None
+    lead_trigger_hint: Optional[str] = None
+    handoff_trigger_hint: Optional[str] = None
+    finish_trigger_hint: Optional[str] = None
+    tools: List[ToolSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_work_hours(self) -> "CampaignCreate":
+        if self.work_hour_start >= self.work_hour_end:
+            raise ValueError("work_hour_start must be less than work_hour_end")
+        return self
+
+
+class CampaignUpdate(BaseModel):
+    """PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).
+
+    Note: sender_ids НЕ обновляется через PATCH в Phase 4 — для добавления/удаления
+    senders v1 простоту делаем «удали → создай новую» либо ждём v2 dedicated endpoint.
+    """
+    name: Optional[constr(min_length=1, max_length=150)] = None
+    description: Optional[str] = None
+    agent_id: Optional[UUID] = None
+    folder_id: Optional[UUID] = None
+    message_template: Optional[constr(min_length=1)] = None
+    timezone: Optional[str] = None
+    work_hour_start: Optional[int] = Field(default=None, ge=0, le=23)
+    work_hour_end: Optional[int] = Field(default=None, ge=1, le=24)
+    work_days_mask: Optional[int] = Field(default=None, ge=1, le=127)
+    start_date: Optional[datetime] = None
+    stop_date: Optional[datetime] = None
+    lead_webhook_url: Optional[HttpUrl] = None
+    handoff_webhook_url: Optional[HttpUrl] = None
+    finish_webhook_url: Optional[HttpUrl] = None
+    lead_trigger_hint: Optional[str] = None
+    handoff_trigger_hint: Optional[str] = None
+    finish_trigger_hint: Optional[str] = None
+    tools: Optional[List[ToolSpec]] = None
+
+
+class CampaignResponse(BaseModel):
+    """GET/POST/PATCH response body. Computed fields: is_exhausted, attached_senders."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    name: str
+    description: Optional[str] = None
+    agent_id: UUID
+    folder_id: UUID
+    status: str  # draft|running|paused|done
+    timezone: str
+    work_hour_start: int
+    work_hour_end: int
+    work_days_mask: int
+    start_date: Optional[datetime] = None
+    stop_date: Optional[datetime] = None
+    message_template: str
+    lead_webhook_url: Optional[str] = None
+    handoff_webhook_url: Optional[str] = None
+    finish_webhook_url: Optional[str] = None
+    lead_trigger_hint: Optional[str] = None
+    handoff_trigger_hint: Optional[str] = None
+    finish_trigger_hint: Optional[str] = None
+    tools: List[dict[str, Any]] = Field(default_factory=list)
+    attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
+    is_exhausted: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class CampaignListResponse(BaseModel):
+    items: List[CampaignResponse]
     total: int

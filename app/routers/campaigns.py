@@ -1,0 +1,671 @@
+"""Campaigns router (Phase 4 — CAMP-01..04, CAMP-07, CAMP-08, CAMP-14).
+
+Workspace-scoped CRUD + lifecycle endpoints для кампаний.
+
+Endpoints:
+    GET    /api/v1/campaigns                       — list workspace campaigns
+    POST   /api/v1/campaigns                       — create draft campaign
+    GET    /api/v1/campaigns/{id}                  — single campaign (с is_exhausted + attached_senders)
+    PATCH  /api/v1/campaigns/{id}                  — partial update
+    DELETE /api/v1/campaigns/{id}                  — hard delete (409 на running)
+    POST   /api/v1/campaigns/{id}/start            — draft|paused → running (sender lock check)
+    POST   /api/v1/campaigns/{id}/pause            — running → paused
+    POST   /api/v1/campaigns/{id}/resume           — paused → running (sender lock re-check)
+    POST   /api/v1/campaigns/{id}/finish           — running|paused → done (terminal)
+    POST   /api/v1/campaigns/{id}/duplicate        — copy row + campaign_senders, status='draft'
+
+Все endpoint'ы под Depends(auth_dep) + .where(Campaign.workspace_id == ctx.workspace_id).
+"""
+
+import logging
+import zoneinfo
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func as sql_func, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models import (
+    AIContext,
+    Campaign,
+    CampaignSender,
+    Folder,
+    Sender,
+)
+from app.schemas import (
+    CampaignCreate,
+    CampaignListResponse,
+    CampaignResponse,
+    CampaignSenderAttach,
+    CampaignUpdate,
+)
+from app.utils.auth import AuthCtx, auth_dep
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _validate_timezone(tz: str) -> None:
+    """Raise 422 INVALID_TIMEZONE if tz not a valid IANA zone."""
+    try:
+        zoneinfo.ZoneInfo(tz)
+    except Exception:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_TIMEZONE",
+                    "message": f"Unknown IANA timezone '{tz}'"},
+        )
+
+
+async def _load_campaign(db: AsyncSession, ctx: AuthCtx, campaign_id: UUID) -> Campaign:
+    """Workspace-scoped fetch by id; 404 if not found or wrong workspace."""
+    res = await db.execute(
+        select(Campaign).where(
+            Campaign.id == campaign_id,
+            Campaign.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy app.workspace_id
+        )
+    )
+    c = res.scalars().first()
+    if c is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CAMPAIGN_NOT_FOUND", "message": "Campaign not found"},
+        )
+    return c
+
+
+async def _validate_workspace_owns_agent(
+    db: AsyncSession, ctx: AuthCtx, agent_id: UUID
+) -> None:
+    row = (await db.execute(
+        select(AIContext.id).where(
+            AIContext.id == agent_id,
+            AIContext.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy
+        )
+    )).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "AGENT_NOT_FOUND",
+                    "message": "Agent not in your workspace"},
+        )
+
+
+async def _validate_workspace_owns_folder(
+    db: AsyncSession, ctx: AuthCtx, folder_id: UUID
+) -> None:
+    row = (await db.execute(
+        select(Folder.id).where(
+            Folder.id == folder_id,
+            Folder.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy
+        )
+    )).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "FOLDER_NOT_FOUND",
+                    "message": "Folder not in your workspace"},
+        )
+
+
+async def _validate_workspace_owns_senders(
+    db: AsyncSession, ctx: AuthCtx, sender_ids: list[UUID]
+) -> None:
+    """Defence-in-depth per Q4 — все sender_ids должны быть в ctx.workspace_id."""
+    if not sender_ids:
+        return
+    rows = (await db.execute(
+        select(Sender.id).where(
+            Sender.id.in_(sender_ids),
+            Sender.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy
+        )
+    )).scalars().all()
+    found = set(rows)
+    missing = [sid for sid in sender_ids if sid not in found]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "SENDER_NOT_FOUND",
+                    "message": "One or more senders not in your workspace",
+                    "missing_sender_ids": [str(s) for s in missing]},
+        )
+
+
+async def _compute_is_exhausted(
+    db: AsyncSession, campaign_id: UUID, folder_id: UUID
+) -> bool:
+    """is_exhausted = (no registered contacts unassigned) AND (no pending/processing queue).
+
+    M4: 'registered' value is part of contacts.tg_status CHECK constraint (migration 013).
+    """
+    unassigned_count = (await db.execute(text("""
+        SELECT COUNT(*)
+        FROM contacts c
+        WHERE c.folder_id = :fid
+          AND c.tg_status = 'registered'
+          AND NOT EXISTS (
+              SELECT 1 FROM campaign_contact_assignments cca
+              WHERE cca.campaign_id = :cid AND cca.contact_phone = c.phone
+          )
+    """), {"fid": str(folder_id), "cid": str(campaign_id)})).scalar() or 0
+
+    pending_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM message_queue
+        WHERE campaign_id = :cid AND status IN ('pending', 'processing')
+    """), {"cid": str(campaign_id)})).scalar() or 0
+
+    return unassigned_count == 0 and pending_count == 0
+
+
+async def _build_attached_senders(
+    db: AsyncSession, ctx: AuthCtx, campaign_id: UUID
+) -> list[CampaignSenderAttach]:
+    """attached_senders with locked_by_campaign_id when sender in OTHER running camp."""
+    rows = await db.execute(text("""
+        SELECT cs.sender_id,
+               (SELECT c.id FROM campaign_senders cs2
+                  JOIN campaigns c ON c.id = cs2.campaign_id
+                  WHERE cs2.sender_id = cs.sender_id
+                    AND c.status = 'running'
+                    AND c.id != :cid
+                    AND c.workspace_id = :wid
+                  LIMIT 1) AS locked_by_id,
+               (SELECT c.name FROM campaign_senders cs2
+                  JOIN campaigns c ON c.id = cs2.campaign_id
+                  WHERE cs2.sender_id = cs.sender_id
+                    AND c.status = 'running'
+                    AND c.id != :cid
+                    AND c.workspace_id = :wid
+                  LIMIT 1) AS locked_by_name
+        FROM campaign_senders cs
+        WHERE cs.campaign_id = :cid
+        ORDER BY cs.added_at
+    """), {"cid": str(campaign_id), "wid": str(ctx.workspace_id)})
+    return [
+        CampaignSenderAttach(
+            sender_id=row[0],
+            locked_by_campaign_id=row[1],
+            locked_by_campaign_name=row[2],
+        )
+        for row in rows.fetchall()
+    ]
+
+
+async def _campaign_to_response(
+    db: AsyncSession, ctx: AuthCtx, campaign: Campaign
+) -> CampaignResponse:
+    attached = await _build_attached_senders(db, ctx, campaign.id)
+    is_exhausted = await _compute_is_exhausted(db, campaign.id, campaign.folder_id)
+    return CampaignResponse(
+        id=campaign.id,
+        workspace_id=campaign.workspace_id,
+        name=campaign.name,
+        description=campaign.description,
+        agent_id=campaign.agent_id,
+        folder_id=campaign.folder_id,
+        status=campaign.status,
+        timezone=campaign.timezone,
+        work_hour_start=campaign.work_hour_start,
+        work_hour_end=campaign.work_hour_end,
+        work_days_mask=campaign.work_days_mask,
+        start_date=campaign.start_date,
+        stop_date=campaign.stop_date,
+        message_template=campaign.message_template,
+        lead_webhook_url=campaign.lead_webhook_url,
+        handoff_webhook_url=campaign.handoff_webhook_url,
+        finish_webhook_url=campaign.finish_webhook_url,
+        lead_trigger_hint=campaign.lead_trigger_hint,
+        handoff_trigger_hint=campaign.handoff_trigger_hint,
+        finish_trigger_hint=campaign.finish_trigger_hint,
+        tools=campaign.tools or [],
+        attached_senders=attached,
+        is_exhausted=is_exhausted,
+        created_at=campaign.created_at,
+        updated_at=campaign.updated_at,
+    )
+
+
+async def _check_sender_lock(
+    db: AsyncSession, ctx: AuthCtx, campaign_id: UUID
+) -> list[dict]:
+    """Return list of {sender_id, campaign_id, campaign_name} conflicts.
+
+    Conflict = another running campaign in same workspace shares ≥1 sender with this one.
+    Empty list = lock OK.
+    """
+    rows = await db.execute(text("""
+        SELECT cs.sender_id, c.id, c.name
+        FROM campaign_senders cs
+        JOIN campaigns c ON c.id = cs.campaign_id
+        WHERE cs.sender_id IN (
+                SELECT sender_id FROM campaign_senders WHERE campaign_id = :cid
+              )
+          AND c.status = 'running'
+          AND c.id != :cid
+          AND c.workspace_id = :wid
+        ORDER BY c.name
+    """), {"cid": str(campaign_id), "wid": str(ctx.workspace_id)})
+    return [
+        {"sender_id": str(r[0]), "campaign_id": str(r[1]), "campaign_name": r[2]}
+        for r in rows.fetchall()
+    ]
+
+
+# ── Endpoints: CRUD ──────────────────────────────────────────────────────────
+
+
+@router.post("", response_model=CampaignResponse, status_code=201)
+async def create_campaign(
+    payload: CampaignCreate,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """CAMP-01: create campaign in draft state.
+
+    Validation chain:
+    1. timezone IANA → 422
+    2. agent_id workspace → 404
+    3. folder_id workspace → 404
+    4. sender_ids[] workspace (Q4) → 404
+    5. Duplicate name → 409
+    """
+    _validate_timezone(payload.timezone)
+    await _validate_workspace_owns_agent(db, ctx, payload.agent_id)
+    await _validate_workspace_owns_folder(db, ctx, payload.folder_id)
+    if payload.sender_ids:
+        await _validate_workspace_owns_senders(db, ctx, payload.sender_ids)
+
+    name = payload.name.strip()
+    existing = (await db.execute(
+        select(Campaign).where(
+            Campaign.workspace_id == ctx.workspace_id,
+            Campaign.name == name,
+        )
+    )).scalars().first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CAMPAIGN_NAME_DUPLICATE",
+                    "message": f"Campaign '{name}' already exists"},
+        )
+
+    camp = Campaign(
+        workspace_id=ctx.workspace_id,
+        name=name,
+        description=payload.description,
+        agent_id=payload.agent_id,
+        folder_id=payload.folder_id,
+        message_template=payload.message_template,
+        timezone=payload.timezone,
+        work_hour_start=payload.work_hour_start,
+        work_hour_end=payload.work_hour_end,
+        work_days_mask=payload.work_days_mask,
+        start_date=payload.start_date,
+        stop_date=payload.stop_date,
+        lead_webhook_url=str(payload.lead_webhook_url) if payload.lead_webhook_url else None,
+        handoff_webhook_url=str(payload.handoff_webhook_url) if payload.handoff_webhook_url else None,
+        finish_webhook_url=str(payload.finish_webhook_url) if payload.finish_webhook_url else None,
+        lead_trigger_hint=payload.lead_trigger_hint,
+        handoff_trigger_hint=payload.handoff_trigger_hint,
+        finish_trigger_hint=payload.finish_trigger_hint,
+        tools=[t.model_dump(mode="json") for t in payload.tools],
+        status="draft",
+    )
+    db.add(camp)
+    try:
+        await db.flush()
+    except IntegrityError as e:
+        await db.rollback()
+        if "idx_campaigns_workspace_name" in str(e.orig).lower() or "duplicate" in str(e.orig).lower():
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "CAMPAIGN_NAME_DUPLICATE",
+                        "message": f"Campaign '{name}' already exists"},
+            )
+        raise
+
+    for sid in payload.sender_ids:
+        db.add(CampaignSender(
+            campaign_id=camp.id,
+            sender_id=sid,
+            workspace_id=ctx.workspace_id,
+        ))
+
+    await db.commit()
+    await db.refresh(camp)
+    logger.info(
+        f"[campaigns] created workspace={ctx.workspace_id} name='{name}' "
+        f"id={camp.id} senders={len(payload.sender_ids)}"
+    )
+    return await _campaign_to_response(db, ctx, camp)
+
+
+@router.get("", response_model=CampaignListResponse)
+async def list_campaigns(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """List campaigns in current workspace, optional filter by status."""
+    q = select(Campaign).where(
+        Campaign.workspace_id == ctx.workspace_id,
+        # TODO(v2-rls): replaced by RLS policy
+    )
+    if status_filter:
+        q = q.where(Campaign.status == status_filter)
+    rows = (await db.execute(q.order_by(Campaign.created_at.desc()))).scalars().all()
+    items = [await _campaign_to_response(db, ctx, c) for c in rows]
+    return CampaignListResponse(items=items, total=len(items))
+
+
+@router.get("/{campaign_id}", response_model=CampaignResponse)
+async def get_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    c = await _load_campaign(db, ctx, campaign_id)
+    return await _campaign_to_response(db, ctx, c)
+
+
+@router.patch("/{campaign_id}", response_model=CampaignResponse)
+async def patch_campaign(
+    campaign_id: UUID,
+    payload: CampaignUpdate,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Partial PATCH. On running campaign: agent_id / folder_id immutable."""
+    c = await _load_campaign(db, ctx, campaign_id)
+    update_data = payload.model_dump(exclude_unset=True)
+
+    if c.status == "running":
+        forbidden = {"agent_id", "folder_id"}
+        present = forbidden & set(update_data.keys())
+        if present:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "CAMPAIGN_RUNNING_IMMUTABLE_FIELDS",
+                        "fields": sorted(present),
+                        "message": "Cannot change agent_id / folder_id on running campaign"},
+            )
+
+    if "timezone" in update_data and update_data["timezone"] is not None:
+        _validate_timezone(update_data["timezone"])
+
+    if "agent_id" in update_data and update_data["agent_id"] is not None:
+        await _validate_workspace_owns_agent(db, ctx, update_data["agent_id"])
+    if "folder_id" in update_data and update_data["folder_id"] is not None:
+        await _validate_workspace_owns_folder(db, ctx, update_data["folder_id"])
+
+    if "name" in update_data and update_data["name"] is not None:
+        new_name = update_data["name"].strip()
+        if new_name != c.name:
+            dup = (await db.execute(
+                select(Campaign).where(
+                    Campaign.workspace_id == ctx.workspace_id,
+                    Campaign.name == new_name,
+                )
+            )).scalars().first()
+            if dup is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "CAMPAIGN_NAME_DUPLICATE",
+                            "message": f"Campaign '{new_name}' already exists"},
+                )
+        update_data["name"] = new_name
+
+    for k in ("lead_webhook_url", "handoff_webhook_url", "finish_webhook_url"):
+        if k in update_data and update_data[k] is not None:
+            update_data[k] = str(update_data[k])
+
+    if "tools" in update_data and update_data["tools"] is not None:
+        update_data["tools"] = [
+            t.model_dump(mode="json") if hasattr(t, "model_dump") else t
+            for t in update_data["tools"]
+        ]
+
+    for k, v in update_data.items():
+        setattr(c, k, v)
+
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        msg = str(e.orig).lower()
+        if "idx_campaigns_workspace_name" in msg or "duplicate" in msg:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "CAMPAIGN_NAME_DUPLICATE"},
+            )
+        raise
+    await db.refresh(c)
+    return await _campaign_to_response(db, ctx, c)
+
+
+@router.delete("/{campaign_id}", status_code=204)
+async def delete_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """D-07: hard delete. 409 на running. draft/paused/done → 204.
+
+    FK semantics:
+      - campaign_senders / campaign_contact_assignments: CASCADE
+      - conversations.campaign_id / message_queue.campaign_id: SET NULL (Q1)
+    """
+    c = await _load_campaign(db, ctx, campaign_id)
+    if c.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CAMPAIGN_RUNNING",
+                    "message": "Stop campaign before deleting"},
+        )
+    await db.delete(c)
+    await db.commit()
+    logger.info(f"[campaigns] deleted workspace={ctx.workspace_id} id={campaign_id}")
+    return None
+
+
+# ── Endpoints: Lifecycle ─────────────────────────────────────────────────────
+
+
+@router.post("/{campaign_id}/start", response_model=CampaignResponse)
+async def start_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """CAMP-08: draft|paused → running. Requires ≥1 sender + sender lock check (CAMP-04)."""
+    c = await _load_campaign(db, ctx, campaign_id)
+    if c.status not in ("draft", "paused"):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_TRANSITION",
+                    "from": c.status, "to": "running"},
+        )
+
+    sender_count = (await db.execute(
+        select(sql_func.count()).select_from(CampaignSender)
+        .where(CampaignSender.campaign_id == c.id)
+    )).scalar()
+    if sender_count == 0:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "NO_SENDERS_ATTACHED",
+                    "message": "Attach at least one sender before starting"},
+        )
+
+    conflicts = await _check_sender_lock(db, ctx, c.id)
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SENDER_LOCK_CONFLICT",
+                    "conflicts": conflicts},
+        )
+
+    c.status = "running"
+    await db.commit()
+    await db.refresh(c)
+    logger.info(f"[campaigns] started id={campaign_id}")
+    return await _campaign_to_response(db, ctx, c)
+
+
+@router.post("/{campaign_id}/pause", response_model=CampaignResponse)
+async def pause_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """running → paused."""
+    c = await _load_campaign(db, ctx, campaign_id)
+    if c.status != "running":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_TRANSITION",
+                    "from": c.status, "to": "paused"},
+        )
+    c.status = "paused"
+    await db.commit()
+    await db.refresh(c)
+    logger.info(f"[campaigns] paused id={campaign_id}")
+    return await _campaign_to_response(db, ctx, c)
+
+
+@router.post("/{campaign_id}/resume", response_model=CampaignResponse)
+async def resume_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """paused → running. D-04: re-check sender lock (другая кампания могла занять)."""
+    c = await _load_campaign(db, ctx, campaign_id)
+    if c.status != "paused":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_TRANSITION",
+                    "from": c.status, "to": "running"},
+        )
+    conflicts = await _check_sender_lock(db, ctx, c.id)
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SENDER_LOCK_CONFLICT",
+                    "conflicts": conflicts},
+        )
+    c.status = "running"
+    await db.commit()
+    await db.refresh(c)
+    logger.info(f"[campaigns] resumed id={campaign_id}")
+    return await _campaign_to_response(db, ctx, c)
+
+
+@router.post("/{campaign_id}/finish", response_model=CampaignResponse)
+async def finish_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """running|paused → done. Terminal."""
+    c = await _load_campaign(db, ctx, campaign_id)
+    if c.status not in ("running", "paused"):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_TRANSITION",
+                    "from": c.status, "to": "done"},
+        )
+    c.status = "done"
+    await db.commit()
+    await db.refresh(c)
+    logger.info(f"[campaigns] finished id={campaign_id}")
+    return await _campaign_to_response(db, ctx, c)
+
+
+# ── Endpoints: Duplicate ─────────────────────────────────────────────────────
+
+
+@router.post("/{campaign_id}/duplicate", response_model=CampaignResponse, status_code=201)
+async def duplicate_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Q2 / C-11: copy campaigns row + campaign_senders. status='draft'.
+
+    NOT copied: message_queue items, campaign_contact_assignments — these are
+    runtime rotation state, not template.
+
+    Name: '{name} (copy)' or '{name} (copy N)' if conflict.
+    """
+    src = await _load_campaign(db, ctx, campaign_id)
+
+    base = f"{src.name} (copy)"
+    candidate = base
+    i = 1
+    while True:
+        existing = (await db.execute(
+            select(Campaign).where(
+                Campaign.workspace_id == ctx.workspace_id,
+                Campaign.name == candidate,
+            )
+        )).scalars().first()
+        if existing is None:
+            break
+        i += 1
+        candidate = f"{src.name} (copy {i})"
+
+    new_c = Campaign(
+        workspace_id=ctx.workspace_id,
+        name=candidate,
+        description=src.description,
+        agent_id=src.agent_id,
+        folder_id=src.folder_id,
+        message_template=src.message_template,
+        timezone=src.timezone,
+        work_hour_start=src.work_hour_start,
+        work_hour_end=src.work_hour_end,
+        work_days_mask=src.work_days_mask,
+        start_date=src.start_date,
+        stop_date=src.stop_date,
+        lead_webhook_url=src.lead_webhook_url,
+        handoff_webhook_url=src.handoff_webhook_url,
+        finish_webhook_url=src.finish_webhook_url,
+        lead_trigger_hint=src.lead_trigger_hint,
+        handoff_trigger_hint=src.handoff_trigger_hint,
+        finish_trigger_hint=src.finish_trigger_hint,
+        tools=src.tools,
+        status="draft",
+    )
+    db.add(new_c)
+    await db.flush()
+
+    # Copy campaign_senders rows (do NOT copy queue items / cca per C-11)
+    src_senders = (await db.execute(
+        select(CampaignSender).where(CampaignSender.campaign_id == src.id)
+    )).scalars().all()
+    for s in src_senders:
+        db.add(CampaignSender(
+            campaign_id=new_c.id,
+            sender_id=s.sender_id,
+            workspace_id=ctx.workspace_id,
+        ))
+
+    await db.commit()
+    await db.refresh(new_c)
+    logger.info(
+        f"[campaigns] duplicated workspace={ctx.workspace_id} "
+        f"src={campaign_id} dst={new_c.id} name='{candidate}'"
+    )
+    return await _campaign_to_response(db, ctx, new_c)

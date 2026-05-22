@@ -1,7 +1,7 @@
 from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Integer, LargeBinary, ForeignKey, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 from app.database import Base
 import uuid
 import enum
@@ -210,6 +210,12 @@ class MessageQueue(Base):
     error_message = Column(Text)
     attempts = Column(Integer, default=0)
 
+    # Phase 4 (D-16 + AUDIT Q1 override): campaign_id NULLable + ON DELETE SET NULL.
+    # NULL means legacy/orphaned queue item after campaign hard-delete (D-07).
+    campaign_id = Column(UUID(as_uuid=True),
+                         ForeignKey("campaigns.id", ondelete="SET NULL"),
+                         nullable=True)
+
     # Relationships
     sender = relationship("Sender")
 
@@ -227,7 +233,11 @@ class Conversation(Base):
     contact_telegram_id = Column(BigInteger, nullable=True)
     ai_enabled = Column(Boolean, default=True, server_default='true')
     ai_context_id = Column(UUID(as_uuid=True), ForeignKey("ai_contexts.id", ondelete="SET NULL"), nullable=True)
-    status = Column(String(20), default="active", server_default="'active'")  # active, manual, paused
+    # Phase 4 D-05: NULLable FK + extended CHECK ('active','manual','paused','lead','handoff','finished').
+    campaign_id = Column(UUID(as_uuid=True),
+                         ForeignKey("campaigns.id", ondelete="SET NULL"),
+                         nullable=True)
+    status = Column(String(20), default="active", server_default="'active'")  # active|manual|paused|lead|handoff|finished
     paused_at = Column(DateTime(timezone=True), nullable=True)
     paused_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -327,22 +337,8 @@ class ProxyPool(Base):
     sender = relationship("Sender")
 
 
-class ContextContactAssignment(Base):
-    """Persistent mapping (context_id, contact_phone) → sender_id for account rotation."""
-    __tablename__ = "context_contact_assignments"
-
-    id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    workspace_id  = Column(UUID(as_uuid=True),
-                           ForeignKey("workspaces.id", ondelete="CASCADE"),
-                           nullable=False)
-    context_id    = Column(UUID(as_uuid=True), ForeignKey("ai_contexts.id", ondelete="CASCADE"), nullable=False)
-    contact_phone = Column(String(20), nullable=False)
-    sender_id     = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"), nullable=False)
-    created_at    = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at    = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    context = relationship("AIContext")
-    sender  = relationship("Sender")
+# NB: ContextContactAssignment dropped in Phase 4 migration 016 (D-06).
+# Rotation state переехало на campaign_contact_assignments (per-campaign).
 
 
 # ─── Phase 2: Folders, Contacts, Onboarding sessions, CSV imports ─────────────
@@ -437,3 +433,93 @@ class CsvImport(Base):
     delimiter = Column(String(5), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
+
+
+# ─── Phase 4: Campaigns ───────────────────────────────────────────────────────
+
+class Campaign(Base):
+    """Outreach campaign — обёртка над рассылкой (D-01..D-15).
+
+    Связи: agent_id (RESTRICT), folder_id (RESTRICT), senders через campaign_senders.
+    Status enum: draft / running / paused / done (VARCHAR + CHECK per AUDIT Q6 — не SQLEnum,
+    т.к. ALTER TYPE ADD VALUE нельзя в транзакции).
+    """
+    __tablename__ = "campaigns"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    agent_id = Column(UUID(as_uuid=True),
+                      ForeignKey("ai_contexts.id", ondelete="RESTRICT"),
+                      nullable=False)
+    folder_id = Column(UUID(as_uuid=True),
+                       ForeignKey("folders.id", ondelete="RESTRICT"),
+                       nullable=False)
+    name = Column(String(150), nullable=False)
+    description = Column(Text, nullable=True)
+    # CHECK ('draft','running','paused','done') enforced in DB (CONSTRAINT campaigns_status_check)
+    status = Column(String(20), nullable=False, server_default="draft")
+    timezone = Column(Text, nullable=False, server_default="Europe/Moscow")
+    work_hour_start = Column(Integer, nullable=False, server_default="9")
+    work_hour_end = Column(Integer, nullable=False, server_default="20")
+    work_days_mask = Column(Integer, nullable=False, server_default="31")  # Mo-Fri
+    start_date = Column(DateTime(timezone=True), nullable=True)
+    stop_date = Column(DateTime(timezone=True), nullable=True)
+    message_template = Column(Text, nullable=False, server_default="")
+    lead_webhook_url = Column(Text, nullable=True)
+    handoff_webhook_url = Column(Text, nullable=True)
+    finish_webhook_url = Column(Text, nullable=True)
+    lead_trigger_hint = Column(Text, nullable=True)
+    handoff_trigger_hint = Column(Text, nullable=True)
+    finish_trigger_hint = Column(Text, nullable=True)
+    tools = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        onupdate=func.now(), nullable=False)
+
+    workspace = relationship("Workspace")
+    agent = relationship("AIContext")
+    folder = relationship("Folder")
+    senders = relationship("CampaignSender", back_populates="campaign",
+                           cascade="all, delete-orphan")
+
+
+class CampaignSender(Base):
+    """Through-table campaign ↔ sender (D-03). PK (campaign_id, sender_id)."""
+    __tablename__ = "campaign_senders"
+
+    campaign_id = Column(UUID(as_uuid=True),
+                         ForeignKey("campaigns.id", ondelete="CASCADE"),
+                         primary_key=True)
+    sender_id = Column(UUID(as_uuid=True),
+                       ForeignKey("senders.id", ondelete="CASCADE"),
+                       primary_key=True)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    added_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    campaign = relationship("Campaign", back_populates="senders")
+    sender = relationship("Sender")
+
+
+class CampaignContactAssignment(Base):
+    """Per-campaign rotation state (D-06). UNIQUE(campaign_id, contact_phone)."""
+    __tablename__ = "campaign_contact_assignments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    campaign_id = Column(UUID(as_uuid=True),
+                         ForeignKey("campaigns.id", ondelete="CASCADE"),
+                         nullable=False)
+    contact_phone = Column(String(20), nullable=False)
+    sender_id = Column(UUID(as_uuid=True),
+                       ForeignKey("senders.id", ondelete="CASCADE"),
+                       nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    campaign = relationship("Campaign")
+    sender = relationship("Sender")
