@@ -711,3 +711,41 @@ class AnalyticsCards(BaseModel):
     replied: AnalyticsReplied
     leads: int
     finishes: int
+
+
+# === Phase 5 LLM call schemas (ANLX-05) ======================================
+
+
+class LLMCallResponse(BaseModel):
+    """Per-conversation LLM audit row for inbox-debug UI.
+
+    Mirrors the 15-column llm_calls table (D-09). prompt is the full request
+    dict (messages + tools + temperature + model). tool_calls is the parsed
+    list of {id, name, arguments} (None when LLM returned plain text).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    conversation_id: UUID
+    campaign_id: Optional[UUID] = None
+    agent_id: Optional[UUID] = None
+    sender_id: Optional[UUID] = None
+    model: str
+    prompt: dict
+    response_text: Optional[str] = None
+    tool_calls: Optional[list[dict]] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    created_at: datetime
+
+
+class LLMCallListResponse(BaseModel):
+    """Paginated wrapper for GET /api/v1/conversations/{id}/llm-calls."""
+
+    llm_calls: list[LLMCallResponse]
+    total: int
