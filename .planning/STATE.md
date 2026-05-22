@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 05-02-analytics-router-PLAN.md
-last_updated: "2026-05-22T14:53:36.394Z"
+status: verifying
+stopped_at: Completed 05-03-llm-logger-and-read-endpoint-PLAN.md
+last_updated: "2026-05-22T15:04:27.039Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 21
-  completed_plans: 20
+  completed_plans: 21
   percent: 17
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 05 (inbox-analytics) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-22
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -61,6 +61,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 04 P05 | 9min | 3 tasks | 8 files |
 | Phase 05 P01 | 13min | 3 tasks | 12 files |
 | Phase 05 P02 | 5min | 2 tasks | 5 files |
+| Phase 05 P03 | 6min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -93,6 +94,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 04]: Phase 4 B1 finalized: 0 TODO(phase-4) markers в app/ — все 10 AUDIT.md Section 1 markers закрыты (agents.py:49+246, folders.py:248, queue.py:708+849, rotation.py:180, ai_engine.py:88, listener.py:250+350+707). Phase 4 готов к verification.
 - [Phase 05]: Plan 05-01: migration 017 defensive messages CREATE TABLE (DDL lost in brownfield fork — IF NOT EXISTS no-op on prod); ANTISPAM_BOT_IDS at module level for D-08 delegation from new bot filter; D-03 fix — enable-ai NEVER touches status; pre-send guard in queue.py one extra SELECT (CLAUDE.md empirical intervals untouched)
 - [Phase 05]: [Phase 05]: Plan 05-02: analytics endpoints — sent source = messages JOIN conversations (C-01 covers manager-send D-04 unlike messages_log/message_queue); replied = one SELECT with COUNT(DISTINCT) + COUNT(*) per D-15; _ALLOWED_SCOPE_COLUMNS whitelist + :scope_val bind for safe scope composition; Pitfall 8 — bot_ignored excluded from every COUNT; Pitfall 9 — leads strict EQ; D-13 — no background workers added (lifespan still 5)
+- [Phase 05]: Plan 05-03: inline await log_llm_call (Open Question #3) — deterministic + testable; +1-3ms latency acceptable for v1; D-12 preserved (warmup.py has 0 references); T-05-03-PROMPT-LEAK guard verified via grep (0 matches for logger.*prompt in llm_logger.py + ai_engine.py); defence-in-depth on GET /llm-calls endpoint (prequery + WHERE workspace_id); Phase 5 complete (3 plans, ANLX-05 closed alongside INBX-01..05 + AIRC-04 + ANLX-01..04)
 
 ### Pending Todos
 
@@ -105,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-22T14:53:36.391Z
-Stopped at: Completed 05-02-analytics-router-PLAN.md
+Last session: 2026-05-22T15:04:18.597Z
+Stopped at: Completed 05-03-llm-logger-and-read-endpoint-PLAN.md
 Resume file: None
