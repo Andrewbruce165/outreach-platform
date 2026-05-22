@@ -67,6 +67,12 @@ async def _setup_database():
         sql_016 = (PROJECT_ROOT / "migrations" / "016_phase4.sql").read_text()
         await conn.exec_driver_sql(sql_016)
 
+        # Phase 5 migration: defensive messages CREATE TABLE + extend
+        # conversations.status CHECK with 'bot_ignored' (D-07) + create
+        # llm_calls (D-09) + 3 composite indexes for analytics (C-04).
+        sql_017 = (PROJECT_ROOT / "migrations" / "017_phase5.sql").read_text()
+        await conn.exec_driver_sql(sql_017)
+
     yield
 
     async with engine.begin() as conn:
@@ -383,5 +389,121 @@ async def test_running_campaign_factory(test_campaign_factory, test_sender_facto
         for s in senders:
             await attach_sender_to_campaign(camp["id"], s.id)
         return camp, senders
+
+    return _make
+
+
+# ─── Phase 5 fixtures: Conversation / Message factories ──────────────────────
+
+@pytest_asyncio.fixture
+async def test_conversation_factory(
+    async_db_session: AsyncSession,
+    test_workspace: Workspace,
+    test_sender_factory,
+):
+    """Insert a conversation row via raw SQL (lets us drive status freely).
+
+    Usage:
+        conv = await test_conversation_factory()                  # default
+        conv = await test_conversation_factory(status='lead')     # explicit
+        conv = await test_conversation_factory(sender=existing)   # reuse sender
+    """
+    from sqlalchemy import text as _t
+    import uuid as _uuid
+
+    counter = {"n": 0}
+
+    async def _make(
+        sender=None,
+        campaign_id=None,
+        ai_context_id=None,
+        contact_phone: str | None = None,
+        contact_name: str | None = None,
+        contact_telegram_id: int | None = None,
+        status: str = "active",
+        ai_enabled: bool = True,
+        workspace_id=None,
+    ) -> dict:
+        counter["n"] += 1
+        if sender is None:
+            sender = await test_sender_factory()
+        sender_id = sender["id"] if isinstance(sender, dict) else sender.id
+        sender_workspace_id = (
+            sender["workspace_id"] if isinstance(sender, dict) else sender.workspace_id
+        )
+        wid = workspace_id or sender_workspace_id
+
+        if contact_phone is None:
+            contact_phone = f"+7910{counter['n']:07d}"
+
+        row = (await async_db_session.execute(_t("""
+            INSERT INTO conversations (
+                workspace_id, sender_id, contact_phone, contact_name,
+                contact_telegram_id, ai_enabled, ai_context_id, campaign_id, status
+            ) VALUES (
+                :wid, :sid, :phone, :name, :tid, :ai_en, :aid, :cid, :status
+            )
+            RETURNING id, workspace_id, sender_id, contact_phone, contact_name,
+                      contact_telegram_id, ai_enabled, ai_context_id, campaign_id,
+                      status, paused_at, paused_reason, created_at, updated_at
+        """), {
+            "wid": str(wid),
+            "sid": str(sender_id),
+            "phone": contact_phone,
+            "name": contact_name,
+            "tid": contact_telegram_id,
+            "ai_en": ai_enabled,
+            "aid": str(ai_context_id) if ai_context_id else None,
+            "cid": str(campaign_id) if campaign_id else None,
+            "status": status,
+        })).first()
+        await async_db_session.commit()
+        return dict(row._mapping)
+
+    return _make
+
+
+@pytest_asyncio.fixture
+async def test_message_factory(async_db_session: AsyncSession):
+    """Insert one or more messages rows under a conversation.
+
+    Usage:
+        msgs = await test_message_factory(conv_id, count=3)
+        msgs = await test_message_factory(conv_id, direction='outbound', sent_by='ai')
+    """
+    from sqlalchemy import text as _t
+
+    counter = {"n": 0}
+
+    async def _make(
+        conversation_id,
+        count: int = 1,
+        direction: str = "inbound",
+        sent_by: str = "contact",
+        text_prefix: str = "msg",
+        workspace_id=None,
+    ):
+        rows = []
+        for _ in range(count):
+            counter["n"] += 1
+            tmid = 100_000 + counter["n"]
+            r = (await async_db_session.execute(_t("""
+                INSERT INTO messages
+                    (workspace_id, conversation_id, direction, message_text,
+                     sent_by, telegram_message_id)
+                VALUES (:wid, :cid, :dir, :txt, :sb, :tmid)
+                RETURNING id, conversation_id, direction, message_text,
+                          sent_by, telegram_message_id, created_at
+            """), {
+                "wid": str(workspace_id) if workspace_id else None,
+                "cid": str(conversation_id),
+                "dir": direction,
+                "txt": f"{text_prefix}-{counter['n']}",
+                "sb": sent_by,
+                "tmid": tmid,
+            })).first()
+            rows.append(dict(r._mapping))
+        await async_db_session.commit()
+        return rows
 
     return _make

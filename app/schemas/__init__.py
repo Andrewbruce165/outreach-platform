@@ -587,3 +587,95 @@ class CampaignResponse(BaseModel):
 class CampaignListResponse(BaseModel):
     items: List[CampaignResponse]
     total: int
+
+
+# === Phase 5: Inbox & Analytics (INBX-01..05, AIRC-04) ========================
+
+CONVERSATION_STATUSES = {
+    "active",
+    "manual",
+    "paused",
+    "lead",
+    "handoff",
+    "finished",
+    "bot_ignored",
+}
+
+
+class ConversationResponse(BaseModel):
+    """GET /api/v1/conversations[/{id}] response row."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    sender_id: UUID
+    sender_slug: Optional[str] = None  # filled via JOIN in router
+    contact_phone: str
+    contact_name: Optional[str] = None
+    contact_telegram_id: Optional[int] = None
+    ai_enabled: bool
+    ai_context_id: Optional[UUID] = None
+    campaign_id: Optional[UUID] = None
+    status: str  # one of CONVERSATION_STATUSES
+    paused_at: Optional[datetime] = None
+    paused_reason: Optional[str] = None
+    last_message: Optional[str] = None
+    last_message_at: Optional[datetime] = None
+    unread_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationListResponse(BaseModel):
+    conversations: List[ConversationResponse]
+    total: int
+
+
+class ConversationUpdate(BaseModel):
+    """PATCH /api/v1/conversations/{id} body — partial PATCH."""
+
+    ai_enabled: Optional[bool] = None
+    ai_context_id: Optional[UUID] = None
+    status: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_status(self) -> "ConversationUpdate":
+        if self.status is not None and self.status not in CONVERSATION_STATUSES:
+            raise ValueError(
+                f"Invalid status '{self.status}'. "
+                f"Must be one of: {sorted(CONVERSATION_STATUSES)}"
+            )
+        return self
+
+
+class MessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    conversation_id: UUID
+    direction: str
+    message_text: str
+    sent_by: str
+    telegram_message_id: Optional[int] = None
+    created_at: datetime
+
+
+class MessageListResponse(BaseModel):
+    messages: List[MessageResponse]
+    total: int
+
+
+class SendMessageFromUIRequest(BaseModel):
+    """POST /api/v1/conversations/{id}/send body (D-04 auto-takeover)."""
+
+    message: str = Field(..., min_length=1, max_length=4096)
+
+
+class SendMessageFromUIResponse(BaseModel):
+    """POST /api/v1/conversations/{id}/send response (D-04 auto-takeover)."""
+
+    success: bool
+    message_id: Optional[UUID] = None
+    telegram_message_id: Optional[int] = None
+    error: Optional[str] = None
