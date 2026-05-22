@@ -679,3 +679,35 @@ class SendMessageFromUIResponse(BaseModel):
     message_id: Optional[UUID] = None
     telegram_message_id: Optional[int] = None
     error: Optional[str] = None
+
+
+# === Phase 5 analytics schemas (ANLX-01..04) =================================
+
+
+class AnalyticsReplied(BaseModel):
+    """Per D-15: «Отвечено» = две цифры — conversation_count + message_count.
+
+    conversation_count = COUNT(DISTINCT m.conversation_id) на JOIN messages+conversations
+                         WHERE m.direction='inbound' AND m.sent_by='contact'.
+    message_count      = COUNT(*)                          (same JOIN/WHERE).
+    """
+
+    conversation_count: int
+    message_count: int
+
+
+class AnalyticsCards(BaseModel):
+    """Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).
+
+    Все 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})
+    возвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.
+
+    Pitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает
+    status='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».
+    Все counts исключают status='bot_ignored' (Pitfall 8).
+    """
+
+    sent: int
+    replied: AnalyticsReplied
+    leads: int
+    finishes: int
