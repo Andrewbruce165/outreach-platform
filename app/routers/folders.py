@@ -229,6 +229,25 @@ async def delete_folder(
             detail={"code": "FOLDER_NOT_FOUND", "message": "Folder not found"},
         )
 
+    # Phase 4 close (D-06 carry-over): block delete если есть running campaign на этой папке.
+    # FK ON DELETE RESTRICT enforces at DB level, but explicit 409 is friendlier UX.
+    active_campaigns = (await db.execute(text("""
+        SELECT id, name FROM campaigns
+        WHERE folder_id = :fid AND workspace_id = :wid AND status = 'running'
+        ORDER BY name
+    """), {"fid": str(folder_id), "wid": str(ctx.workspace_id)})).fetchall()
+    if active_campaigns:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "FOLDER_USED_BY_RUNNING_CAMPAIGN",
+                "message": "Cannot delete folder — used by running campaign(s)",
+                "campaigns": [
+                    {"id": str(r[0]), "name": r[1]} for r in active_campaigns
+                ],
+            },
+        )
+
     # D-06: запрет удаления непустой папки (если force=false).
     count_result = await db.execute(
         select(sql_func.count(Contact.id)).where(Contact.folder_id == folder.id)
@@ -245,8 +264,6 @@ async def delete_folder(
                     "Move them, delete them, or pass ?force=true."
                 ),
                 "contact_count": contact_count,
-                # TODO(phase-4): also block on active campaign attachment
-                "active_campaigns": [],
             },
         )
 

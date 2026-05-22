@@ -29,7 +29,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -143,6 +143,37 @@ def _validate_rate_limits(
                 )
             )
     return warnings
+
+
+async def _check_sender_not_in_running_campaign(
+    db: AsyncSession, ctx: AuthCtx, sender_id: UUID
+) -> None:
+    """Phase 4 close (new check, не TODO marker): sender нельзя удалить или
+    pause/warmup-flip пока он прицеплен к running campaign в workspace.
+
+    409 with detail{campaigns:[...]} — UX-friendly hint.
+    """
+    active = (await db.execute(text("""
+        SELECT c.id, c.name
+        FROM campaign_senders cs
+        JOIN campaigns c ON c.id = cs.campaign_id
+        WHERE cs.sender_id = :sid
+          AND c.workspace_id = :wid
+          AND c.status = 'running'
+        ORDER BY c.name
+    """), {"sid": str(sender_id), "wid": str(ctx.workspace_id)})).fetchall()
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SENDER_USED_BY_RUNNING_CAMPAIGN",
+                "message": (
+                    "Sender is attached to running campaign(s) — "
+                    "pause / finish them first"
+                ),
+                "campaigns": [{"id": str(r[0]), "name": r[1]} for r in active],
+            },
+        )
 
 
 async def _load_sender_by_slug(
@@ -316,6 +347,9 @@ async def update_sender(
     if request.session_string is not None:
         sender.session_string = encrypt_session(request.session_string)
     if request.lifecycle_status is not None:
+        # Phase 4 close: cannot pause/warmup-flip a sender that is currently in running campaign.
+        if request.lifecycle_status != "active" and sender.lifecycle_status == "active":
+            await _check_sender_not_in_running_campaign(db, ctx, sender.id)
         sender.lifecycle_status = request.lifecycle_status
     if request.rate_per_min is not None:
         sender.rate_per_min = request.rate_per_min
@@ -347,10 +381,15 @@ async def delete_sender(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """Hard delete sender + связанные диалоги/сообщения/контакты."""
-    from sqlalchemy import text
+    """Hard delete sender + связанные диалоги/сообщения/контакты.
 
+    Phase 4 close: 409 if sender is attached to any running campaign in workspace.
+    """
     sender = await _load_sender_by_slug(db, ctx, slug)
+
+    # Phase 4 close: block delete if sender in running campaign.
+    await _check_sender_not_in_running_campaign(db, ctx, sender.id)
+
     sender_id = str(sender.id)
 
     # CASCADE через FK не покрывает 'messages' (нет sender_id напрямую — через conversations).

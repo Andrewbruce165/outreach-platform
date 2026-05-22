@@ -43,10 +43,11 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _agent_to_response(agent: AIContext) -> AgentResponse:
-    """Build AgentResponse with hardcoded campaign_count=0 (D-10).
+def _agent_to_response(agent: AIContext, campaign_count: int = 0) -> AgentResponse:
+    """Build AgentResponse. campaign_count must be computed by caller (Phase 4 D-10 closure).
 
-    TODO(phase-4): campaign_count via SELECT COUNT(*) FROM campaigns WHERE agent_id = ai_contexts.id.
+    Phase 4 close: campaign_count теперь реальный SELECT COUNT(*) FROM campaigns WHERE agent_id=...
+    (см. _campaign_counts_for_agents helper). Default 0 для безопасности (если caller забыл передать).
     """
     faq_data = agent.faq if agent.faq else []
     # If FAQ stored as legacy dict form — coerce to empty list for safety
@@ -61,10 +62,41 @@ def _agent_to_response(agent: AIContext) -> AgentResponse:
         faq=[FaqItem(**item) for item in faq_data],
         company_info=agent.company_info,
         product_info=agent.product_info,
-        campaign_count=0,  # D-10
+        campaign_count=campaign_count,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
+
+
+async def _campaign_counts_for_agents(
+    db: AsyncSession, workspace_id: UUID
+) -> dict[UUID, int]:
+    """Phase 4 close: SELECT COUNT(*) FROM campaigns WHERE agent_id=... per agent.
+
+    Returns dict {agent_id: count} for ALL agents in workspace. Filters by
+    workspace as defence-in-depth (campaigns FK-scoped already but explicit filter is safer).
+    """
+    rows = (await db.execute(text("""
+        SELECT a.id, COUNT(c.id)
+        FROM ai_contexts a
+        LEFT JOIN campaigns c
+               ON c.agent_id = a.id
+              AND c.workspace_id = a.workspace_id
+        WHERE a.workspace_id = :wid
+        GROUP BY a.id
+    """), {"wid": str(workspace_id)})).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+async def _count_campaigns_for_agent(
+    db: AsyncSession, workspace_id: UUID, agent_id: UUID
+) -> int:
+    """Single-agent count for GET /{id} endpoint."""
+    row = (await db.execute(text("""
+        SELECT COUNT(*) FROM campaigns
+        WHERE agent_id = :aid AND workspace_id = :wid
+    """), {"aid": str(agent_id), "wid": str(workspace_id)})).first()
+    return int(row[0]) if row else 0
 
 
 async def _load_agent(db: AsyncSession, ctx: AuthCtx, agent_id: UUID) -> AIContext:
@@ -120,7 +152,7 @@ async def list_agents(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all agents in current workspace (D-10 campaign_count=0)."""
+    """List all agents in current workspace. Phase 4: campaign_count is real SELECT COUNT."""
     result = await db.execute(
         select(AIContext)
         .where(AIContext.workspace_id == ctx.workspace_id)
@@ -128,8 +160,9 @@ async def list_agents(
         .order_by(AIContext.created_at.desc())
     )
     agents = result.scalars().all()
+    counts = await _campaign_counts_for_agents(db, ctx.workspace_id)
     return AgentListResponse(
-        agents=[_agent_to_response(a) for a in agents],
+        agents=[_agent_to_response(a, campaign_count=counts.get(a.id, 0)) for a in agents],
         total=len(agents),
     )
 
@@ -173,7 +206,8 @@ async def create_agent(
     logger.info(
         f"[agents] created workspace={ctx.workspace_id} name='{name}' id={agent.id}"
     )
-    return _agent_to_response(agent)
+    # New agent → 0 campaigns yet.
+    return _agent_to_response(agent, campaign_count=0)
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
@@ -184,7 +218,8 @@ async def get_agent(
 ):
     """Get agent by id (workspace-scoped). 404 если cross-tenant."""
     agent = await _load_agent(db, ctx, agent_id)
-    return _agent_to_response(agent)
+    cnt = await _count_campaigns_for_agent(db, ctx.workspace_id, agent.id)
+    return _agent_to_response(agent, campaign_count=cnt)
 
 
 @router.patch("/{agent_id}", response_model=AgentResponse)
@@ -231,7 +266,8 @@ async def update_agent(
     await db.commit()
     await db.refresh(agent)
     logger.info(f"[agents] updated workspace={ctx.workspace_id} id={agent_id}")
-    return _agent_to_response(agent)
+    cnt = await _count_campaigns_for_agent(db, ctx.workspace_id, agent.id)
+    return _agent_to_response(agent, campaign_count=cnt)
 
 
 @router.delete("/{agent_id}", status_code=204)
@@ -240,11 +276,26 @@ async def delete_agent(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """D-08: hard delete. FK SET NULL у conversations, CASCADE у context_contact_assignments."""
+    """D-08: hard delete. Phase 4 close (D-09): 409 если есть running campaign на этом agent."""
     agent = await _load_agent(db, ctx, agent_id)
 
-    # TODO(phase-4): also block on active campaign attachment (D-09)
-    # — заглушка до появления Campaign модели в Phase 4.
+    # Phase 4 close D-09: block DELETE if active (running) campaign references this agent.
+    # FK ON DELETE RESTRICT also enforces this at DB level for any non-deleted campaign,
+    # but explicit 409 with detail{campaigns: [...]} is friendlier UX.
+    active = (await db.execute(text("""
+        SELECT id, name FROM campaigns
+        WHERE agent_id = :aid AND workspace_id = :wid AND status = 'running'
+        ORDER BY name
+    """), {"aid": str(agent_id), "wid": str(ctx.workspace_id)})).fetchall()
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "AGENT_USED_BY_RUNNING_CAMPAIGN",
+                "message": "Cannot delete agent — used by running campaign(s)",
+                "campaigns": [{"id": str(r[0]), "name": r[1]} for r in active],
+            },
+        )
 
     await db.delete(agent)
     await db.commit()
@@ -284,7 +335,7 @@ async def duplicate_agent(
                 f"[agents] duplicated workspace={ctx.workspace_id} "
                 f"src={agent_id} dst={new_agent.id} name='{new_name}'"
             )
-            return _agent_to_response(new_agent)
+            return _agent_to_response(new_agent, campaign_count=0)
         except IntegrityError:
             await db.rollback()
             continue
