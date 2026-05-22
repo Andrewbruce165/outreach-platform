@@ -61,15 +61,16 @@ Brownfield-проект: базовая механика (очередь, rate l
 - [x] CRUD списка агентов workspace
   - Validated in Phase 3: migration 015 cleaned `ai_contexts` schema (D-02), `app/routers/agents.py` exposes 6 workspace-scoped endpoints under `/api/v1/agents` (incl. duplicate + hard delete), `app/routers/send.py` rewritten under AuthDep with explicit `ai_context_id` in body. Phase 4 carry-overs: real `campaign_count` query and DELETE-block on active-campaign attachment (Phase 4 Campaign FK).
 
-**Campaigns (Phase 4):**
-- [ ] Модель Campaign: agent + senders + folder + status
-- [ ] Расписание кампании (рабочие часы + старт/стоп даты)
-- [ ] Сигналы кампании: «передать лид», «передать на менеджера», «финиш диалога»
-- [ ] **Webhook кампании** — URL для передачи событий (лид/финиш/ручник)
-- [ ] **Tools кампании** — function calling спецификация
-- [ ] Запуск / пауза / стоп кампании + досыпание контактов
-- [ ] Переменные `{{имя}}, {{username}}, {{source}}, {{custom.X}}` в тексте
-- [ ] Очередь учитывает campaign_id
+**Campaigns (Phase 4): ✓ Complete (2026-05-22)**
+- [x] Модель Campaign: agent + senders + folder + status
+- [x] Расписание кампании (рабочие часы + старт/стоп даты)
+- [x] Сигналы кампании: «передать лид», «передать на менеджера», «финиш диалога»
+- [x] **Webhook кампании** — URL для передачи событий (лид/финиш/ручник)
+- [x] **Tools кампании** — function calling спецификация
+- [x] Запуск / пауза / стоп кампании + досыпание контактов
+- [x] Переменные `{{имя}}, {{username}}, {{source}}, {{custom.X}}` в тексте
+- [x] Очередь учитывает campaign_id
+  - Validated in Phase 4: migration `016_phase4.sql` adds `campaigns` + `campaign_senders` + `campaign_contact_assignments`, drops `context_contact_assignments`, extends `conversations.status` CHECK, NULLable `message_queue.campaign_id` with `ON DELETE SET NULL` (Q1 override of D-16), VARCHAR(20)+CHECK for `campaigns.status` instead of PG ENUM (Q6 override of D-04). `app/routers/campaigns.py` exposes CRUD + 5 lifecycle endpoints + duplicate + sender-lock check. Global schedule constants (`MOSCOW_TZ`, `WORK_HOUR_*`) removed from `queue.py` — replaced by per-campaign `zoneinfo.ZoneInfo` + `work_days_mask` JOIN gate. `CampaignEnqueueWorker` (30s tick) renders templates ({{имя}}, {{username}}, {{source}}, {{custom.X}} + RU aliases) and tops up queue with `campaign_id` set. Built-in tools (mark_as_lead, transfer_to_manager, finish_conversation) wired into `ai_engine` with priority dispatch finish>handoff>lead and Q3 text+tool_call farewell handling. `webhook_notify.notify_signal` fires per-campaign URLs (C-01 uniform payload). All 10 TODO(phase-4) markers closed.
 
 **Inbox & Analytics (Phase 5):**
 - [ ] Inbox с фильтром по кампании / агенту / аккаунту
@@ -163,4 +164,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-21 — Phase 3 (Agents) complete: ai_contexts schema clean, workspace-scoped /api/v1/agents CRUD live, send.py rewritten under AuthDep*
+*Last updated: 2026-05-22 — Phase 4 (Campaigns) complete: campaign model + per-campaign schedule + template rendering + enqueue worker + built-in signal tools + per-campaign webhooks live. 10 TODO(phase-4) markers closed. Awaiting server-side pytest + live smoke (04-HUMAN-UAT.md).*
