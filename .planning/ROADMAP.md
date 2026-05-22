@@ -149,14 +149,13 @@ Plans:
 5. Дашборд показывает карточки метрик на 4 уровнях: workspace / campaign / agent / sender (отправлено / отвечено / лидов / финишей / ошибки для sender)
 6. В каждом диалоге доступен лог LLM-запросов (промпт → ответ) для отладки
 
-**Plans**: 4 plans
+**Plans**: 3 plans
 
 Plans:
 
-- [ ] 05-01: Inbox API & filters — conversations endpoint with workspace + campaign/agent/sender filters
-- [ ] 05-02: Manual manager mode + system bot filter — toggle endpoint, listener-side bot blocklist
-- [ ] 05-03: Analytics aggregation — карточки метрик по 4 уровням, агрегаты из очереди и диалогов
-- [ ] 05-04: LLM request log per conversation — сохранение запросов/ответов с привязкой к conversation_id
+- [ ] 05-01-migration-inbox-manager-bot-filter-PLAN.md — Migration 017 (status CHECK +bot_ignored, llm_calls table, 3 composite indexes) + полный рерайт app/routers/conversations.py (8 endpoints под auth_dep, D-01..D-04 manager mode) + listener.py proactive bot filter (D-05/D-06) + queue.py pre-send race guard + регистрация в main.py [Wave 1]
+- [ ] 05-02-analytics-router-PLAN.md — app/routers/analytics.py (4 endpoints workspace/campaigns/agents/senders с identical AnalyticsCards schema) + _compute_cards helper (real-time COUNT, D-13/D-14/D-15/D-16) + AnalyticsReplied/AnalyticsCards schemas [Wave 2, depends_on: 05-01]
+- [ ] 05-03-llm-logger-and-read-endpoint-PLAN.md — app/services/llm_logger.py (never-raise log_llm_call) + 2 wrap points в ai_engine.generate_response + GET /conversations/{id}/llm-calls endpoint + LLMCallResponse/LLMCallListResponse schemas [Wave 2, depends_on: 05-01]
 
 ---
 
@@ -189,7 +188,7 @@ Plans:
 | 02.1. Worker Hardening | 3/3 | Complete   | 2026-05-21 |
 | 3. Agents (AI Templates) | 0/2 | Planned (2 plans, both Wave 1) | - |
 | 4. Campaigns | 0/5 | Planned (5 plans, waves 1→4) | - |
-| 5. Inbox & Analytics | 0/4 | Not started | - |
+| 5. Inbox & Analytics | 0/3 | Planned (3 plans, waves 1→2) | - |
 | 6. Admin Master Bot | 0/2 | Not started | - |
 
-**Total: 7 phases (incl. 02.1 hardening), 24 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
+**Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
