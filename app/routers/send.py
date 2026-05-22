@@ -81,19 +81,16 @@ async def send_message(
                 },
             )
     else:
-        # Rotation pick (workspace-only since Phase 3 D-04)
-        try:
-            sender = await get_or_assign_sender(
-                db=db,
-                context_id=request.ai_context_id,
-                contact_phone=request.recipient_phone,
-                workspace_id=ctx.workspace_id,
-            )
-        except ValueError as e:
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "NO_ACTIVE_SENDER", "message": str(e)},
-            )
+        # Phase 4: rotation now per-campaign — but Phase 3 send.py path
+        # is fully rewritten in Plan 04-04 Task 5. This stub fails fast
+        # to surface that the caller MUST use campaign_id (D-16).
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "ROTATION_REQUIRES_CAMPAIGN_ID",
+                "message": "Phase 4: rotation rewrite requires campaign_id (see Plan 04-04 Task 5).",
+            },
+        )
 
     # 3. Enqueue with explicit ai_context_id (Plan 03-01 added param)
     try:
