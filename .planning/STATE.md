@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 04-04-PLAN.md (template + CampaignEnqueueWorker + rotation/send/queue rewrite + 3 TODO(phase-4) markers closed)
-last_updated: "2026-05-22T08:57:47.471Z"
+status: verifying
+stopped_at: "Completed 04-05-PLAN.md (Phase 4 final plan: built-in tools + webhooks + custom tools wiring; B1 finalized — 0 TODO markers in app/)"
+last_updated: "2026-05-22T09:11:53.769Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 18
-  completed_plans: 17
+  completed_plans: 18
   percent: 17
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 04 (campaigns) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-22
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -58,6 +58,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 04 P02 | 75min | 3 tasks | 14 files |
 | Phase 04 P03 | 6min | 2 tasks | 3 files |
 | Phase 04 P04 | 10min | 5 tasks | 13 files |
+| Phase 04 P05 | 9min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 04]: Plan 04-02: campaigns.status VARCHAR+CHECK (Q6 override) — ALTER TYPE ADD VALUE blocks transactions; message_queue.campaign_id NULLable + SET NULL (Q1 override) — preserves queue history on hard delete of done campaigns; lifecycle as explicit POST endpoints; computed is_exhausted + attached_senders.locked_by_campaign_id at GET time; rotation.py reference to dropped context_contact_assignments deferred to 04-04 per AUDIT TODO #6
 - [Phase 04]: Plan 04-03: per-campaign scheduling — выпилены MOSCOW_TZ/WORK_HOUR_*/_is_working_hours/_next_working_window из queue.py; добавлен _campaign_in_working_window(tz, h_start, h_end, days_mask) helper; _tick + _process_next_for_sender JOIN на campaigns с фильтром status='running' + start_date/stop_date window + work hours (Python-side post-filter); past stop_date items → failed/past_stop_date (D-11); H4: explicit mq.campaign_id IS NOT NULL defence-in-depth; эмпирические rate-limit константы untouched (CLAUDE.md guard)
 - [Phase 04]: Plan 04-04: render_template Mustache regex with RU aliases (имя/юзернейм/телефон/источник/компания) + empty fallback (D-19); rotation.py rewritten with commit=False kwarg (M2) для worker savepoint; CampaignEnqueueWorker singleton + lifespan; enqueue_file accepts campaign_id (B1 file-flow синхронизирован с message-flow); 3 TODO(phase-4) markers закрыты (queue.py:705, queue.py:849, rotation.py); empirical constants untouched (CLAUDE.md guard)
+- [Phase 04]: Plan 04-05: built-in OpenAI function tools (mark_as_lead/transfer_to_manager/finish_conversation per C-04) ВСЕГДА инжектятся даже когда campaigns.tools=[] (D-12); restrictive default descriptions (Pitfall 7) — Use ONLY/Do not mark — снижают false-positive over-triggering на casual greetings; priority dispatch (Pitfall 1): _BUILTIN_PRIORITY = {finish:0, handoff:1, lead:2}, sorted descending → последний UPDATE = highest-priority; Q3 farewell semantic — text_content возвращается перед status flip когда finish/handoff parallel с text (без second LLM call для tool-result summary); M3 legacy fallback — campaign_id NULL → ai_context_id direct path, get_context_for_conversation НЕ raises; custom tools источник = campaigns.tools JSONB (D-14), webhook_functions путь mortuus; no HMAC на webhook payload (deferred v2); _handle_antispam_signal preserved as safety net; document_webhook_url НЕ восстановлен (custom tool с file param)
+- [Phase 04]: Phase 4 B1 finalized: 0 TODO(phase-4) markers в app/ — все 10 AUDIT.md Section 1 markers закрыты (agents.py:49+246, folders.py:248, queue.py:708+849, rotation.py:180, ai_engine.py:88, listener.py:250+350+707). Phase 4 готов к verification.
 
 ### Pending Todos
 
@@ -98,6 +101,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-22T08:57:39.873Z
-Stopped at: Completed 04-04-PLAN.md (template + CampaignEnqueueWorker + rotation/send/queue rewrite + 3 TODO(phase-4) markers closed)
+Last session: 2026-05-22T09:11:40.449Z
+Stopped at: Completed 04-05-PLAN.md (Phase 4 final plan: built-in tools + webhooks + custom tools wiring; B1 finalized — 0 TODO markers in app/)
 Resume file: None
