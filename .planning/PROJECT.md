@@ -72,12 +72,13 @@ Brownfield-проект: базовая механика (очередь, rate l
 - [x] Очередь учитывает campaign_id
   - Validated in Phase 4: migration `016_phase4.sql` adds `campaigns` + `campaign_senders` + `campaign_contact_assignments`, drops `context_contact_assignments`, extends `conversations.status` CHECK, NULLable `message_queue.campaign_id` with `ON DELETE SET NULL` (Q1 override of D-16), VARCHAR(20)+CHECK for `campaigns.status` instead of PG ENUM (Q6 override of D-04). `app/routers/campaigns.py` exposes CRUD + 5 lifecycle endpoints + duplicate + sender-lock check. Global schedule constants (`MOSCOW_TZ`, `WORK_HOUR_*`) removed from `queue.py` — replaced by per-campaign `zoneinfo.ZoneInfo` + `work_days_mask` JOIN gate. `CampaignEnqueueWorker` (30s tick) renders templates ({{имя}}, {{username}}, {{source}}, {{custom.X}} + RU aliases) and tops up queue with `campaign_id` set. Built-in tools (mark_as_lead, transfer_to_manager, finish_conversation) wired into `ai_engine` with priority dispatch finish>handoff>lead and Q3 text+tool_call farewell handling. `webhook_notify.notify_signal` fires per-campaign URLs (C-01 uniform payload). All 10 TODO(phase-4) markers closed.
 
-**Inbox & Analytics (Phase 5):**
-- [ ] Inbox с фильтром по кампании / агенту / аккаунту
-- [ ] Ручной перевод диалога в режим «менеджер»
-- [ ] AI не отвечает системным ботам (SpamBot и др.)
-- [ ] Метрики по уровням: workspace / campaign / agent / TG-account
-- [ ] Лог запросов в OpenAI на уровне диалога
+**Inbox & Analytics (Phase 5): ✓ Complete (2026-05-22)**
+- [x] Inbox с фильтром по кампании / агенту / аккаунту
+- [x] Ручной перевод диалога в режим «менеджер»
+- [x] AI не отвечает системным ботам (SpamBot и др.)
+- [x] Метрики по уровням: workspace / campaign / agent / TG-account
+- [x] Лог запросов в OpenAI на уровне диалога
+  - Validated in Phase 5: migration `017_phase5.sql` extends `conversations.status` CHECK to 7 values (adds `bot_ignored`), creates `llm_calls` (15 cols + 2 indexes) and 3 composite indexes on conversations. `app/routers/conversations.py` rewritten under `auth_dep` + workspace scope with 9 endpoints (list / detail / messages / PATCH / enable-ai / disable-ai / send / DELETE / llm-calls). `app/routers/analytics.py` exposes 4 read-only endpoints (workspace / campaigns / agents / senders) with identical `AnalyticsCards` schema and `_compute_cards` helper (raw COUNTs, `bot_ignored` excluded). `app/services/listener.py` adds proactive bot filter (`getattr(sender, 'bot', False)`) with delegation to `_handle_antispam_signal` for hardcoded `ANTISPAM_BOT_IDS`; `app/services/queue.py` adds pre-send race guard (D-04). `app/services/llm_logger.py` provides never-raise `log_llm_call()` coroutine with denormalisation resolve; `app/services/ai_engine.py` wraps both OpenAI `chat.completions.create` calls (points #1 and #2 = tool result summarisation). Awaiting server-side pytest + live smoke (05-HUMAN-UAT.md).
 
 **Admin Master Bot (Phase 6):**
 - [ ] TG-бот workspace для админских уведомлений
@@ -164,4 +165,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-22 — Phase 4 (Campaigns) complete: campaign model + per-campaign schedule + template rendering + enqueue worker + built-in signal tools + per-campaign webhooks live. 10 TODO(phase-4) markers closed. Awaiting server-side pytest + live smoke (04-HUMAN-UAT.md).*
+*Last updated: 2026-05-22 — Phase 5 (Inbox & Analytics) complete: migration 017 + conversations router rewrite (9 endpoints under auth_dep) + analytics router (4 read-only endpoints) + listener bot filter + queue pre-send race guard + never-raise LLM call logger + per-conversation LLM call log endpoint. All 11 Phase 5 requirements (INBX-01..05, AIRC-04, ANLX-01..05) closed at code level. Awaiting server-side pytest + live smoke (05-HUMAN-UAT.md).*
