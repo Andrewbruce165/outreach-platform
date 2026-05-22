@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     decodo_password: Optional[str] = None
     decodo_ports: Optional[str] = None  # comma-separated: "10001,10002,...,10010"
 
+    # Phase 4 D-17: CampaignEnqueueWorker tick (background generator queue items per running campaign).
+    campaign_enqueue_tick_seconds: int = Field(
+        default=30,
+        validation_alias="CAMPAIGN_ENQUEUE_TICK_SECONDS",
+        description="Polling interval for CampaignEnqueueWorker tick (seconds).",
+    )
+    campaign_enqueue_batch_size: int = Field(
+        default=500,
+        validation_alias="CAMPAIGN_ENQUEUE_BATCH_SIZE",
+        description="Max contacts processed per campaign per tick.",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Парсит CORS_ALLOWED_ORIGINS в list для FastAPI CORSMiddleware."""

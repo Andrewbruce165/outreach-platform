@@ -10,6 +10,7 @@ from app.services.queue import queue_worker, recover_stuck_jobs
 from app.services.warmup import warmup_worker
 from app.services.onboarding_state import onboarding_cleanup_worker
 from app.services.contact_check_worker import contact_check_worker
+from app.services.campaign_enqueue import campaign_enqueue_worker  # Phase 4 D-17
 from app.routers import (
     agents,
     campaigns,
@@ -49,11 +50,14 @@ async def lifespan(app: FastAPI):
     logger.info("Onboarding cleanup worker started")
     contact_check_worker.start()
     logger.info("Contact check worker started")
+    campaign_enqueue_worker.start()  # Phase 4 D-17
+    logger.info("Campaign enqueue worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await campaign_enqueue_worker.stop()  # Phase 4 D-17
     await contact_check_worker.stop()
     await onboarding_cleanup_worker.stop()
     await queue_worker.stop()
