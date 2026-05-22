@@ -28,6 +28,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.services.webhook_notify import notify_signal
+from app.services.llm_logger import log_llm_call  # Phase 5 ANLX-05
 
 logger = logging.getLogger(__name__)
 
@@ -656,8 +657,30 @@ class AIEngine:
                 request_params["tools"] = all_tools
                 request_params["tool_choice"] = "auto"
 
-            # Вызываем GPT
-            response = await client.chat.completions.create(**request_params)
+            # === Phase 5 ANLX-05: wrap first OpenAI call for llm_calls logging ===
+            # Inline await — deterministic, testable (Open Question #3 resolution).
+            # log_llm_call NEVER raises (Pitfall 5 / T-05-03-LOG-FAIL-DOS) — safe
+            # to await unconditionally in finally block.
+            _start_ts = time.perf_counter()
+            _log_error: Optional[str] = None
+            response = None
+            try:
+                response = await client.chat.completions.create(**request_params)
+            except Exception as _e:
+                _log_error = str(_e)[:500]
+                raise  # re-raise — external RateLimitError/APIError handler catches it
+            finally:
+                _latency_ms = int((time.perf_counter() - _start_ts) * 1000)
+                await log_llm_call(
+                    workspace_id=None,  # llm_logger resolves from conversations
+                    conversation_id=conversation_id,
+                    model=request_params["model"],
+                    prompt=request_params,
+                    response=response,
+                    latency_ms=_latency_ms,
+                    error=_log_error,
+                )
+            # === End Phase 5 wrap (point #1) ===
 
             response_message = response.choices[0].message
             logger.debug(
@@ -777,11 +800,32 @@ class AIEngine:
                     "content": tool_results.get(tool_call.id, "Функция выполнена"),
                 })
 
-            response2 = await client.chat.completions.create(
-                model="gpt-5-mini-2025-08-07",
-                messages=messages,
-                max_completion_tokens=2000,
-            )
+            # === Phase 5 ANLX-05: wrap second OpenAI call (tool result summarisation) ===
+            _second_params = {
+                "model": "gpt-5-mini-2025-08-07",
+                "messages": messages,
+                "max_completion_tokens": 2000,
+            }
+            _start_ts_2 = time.perf_counter()
+            _log_error_2: Optional[str] = None
+            response2 = None
+            try:
+                response2 = await client.chat.completions.create(**_second_params)
+            except Exception as _e:
+                _log_error_2 = str(_e)[:500]
+                raise
+            finally:
+                _latency_ms_2 = int((time.perf_counter() - _start_ts_2) * 1000)
+                await log_llm_call(
+                    workspace_id=None,
+                    conversation_id=conversation_id,
+                    model=_second_params["model"],
+                    prompt=_second_params,
+                    response=response2,
+                    latency_ms=_latency_ms_2,
+                    error=_log_error_2,
+                )
+            # === End Phase 5 wrap (point #2) ===
 
             reply = response2.choices[0].message.content
             if reply:

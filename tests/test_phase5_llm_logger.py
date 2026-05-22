@@ -298,3 +298,106 @@ async def test_llm_call_response_pydantic_schema(
     assert schema.model == "gpt-4o-mini"
     assert schema.latency_ms == 20
     assert schema.prompt == {"x": 1}
+
+
+# ── Integration tests via ai_engine.generate_response ────────────────────────
+
+
+async def test_generate_response_writes_llm_call_row(
+    async_db_session, test_conversation_factory, monkeypatch,
+):
+    """Integration test 1 — generate_response wraps OpenAI call → llm_calls row inserted.
+
+    Mocks `client.chat.completions.create` so the wrap fires log_llm_call in
+    finally; verify exactly one llm_calls row appears for the conversation.
+    """
+    from unittest.mock import AsyncMock
+
+    from app.services import ai_engine as ai_engine_module
+
+    conv = await test_conversation_factory()
+
+    mock_response = _mock_openai_response(
+        content="Mocked AI reply", prompt_tokens=100, completion_tokens=50,
+    )
+    # Mock has no tool_calls → simple text response path (no second LLM call).
+    mock_response.choices[0].message.tool_calls = None
+
+    create_mock = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        ai_engine_module.client.chat.completions, "create", create_mock,
+    )
+
+    result = await ai_engine_module.ai_engine.generate_response(
+        session=async_db_session,
+        conversation_id=str(conv["id"]),
+        context_id=None,
+        contact_name="Test Contact",
+        new_message="Hello",
+        conversation_context={},
+    )
+
+    # Result is the AI reply text
+    assert result == "Mocked AI reply"
+
+    # Exactly one llm_calls row inserted (no tool_calls path → no second call)
+    row = (await async_db_session.execute(text("""
+        SELECT model, response_text, prompt_tokens, latency_ms, error
+        FROM llm_calls WHERE conversation_id = :cid
+    """), {"cid": str(conv["id"])})).first()
+    assert row is not None
+    assert row.response_text == "Mocked AI reply"
+    assert row.prompt_tokens == 100
+    assert row.error is None
+    assert row.latency_ms is not None and row.latency_ms >= 0
+
+
+async def test_openai_error_captured_in_llm_calls(
+    async_db_session, test_conversation_factory, monkeypatch,
+):
+    """Integration test 3 — OpenAI raises → error captured, response_text NULL.
+
+    The Phase 4 generate_response catches RateLimitError/APIError externally
+    and returns None — but BEFORE that, the inner try/except/finally re-raises
+    and the finally fires log_llm_call(error=...).
+    """
+    from unittest.mock import AsyncMock
+
+    from openai import RateLimitError
+
+    from app.services import ai_engine as ai_engine_module
+
+    conv = await test_conversation_factory()
+
+    # RateLimitError requires (message, response, body) — use a minimal Mock.
+    err_response = MagicMock()
+    err_response.request = MagicMock()
+    create_mock = AsyncMock(
+        side_effect=RateLimitError(
+            message="rate limit exceeded", response=err_response, body=None,
+        ),
+    )
+    monkeypatch.setattr(
+        ai_engine_module.client.chat.completions, "create", create_mock,
+    )
+
+    # generate_response catches RateLimitError externally → returns None.
+    result = await ai_engine_module.ai_engine.generate_response(
+        session=async_db_session,
+        conversation_id=str(conv["id"]),
+        context_id=None,
+        contact_name="Test Contact",
+        new_message="Hello",
+        conversation_context={},
+    )
+    assert result is None
+
+    # The finally still fired log_llm_call → row exists with error captured.
+    row = (await async_db_session.execute(text("""
+        SELECT response_text, error FROM llm_calls
+        WHERE conversation_id = :cid
+    """), {"cid": str(conv["id"])})).first()
+    assert row is not None
+    assert row.response_text is None
+    assert row.error is not None
+    assert "rate limit" in row.error.lower() or "RateLimit" in row.error
