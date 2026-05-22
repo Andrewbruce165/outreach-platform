@@ -15,12 +15,20 @@ class ProxyConfig(BaseModel):
 
 # === Send Message ===
 class SendMessageRequest(BaseModel):
-    """Phase 3 rewrite (D-06): ai_context_id REQUIRED (no derive from sender)."""
-    ai_context_id: UUID = Field(..., description="Agent ID (workspace-scoped validation)")
-    sender_slug: Optional[str] = Field(None, description="Explicit sender; if None, rotation picks one")
-    recipient_phone: str = Field(..., description="Номер получателя с кодом страны")
-    recipient_name: Optional[str] = Field(None, description="Имя получателя")
-    message: str = Field(..., max_length=4096, description="Текст сообщения")
+    """Phase 4 D-16 rewrite: campaign_id REQUIRED (was the legacy agent-id in Phase 3).
+
+    Agent выводится через JOIN campaigns.agent_id. Workspace API-key push (n8n)
+    продолжает работать тем же endpoint'ом — n8n должен передавать campaign_id.
+    """
+    campaign_id: UUID = Field(..., description="Campaign ID (workspace-scoped validation)")
+    sender_slug: Optional[str] = Field(None, description="Explicit sender slug; if None, rotation picks one from campaign_senders")
+    recipient_phone: str = Field(..., description="Номер получателя с кодом страны (E.164)")
+    recipient_name: Optional[str] = Field(None, description="Имя получателя (для new conversation)")
+    message: Optional[str] = Field(
+        None,
+        max_length=4096,
+        description="Текст сообщения. Если None — рендерится из campaign.message_template + contact lookup.",
+    )
     as_draft: bool = Field(False, description="Сохранить как черновик")
     metadata: Optional[dict] = Field(default_factory=dict, description="Дополнительные данные")
     callback_url: Optional[str] = Field(None, description="Webhook-уведомление после отправки")

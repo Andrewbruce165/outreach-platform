@@ -803,7 +803,14 @@ class QueueWorker:
         await db.commit()
 
     async def _upsert_conversation(self, db: AsyncSession, sender: Sender, item: MessageQueue, result: dict):
-        """Mirror the conversation/message bookkeeping from send.py."""
+        """Mirror the conversation/message bookkeeping from send.py.
+
+        Phase 4 D-05: INSERT extended with ``campaign_id`` from
+        ``item.campaign_id`` (the new NULLable FK on message_queue per AUDIT Q1).
+        ``ai_context_id`` is now derived from ``campaigns.agent_id`` via JOIN
+        when item.campaign_id is set; falls back to ``extra_data["ai_context_id"]``
+        for legacy queue items (campaign_id NULL).
+        """
         try:
             recipient_tg_id = result.get("recipient", {}).get("telegram_id")
             recipient_name = (
@@ -821,13 +828,34 @@ class QueueWorker:
             if conv_row:
                 conversation_id = str(conv_row[0])
             else:
+                # Phase 4 D-05 resolution:
+                #  - campaign_id is taken directly from item.campaign_id (new column).
+                #  - ai_context_id is derived from campaigns.agent_id via JOIN if
+                #    campaign_id is set, else falls back to item.extra_data
+                #    (legacy queue items written before Phase 4).
+                campaign_id_str: Optional[str] = (
+                    str(item.campaign_id) if item.campaign_id else None
+                )
+                ai_ctx_id: Optional[str] = None
+                if campaign_id_str is not None:
+                    camp_row = (await db.execute(
+                        text("SELECT agent_id FROM campaigns WHERE id = :cid"),
+                        {"cid": campaign_id_str},
+                    )).fetchone()
+                    if camp_row is not None and camp_row.agent_id is not None:
+                        ai_ctx_id = str(camp_row.agent_id)
+                if ai_ctx_id is None:
+                    # Legacy fallback for queue items without campaign_id.
+                    ai_ctx_id = (item.extra_data or {}).get("ai_context_id")
+
                 # Phase 02.1 CR-01: workspace_id NOT NULL on conversations after
                 # migration 012 — derive from sender (single source of truth).
                 r2 = await db.execute(
                     text("""
                         INSERT INTO conversations
-                            (workspace_id, sender_id, contact_phone, contact_name, contact_telegram_id, ai_enabled, ai_context_id)
-                        VALUES (:wid, :sid, :phone, :name, :tg_id, true, :ai_ctx)
+                            (workspace_id, sender_id, contact_phone, contact_name,
+                             contact_telegram_id, ai_enabled, ai_context_id, campaign_id)
+                        VALUES (:wid, :sid, :phone, :name, :tg_id, true, :ai_ctx, :cid)
                         RETURNING id
                     """),
                     {
@@ -836,10 +864,8 @@ class QueueWorker:
                         "phone": item.recipient_phone,
                         "name": recipient_name,
                         "tg_id": recipient_tg_id,
-                        # Phase 3 D-06: senders.ai_context_id dropped — ai_context_id
-                        # приходит через extra_data, заполняется enqueue_message().
-                        # TODO(phase-4): pull from conversation.campaign_id JOIN.
-                        "ai_ctx": (item.extra_data or {}).get("ai_context_id"),
+                        "ai_ctx": ai_ctx_id,
+                        "cid": campaign_id_str,  # Phase 4 D-05: propagate campaign_id.
                     }
                 )
                 conversation_id = str(r2.fetchone()[0])
@@ -918,6 +944,7 @@ async def enqueue_message(
     priority: int = 0,
     callback_url: Optional[str] = None,
     ai_context_id: Optional[UUID] = None,
+    campaign_id: Optional[UUID] = None,
 ) -> dict:
     """Add a message to the queue. Returns queue info dict.
 
@@ -925,10 +952,13 @@ async def enqueue_message(
     NOT NULL after migration 012). Callers must pass the workspace_id from
     AuthCtx or the sender's workspace_id.
 
-    Phase 3 D-06: ai_context_id is now an explicit parameter (sender больше
-    не «знает» агента, senders.ai_context_id dropped). When set, it is stored
-    in extra_data["ai_context_id"] and propagated to conversations.ai_context_id
-    by _upsert_conversation.
+    Phase 3 D-06: ai_context_id was an explicit parameter for the Phase 3
+    send-flow. Phase 4 D-16 deprecates this in favour of ``campaign_id``;
+    ``ai_context_id`` is now retained ONLY for legacy callers and is overridden
+    by the campaign agent_id JOIN at _upsert_conversation time.
+
+    Phase 4 D-16: ``campaign_id`` is the canonical parameter. ``message_queue
+    .campaign_id`` is NULLable per AUDIT Q1 (legacy items support).
     """
     extra_data = dict(metadata or {})
     if ai_context_id is not None:
@@ -945,6 +975,7 @@ async def enqueue_message(
         extra_data=extra_data,
         priority=priority,
         callback_url=callback_url,
+        campaign_id=campaign_id,
     )
     db.add(item)
     await db.commit()
@@ -973,14 +1004,17 @@ async def enqueue_file(
     metadata: Optional[dict] = None,
     priority: int = 0,
     callback_url: Optional[str] = None,
+    campaign_id: Optional[UUID] = None,
 ) -> dict:
     """Add a file send to the queue. Returns queue info dict.
 
     Phase 02.1 CR-01: workspace_id is required (message_queue.workspace_id
     NOT NULL after migration 012).
 
-    TODO(phase-4): apply same ai_context_id propagation as enqueue_message —
-    file-flow not in Phase 3 send-path so left as legacy (D-06 partial).
+    Phase 4 D-16 (B1 revision): ``campaign_id`` propagated through the
+    function signature, mirroring ``enqueue_message``. ``message_queue
+    .campaign_id`` is NULLable per AUDIT Q1 — legacy callers (no campaign)
+    continue to work.
     """
     item = MessageQueue(
         workspace_id=workspace_id,
@@ -994,6 +1028,7 @@ async def enqueue_file(
         extra_data=metadata or {},
         priority=priority,
         callback_url=callback_url,
+        campaign_id=campaign_id,
     )
     db.add(item)
     await db.commit()
