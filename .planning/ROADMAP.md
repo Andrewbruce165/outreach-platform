@@ -113,7 +113,7 @@ Plans:
 
 **Goal**: Клиент создаёт кампанию (объект-обёртка над рассылкой) — связывает агента + TG-аккаунты + папку контактов + сигналы (лид/менеджер/финиш) + webhook + tools + расписание, запускает её и видит как сообщения уходят.
 **Depends on**: Phase 2, Phase 3
-**Requirements**: CAMP-01..17 (17 требований)
+**Requirements**: CAMP-01, CAMP-02, CAMP-03, CAMP-04, CAMP-05, CAMP-06, CAMP-07, CAMP-08, CAMP-09, CAMP-10, CAMP-11, CAMP-12, CAMP-13, CAMP-14, CAMP-15, CAMP-16, CAMP-17
 **Success Criteria** (what must be TRUE):
 
 1. Пользователь создаёт кампанию: выбирает агента, папку контактов, TG-аккаунты, задаёт расписание (часы / дни / старт-стоп даты)
@@ -127,11 +127,11 @@ Plans:
 
 Plans:
 
-- [ ] 04-01: Audit existing webhook + function calling — что реализовано в коде, что переносим на уровень кампании, что переписываем
-- [ ] 04-02: Campaign model & lifecycle — таблица campaigns, статусы (draft/running/paused/done), sender lock, attached folder/agent
-- [ ] 04-03: Campaign schedule & start/stop — рабочие часы кампании (заменяет глобальные 09–20 МСК), даты, переходы статусов
-- [ ] 04-04: Queue rewrite for campaign_id — миграция queue под campaign_id, подстановка переменных при постановке, генерация задач из папки
-- [ ] 04-05: Signals + webhook + tools wiring — сигналы передаются в LLM-промпт вместе с агентским контекстом, webhook вызывается на событие, tools передаются как function calling
+- [ ] 04-01-PLAN.md — Audit existing webhook+tools+signals code, recover dropped webhook_functions shape from git, classify 10 TODO(phase-4) markers across plans 04-02..04-05, resolve 5 Open Questions (Q1=NULLable message_queue.campaign_id, Q2=include /duplicate, Q3=text+tool_call → send farewell, Q4=API-level workspace validation, Q5=atomic transaction in worker) — output `.planning/phases/04-campaigns/04-01-AUDIT.md` [Wave 1]
+- [ ] 04-02-PLAN.md — Migration 016_phase4.sql (campaigns + campaign_senders + campaign_contact_assignments + conversations.campaign_id + message_queue.campaign_id NULLable + DROP context_contact_assignments + extend conversations.status CHECK), ORM models, Pydantic schemas, /api/v1/campaigns router (CRUD + 5 lifecycle endpoints + /duplicate + sender lock), close 4 TODO markers (agents.py campaign_count + DELETE blocks in agents/folders/senders), update REQUIREMENTS.md CAMP-14 — addresses CAMP-01..04, 07, 08, 14 [Wave 2, depends_on: 04-01]
+- [ ] 04-03-PLAN.md — Per-campaign schedule rewrite в queue.py: remove globals MOSCOW_TZ / WORK_HOUR_START/END / _is_working_hours, add `_campaign_in_working_window` helper, JOIN campaigns в queue tick, mark items past stop_date as failed, paused campaign skip; CLAUDE.md guard for empirical intervals — addresses CAMP-05, 06 [Wave 2, depends_on: 04-01]
+- [ ] 04-04-PLAN.md — app/services/template.py (render_template Mustache + Russian aliases), app/services/campaign_enqueue.py (CampaignEnqueueWorker singleton, tick 30s, atomic INSERT cca+queue), rotation.py rewrite (campaign_id signature), send.py rewrite (campaign_id body), queue.py INSERT conversations.campaign_id, config env vars, lifespan registration, close 3 TODO markers — addresses CAMP-09, 10, 17 [Wave 3, depends_on: 04-02, 04-03]
+- [ ] 04-05-PLAN.md — ai_engine.py extensions (BUILT_IN_TOOL_NAMES, build_builtin_tools, _handle_builtin_signal, get_context_for_conversation), webhook_notify.py helper with uniform payload, listener.py minimal switch to get_context_for_conversation (3 TODO closed), priority dispatch finish>handoff>lead, Q3 farewell text+tool_call handling, custom tools migration from ai_contexts.webhook_functions to campaigns.tools — addresses CAMP-11, 12, 13, 15, 16 [Wave 4, depends_on: 04-02, 04-04]
 
 ---
 
@@ -188,7 +188,7 @@ Plans:
 | 2. TG Accounts & Contacts | 5/5 | Verified (gaps_found → 02.1) | 2026-05-21 |
 | 02.1. Worker Hardening | 3/3 | Complete   | 2026-05-21 |
 | 3. Agents (AI Templates) | 0/2 | Planned (2 plans, both Wave 1) | - |
-| 4. Campaigns | 0/5 | Not started | - |
+| 4. Campaigns | 0/5 | Planned (5 plans, waves 1→4) | - |
 | 5. Inbox & Analytics | 0/4 | Not started | - |
 | 6. Admin Master Bot | 0/2 | Not started | - |
 
