@@ -247,22 +247,30 @@ class TelegramListener:
     async def _send_to_ai(self, conversation_id: str, message_text: str, context: dict):
         """Отправить сообщение на AI и ответить пользователю.
 
-        TODO(phase-4): pull ai_context_id from conversation.campaign_id via JOIN.
-        В Phase 3 ai_context_id приходит из conversation.ai_context_id (D-05) —
-        может быть NULL для conversations созданных через listener без явного
-        контекста (Phase 3 known regression — see RESEARCH Pitfall 5).
+        Phase 4 D-12/D-14: agent + campaign-level tools/hints/webhook URLs
+        теперь резолвятся в ai_engine.get_context_for_conversation(conversation.id)
+        через JOIN conversations → campaigns → ai_contexts. Legacy
+        conversation.ai_context_id путь сохранён для pre-Phase-4 conversations
+        (M3 fallback).
         """
-        ai_context_id = context.get("ai_context_id")
         contact_name = context.get("contact_name")
         client = context.get("client")
         recipient_id = context.get("recipient_id")
         sender_info = context.get("sender_info")
-
-        if not ai_context_id:
-            logger.warning(f"⚠️ Нет ai_context_id для {conversation_id[:8]}")
-            return
+        # Legacy ai_context_id may still be present (set in handle_incoming_message);
+        # we pass it through so generate_response's legacy fallback path works for
+        # pre-Phase-4 conversations whose campaign_id is NULL.
+        ai_context_id = context.get("ai_context_id")
 
         async with AsyncSessionLocal() as session:
+            # Phase 4: resolve through campaign — verify context exists.
+            resolved = await ai_engine.get_context_for_conversation(conversation_id, session)
+            if resolved is None:
+                logger.warning(
+                    f"⚠️ listener._send_to_ai: no context for conversation {conversation_id[:8]} — skip"
+                )
+                return
+
             conversation_context = {
                 "conversation_id": conversation_id,
                 "contact_phone": context.get("contact_phone"),
@@ -271,7 +279,7 @@ class TelegramListener:
                 "sender_id": sender_info["id"],
                 "sender_slug": sender_info["slug"],
                 "sender_name": sender_info.get("name", sender_info["slug"]),
-                "ai_context_id": ai_context_id
+                "ai_context_id": ai_context_id,
             }
 
             reply = await ai_engine.generate_response(
@@ -347,7 +355,9 @@ class TelegramListener:
         async with AsyncSessionLocal() as session:
             # Phase 2 (D-11/D-12): is_active dropped — filter by lifecycle_status + auth_status.
             # Phase 3 D-04: senders.ai_context_id dropped — больше не SELECT'им.
-            # TODO(phase-4): pull ai_context_id from conversation.campaign_id via JOIN.
+            # Phase 4 D-14: agent_id derived per-conversation via
+            # ai_engine.get_context_for_conversation() (JOIN through conversations.campaign_id);
+            # senders no longer carry agent linkage — see _send_to_ai above.
             result = await session.execute(
                 text("""
                     SELECT id, slug, phone, session_string, proxy
@@ -701,13 +711,13 @@ class TelegramListener:
                 conversation_id = conv["id"]
                 ai_context_id = conv["ai_context_id"]
 
-                # Phase 3 D-01: document_webhook_url column dropped from ai_contexts.
-                # Document-webhook feature пауза до Phase 4 (CAMP-14) где webhook
-                # перейдёт на уровень кампании. В Phase 3 — no-op.
-                # TODO(phase-4): pull document_webhook_url from conversation.campaign_id.
+                # document_webhook_url not restored: dropped in Phase 3 migration 015,
+                # moved to custom tools (campaigns.tools). If a client needs to receive
+                # incoming files — define a custom tool with a file parameter in the
+                # campaign config (deferred to custom tools per CONTEXT.md item 6).
                 logger.info(
-                    "ℹ️ document_webhook (Phase 3): функция отключена до миграции "
-                    "на Campaign в Phase 4 (CAMP-14)"
+                    "ℹ️ document_webhook: legacy функция убрана в Phase 4. "
+                    "Используйте campaigns.tools custom function с file param."
                 )
 
                 # Текст для сохранения — метка о документе + caption если есть
