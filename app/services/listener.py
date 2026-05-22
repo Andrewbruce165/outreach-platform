@@ -6,6 +6,7 @@ Telegram Listener Service
 import asyncio
 import random
 import logging
+import uuid
 from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -105,6 +106,15 @@ def build_proxy_tuple(proxy: dict | None) -> tuple | None:
 
 # AI Engine import
 from app.services.ai_engine import ai_engine
+
+
+# Phase 5 D-08 / Open Question #2: hardcoded antispam IDs that fall through
+# to _handle_antispam_signal (safety net) instead of the regular bot filter
+# in _handle_bot_message. This preserves the "pause sender lifecycle +
+# cancel ALL queue items" behaviour for accounts at risk of being flagged
+# by Telegram. Adjacent ANTISPAM_KEYWORDS check (по name) сохранён как
+# backup if Telegram ever changes the bot IDs.
+ANTISPAM_BOT_IDS = {178220800, 777000}  # SpamBot, Telegram service
 
 
 @dataclass
@@ -587,8 +597,32 @@ class TelegramListener:
                     logger.debug(f"📨 Не удалось пометить прочитанным {event.chat_id}: {e}")
                 return
 
+            # === Phase 5 D-05/D-06: proactive bot filter ===
+            # Если Telegram отдал event.sender.bot=True — это бот. AI не отвечаем.
+            # Известные antispam id (178220800 SpamBot, 777000 Telegram service)
+            # делегируем в существующий safety net `_handle_antispam_signal`
+            # (Open Question #2 — D-08 sender lifecycle pause + cancel ВСЕХ
+            # queue items сохраняется).
+            if getattr(sender, 'bot', False) is True:
+                if sender.id in ANTISPAM_BOT_IDS:
+                    logger.warning(
+                        "🚨 Antispam bot ID detected (%s) → delegating to safety net",
+                        sender.id,
+                    )
+                    await self._handle_antispam_signal(
+                        sender_info, name, sender.id, event.text or ""
+                    )
+                    return
+                # Обычный бот — записываем сообщение и помечаем диалог bot_ignored.
+                await self._handle_bot_message(
+                    sender_info, sender, event, name, phone
+                )
+                return  # AI dispatch SKIPPED
+            # === End Phase 5 D-06 ===
+
             # === Детект antispam bot — отключаем AI и останавливаем очередь ===
-            ANTISPAM_BOT_IDS = {178220800, 777000}  # Spam Info Bot, Telegram official
+            # Backup path: keyword detection ловит ботов которые не выставляют
+            # event.sender.bot=True (например если SpamBot когда-нибудь поменяет ID).
             ANTISPAM_KEYWORDS = ["spam", "антиспам", "spambot", "spam info"]
             is_antispam = (
                 sender.id in ANTISPAM_BOT_IDS
@@ -887,7 +921,89 @@ class TelegramListener:
 
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке antispam-сигнала для {sender_slug}: {e}", exc_info=True)
-    
+
+    async def _handle_bot_message(
+        self,
+        sender_info: dict,
+        sender,           # Telethon User object
+        event,            # Telethon NewMessage event
+        name: str,
+        phone: str,
+    ) -> None:
+        """Phase 5 D-06 — store inbound bot message + flag conversation as bot_ignored.
+
+        AI dispatch SKIPPED. UPDATE guard (Pitfall 3): only downgrades from
+        status='active' to status='bot_ignored' — preserves lead/handoff/finished/manual.
+        Isolated AsyncSessionLocal so a transient failure does not poison the
+        listener's main event loop.
+        """
+        try:
+            async with AsyncSessionLocal() as session:
+                existing = (await session.execute(text("""
+                    SELECT id, status FROM conversations
+                    WHERE sender_id = :sid AND contact_telegram_id = :tid
+                """), {
+                    "sid": str(sender_info["id"]),
+                    "tid": sender.id,
+                })).fetchone()
+
+                if existing is None:
+                    conv_id = uuid.uuid4()
+                    await session.execute(text("""
+                        INSERT INTO conversations (
+                            id, workspace_id, sender_id, contact_phone, contact_name,
+                            contact_telegram_id, ai_enabled, status, paused_at, paused_reason
+                        )
+                        VALUES (
+                            :id, :wid, :sid, :phone, :name, :tid,
+                            false, 'bot_ignored', NOW(),
+                            'Telegram bot account (event.sender.bot=True)'
+                        )
+                    """), {
+                        "id": str(conv_id),
+                        "wid": str(sender_info["workspace_id"]),
+                        "sid": str(sender_info["id"]),
+                        "phone": phone,
+                        "name": name,
+                        "tid": sender.id,
+                    })
+                else:
+                    conv_id = existing.id
+                    # Pitfall 3 guard: only downgrade from 'active'.
+                    # Preserve lead/handoff/finished/manual/paused — historic truth.
+                    if existing.status == 'active':
+                        await session.execute(text("""
+                            UPDATE conversations
+                            SET status = 'bot_ignored',
+                                ai_enabled = false,
+                                paused_at = NOW(),
+                                paused_reason = 'Telegram bot account (event.sender.bot=True)',
+                                updated_at = NOW()
+                            WHERE id = :cid
+                        """), {"cid": str(conv_id)})
+
+                # D-06: save inbound message history regardless (manager can see).
+                await session.execute(text("""
+                    INSERT INTO messages
+                        (workspace_id, conversation_id, direction, message_text,
+                         sent_by, telegram_message_id)
+                    VALUES (:wid, :cid, 'inbound', :txt, 'contact', :tmid)
+                    ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+                """), {
+                    "wid": str(sender_info["workspace_id"]),
+                    "cid": str(conv_id),
+                    "txt": event.text or "<media>",
+                    "tmid": event.id,
+                })
+                await session.commit()
+
+                logger.info(
+                    "🤖 Bot message ignored: %s (%s) → conv=%s",
+                    name, phone, str(conv_id)[:8],
+                )
+        except Exception as e:
+            logger.error("Bot filter failed: %s", e, exc_info=True)
+
     async def handle_outgoing_message(self, event, sender_info: dict):
         """Обработка исходящего сообщения (отправленного вручную)"""
         try:

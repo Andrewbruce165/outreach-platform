@@ -525,6 +525,47 @@ class QueueWorker:
                 )
                 return
 
+            # === Phase 5 D-04 / Pitfall 6: Pre-send guard against race condition ===
+            # Менеджер мог нажать POST /conversations/{id}/send одновременно с
+            # очередью worker. /send уже UPDATE'нул conversation.ai_enabled=false
+            # и cancel-queue для pending, но этот item уже был помечен 'processing'
+            # к этому моменту — попал бы в Telegram несмотря на ручник.
+            #
+            # Один SELECT по conversations: если ai_enabled=false → SKIP send.
+            # CLAUDE.md guard: НЕ трогаем эмпирические интервалы rate-limit /
+            # debounce / long-pause / flood-threshold — только один SELECT и
+            # одно UPDATE на queue item.
+            guard_row = (await db.execute(text("""
+                SELECT ai_enabled FROM conversations
+                WHERE workspace_id = :wid
+                  AND sender_id = :sid
+                  AND contact_phone = :phone
+                LIMIT 1
+            """), {
+                "wid": str(item.workspace_id),
+                "sid": str(item.sender_id),
+                "phone": item.recipient_phone,
+            })).first()
+
+            if guard_row is not None and guard_row.ai_enabled is False:
+                logger.info(
+                    "⏭️  Pre-send guard: skipping queue item %s — "
+                    "conversation taken over manually",
+                    str(item.id)[:8],
+                )
+                await db.execute(
+                    update(MessageQueue)
+                    .where(MessageQueue.id == item.id)
+                    .values(
+                        status=QueueItemStatus.failed,
+                        error_message="Conversation taken over manually",
+                        finished_at=datetime.now(timezone.utc),
+                    )
+                )
+                await db.commit()
+                return
+            # === End Phase 5 pre-send guard ===
+
             client = None
             try:
                 client = await telegram_service.get_client(sender.slug, sender.session_string, proxy=sender.proxy)
