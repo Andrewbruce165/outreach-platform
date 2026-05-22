@@ -153,7 +153,7 @@ Plans:
 
 Plans:
 
-- [ ] 05-01-migration-inbox-manager-bot-filter-PLAN.md — Migration 017 (status CHECK +bot_ignored, llm_calls table, 3 composite indexes) + полный рерайт app/routers/conversations.py (8 endpoints под auth_dep, D-01..D-04 manager mode) + listener.py proactive bot filter (D-05/D-06) + queue.py pre-send race guard + регистрация в main.py [Wave 1]
+- [x] 05-01-migration-inbox-manager-bot-filter-PLAN.md — Migration 017 (status CHECK +bot_ignored, llm_calls table, 3 composite indexes) + полный рерайт app/routers/conversations.py (8 endpoints под auth_dep, D-01..D-04 manager mode) + listener.py proactive bot filter (D-05/D-06) + queue.py pre-send race guard + регистрация в main.py [Wave 1]
 - [ ] 05-02-analytics-router-PLAN.md — app/routers/analytics.py (4 endpoints workspace/campaigns/agents/senders с identical AnalyticsCards schema) + _compute_cards helper (real-time COUNT, D-13/D-14/D-15/D-16) + AnalyticsReplied/AnalyticsCards schemas [Wave 2, depends_on: 05-01]
 - [ ] 05-03-llm-logger-and-read-endpoint-PLAN.md — app/services/llm_logger.py (never-raise log_llm_call) + 2 wrap points в ai_engine.generate_response + GET /conversations/{id}/llm-calls endpoint + LLMCallResponse/LLMCallListResponse schemas [Wave 2, depends_on: 05-01]
 

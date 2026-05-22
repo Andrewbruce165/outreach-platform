@@ -77,15 +77,15 @@
 
 ### Inbox (Phase 5)
 
-- [ ] **INBX-01**: Пользователь видит все входящие диалоги своего workspace
-- [ ] **INBX-02**: В каждом диалоге видна история сообщений (исходящие + входящие)
-- [ ] **INBX-03**: Виден статус AI диалога: активен / пауза / режим менеджера / лид / финиш
-- [ ] **INBX-04**: Пользователь может вручную переключить диалог в режим менеджера (AI отключается для диалога)
-- [ ] **INBX-05**: Фильтр диалогов по кампании / агенту / TG-аккаунту
+- [x] **INBX-01**: Пользователь видит все входящие диалоги своего workspace
+- [x] **INBX-02**: В каждом диалоге видна история сообщений (исходящие + входящие)
+- [x] **INBX-03**: Виден статус AI диалога: активен / пауза / режим менеджера / лид / финиш
+- [x] **INBX-04**: Пользователь может вручную переключить диалог в режим менеджера (AI отключается для диалога)
+- [x] **INBX-05**: Фильтр диалогов по кампании / агенту / TG-аккаунту
 
 ### AI Behavior Rules (Phase 5)
 
-- [ ] **AIRC-04**: AI не отвечает системным ботам (SpamBot и аналоги) — фильтр на listener'е
+- [x] **AIRC-04**: AI не отвечает системным ботам (SpamBot и аналоги) — фильтр на listener'е
 
 ### Analytics (Phase 5)
 
@@ -178,12 +178,12 @@
 | CAMP-15 | Phase 4 | Complete |
 | CAMP-16 | Phase 4 | Complete |
 | CAMP-17 | Phase 4 | Complete |
-| INBX-01 | Phase 5 | Pending |
-| INBX-02 | Phase 5 | Pending |
-| INBX-03 | Phase 5 | Pending |
-| INBX-04 | Phase 5 | Pending |
-| INBX-05 | Phase 5 | Pending |
-| AIRC-04 | Phase 5 | Pending |
+| INBX-01 | Phase 5 | Complete |
+| INBX-02 | Phase 5 | Complete |
+| INBX-03 | Phase 5 | Complete |
+| INBX-04 | Phase 5 | Complete |
+| INBX-05 | Phase 5 | Complete |
+| AIRC-04 | Phase 5 | Complete |
 | ANLX-01 | Phase 5 | Pending |
 | ANLX-02 | Phase 5 | Pending |
 | ANLX-03 | Phase 5 | Pending |
