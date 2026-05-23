@@ -695,3 +695,90 @@ a { color: inherit; text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .modal__scrim, .modal { animation: none; }
 }
+
+/* ============================================================
+   Contacts (CT) — 2-pane
+   ============================================================ */
+.ct { display: grid; grid-template-columns: 260px 1fr; min-height: 0; }
+.ct__side {
+  border-right: 1px solid var(--border); background: var(--bg);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.ct__sideHead {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px 8px;
+}
+.ct__sideTitle { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.ct__newFolder { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; }
+.ct__list { list-style: none; padding: 4px 8px; margin: 0; overflow-y: auto; flex: 1; min-height: 0; }
+.ct__listItem {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border-radius: 8px;
+  font-size: 13px; color: var(--text-soft); text-align: left;
+}
+.ct__listItem:hover { background: var(--bg-soft); }
+.ct__listItem.is-active { background: var(--tg-blue-soft); color: var(--tg-blue); font-weight: 500; }
+.ct__listItem.is-active svg { color: var(--tg-blue); }
+.ct__listName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct__listCount { font-size: 11px; color: var(--text-muted); }
+.ct__listItem.is-active .ct__listCount { color: var(--tg-blue); }
+.ct__sideEmpty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 16px; color: var(--text-muted); text-align: center; font-size: 13px; }
+
+.ct__main { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
+.ct__mainHead {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--border); background: var(--bg);
+}
+.ct__mainTitle { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.ct__search { display: inline-flex; align-items: center; gap: 6px; }
+.ct__search svg { color: var(--text-muted); }
+.ct__search .input { height: 32px; padding: 0 10px; min-width: 200px; }
+
+/* Import modal extras */
+.modal--wide { max-width: 720px; }
+.ct__upload { padding: 8px 0; }
+.ct__dropzone {
+  border: 1.5px dashed var(--border-strong); border-radius: 12px;
+  padding: 40px 20px; display: flex; flex-direction: column; align-items: center;
+  gap: 8px; cursor: pointer; color: var(--text-soft);
+  transition: border-color 120ms, background 120ms;
+}
+.ct__dropzone:hover { border-color: var(--tg-blue); background: var(--tg-blue-softer); color: var(--tg-blue); }
+
+.ct__mapping { display: flex; flex-direction: column; gap: 14px; }
+.ct__mapGrid {
+  display: grid; grid-template-columns: 1.1fr 1.4fr 1.5fr; gap: 10px 12px;
+  align-items: center; max-height: 280px; overflow-y: auto; padding-right: 4px;
+}
+.ct__mapCol { padding: 8px 10px; background: var(--bg-soft); border-radius: 6px; }
+
+.ct__folderChoice { display: flex; gap: 8px; }
+.ct__choice {
+  flex: 1; display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  font-size: 13px; cursor: pointer;
+}
+.ct__choice.is-active { border-color: var(--tg-blue); background: var(--tg-blue-softer); color: var(--tg-blue); }
+.ct__choice input { accent-color: var(--tg-blue); }
+
+.ct__warn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: var(--warning-soft); color: #a86200;
+  border-radius: 8px; font-size: 12.5px;
+}
+
+.ct__importing { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 32px 0; }
+
+.ct__summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  margin: 16px 0; width: 100%;
+}
+.ct__summary > div {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 14px 8px; background: var(--bg-soft); border-radius: 10px;
+}
+.ct__summary b { font-size: 20px; font-weight: 600; }
+
+@media (max-width: 900px) {
+  .ct { grid-template-columns: 200px 1fr; }
+}
