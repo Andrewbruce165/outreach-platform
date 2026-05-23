@@ -58,25 +58,30 @@ async function flush(beacon = false) {
   if (queue.length === 0) return;
   const batch = queue.splice(0, queue.length);
   const url = `${BACKEND_URL}/api/v1/telemetry/events`;
-  const body = JSON.stringify({ events: batch });
 
   if (beacon && typeof navigator !== "undefined" && "sendBeacon" in navigator) {
-    const blob = new Blob([body], { type: "application/json" });
-    navigator.sendBeacon(url, blob);
+    for (const evt of batch) {
+      const blob = new Blob([JSON.stringify(evt)], { type: "application/json" });
+      navigator.sendBeacon(url, blob);
+    }
     return;
   }
 
   try {
     const token = await waitForAccessToken();
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body,
-      keepalive: true,
-    });
+    await Promise.all(
+      batch.map((evt) =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(evt),
+          keepalive: true,
+        }).catch(() => undefined),
+      ),
+    );
   } catch {
     /* swallow — telemetry must never break the UI */
   }
