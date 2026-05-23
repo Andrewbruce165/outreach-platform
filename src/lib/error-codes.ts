@@ -3,8 +3,7 @@
 
 const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   TOKEN_EXPIRED: () => "Your session expired. Sign in again.",
-  TOKEN_INVALID: () =>
-    "Sign-in succeeded, but the API rejected the auth token. Check the auth JWT algorithm/secret, then sign in again.",
+  TOKEN_INVALID: () => "Sign-in could not be validated. Open the latest email link or sign in again.",
   AUTH_REQUIRED: () => "Sign-in is still syncing. Refresh the page in a moment.",
   WORKSPACE_NOT_FOUND: () => "Workspace not found",
   CAMPAIGN_NOT_FOUND: () => "Campaign not found",
