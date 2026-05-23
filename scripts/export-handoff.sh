@@ -24,16 +24,16 @@ echo "==> Booting backend (docker compose up -d db api)..."
 docker compose up -d db api
 
 echo "==> Waiting for /openapi.json (inside api container)..."
-# Use docker compose exec to hit the api container directly via its container network.
-# Avoids any host port mapping ambiguity (multiple FastAPI services may share host port 8000).
+# The api container is python-slim with no curl/wget — use python urllib directly via `docker compose exec`.
+# This also bypasses host port mapping ambiguity (multiple FastAPI services may share host port 8000).
 timeout 60 bash -c '
-  until docker compose exec -T api curl -sf http://localhost:8000/openapi.json > /dev/null 2>&1; do
+  until docker compose exec -T api python -c "import urllib.request, sys; urllib.request.urlopen(\"http://localhost:8000/openapi.json\", timeout=2).read(); sys.exit(0)" >/dev/null 2>&1; do
     sleep 1
   done
 '
 
 echo "==> Exporting openapi.json..."
-docker compose exec -T api curl -s http://localhost:8000/openapi.json | jq . > "$HANDOFF_DIR/openapi.json"
+docker compose exec -T api python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/openapi.json').read().decode())" | jq . > "$HANDOFF_DIR/openapi.json"
 
 # Sanity check: the openapi.json must be from THIS project (Outreach Platform), not a neighbouring FastAPI.
 PROJECT_TITLE=$(jq -r '.info.title // ""' "$HANDOFF_DIR/openapi.json")
