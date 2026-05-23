@@ -229,6 +229,18 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Recheck failed"),
   });
 
+  const contacts = contactsQ.data ?? [];
+  const filtered = useMemo(() => {
+    if (!search.trim()) return contacts;
+    const q = search.toLowerCase();
+    return contacts.filter(
+      (c) =>
+        (c.full_name ?? "").toLowerCase().includes(q) ||
+        (c.username ?? "").toLowerCase().includes(q) ||
+        (c.phone ?? "").includes(q),
+    );
+  }, [contacts, search]);
+
   if (!folder) {
     return (
       <section className="ct__main">
