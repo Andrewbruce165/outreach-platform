@@ -62,6 +62,20 @@ def _agent_to_response(agent: AIContext, campaign_count: int = 0) -> AgentRespon
         faq=[FaqItem(**item) for item in faq_data],
         company_info=agent.company_info,
         product_info=agent.product_info,
+        # 05.1 v2 fields (UI-AGNT-01 — UI-SPEC §5.8 router pass-through).
+        # Serialised straight from JSONB/TEXT[] columns; None for pre-05.1 rows.
+        who_is_agent=agent.who_is_agent,
+        company_knowledge=agent.company_knowledge,
+        knowledge_base=agent.knowledge_base,
+        voice_baseline=agent.voice_baseline,
+        tone=agent.tone,
+        max_message_length=agent.max_message_length,
+        mirror_language=agent.mirror_language,
+        allow_emoji=agent.allow_emoji,
+        banlist=agent.banlist,
+        qa_pairs=agent.qa_pairs,
+        auto_pause_triggers=agent.auto_pause_triggers,
+        auto_pause_scope=agent.auto_pause_scope,
         campaign_count=campaign_count,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
@@ -199,6 +213,19 @@ async def create_agent(
         faq=[item.model_dump() for item in payload.faq],
         company_info=payload.company_info,
         product_info=payload.product_info,
+        # 05.1 v2 fields (UI-SPEC §5.8 — UI-AGNT-01 router pass-through).
+        who_is_agent=payload.who_is_agent,
+        company_knowledge=payload.company_knowledge,
+        knowledge_base=payload.knowledge_base,
+        voice_baseline=payload.voice_baseline,
+        tone=payload.tone.model_dump() if payload.tone else None,
+        max_message_length=payload.max_message_length,
+        mirror_language=payload.mirror_language,
+        allow_emoji=payload.allow_emoji,
+        banlist=payload.banlist,
+        qa_pairs=[q.model_dump() for q in payload.qa_pairs] if payload.qa_pairs else None,
+        auto_pause_triggers=payload.auto_pause_triggers,
+        auto_pause_scope=payload.auto_pause_scope,
     )
     db.add(agent)
     await db.commit()
@@ -262,6 +289,33 @@ async def update_agent(
         agent.company_info = payload.company_info
     if payload.product_info is not None:
         agent.product_info = payload.product_info
+    # 05.1 v2 fields (UI-SPEC §5.8 — UI-AGNT-01). Partial PATCH semantics:
+    # None = leave unchanged. tone is replaced wholesale (Pitfall 7 — full
+    # replacement like faq).
+    if payload.who_is_agent is not None:
+        agent.who_is_agent = payload.who_is_agent
+    if payload.company_knowledge is not None:
+        agent.company_knowledge = payload.company_knowledge
+    if payload.knowledge_base is not None:
+        agent.knowledge_base = payload.knowledge_base
+    if payload.voice_baseline is not None:
+        agent.voice_baseline = payload.voice_baseline
+    if payload.tone is not None:
+        agent.tone = payload.tone.model_dump()
+    if payload.max_message_length is not None:
+        agent.max_message_length = payload.max_message_length
+    if payload.mirror_language is not None:
+        agent.mirror_language = payload.mirror_language
+    if payload.allow_emoji is not None:
+        agent.allow_emoji = payload.allow_emoji
+    if payload.banlist is not None:
+        agent.banlist = payload.banlist
+    if payload.qa_pairs is not None:
+        agent.qa_pairs = [q.model_dump() for q in payload.qa_pairs]
+    if payload.auto_pause_triggers is not None:
+        agent.auto_pause_triggers = payload.auto_pause_triggers
+    if payload.auto_pause_scope is not None:
+        agent.auto_pause_scope = payload.auto_pause_scope
 
     await db.commit()
     await db.refresh(agent)
@@ -326,6 +380,19 @@ async def duplicate_agent(
             faq=original.faq,
             company_info=original.company_info,
             product_info=original.product_info,
+            # 05.1 v2 fields — duplicate copies them for parity with source.
+            who_is_agent=original.who_is_agent,
+            company_knowledge=original.company_knowledge,
+            knowledge_base=original.knowledge_base,
+            voice_baseline=original.voice_baseline,
+            tone=original.tone,
+            max_message_length=original.max_message_length,
+            mirror_language=original.mirror_language,
+            allow_emoji=original.allow_emoji,
+            banlist=original.banlist,
+            qa_pairs=original.qa_pairs,
+            auto_pause_triggers=original.auto_pause_triggers,
+            auto_pause_scope=original.auto_pause_scope,
         )
         db.add(new_agent)
         try:
