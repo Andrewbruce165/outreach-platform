@@ -22,7 +22,9 @@ services:
     container_name: outreach-platform-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Биндим только на loopback: внешний трафик идёт через nginx (127.0.0.1:8444 ssl proxy_protocol)
+      # за SNI stream-диспетчером MTProto-camouflage на :443. Порт 8000 занят старым telegram-api.
+      - "127.0.0.1:8005:8000"
     # Phase 2 (D-18): host socket mount removed — listener auto-reconciles
     # via app/services/listener.py::_reconcile_loop. No more
     # subprocess.run(['docker','restart','telegram-listener']) in API code.

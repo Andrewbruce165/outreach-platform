@@ -91,13 +91,26 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 git clone git@github.com:Andrewbruce165/outreach-platform.git
 
 # Деплой на сервер
-cd /root/apps/outreach-platform && git pull && docker compose up -d --build api
+cd /root/apps/aimly/tg-outreach && git pull && docker compose up -d --build api
 docker compose up -d --build listener
 ```
 
-**Сервер:** /root/apps/outreach-platform/
+**Сервер:** /root/apps/aimly/tg-outreach/ (VPS DigitalOcean, 134.209.239.97)
 **Старый продакшн:** /root/apps/telegram-api/ — не трогаем, работает независимо
 **GitHub:** git@github.com:Andrewbruce165/outreach-platform.git
+
+### Сетевая топология (важно)
+
+Прод-домен: **`https://aimly.agsventurelab.com`**
+
+Хост-порт `:443` занят stream-блоком nginx (SNI-диспетчер MTProto-camouflage для других сервисов). Поэтому:
+
+- API-контейнер биндится на `127.0.0.1:8005:8000` (порт 8000 занят старым telegram-api)
+- nginx vhost для домена слушает `127.0.0.1:8444 ssl proxy_protocol` (за SNI-диспетчером, шаблон funnel-api)
+- Цепочка: `:443 → SNI stream → nginx:8444 ssl proxy_protocol → 127.0.0.1:8005 → api:8000`
+- TLS выпускается **только** через `certbot certonly --webroot` (НЕ `--nginx`, иначе сломает SNI stream-схему). Автопродление — `certbot.timer`.
+
+При добавлении новых доменов/сервисов: брать конфиг по шаблону `funnel-api` и согласовывать с devops.
 
 ---
 

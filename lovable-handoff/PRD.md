@@ -111,7 +111,7 @@ src/
 
 ```env
 # Backend API base URL
-VITE_API_URL=https://api.aimly.com/api/v1
+VITE_API_URL=https://aimly.agsventurelab.com/api/v1
 # In dev / preview: point to staging
 # VITE_API_URL=http://localhost:8810/api/v1  (only for local dev tunnels)
 
