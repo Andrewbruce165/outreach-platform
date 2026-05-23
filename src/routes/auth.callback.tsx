@@ -30,8 +30,7 @@ function AuthCallback() {
     let cancelled = false;
     (async () => {
       const code = new URLSearchParams(window.location.search).get("code");
-      const { data: initialSession } = await supabase.auth.getSession();
-      if (!initialSession.session && code) {
+      if (code) {
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
         if (exchangeError) {
           if (!cancelled) setError("Sign-in link was invalid or expired. Try again.");
