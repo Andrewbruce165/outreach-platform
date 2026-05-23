@@ -863,3 +863,45 @@ class CoreValueResponse(BaseModel):
     time_to_first_campaign_seconds: Optional[int] = None
     signup_at: Optional[datetime] = None
     first_launch_at: Optional[datetime] = None
+
+
+# === Phase 05.1: Analytics — Funnel (UI-DASH-01) + LLM aggregates (UI-CAMPD-01)
+
+class FunnelResponse(BaseModel):
+    """UI-SPEC §5.3 dashboard Sankey funnel — 5 stage counts.
+
+    Stages are monotonically non-increasing under typical seeded data:
+        sent >= replied >= engaged >= lead >= handoff
+    (the API does not enforce monotonicity — pathological data such as manual
+    human-sends without prior outbound, or stale leads/handoffs from other
+    funnel branches, can break the chain. UI renders the Sankey as-is.)
+
+    'engaged' definition is locked per RESEARCH Pitfall 5:
+        COUNT(DISTINCT conversation_id) where >= 2 inbound contact messages AND
+        status NOT IN ('lead','handoff','finished','bot_ignored').
+    """
+
+    sent: int
+    replied: int
+    engaged: int
+    lead: int
+    handoff: int
+
+
+class LLMAggregatesResponse(BaseModel):
+    """UI-SPEC §5.6 LLM trace tab top-of-tab metrics.
+
+    Aggregates over the since-window (1d/7d/30d/90d). avg_latency_ms is None
+    when no llm_calls rows match the filter (empty window).
+
+    spend_usd_cents is 0 in v1 (per-model pricing deferred to v2 — RESEARCH
+    §"Backend Gap Map"); the field is reserved in the response shape so the UI
+    can render a placeholder without breaking the schema in v2.
+    """
+
+    total_calls: int
+    avg_latency_ms: Optional[int] = None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    spend_usd_cents: int  # v1 stub: always 0; pricing-per-model added in v2

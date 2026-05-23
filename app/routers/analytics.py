@@ -18,7 +18,7 @@ Sources resolved (Phase 5 RESEARCH):
 """
 
 import logging
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,7 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AIContext, Campaign, Sender
-from app.schemas import AnalyticsCards, AnalyticsReplied
+from app.schemas import (
+    AnalyticsCards,
+    AnalyticsReplied,
+    FunnelResponse,
+    LLMAggregatesResponse,
+)
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -97,6 +102,27 @@ async def _ensure_sender_in_workspace(
 # scope_clause через f-string. Никакого dynamic SQL composition по другим колонкам
 # (workspace_id всегда — первый WHERE; scope column — только из этого set'а).
 _ALLOWED_SCOPE_COLUMNS = {"campaign_id", "ai_context_id", "sender_id"}
+
+
+# Phase 05.1 (UI-DASH-01 + UI-CAMPD-01): scope-column whitelists для новых
+# /funnel и /llm endpoint'ов. Тот же pattern что _ALLOWED_SCOPE_COLUMNS выше —
+# scope query-param mapping → раз-валидированная SQL колонка через f-string,
+# scope_val привязывается параметром :scope_val (никогда не интерполируется).
+_FUNNEL_SCOPE_COLUMNS = {
+    "campaign": "c.campaign_id",
+    "agent": "c.ai_context_id",
+    "sender": "c.sender_id",
+}
+_LLM_SCOPE_COLUMNS = {
+    "campaign": "lc.campaign_id",
+}
+_SINCE_DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+# scope→tableName для cross-workspace 404 prequery в /funnel.
+_FUNNEL_SCOPE_TABLE = {
+    "campaign": "campaigns",
+    "agent": "ai_contexts",
+    "sender": "senders",
+}
 
 
 async def _compute_cards(
@@ -244,4 +270,189 @@ async def sender_analytics(
     await _ensure_sender_in_workspace(db, ctx, sender_id)
     return await _compute_cards(
         db, ctx.workspace_id, scope=("sender_id", sender_id)
+    )
+
+
+# === Phase 05.1: UI-DASH-01 Sankey funnel + UI-CAMPD-01 LLM aggregates ========
+
+
+@router.get("/funnel", response_model=FunnelResponse)
+async def funnel(
+    scope: Literal["workspace", "campaign", "agent", "sender"] = "workspace",
+    id: Optional[UUID] = None,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> FunnelResponse:
+    """UI-SPEC §5.3 dashboard Sankey funnel — 5 stage counts.
+
+    Stages: Sent → Replied → Engaged → Lead → Handoff.
+
+    'engaged' definition LOCKED per RESEARCH Pitfall 5:
+        COUNT(DISTINCT conversation_id) where >= 2 inbound contact messages AND
+        status NOT IN ('lead','handoff','finished','bot_ignored').
+
+    bot_ignored conversations are excluded from EVERY count (Phase 5 Pitfall 8
+    carry-over). Counts are monotonically non-increasing under typical seeded
+    data but the SQL does not enforce monotonicity — callers must not assume
+    sent ≥ replied at the row level (e.g. a manual "human" message can land
+    before any AI outbound).
+
+    Per Pitfall 8 / Pitfall 9 (Phase 5): scope column whitelisted via
+    `_FUNNEL_SCOPE_COLUMNS`; scope value bound as `:scope_val` (no f-string
+    interpolation of user input into SQL).
+    """
+    if scope != "workspace":
+        if id is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "ID_REQUIRED",
+                        "message": f"id query-param required for scope={scope}"},
+            )
+        scope_col = _FUNNEL_SCOPE_COLUMNS[scope]
+        scope_clause = f" AND {scope_col} = :scope_val"
+        params: dict = {"wid": str(ctx.workspace_id), "scope_val": str(id)}
+
+        # Cross-workspace 404 — silent (do not leak existence of other-ws ids).
+        owns_table = _FUNNEL_SCOPE_TABLE[scope]
+        owns = (await db.execute(text(f"""
+            SELECT 1 FROM {owns_table}
+            WHERE id = :scope_val AND workspace_id = :wid LIMIT 1
+        """), params)).first()
+        if owns is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": f"{scope.upper()}_NOT_FOUND",
+                        "message": f"{scope} not found in your workspace"},
+            )
+    else:
+        scope_clause = ""
+        params = {"wid": str(ctx.workspace_id)}
+
+    # 1. sent — outbound messages joined to conversations
+    # (Phase 5 C-01: messages is the source-of-truth — covers queue worker +
+    # listener self-checks + UI manager-send D-04).
+    sent = (await db.execute(text(f"""
+        SELECT COUNT(*) FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.workspace_id = :wid
+          AND c.status != 'bot_ignored'
+          {scope_clause}
+          AND m.direction = 'outbound'
+    """), params)).scalar() or 0
+
+    # 2. replied — distinct conversations with >= 1 inbound contact message.
+    replied = (await db.execute(text(f"""
+        SELECT COUNT(DISTINCT m.conversation_id) FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.workspace_id = :wid
+          AND c.status != 'bot_ignored'
+          {scope_clause}
+          AND m.direction = 'inbound'
+          AND m.sent_by = 'contact'
+    """), params)).scalar() or 0
+
+    # 3. engaged — >= 2 inbound contact messages AND status NOT IN terminal/bot.
+    # Definition locked per RESEARCH.md Pitfall 5 — DO NOT drift this clause.
+    engaged = (await db.execute(text(f"""
+        SELECT COUNT(*) FROM (
+            SELECT m.conversation_id
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE c.workspace_id = :wid
+              AND c.status NOT IN ('lead','handoff','finished','bot_ignored')
+              {scope_clause}
+              AND m.direction = 'inbound'
+              AND m.sent_by = 'contact'
+            GROUP BY m.conversation_id
+            HAVING COUNT(*) >= 2
+        ) e
+    """), params)).scalar() or 0
+
+    # 4. lead — conversations with status='lead' (strict EQ per Phase 5
+    # Pitfall 9; 'lead' is mutually exclusive with 'finished').
+    lead = (await db.execute(text(f"""
+        SELECT COUNT(*) FROM conversations c
+        WHERE c.workspace_id = :wid
+          AND c.status = 'lead'
+          {scope_clause}
+    """), params)).scalar() or 0
+
+    # 5. handoff — conversations with status='handoff' (AI-triggered manager
+    # transfer). UI-SPEC §8.3 also maps 'manual' to "Manager" mode but that is
+    # a human-driven takeover — not a funnel stage. Funnel locks to 'handoff'.
+    handoff = (await db.execute(text(f"""
+        SELECT COUNT(*) FROM conversations c
+        WHERE c.workspace_id = :wid
+          AND c.status = 'handoff'
+          {scope_clause}
+    """), params)).scalar() or 0
+
+    return FunnelResponse(
+        sent=sent, replied=replied, engaged=engaged, lead=lead, handoff=handoff,
+    )
+
+
+@router.get("/llm", response_model=LLMAggregatesResponse)
+async def llm_aggregates(
+    scope: Literal["workspace", "campaign"] = "workspace",
+    id: Optional[UUID] = None,
+    since: Literal["1d", "7d", "30d", "90d"] = "7d",
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> LLMAggregatesResponse:
+    """UI-SPEC §5.6 LLM trace tab — top-of-tab aggregates over since-window.
+
+    Returns total_calls / avg_latency_ms / prompt_tokens / completion_tokens /
+    total_tokens / spend_usd_cents. spend_usd_cents is 0 in v1 — per-model
+    pricing is deferred to v2 (RESEARCH §"Backend Gap Map" note).
+
+    scope=workspace counts every LLM call in the workspace. scope=campaign
+    filters by `llm_calls.campaign_id = :scope_val` (404 if cross-workspace).
+
+    avg_latency_ms is None when no rows match — Pydantic Optional handles this.
+    """
+    days = _SINCE_DAYS[since]
+    if scope == "campaign":
+        if id is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "ID_REQUIRED",
+                        "message": "id query-param required for scope=campaign"},
+            )
+        owns = (await db.execute(text("""
+            SELECT 1 FROM campaigns
+            WHERE id = :scope_val AND workspace_id = :wid LIMIT 1
+        """), {"wid": str(ctx.workspace_id), "scope_val": str(id)})).first()
+        if owns is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "CAMPAIGN_NOT_FOUND",
+                        "message": "Campaign not found in your workspace"},
+            )
+        scope_clause = " AND lc.campaign_id = :scope_val"
+        params = {"wid": str(ctx.workspace_id), "scope_val": str(id), "days": days}
+    else:
+        scope_clause = ""
+        params = {"wid": str(ctx.workspace_id), "days": days}
+
+    row = (await db.execute(text(f"""
+        SELECT
+            COUNT(*)                                    AS total_calls,
+            CAST(ROUND(AVG(lc.latency_ms)) AS INT)      AS avg_latency_ms,
+            COALESCE(SUM(lc.prompt_tokens), 0)::INT     AS prompt_tokens,
+            COALESCE(SUM(lc.completion_tokens), 0)::INT AS completion_tokens,
+            COALESCE(SUM(lc.total_tokens), 0)::INT      AS total_tokens
+        FROM llm_calls lc
+        WHERE lc.workspace_id = :wid
+          AND lc.created_at >= NOW() - (:days || ' days')::INTERVAL
+          {scope_clause}
+    """), params)).first()
+
+    return LLMAggregatesResponse(
+        total_calls=(row.total_calls if row else 0) or 0,
+        avg_latency_ms=row.avg_latency_ms if row else None,
+        prompt_tokens=(row.prompt_tokens if row else 0) or 0,
+        completion_tokens=(row.completion_tokens if row else 0) or 0,
+        total_tokens=(row.total_tokens if row else 0) or 0,
+        spend_usd_cents=0,  # v1 stub — RESEARCH defers per-model pricing
     )
