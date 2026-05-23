@@ -102,14 +102,30 @@ async def _setup_database():
         ):
             sql_text = (PROJECT_ROOT / "migrations" / filename).read_text()
             await asyncpg_conn.execute(sql_text)
+
+        # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
+        # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
+        # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
+        await asyncpg_conn.execute("""
+            ALTER TABLE ai_contexts ALTER COLUMN tone
+                SET DEFAULT '{"formal": 0, "warm": 0, "brief": 0}'::jsonb;
+            ALTER TABLE ai_contexts ALTER COLUMN max_message_length SET DEFAULT 280;
+            ALTER TABLE ai_contexts ALTER COLUMN mirror_language SET DEFAULT TRUE;
+            ALTER TABLE ai_contexts ALTER COLUMN allow_emoji SET DEFAULT FALSE;
+            ALTER TABLE ai_contexts ALTER COLUMN auto_pause_scope SET DEFAULT 'conversation';
+        """)
     finally:
         await asyncpg_conn.close()
 
     yield
 
-    # Teardown
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    # Teardown: drop schema with CASCADE (drop_all can't handle FK cycles like
+    # messages -> conversations -> messages).
+    asyncpg_conn = await asyncpg.connect(dsn=dsn)
+    try:
+        await asyncpg_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    finally:
+        await asyncpg_conn.close()
 
 
 @pytest_asyncio.fixture
