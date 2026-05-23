@@ -17,9 +17,9 @@ import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedOnboardingRouteImport } from './routes/_authenticated/onboarding'
 import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/inbox'
 import { Route as AuthenticatedContactsRouteImport } from './routes/_authenticated/contacts'
-import { Route as AuthenticatedCampaignsRouteImport } from './routes/_authenticated/campaigns'
 import { Route as AuthenticatedAgentsRouteImport } from './routes/_authenticated/agents'
 import { Route as AuthenticatedAccountsRouteImport } from './routes/_authenticated/accounts'
+import { Route as AuthenticatedCampaignsIndexRouteImport } from './routes/_authenticated/campaigns.index'
 import { Route as AuthenticatedCampaignsNewRouteImport } from './routes/_authenticated/campaigns.new'
 
 const LoginRoute = LoginRouteImport.update({
@@ -61,11 +61,6 @@ const AuthenticatedContactsRoute = AuthenticatedContactsRouteImport.update({
   path: '/contacts',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthenticatedCampaignsRoute = AuthenticatedCampaignsRouteImport.update({
-  id: '/campaigns',
-  path: '/campaigns',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
 const AuthenticatedAgentsRoute = AuthenticatedAgentsRouteImport.update({
   id: '/agents',
   path: '/agents',
@@ -76,11 +71,17 @@ const AuthenticatedAccountsRoute = AuthenticatedAccountsRouteImport.update({
   path: '/accounts',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedCampaignsIndexRoute =
+  AuthenticatedCampaignsIndexRouteImport.update({
+    id: '/campaigns/',
+    path: '/campaigns/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedCampaignsNewRoute =
   AuthenticatedCampaignsNewRouteImport.update({
-    id: '/new',
-    path: '/new',
-    getParentRoute: () => AuthenticatedCampaignsRoute,
+    id: '/campaigns/new',
+    path: '/campaigns/new',
+    getParentRoute: () => AuthenticatedRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -88,19 +89,18 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/accounts': typeof AuthenticatedAccountsRoute
   '/agents': typeof AuthenticatedAgentsRoute
-  '/campaigns': typeof AuthenticatedCampaignsRouteWithChildren
   '/contacts': typeof AuthenticatedContactsRoute
   '/inbox': typeof AuthenticatedInboxRoute
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/campaigns/new': typeof AuthenticatedCampaignsNewRoute
+  '/campaigns/': typeof AuthenticatedCampaignsIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/accounts': typeof AuthenticatedAccountsRoute
   '/agents': typeof AuthenticatedAgentsRoute
-  '/campaigns': typeof AuthenticatedCampaignsRouteWithChildren
   '/contacts': typeof AuthenticatedContactsRoute
   '/inbox': typeof AuthenticatedInboxRoute
   '/onboarding': typeof AuthenticatedOnboardingRoute
@@ -108,6 +108,7 @@ export interface FileRoutesByTo {
   '/auth/callback': typeof AuthCallbackRoute
   '/': typeof AuthenticatedIndexRoute
   '/campaigns/new': typeof AuthenticatedCampaignsNewRoute
+  '/campaigns': typeof AuthenticatedCampaignsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -115,7 +116,6 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_authenticated/accounts': typeof AuthenticatedAccountsRoute
   '/_authenticated/agents': typeof AuthenticatedAgentsRoute
-  '/_authenticated/campaigns': typeof AuthenticatedCampaignsRouteWithChildren
   '/_authenticated/contacts': typeof AuthenticatedContactsRoute
   '/_authenticated/inbox': typeof AuthenticatedInboxRoute
   '/_authenticated/onboarding': typeof AuthenticatedOnboardingRoute
@@ -123,6 +123,7 @@ export interface FileRoutesById {
   '/auth/callback': typeof AuthCallbackRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/campaigns/new': typeof AuthenticatedCampaignsNewRoute
+  '/_authenticated/campaigns/': typeof AuthenticatedCampaignsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -131,19 +132,18 @@ export interface FileRouteTypes {
     | '/login'
     | '/accounts'
     | '/agents'
-    | '/campaigns'
     | '/contacts'
     | '/inbox'
     | '/onboarding'
     | '/settings'
     | '/auth/callback'
     | '/campaigns/new'
+    | '/campaigns/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/accounts'
     | '/agents'
-    | '/campaigns'
     | '/contacts'
     | '/inbox'
     | '/onboarding'
@@ -151,13 +151,13 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/'
     | '/campaigns/new'
+    | '/campaigns'
   id:
     | '__root__'
     | '/_authenticated'
     | '/login'
     | '/_authenticated/accounts'
     | '/_authenticated/agents'
-    | '/_authenticated/campaigns'
     | '/_authenticated/contacts'
     | '/_authenticated/inbox'
     | '/_authenticated/onboarding'
@@ -165,6 +165,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/_authenticated/'
     | '/_authenticated/campaigns/new'
+    | '/_authenticated/campaigns/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -231,13 +232,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedContactsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/campaigns': {
-      id: '/_authenticated/campaigns'
-      path: '/campaigns'
-      fullPath: '/campaigns'
-      preLoaderRoute: typeof AuthenticatedCampaignsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
     '/_authenticated/agents': {
       id: '/_authenticated/agents'
       path: '/agents'
@@ -252,50 +246,45 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/campaigns/': {
+      id: '/_authenticated/campaigns/'
+      path: '/campaigns'
+      fullPath: '/campaigns/'
+      preLoaderRoute: typeof AuthenticatedCampaignsIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/campaigns/new': {
       id: '/_authenticated/campaigns/new'
-      path: '/new'
+      path: '/campaigns/new'
       fullPath: '/campaigns/new'
       preLoaderRoute: typeof AuthenticatedCampaignsNewRouteImport
-      parentRoute: typeof AuthenticatedCampaignsRoute
+      parentRoute: typeof AuthenticatedRoute
     }
   }
 }
 
-interface AuthenticatedCampaignsRouteChildren {
-  AuthenticatedCampaignsNewRoute: typeof AuthenticatedCampaignsNewRoute
-}
-
-const AuthenticatedCampaignsRouteChildren: AuthenticatedCampaignsRouteChildren =
-  {
-    AuthenticatedCampaignsNewRoute: AuthenticatedCampaignsNewRoute,
-  }
-
-const AuthenticatedCampaignsRouteWithChildren =
-  AuthenticatedCampaignsRoute._addFileChildren(
-    AuthenticatedCampaignsRouteChildren,
-  )
-
 interface AuthenticatedRouteChildren {
   AuthenticatedAccountsRoute: typeof AuthenticatedAccountsRoute
   AuthenticatedAgentsRoute: typeof AuthenticatedAgentsRoute
-  AuthenticatedCampaignsRoute: typeof AuthenticatedCampaignsRouteWithChildren
   AuthenticatedContactsRoute: typeof AuthenticatedContactsRoute
   AuthenticatedInboxRoute: typeof AuthenticatedInboxRoute
   AuthenticatedOnboardingRoute: typeof AuthenticatedOnboardingRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedCampaignsNewRoute: typeof AuthenticatedCampaignsNewRoute
+  AuthenticatedCampaignsIndexRoute: typeof AuthenticatedCampaignsIndexRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAccountsRoute: AuthenticatedAccountsRoute,
   AuthenticatedAgentsRoute: AuthenticatedAgentsRoute,
-  AuthenticatedCampaignsRoute: AuthenticatedCampaignsRouteWithChildren,
   AuthenticatedContactsRoute: AuthenticatedContactsRoute,
   AuthenticatedInboxRoute: AuthenticatedInboxRoute,
   AuthenticatedOnboardingRoute: AuthenticatedOnboardingRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedCampaignsNewRoute: AuthenticatedCampaignsNewRoute,
+  AuthenticatedCampaignsIndexRoute: AuthenticatedCampaignsIndexRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
