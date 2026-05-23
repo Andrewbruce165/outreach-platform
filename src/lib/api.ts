@@ -38,6 +38,15 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
+async function waitForAccessToken(): Promise<string | null> {
+  for (let i = 0; i < 20; i++) {
+    const token = await getAccessToken();
+    if (token) return token;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
 function buildUrl(path: string, query?: ApiOptions["query"]) {
   const base = BACKEND_URL || "";
   const url = new URL(path.startsWith("http") ? path : base + path, base || window.location.origin);
@@ -63,8 +72,9 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
     }
   }
 
+  let token: string | null = null;
   if (!opts.anonymous) {
-    const token = await getAccessToken();
+    token = await waitForAccessToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
   }
 
@@ -95,7 +105,7 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
       message = errorMessageFromEnvelope(code, {});
     }
 
-    if (res.status === 401) {
+    if (res.status === 401 && token && (code === "TOKEN_EXPIRED" || code === "TOKEN_INVALID")) {
       // Hook for sign-out / redirect handled in the route layer.
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("aimly:auth-expired"));
