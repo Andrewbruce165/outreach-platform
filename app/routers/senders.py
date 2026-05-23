@@ -418,6 +418,74 @@ async def delete_sender(
     logger.info(f"[senders] deleted workspace={ctx.workspace_id} slug={slug}")
 
 
+# ─── Lifecycle endpoints (Phase 05.1 — UI-ACCT-01) ───────────────────────────
+
+
+@router.post("/senders/{slug}/pause", response_model=SenderCreateResponse)
+async def pause_sender(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """UI-SPEC §5.10 row action Pause — flip lifecycle_status active → paused.
+
+    Phase 05.1 (UI-ACCT-01): explicit endpoint added alongside existing PATCH path
+    so the UI doesn't need to send a typed body for a one-button action. The Phase 4
+    sender-lock guard still applies — cannot pause a sender mid-campaign without
+    explicit campaign teardown.
+
+    Idempotent: already-paused → 200 with current state (matches frontend retry
+    semantics on flaky network).
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    if sender.lifecycle_status == "paused":
+        # Idempotent — return current state instead of erroring.
+        return SenderCreateResponse(sender=_sender_to_response(sender), warnings=[])
+    if sender.lifecycle_status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_TRANSITION",
+                    "from": sender.lifecycle_status, "to": "paused"},
+        )
+    # Same guard PATCH uses (line 351): cannot pause if locked in running campaign.
+    await _check_sender_not_in_running_campaign(db, ctx, sender.id)
+    sender.lifecycle_status = "paused"
+    await db.commit()
+    await db.refresh(sender)
+    logger.info(
+        f"[senders] paused workspace={ctx.workspace_id} slug={sender.slug}"
+    )
+    return SenderCreateResponse(sender=_sender_to_response(sender), warnings=[])
+
+
+@router.post("/senders/{slug}/resume", response_model=SenderCreateResponse)
+async def resume_sender(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """UI-SPEC §5.10 row action Resume — flip lifecycle_status paused → active.
+
+    Idempotent: already-active → 200 with current state.
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    if sender.lifecycle_status == "active":
+        return SenderCreateResponse(sender=_sender_to_response(sender), warnings=[])
+    if sender.lifecycle_status != "paused":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "INVALID_TRANSITION",
+                    "from": sender.lifecycle_status, "to": "active"},
+        )
+    sender.lifecycle_status = "active"
+    await db.commit()
+    await db.refresh(sender)
+    logger.info(
+        f"[senders] resumed workspace={ctx.workspace_id} slug={sender.slug}"
+    )
+    return SenderCreateResponse(sender=_sender_to_response(sender), warnings=[])
+
+
 # ─── Proxy assignment ────────────────────────────────────────────────────────
 
 
