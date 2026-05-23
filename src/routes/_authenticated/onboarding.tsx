@@ -1,21 +1,26 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Topbar } from "@/components/Topbar";
+import { OnboardingFlow } from "@/components/OnboardingFlow";
 
 export const Route = createFileRoute("/_authenticated/onboarding")({
   component: Page,
 });
 
 function Page() {
+  const navigate = useNavigate();
   return (
     <>
-      <Topbar title="Onboarding" />
-      <div className="scroll" style={{ padding: 24, flex: 1 }}>
-        <div className="card"><div className="card__body">
-          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Onboarding — coming next</h2>
-          <p className="muted" style={{ fontSize: 13 }}>
-            This screen is scheduled per <code>docs/screen-build-order.md</code>. Foundation (tokens, types, API client, auth, sidebar) is in place — wiring lands turn by turn.
-          </p>
-        </div></div>
+      <Topbar title="Connect a Telegram account" />
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        <div className="card" style={{ maxWidth: 560, margin: "0 auto" }}>
+          <div className="card__body">
+            <OnboardingFlow
+              onComplete={() => {
+                setTimeout(() => navigate({ to: "/accounts" }), 1200);
+              }}
+            />
+          </div>
+        </div>
       </div>
     </>
   );
