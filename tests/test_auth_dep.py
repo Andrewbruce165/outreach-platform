@@ -22,36 +22,63 @@ from app.utils.auth import (
 # ─── JWT decode tests (AUTH-03) ──────────────────────────────────────────────
 
 
-def test_decode_valid_jwt(valid_supabase_jwt):
+async def test_decode_valid_jwt(valid_supabase_jwt):
     """Валидный JWT → claims dict с sub и email."""
     token = valid_supabase_jwt(sub="user-123", email="user@example.com")
-    claims = _decode_supabase_jwt(token)
+    claims = await _decode_supabase_jwt(token)
     assert claims["sub"] == "user-123"
     assert claims["email"] == "user@example.com"
 
 
-def test_decode_expired_jwt(expired_supabase_jwt):
+async def test_decode_expired_jwt(expired_supabase_jwt):
     """Истёкший JWT → 401 TOKEN_EXPIRED."""
     with pytest.raises(HTTPException) as exc:
-        _decode_supabase_jwt(expired_supabase_jwt)
+        await _decode_supabase_jwt(expired_supabase_jwt)
     assert exc.value.status_code == 401
     assert exc.value.detail["code"] == "TOKEN_EXPIRED"
 
 
-def test_decode_invalid_jwt():
+async def test_decode_invalid_jwt():
     """Bogus token → 401 TOKEN_INVALID."""
     with pytest.raises(HTTPException) as exc:
-        _decode_supabase_jwt("not-a-real-jwt")
+        await _decode_supabase_jwt("not-a-real-jwt")
     assert exc.value.status_code == 401
     assert exc.value.detail["code"] == "TOKEN_INVALID"
 
 
-def test_decode_jwt_wrong_audience(valid_supabase_jwt):
+async def test_decode_jwt_wrong_audience(valid_supabase_jwt):
     """JWT с aud != 'authenticated' → 401."""
     token = valid_supabase_jwt(aud="anon")
     with pytest.raises(HTTPException) as exc:
-        _decode_supabase_jwt(token)
+        await _decode_supabase_jwt(token)
     assert exc.value.status_code == 401
+
+
+# ─── ES256 JWKS path (Phase 05.1-DEBUG 2026-05-23) ───────────────────────────
+
+
+async def test_decode_es256_jwt_via_jwks(es256_supabase_jwt):
+    """ES256 JWT с kid из подготовленного JWKS → claims dict (JWKS path)."""
+    token = es256_supabase_jwt(sub="es256-user-001", email="es@example.com")
+    claims = await _decode_supabase_jwt(token)
+    assert claims["sub"] == "es256-user-001"
+    assert claims["email"] == "es@example.com"
+
+
+async def test_decode_es256_jwt_unknown_kid(es256_supabase_jwt_unknown_kid):
+    """ES256 JWT с kid которого нет в JWKS (и refetch не помог) → 401 TOKEN_INVALID."""
+    with pytest.raises(HTTPException) as exc:
+        await _decode_supabase_jwt(es256_supabase_jwt_unknown_kid)
+    assert exc.value.status_code == 401
+    assert exc.value.detail["code"] == "TOKEN_INVALID"
+
+
+async def test_decode_jwt_unsupported_alg(unsupported_alg_jwt):
+    """JWT с alg=none или другим неподдерживаемым → 401 TOKEN_INVALID."""
+    with pytest.raises(HTTPException) as exc:
+        await _decode_supabase_jwt(unsupported_alg_jwt)
+    assert exc.value.status_code == 401
+    assert exc.value.detail["code"] == "TOKEN_INVALID"
 
 
 # ─── Lazy workspace create (TENT-02, D-08, Pitfall 5) ────────────────────────

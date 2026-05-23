@@ -10,17 +10,25 @@ Dual-auth FastAPI dependency для outreach-platform.
 Lazy workspace creation (D-08, TENT-02):
   валидный JWT + нет записи user_workspaces → atomic create в одной транзакции.
 
-# TODO(v2): migrate from python-jose to PyJWT (deprecation — RESEARCH Pitfall 2)
-# TODO(v2): migrate JWT validation from HS256 to ES256/JWKS (Supabase
-#           default since Oct 2025 — RESEARCH Pitfall 1)
+# JWT verification (Phase 05.1-DEBUG 2026-05-23):
+#   Supabase migrated all projects to **ES256** (asymmetric, EC P-256) signing
+#   by default in Oct 2025. The original Phase 05.1 plan was to pin new projects
+#   back to HS256 in Supabase Dashboard, but that workaround is fragile —
+#   Supabase has been auto-flipping projects forward.
 #
-# Phase 05.1 decision (Pitfall 3 — RESEARCH.md §"Common Pitfalls"):
-#   Lovable's auto-bootstrapped Supabase project MUST be pinned to HS256 in
-#   Supabase Dashboard → Settings → API → JWT Settings → Algorithm = HS256.
-#   This is documented in lovable-handoff/AGENTS.md (created in plan 05.1-05)
-#   so customers running through the handoff bundle know to flip the toggle.
-#   Migration to ES256 + JWKS is v2 work — full PyJWT swap in one focused
-#   refactor (likely Phase 7+). Do NOT attempt it during 05.1 launch window.
+#   This module now verifies tokens via the project's published JWKS
+#   (`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`) and ES256, with an HS256
+#   fallback for legacy projects that explicitly opted into the symmetric
+#   algorithm. The decision routes off the JWT `alg` header:
+#     - alg=ES256 → verify against JWKS (fetched + cached for 1h)
+#     - alg=HS256 → verify against settings.supabase_jwt_secret (legacy)
+#     - anything else → 401 TOKEN_INVALID
+#
+#   The JWKS cache is per-process (each api container warms its own cache on
+#   first request, then keeps the keys for an hour). A `kid` miss triggers
+#   one refetch (handles graceful key rotation).
+#
+# TODO(v2): migrate from python-jose to PyJWT (deprecation — RESEARCH Pitfall 2)
 # TODO(v2-rls): app-level workspace filter replaced by Postgres RLS policy
 """
 
@@ -33,6 +41,7 @@ from typing import Literal, Optional
 from uuid import UUID
 
 import bcrypt
+import httpx
 from fastapi import Depends, Header, HTTPException
 from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
@@ -88,6 +97,73 @@ def _cache_put(raw_token: str, ctx: "AuthCtx") -> None:
     _TOKEN_CACHE[raw_token] = (ctx, _time.time() + _TOKEN_CACHE_TTL_SECONDS)
 
 
+# ─── JWKS cache (Phase 05.1-DEBUG, ES256 verification) ───────────────────────
+# Supabase publishes its JWT signing keys at
+# `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`. We fetch once, cache for 1h,
+# refetch on `kid` miss (handles key rotation without restart).
+#
+# Layout: { "keys_by_kid": {kid: jwk_dict}, "fetched_at": epoch_seconds }
+# Lock prevents thundering herd at cold start.
+
+_JWKS_CACHE: dict[str, dict] = {"keys_by_kid": {}, "fetched_at": 0.0}
+_JWKS_TTL_SECONDS: float = 3600.0   # 1 час
+_JWKS_LOCK: Optional[asyncio.Lock] = None  # lazy-init на первом await (для event-loop binding)
+
+
+def _jwks_url() -> str:
+    base = (settings.supabase_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "AUTH_MISCONFIGURED", "message": "SUPABASE_URL is not set"},
+        )
+    return f"{base}/auth/v1/.well-known/jwks.json"
+
+
+async def _fetch_jwks() -> dict[str, dict]:
+    """Сходить за свежим JWKS и обновить кеш. Returns keys_by_kid dict."""
+    url = _jwks_url()
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        payload = resp.json()
+    keys_by_kid = {k["kid"]: k for k in payload.get("keys", []) if "kid" in k}
+    _JWKS_CACHE["keys_by_kid"] = keys_by_kid
+    _JWKS_CACHE["fetched_at"] = _time.time()
+    logger.info(f"[auth] JWKS refreshed: {len(keys_by_kid)} key(s) — kids={list(keys_by_kid)}")
+    return keys_by_kid
+
+
+async def _get_jwk_for_kid(kid: str) -> Optional[dict]:
+    """Найти JWK по kid. Refresh кеша если истёк ИЛИ kid отсутствует.
+
+    Single retry on kid-miss — защита от rotation, но без бесконечного цикла
+    если злоумышленник шлёт мусорный kid.
+    """
+    global _JWKS_LOCK
+    if _JWKS_LOCK is None:
+        _JWKS_LOCK = asyncio.Lock()
+
+    keys = _JWKS_CACHE["keys_by_kid"]
+    fresh = (_time.time() - _JWKS_CACHE["fetched_at"]) < _JWKS_TTL_SECONDS
+
+    if fresh and kid in keys:
+        return keys[kid]
+
+    async with _JWKS_LOCK:
+        # double-check после получения лока (другой запрос мог обновить)
+        keys = _JWKS_CACHE["keys_by_kid"]
+        fresh = (_time.time() - _JWKS_CACHE["fetched_at"]) < _JWKS_TTL_SECONDS
+        if fresh and kid in keys:
+            return keys[kid]
+        try:
+            keys = await _fetch_jwks()
+        except Exception as e:
+            logger.error(f"[auth] JWKS fetch failed: {e!r}")
+            # fall through — keys остался старый, и/или пустой; вернём None если kid не найден
+        return keys.get(kid)
+
+
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 class AuthCtx(BaseModel):
@@ -107,13 +183,13 @@ async def auth_dep(
     """
     Главный FastAPI Depends для всех новых endpoint-ов (D-11).
 
-    Branch 1: Authorization: Bearer <JWT> — validate Supabase HS256
-    Branch 2: X-Workspace-Key: wsk_...  — bcrypt verify against workspace_api_keys
+    Branch 1: Authorization: Bearer <JWT> — validate Supabase ES256 (JWKS) or HS256 fallback
+    Branch 2: X-Workspace-Key: wsk_...    — bcrypt verify against workspace_api_keys
     No credentials → 401 AUTH_REQUIRED
     """
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
-        claims = _decode_supabase_jwt(token)
+        claims = await _decode_supabase_jwt(token)
         return await _resolve_or_create_workspace(
             db,
             supabase_user_id=claims["sub"],
@@ -134,22 +210,63 @@ async def auth_dep(
 
 # ─── Private helpers ─────────────────────────────────────────────────────────
 
-def _decode_supabase_jwt(token: str) -> dict:
+async def _decode_supabase_jwt(token: str) -> dict:
     """
-    Decode + verify Supabase HS256 JWT.
+    Decode + verify Supabase JWT (ES256 via JWKS, HS256 fallback for legacy).
 
-    Phase 05.1: HS256 only. Asymmetric / JWKS support is deferred to v2 (see
-    top-of-file TODOs and lovable-handoff/AGENTS.md Pitfall 3 entry). Customers
-    using Lovable's Supabase native integration must pin the project's JWT
-    algorithm to HS256 in Supabase Dashboard → Settings → API → JWT Settings.
+    Routing off the JWT `alg` header:
+      - ES256 → fetch JWK by `kid` from project's JWKS, verify EC P-256 signature
+      - HS256 → verify against settings.supabase_jwt_secret (legacy projects)
+      - other → 401 TOKEN_INVALID
 
     Raises HTTPException(401) for expired, invalid claims, or signature errors.
     """
+    # Read unverified header to route on algorithm.
+    try:
+        header = jwt.get_unverified_header(token)
+    except JWTError:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "TOKEN_INVALID", "message": "Invalid JWT (malformed header)"},
+        )
+
+    alg = header.get("alg")
+    kid = header.get("kid")
+
+    if alg == "ES256":
+        if not kid:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "TOKEN_INVALID", "message": "Invalid JWT (missing kid for ES256)"},
+            )
+        jwk = await _get_jwk_for_kid(kid)
+        if jwk is None:
+            logger.warning(f"[auth] no JWK found for kid={kid}")
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "TOKEN_INVALID", "message": "Invalid JWT (unknown kid)"},
+            )
+        key = jwk
+        algorithms = ["ES256"]
+    elif alg == "HS256":
+        if not settings.supabase_jwt_secret:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "TOKEN_INVALID", "message": "Invalid JWT (HS256 not configured)"},
+            )
+        key = settings.supabase_jwt_secret
+        algorithms = ["HS256"]
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "TOKEN_INVALID", "message": f"Invalid JWT (unsupported alg={alg!r})"},
+        )
+
     try:
         claims = jwt.decode(
             token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
+            key,
+            algorithms=algorithms,
             audience="authenticated",
             options={"require": ["sub", "exp"]},
         )

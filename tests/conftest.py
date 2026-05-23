@@ -170,6 +170,117 @@ def expired_supabase_jwt(valid_supabase_jwt: Callable[..., str]) -> str:
     return valid_supabase_jwt(exp=1)  # 1970-01-01
 
 
+# ─── Phase 05.1-DEBUG (2026-05-23): ES256 / JWKS fixtures ────────────────────
+
+import base64 as _b64
+import time as _time_mod
+
+
+def _b64u_int(value: int, size: int) -> str:
+    raw = value.to_bytes(size, "big")
+    return _b64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+@pytest_asyncio.fixture
+def _es256_keypair():
+    """Generate an ephemeral EC P-256 keypair + matching JWK for tests.
+
+    Returns (private_pem: str, jwk_dict: dict). The JWK is what would be served
+    by Supabase from /auth/v1/.well-known/jwks.json — we inject it directly
+    into the in-process _JWKS_CACHE to avoid making a real HTTP call.
+    """
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    pub = key.public_key().public_numbers()
+    jwk_dict = {
+        "kty": "EC",
+        "crv": "P-256",
+        "use": "sig",
+        "alg": "ES256",
+        "kid": "test-kid-es256-1",
+        "x": _b64u_int(pub.x, 32),
+        "y": _b64u_int(pub.y, 32),
+    }
+    return pem, jwk_dict
+
+
+@pytest_asyncio.fixture
+def _seed_jwks_cache(_es256_keypair):
+    """Pre-populate the auth module's JWKS cache with our test JWK.
+
+    Fresh fetched_at = now so the auth code won't try to refetch from a real
+    Supabase URL during the test.
+    """
+    from app.utils import auth as _auth_module
+
+    _pem, jwk_dict = _es256_keypair
+    _auth_module._JWKS_CACHE["keys_by_kid"] = {jwk_dict["kid"]: jwk_dict}
+    _auth_module._JWKS_CACHE["fetched_at"] = _time_mod.time()
+    yield jwk_dict
+    # teardown: clear so other tests don't see stale state
+    _auth_module._JWKS_CACHE["keys_by_kid"] = {}
+    _auth_module._JWKS_CACHE["fetched_at"] = 0.0
+
+
+@pytest_asyncio.fixture
+def es256_supabase_jwt(_es256_keypair, _seed_jwks_cache) -> Callable[..., str]:
+    """Factory of valid ES256 JWTs signed by our test key (in JWKS cache)."""
+    pem, jwk_dict = _es256_keypair
+
+    def _factory(
+        sub: str = "test-user-es256",
+        email: str | None = "es256@example.com",
+        exp: int = 9999999999,
+        aud: str = "authenticated",
+    ) -> str:
+        claims = {"sub": sub, "email": email, "aud": aud, "exp": exp}
+        return jwt.encode(
+            claims, pem, algorithm="ES256", headers={"kid": jwk_dict["kid"]}
+        )
+
+    return _factory
+
+
+@pytest_asyncio.fixture
+def es256_supabase_jwt_unknown_kid(_es256_keypair, _seed_jwks_cache) -> str:
+    """ES256 JWT signed by our test key but with a kid not in the cached JWKS.
+
+    The auth code will refetch JWKS once; we mock _fetch_jwks to return the same
+    seeded keys (so the unknown kid stays unknown) — patching via env. In our
+    test setup the SUPABASE_URL points to localhost:54321 (no real server), so
+    the refetch attempt will hit the except branch in _get_jwk_for_kid and
+    return None → 401 TOKEN_INVALID.
+    """
+    pem, _jwk_dict = _es256_keypair
+    claims = {"sub": "x", "email": "x@y.z", "aud": "authenticated", "exp": 9999999999}
+    return jwt.encode(
+        claims, pem, algorithm="ES256", headers={"kid": "unknown-kid-zzz"}
+    )
+
+
+@pytest_asyncio.fixture
+def unsupported_alg_jwt(valid_supabase_jwt) -> str:
+    """JWT with unsupported algorithm (none) → header alg=none → 401.
+
+    python-jose blocks alg=none on decode but we test that our header routing
+    also rejects it explicitly. Use jwt.encode with algorithm="HS512" which
+    we don't accept (only HS256/ES256 are in our allowlist).
+    """
+    settings = get_settings()
+    secret = settings.supabase_jwt_secret or "test-secret-fallback"
+    claims = {"sub": "x", "email": "x@y.z", "aud": "authenticated", "exp": 9999999999}
+    return jwt.encode(claims, secret, algorithm="HS512")
+
+
+
+
 # ─── Phase 2 fixtures: Workspace / Sender / Folder / Contact factories ───────
 
 # Локальные импорты ниже, чтобы не платить за них при collection-time
