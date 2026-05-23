@@ -75,10 +75,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware — Phase 1 lockdown (D-14): explicit origins, no wildcard.
+# CORS middleware — Phase 1 D-14 lockdown preserved (explicit allowlist) +
+# Phase 05.1 widening: allow_origin_regex for Lovable preview deployments
+# (Pitfall 7 — Starlette allow_origins does NOT honor wildcards; regex is
+# the only safe path for auto-generated subdomains).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=settings.cors_allowed_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight
     allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
