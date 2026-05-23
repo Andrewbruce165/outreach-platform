@@ -430,10 +430,10 @@ async def llm_aggregates(
                         "message": "Campaign not found in your workspace"},
             )
         scope_clause = " AND lc.campaign_id = :scope_val"
-        params = {"wid": str(ctx.workspace_id), "scope_val": str(id), "days": days}
+        params = {"wid": str(ctx.workspace_id), "scope_val": str(id), "days": str(days)}
     else:
         scope_clause = ""
-        params = {"wid": str(ctx.workspace_id), "days": days}
+        params = {"wid": str(ctx.workspace_id), "days": str(days)}
 
     row = (await db.execute(text(f"""
         SELECT
