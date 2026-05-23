@@ -66,3 +66,37 @@ Unhandled exceptions bubble past Starlette's `CORSMiddleware` (added via `app.ad
 
 - root_cause: SQLAlchemy `InvalidRequestError: A transaction is already begun on this Session` in `_resolve_or_create_workspace` lazy auto-create branch — `async with db.begin()` opened a nested transaction on a session that already had an implicit transaction from the preceding `db.execute(select(...))`. Triggered for every JWT-authenticated request because `user_workspaces` was empty (everyone hits the lazy-create path).
 - fix: Rewrote the lazy auto-create block in `app/utils/auth.py::_resolve_or_create_workspace` to use the project's standard `db.flush() / db.commit() / db.rollback()` pattern instead of a nested `async with db.begin()`. Container rebuilt via `docker compose up -d --build api`.
+
+---
+
+## Follow-up incident (2026-05-23, same session)
+
+After deploying defense-in-depth (commit `de25e4e`), user reported new 500s on `/api/v1/conversations?limit=100`, `/api/v1/analytics/workspace`, `/api/v1/analytics/funnel` — still with missing CORS header in the *browser* (cached errors; live curl confirmed CORS now attached on 401/500 alike).
+
+### Root cause (second wave)
+
+`sqlalchemy.exc.ProgrammingError: relation "messages" does not exist`. Two distinct tables exist in this repo:
+- `messages_log` — legacy send log inherited from `telegram-api`, with SQLAlchemy model `MessageLog`
+- `messages` — Phase 5 inbox table (conversation_id / direction / sent_by), defined only in raw SQL at `migrations/017_phase5.sql:19-30`
+
+The production DB had `messages_log` and `llm_calls` (017 applied partially in the past) but **not** `messages`. `init_db()` only runs `Base.metadata.create_all`, which ignores raw-SQL tables.
+
+### Fix
+
+Applied `migrations/017_phase5.sql` against production DB:
+```bash
+docker cp migrations/017_phase5.sql outreach-platform-db:/tmp/017.sql
+docker exec outreach-platform-db psql -U outreach_user -d outreach_platform -v ON_ERROR_STOP=1 -f /tmp/017.sql
+```
+Idempotent (`IF NOT EXISTS`). Created `messages` + 2 indexes; everything else already existed (NOTICE: skipping).
+
+### Verification
+
+- `\d messages` shows full structure with FK CASCADE to conversations + workspaces
+- `/conversations?limit=100` → 401 with CORS (no auth) — was 500 before
+- `/analytics/{workspace,funnel}` → 401 with CORS — was 500 before
+- Live api logs show fresh `GET /agents 200`, `POST /agents 201`, `GET /contacts 200` from Lovable origin
+
+### Memory written
+
+[[project-aimly-tg-outreach-migrations]] — locked in the fact that raw-SQL migrations need hand-application on this project.
