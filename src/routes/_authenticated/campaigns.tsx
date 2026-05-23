@@ -107,7 +107,8 @@ function CampaignsPage() {
       <Topbar
         title="Campaigns"
         right={
-          <Link to="/campaigns" search={{ new: 1 } as never}>
+          <Link to="/campaigns/new">
+
             <button className="btn btn--primary btn--sm">+ New campaign</button>
           </Link>
         }
@@ -374,7 +375,7 @@ function EmptyState({ filter }: { filter: FilterId }) {
           ? "Try a different filter, or create a new campaign."
           : "A campaign sends your agent's message from your accounts to a folder of contacts."}
       </p>
-      <Link to="/campaigns" search={{ new: 1 } as never}>
+      <Link to="/campaigns/new">
         <button className="btn btn--primary">+ New campaign</button>
       </Link>
     </div>
