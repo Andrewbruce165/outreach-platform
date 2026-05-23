@@ -105,7 +105,7 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
       message = errorMessageFromEnvelope(code, {});
     }
 
-    if (res.status === 401 && token && (code === "TOKEN_EXPIRED" || code === "TOKEN_INVALID")) {
+    if (res.status === 401 && token && code === "TOKEN_EXPIRED") {
       // Hook for sign-out / redirect handled in the route layer.
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("aimly:auth-expired"));
