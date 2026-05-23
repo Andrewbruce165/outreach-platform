@@ -57,36 +57,51 @@ function Sparkline({ data = [], width = 100, height = 30, color = "var(--tg-blue
   );
 }
 
-// SVG bar chart (group of bars)
+// CSS-flex bar chart (group of bars) — replaces previous SVG preserveAspectRatio="none"
+// which stretched bars and labels unevenly. Flex layout scales honestly.
 function BarChart({ data = [], width = 240, height = 80, color = "var(--tg-blue)", labels }) {
   if (!data.length) return null;
   const max = Math.max(...data, 1);
-  const gap = 6;
-  const bw = (width - gap * (data.length - 1)) / data.length;
   return (
-    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height + (labels ? 16 : 0)}`} preserveAspectRatio="none" style={{ display: "block" }}>
-      {data.map((v, i) => {
-        const h = (v / max) * (height - 4);
-        return (
-          <g key={i}>
-            <rect
-              x={i * (bw + gap)}
-              y={height - h}
-              width={bw}
-              height={h}
-              rx={Math.min(4, bw / 2)}
-              fill={color}
-              opacity={0.85}
-            />
-            {labels && (
-              <text x={i * (bw + gap) + bw / 2} y={height + 12} textAnchor="middle" fontSize="10" fill="var(--text-faint)">
-                {labels[i]}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+    <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: labels ? 4 : 0 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height, width: "100%" }}>
+        {data.map((v, i) => (
+          <div
+            key={i}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: `${(v / max) * 100}%`,
+              minHeight: v > 0 ? 2 : 0,
+              background: color,
+              opacity: 0.85,
+              borderRadius: 4,
+            }}
+          />
+        ))}
+      </div>
+      {labels && (
+        <div style={{ display: "flex", gap: 6, width: "100%" }}>
+          {labels.map((label, i) => (
+            <div
+              key={i}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                textAlign: "center",
+                fontSize: 10,
+                color: "var(--text-faint)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
