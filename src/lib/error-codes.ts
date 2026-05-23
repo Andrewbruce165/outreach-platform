@@ -4,6 +4,7 @@
 const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   TOKEN_EXPIRED: () => "Your session expired. Sign in again.",
   TOKEN_INVALID: () => "Your session expired. Sign in again.",
+  AUTH_REQUIRED: () => "Sign-in is still syncing. Refresh the page in a moment.",
   WORKSPACE_NOT_FOUND: () => "Workspace not found",
   CAMPAIGN_NOT_FOUND: () => "Campaign not found",
   SENDER_NOT_FOUND: () => "Account not found",

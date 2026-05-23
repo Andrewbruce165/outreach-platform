@@ -29,8 +29,17 @@ function AuthCallback() {
     }
     let cancelled = false;
     (async () => {
-      // detectSessionInUrl on the Supabase client consumes the URL fragment.
-      // We just wait for the session to materialize.
+      const code = new URLSearchParams(window.location.search).get("code");
+      const { data: initialSession } = await supabase.auth.getSession();
+      if (!initialSession.session && code) {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (exchangeError) {
+          if (!cancelled) setError("Sign-in link was invalid or expired. Try again.");
+          return;
+        }
+      }
+
+      // Wait until the browser auth client has persisted the session before any backend calls.
       for (let i = 0; i < 30 && !cancelled; i++) {
         const { data } = await supabase.auth.getSession();
         if (data.session) break;
