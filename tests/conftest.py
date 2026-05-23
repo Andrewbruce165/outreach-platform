@@ -35,47 +35,81 @@ async def _setup_database():
     """Создаёт схему перед всеми тестами и применяет миграцию 012."""
     import pathlib
 
-    # Apply migrations 001–018 from scratch via a standalone asyncpg connection.
-    # We do NOT use Base.metadata.create_all because the ORM is post-Phase-4 and lacks
-    # server-side column defaults (e.g. ai_contexts.id UUID DEFAULT gen_random_uuid()),
-    # which the migrations rely on. Running the full migration chain produces a schema
-    # identical to production.
-    #
-    # SQLAlchemy's exec_driver_sql goes through asyncpg's `prepare`, which only accepts
-    # one statement per call. So we bypass SQLAlchemy and call asyncpg directly —
-    # standalone connection (NOT from the sqlalchemy pool, which caused event-loop
-    # crosstalk in earlier attempts).
+    # Setup strategy:
+    # 1. Base.metadata.create_all builds base tables from the ORM (defines `messages`,
+    #    `ai_contexts`, `senders`, etc. that the migrations 001-011 ALTER but never CREATE).
+    # 2. Migrations 012-018 then layer the Phase 1-5.1 extensions on top.
+    # 3. The ORM has `default=uuid.uuid4` (Python-side) for id columns. Tests that do raw
+    #    SQL INSERT need server-side defaults — we add them post-create_all.
     import asyncpg
 
     settings = get_settings()
     dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+    # 1. Wipe + create base tables from ORM
     asyncpg_conn = await asyncpg.connect(dsn=dsn)
     try:
-        # Wipe any leftover schema from a prior incomplete run — migrations are idempotent
-        # but won't recreate dropped objects (e.g. context_contact_assignments was dropped
-        # in 016 but is needed for the 012 ALTER, then re-dropped by 016).
         await asyncpg_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    finally:
+        await asyncpg_conn.close()
 
-        # Apply migrations 001–018 in order. They are written to be idempotent and to chain.
-        migration_files = sorted(
-            (PROJECT_ROOT / "migrations").glob("[0-9][0-9][0-9]_*.sql")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # 2. Defensive stub: cca was dropped from the ORM by Phase 4 (016) but migration 012
+    #    still ALTERs it. Stub it minimally so 012 can run; 016 drops it again.
+    # 3. Add server-side `gen_random_uuid()` default on UUID PKs so raw-SQL tests work.
+    asyncpg_conn = await asyncpg.connect(dsn=dsn)
+    try:
+        # Stub for migration 012's cca ALTER
+        await asyncpg_conn.execute(
+            "CREATE TABLE IF NOT EXISTS context_contact_assignments ("
+            "id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
+            "context_id UUID, contact_phone VARCHAR(20), sender_id UUID, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
         )
-        for migration in migration_files:
-            sql_text = migration.read_text()
+
+        # Add server-side UUID defaults to tables tested with raw INSERT statements.
+        # The ORM uses Python-side default=uuid.uuid4 which only fires via ORM mapper.
+        for table in (
+            "ai_contexts", "senders", "contacts", "folders", "campaigns",
+            "campaign_senders", "campaign_contact_assignments",
+            "message_queue", "conversations", "messages", "llm_calls",
+            "workspaces", "user_workspaces", "workspace_api_keys",
+            "onboarding_sessions", "csv_imports", "proxy_pool",
+            "warmup_pool", "warmup_sessions", "warmup_messages",
+        ):
+            try:
+                await asyncpg_conn.execute(
+                    f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT gen_random_uuid()"
+                )
+            except (asyncpg.exceptions.UndefinedTableError,
+                    asyncpg.exceptions.UndefinedColumnError):
+                # Table or `id` column not present (e.g. junction tables w/ composite PK).
+                pass
+
+        # Apply Phase 1-5.1 migrations 012-018 in order.
+        for filename in (
+            "012_workspace.sql",
+            "013_phase2.sql",
+            "014_phase2_1_hardening.sql",
+            "015_phase3.sql",
+            "016_phase4.sql",
+            "017_phase5.sql",
+            "018_phase5_1.sql",
+        ):
+            sql_text = (PROJECT_ROOT / "migrations" / filename).read_text()
             await asyncpg_conn.execute(sql_text)
     finally:
         await asyncpg_conn.close()
 
     yield
 
-    # Teardown: nuke the schema so the next pytest invocation starts clean.
-    asyncpg_conn = await asyncpg.connect(dsn=dsn)
-    try:
-        await asyncpg_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    finally:
-        await asyncpg_conn.close()
+    # Teardown
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest_asyncio.fixture
