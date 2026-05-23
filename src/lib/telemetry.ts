@@ -40,6 +40,20 @@ interface QueuedEvent {
 const queue: QueuedEvent[] = [];
 let flushScheduled = false;
 
+async function waitForAccessToken(): Promise<string | null> {
+  for (let i = 0; i < 20; i++) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token ?? null;
+      if (token) return token;
+    } catch {
+      return null;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
 async function flush(beacon = false) {
   if (queue.length === 0) return;
   const batch = queue.splice(0, queue.length);
@@ -53,13 +67,7 @@ async function flush(beacon = false) {
   }
 
   try {
-    let token: string | null = null;
-    try {
-      const { data } = await supabase.auth.getSession();
-      token = data.session?.access_token ?? null;
-    } catch {
-      /* SSR or unconfigured */
-    }
+    const token = await waitForAccessToken();
     await fetch(url, {
       method: "POST",
       headers: {
