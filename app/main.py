@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 
@@ -88,6 +89,21 @@ app.add_middleware(
     allow_methods=["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight
     allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
 )
+
+
+# Defense-in-depth (Phase 05.1-DEBUG agents-500-cors): catch any unhandled
+# exception so the response goes through CORSMiddleware. Without this,
+# exceptions bubble to Starlette's outer ServerErrorMiddleware which returns
+# a 500 *without* CORS headers — surfacing on the frontend as a misleading
+# "No Access-Control-Allow-Origin" error and masking the real failure.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "code": "INTERNAL_ERROR"},
+    )
+
 
 # Include routers.
 #   Phase 1: health, workspace (D-14 lockdown)
