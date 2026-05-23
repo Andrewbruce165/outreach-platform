@@ -38,6 +38,20 @@ async def _setup_database():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        # Defensive: Base.metadata is post-Phase-4 (context_contact_assignments dropped in 016).
+        # Migration 012 ALTERs that table; without a stub here, 012 fails on the missing table.
+        # Migration 016 then drops it cleanly, restoring the post-Phase-4 state.
+        await conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS context_contact_assignments (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                context_id    UUID,
+                contact_phone VARCHAR(20),
+                sender_id     UUID,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+
         # Применяем миграцию целиком через exec_driver_sql (не split по ";" —
         # partial-индексы WHERE revoked_at IS NULL и CHECK с запятыми ломают наивный сплиттер).
         # BEGIN/COMMIT в миграции уже есть, но run_sync даёт нам autocommit-engine для setup,
