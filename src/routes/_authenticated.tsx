@@ -9,6 +9,8 @@ export const Route = createFileRoute("/_authenticated")({
   ssr: false,
   beforeLoad: async ({ location }) => {
     if (typeof window === "undefined") return;
+    // DEV BYPASS: skip auth guard so screens are previewable without login.
+    if (import.meta.env.DEV) return;
     if (!hasSupabaseEnv) {
       throw redirect({ to: "/login" });
     }
