@@ -38,60 +38,48 @@ async def _setup_database():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        # Defensive: Base.metadata is post-Phase-4 (context_contact_assignments dropped in 016).
-        # Migration 012 ALTERs that table; without a stub here, 012 fails on the missing table.
-        # Migration 016 then drops it cleanly, restoring the post-Phase-4 state.
-        await conn.exec_driver_sql("""
-            CREATE TABLE IF NOT EXISTS context_contact_assignments (
-                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                context_id    UUID,
-                contact_phone VARCHAR(20),
-                sender_id     UUID,
-                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-        """)
+    # Migrations are multi-statement files (BEGIN ... COMMIT with many DDL inside).
+    # SQLAlchemy's exec_driver_sql goes through asyncpg's `prepare`, which only accepts
+    # a single SQL statement — so multi-statement files fail with
+    # "cannot insert multiple commands into a prepared statement". The workaround is
+    # to bypass SQLAlchemy and call asyncpg's raw `.execute()` directly, which DOES
+    # batch-execute multi-statement strings.
+    async def _run_migration(sql_path: pathlib.Path) -> None:
+        sql_text = sql_path.read_text()
+        # Acquire a raw asyncpg connection from the pool. Use _connection_dialect of the engine.
+        # NOTE: engine.pool gives sync-style API; for asyncpg we go through the dialect connection.
+        async with engine.connect() as conn_:
+            raw_conn = await conn_.get_raw_connection()
+            asyncpg_conn = raw_conn.driver_connection  # actual asyncpg.Connection
+            await asyncpg_conn.execute(sql_text)
+            await conn_.commit()
 
-        # Применяем миграцию целиком через exec_driver_sql (не split по ";" —
-        # partial-индексы WHERE revoked_at IS NULL и CHECK с запятыми ломают наивный сплиттер).
-        # BEGIN/COMMIT в миграции уже есть, но run_sync даёт нам autocommit-engine для setup,
-        # поэтому оставляем как есть — Postgres выполнит транзакцию как одну statement-batch.
-        PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
-        sql_012 = (PROJECT_ROOT / "migrations" / "012_workspace.sql").read_text()
-        await conn.exec_driver_sql(sql_012)
+    PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-        # Phase 2 migration: folders, contacts, onboarding_sessions, csv_imports
-        # + senders extension (lifecycle_status, rate_per_*, role CHECK) - is_active.
-        sql_013 = (PROJECT_ROOT / "migrations" / "013_phase2.sql").read_text()
-        await conn.exec_driver_sql(sql_013)
+    # Defensive: Base.metadata is post-Phase-4 (context_contact_assignments dropped in 016).
+    # Migration 012 ALTERs that table; without a stub, the ALTER on missing table fails.
+    # Migration 016 then drops it cleanly, restoring the post-Phase-4 state.
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE IF NOT EXISTS context_contact_assignments ("
+            "id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
+            "context_id UUID, contact_phone VARCHAR(20), sender_id UUID, "
+            "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), "
+            "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+        )
 
-        # Phase 02.1 hardening migration: per-workspace UNIQUE(slug) +
-        # onboarding_sessions.original_sender_id (CR-05, WR-02).
-        sql_014 = (PROJECT_ROOT / "migrations" / "014_phase2_1_hardening.sql").read_text()
-        await conn.exec_driver_sql(sql_014)
-
-        # Phase 3 migration: drop deprecated ai_contexts columns + drop senders.ai_context_id
-        # + UNIQUE (workspace_id, name).
-        sql_015 = (PROJECT_ROOT / "migrations" / "015_phase3.sql").read_text()
-        await conn.exec_driver_sql(sql_015)
-
-        # Phase 4 migration: campaigns + campaign_senders + cca + +columns;
-        # DROP context_contact_assignments; extend conversations.status CHECK;
-        # +message_queue.campaign_id (NULLable per AUDIT Q1).
-        sql_016 = (PROJECT_ROOT / "migrations" / "016_phase4.sql").read_text()
-        await conn.exec_driver_sql(sql_016)
-
-        # Phase 5 migration: defensive messages CREATE TABLE + extend
-        # conversations.status CHECK with 'bot_ignored' (D-07) + create
-        # llm_calls (D-09) + 3 composite indexes for analytics (C-04).
-        sql_017 = (PROJECT_ROOT / "migrations" / "017_phase5.sql").read_text()
-        await conn.exec_driver_sql(sql_017)
-
-        # Phase 05.1 migration: telemetry_events + ai_contexts (12 cols
-        # incl. auto_pause_triggers revival) + campaigns (4 cols incl.
-        # unified webhook_url + audience_hints/primary_goal/success_criteria).
-        sql_018 = (PROJECT_ROOT / "migrations" / "018_phase5_1.sql").read_text()
-        await conn.exec_driver_sql(sql_018)
+    # Phase 1 (012), Phase 2 (013), Phase 02.1 (014), Phase 3 (015), Phase 4 (016),
+    # Phase 5 (017), Phase 05.1 (018) — applied in order via raw asyncpg execute.
+    for filename in (
+        "012_workspace.sql",
+        "013_phase2.sql",
+        "014_phase2_1_hardening.sql",
+        "015_phase3.sql",
+        "016_phase4.sql",
+        "017_phase5.sql",
+        "018_phase5_1.sql",
+    ):
+        await _run_migration(PROJECT_ROOT / "migrations" / filename)
 
     yield
 
