@@ -249,17 +249,8 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
     );
   }
 
-  const contacts = contactsQ.data ?? [];
-  const filtered = useMemo(() => {
-    if (!search.trim()) return contacts;
-    const q = search.toLowerCase();
-    return contacts.filter(
-      (c) =>
-        (c.full_name ?? "").toLowerCase().includes(q) ||
-        (c.username ?? "").toLowerCase().includes(q) ||
-        (c.phone ?? "").includes(q),
-    );
-  }, [contacts, search]);
+
+
 
   return (
     <section className="ct__main">
