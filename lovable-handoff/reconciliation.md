@@ -39,6 +39,13 @@ The frontend uses generated `types/api.ts` for shape contracts, so screen behavi
 - Reason: Slug is the natural identifier for senders (per onboarding flow); UUIDs are internal
 - Action: UI-SPEC §5.10 patched — all `{id}` in §5.10 sender paths replaced with `{slug}`
 
+## §5.10 Senders — re-auth has no dedicated endpoint
+
+- UI-SPEC initially listed: `POST /api/v1/senders/{slug}/reauth`
+- Backend ships: no `/reauth` endpoint
+- Reason: re-auth (session revoked) reuses the existing onboarding flow — phone → SMS code → success — against the same slug. Backend writes the new encrypted session to the existing sender row via `POST /onboarding/verify-code`. A dedicated `/reauth` endpoint would duplicate logic for zero behavior gain.
+- Action: UI-SPEC §5.10 Backend cell patched (2026-05-23). The frontend "Re-auth" row action opens `<OnboardingFlow>` pre-filled with the sender's phone; success path identical to first-time onboarding.
+
 ## UI-CONT-01 closure note
 
 The CSV import preview/apply + recheck reconciliation above (three §5.9 path patches) closes requirement UI-CONT-01 — the contacts screen now builds against `/contacts/import/preview`, `/contacts/import`, `/contacts/recheck` (the shipped backend paths), so Lovable can wire the 4-stage CSV import modal with confidence that types and URLs match.
