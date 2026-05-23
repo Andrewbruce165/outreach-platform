@@ -23,6 +23,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func as sql_func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -229,6 +230,11 @@ async def _campaign_to_response(
         handoff_trigger_hint=campaign.handoff_trigger_hint,
         finish_trigger_hint=campaign.finish_trigger_hint,
         tools=campaign.tools or [],
+        # 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6 — UI-CAMPB-01 / UI-CAMPL-01).
+        audience_hints=campaign.audience_hints,
+        primary_goal=campaign.primary_goal,
+        success_criteria=campaign.success_criteria,
+        webhook_url=campaign.webhook_url,
         attached_senders=attached,
         is_exhausted=is_exhausted,
         created_at=campaign.created_at,
@@ -320,6 +326,11 @@ async def create_campaign(
         handoff_trigger_hint=payload.handoff_trigger_hint,
         finish_trigger_hint=payload.finish_trigger_hint,
         tools=[t.model_dump(mode="json") for t in payload.tools],
+        # 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6 — UI-CAMPB-01).
+        audience_hints=payload.audience_hints,
+        primary_goal=payload.primary_goal,
+        success_criteria=payload.success_criteria,
+        webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
         status="draft",
     )
     db.add(camp)
@@ -349,6 +360,49 @@ async def create_campaign(
         f"id={camp.id} senders={len(payload.sender_ids)}"
     )
     return await _campaign_to_response(db, ctx, camp)
+
+
+# ── Endpoint: AI co-pilot auto-fill (UI-SPEC §5.5 — v1 stub) ─────────────────
+
+
+class _AutoFillRequest(BaseModel):
+    """UI-SPEC §5.5 AI co-pilot button payload — free-form brief text the user pasted.
+
+    Phase 05.1 v1: brief is currently ignored; the endpoint returns canned defaults.
+    """
+    brief: Optional[str] = None
+
+
+class _AutoFillResponse(BaseModel):
+    """Canned defaults so the UI button works without an LLM call (v1 stub)."""
+    name: str
+    audience_hints: str
+    primary_goal: str
+    success_criteria: str
+    tools: list
+
+
+@router.post("/auto-fill", response_model=_AutoFillResponse)
+async def auto_fill_campaign(
+    _body: _AutoFillRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+):
+    """UI-SPEC §5.5 AI co-pilot — v1 stub returns canned defaults.
+
+    RESEARCH §"Backend Gap Map" Campaigns explicitly defers LLM-driven auto-fill to v2.
+    This endpoint exists so the UI button stops looking broken; the real implementation
+    lands when /telemetry/core-value KPI proves users want the feature.
+
+    Body shape is the same for v1 and v2 — clients can begin sending `brief` text now
+    so the wire-format doesn't break when the LLM call lands.
+    """
+    return _AutoFillResponse(
+        name="Untitled campaign",
+        audience_hints="",
+        primary_goal="book_meeting",
+        success_criteria="",
+        tools=[],
+    )
 
 
 @router.get("", response_model=CampaignListResponse)
@@ -426,7 +480,7 @@ async def patch_campaign(
                 )
         update_data["name"] = new_name
 
-    for k in ("lead_webhook_url", "handoff_webhook_url", "finish_webhook_url"):
+    for k in ("lead_webhook_url", "handoff_webhook_url", "finish_webhook_url", "webhook_url"):
         if k in update_data and update_data[k] is not None:
             update_data[k] = str(update_data[k])
 
@@ -593,6 +647,21 @@ async def finish_campaign(
     return await _campaign_to_response(db, ctx, c)
 
 
+@router.post("/{campaign_id}/stop", response_model=CampaignResponse)
+async def stop_campaign(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """UI-SPEC §5.4/§5.6 alias — UI labels say "Stop", backend has historically been
+    'finish'. Identical effect (running|paused → done, terminal).
+
+    Phase 05.1 (UI-CAMPL-01): added as alias rather than rename to preserve Phase 4 tests
+    against POST /{id}/finish.
+    """
+    return await finish_campaign(campaign_id, ctx, db)
+
+
 # ── Endpoints: Duplicate ─────────────────────────────────────────────────────
 
 
@@ -646,6 +715,11 @@ async def duplicate_campaign(
         handoff_trigger_hint=src.handoff_trigger_hint,
         finish_trigger_hint=src.finish_trigger_hint,
         tools=src.tools,
+        # 05.1 v2 fields — duplicate should copy them for parity with src.
+        audience_hints=src.audience_hints,
+        primary_goal=src.primary_goal,
+        success_criteria=src.success_criteria,
+        webhook_url=src.webhook_url,
         status="draft",
     )
     db.add(new_c)

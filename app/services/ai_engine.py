@@ -143,6 +143,12 @@ async def get_context_for_conversation(
         dict with conversation_id / workspace_id / agent fields / campaign sub-dict
         (or None if conversation row was not found).
     """
+    # Phase 05.1 (UI-AGNT-01): widen SELECT with COALESCE(new, legacy) so newly
+    # migrated agents (who_is_agent / company_knowledge / knowledge_base set,
+    # system_prompt / company_info / product_info NULL) produce the same in-memory
+    # `context` dict keys as Phase 3 agents. faq COALESCE is text-cast because
+    # qa_pairs and faq are both JSONB and Postgres won't apply COALESCE directly
+    # across JSONB without an explicit cast (Pitfall: implicit cast inference).
     row = (
         await db.execute(
             text(
@@ -151,8 +157,13 @@ async def get_context_for_conversation(
                     conv.id AS conv_id, conv.workspace_id AS conv_wid,
                     conv.campaign_id, conv.ai_context_id, conv.contact_phone,
                     conv.contact_name, conv.contact_telegram_id,
-                    a.id AS agent_id, a.name AS agent_name, a.system_prompt, a.rules,
-                    a.tone_of_voice, a.faq, a.company_info, a.product_info,
+                    a.id AS agent_id, a.name AS agent_name,
+                    COALESCE(a.who_is_agent, a.system_prompt) AS system_prompt,
+                    a.rules,
+                    a.tone_of_voice,
+                    COALESCE(a.qa_pairs::text, a.faq::text)::jsonb AS faq,
+                    COALESCE(a.company_knowledge, a.company_info) AS company_info,
+                    COALESCE(a.knowledge_base, a.product_info) AS product_info,
                     c.id AS campaign_id_full, c.name AS campaign_name,
                     c.workspace_id AS campaign_wid,
                     c.tools AS campaign_tools, c.message_template,
@@ -370,9 +381,17 @@ class AIEngine:
             return cached[0]
 
         try:
+            # Phase 05.1 (UI-AGNT-01): COALESCE(new, legacy) so newly migrated agents
+            # (who_is_agent / company_knowledge set, legacy cols NULL) still expose
+            # the same row indices to the consumer below — ordinal positions
+            # unchanged, only the value source widens.
             result = await session.execute(
                 text("""
-                    SELECT system_prompt, tone_of_voice, rules, company_info
+                    SELECT
+                        COALESCE(who_is_agent, system_prompt) AS system_prompt,
+                        tone_of_voice,
+                        rules,
+                        COALESCE(company_knowledge, company_info) AS company_info
                     FROM ai_contexts
                     WHERE id = :id
                 """),
