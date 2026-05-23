@@ -23,6 +23,7 @@ from app.routers import (
     onboarding,
     send,
     senders,
+    telemetry,  # Phase 05.1 — UI-SPEC §9 Core Value KPI ingest
     workspace,
 )
 
@@ -103,7 +104,8 @@ app.include_router(agents.router)
 app.include_router(send.router)
 app.include_router(campaigns.router)  # Phase 4
 app.include_router(conversations.router)  # Phase 5 — inbox + manager mode
-app.include_router(analytics.router)  # Phase 5 — analytics (4 endpoints)
+app.include_router(analytics.router)  # Phase 5 — analytics (4 endpoints) + 05.1 funnel + llm
+app.include_router(telemetry.router)  # Phase 05.1 — UI-SPEC §9 telemetry + core-value KPI
 
 
 @app.get("/")
