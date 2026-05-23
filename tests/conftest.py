@@ -73,6 +73,12 @@ async def _setup_database():
         sql_017 = (PROJECT_ROOT / "migrations" / "017_phase5.sql").read_text()
         await conn.exec_driver_sql(sql_017)
 
+        # Phase 05.1 migration: telemetry_events + ai_contexts (12 cols
+        # incl. auto_pause_triggers revival) + campaigns (4 cols incl.
+        # unified webhook_url + audience_hints/primary_goal/success_criteria).
+        sql_018 = (PROJECT_ROOT / "migrations" / "018_phase5_1.sql").read_text()
+        await conn.exec_driver_sql(sql_018)
+
     yield
 
     async with engine.begin() as conn:

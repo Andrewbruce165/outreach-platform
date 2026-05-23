@@ -412,20 +412,50 @@ class FaqItem(BaseModel):
     answer: str = Field(..., max_length=2000)
 
 
+# ─── Phase 05.1 agent v2 helpers (UI-SPEC §5.8) ──────────────────────────────
+
+
+class ToneSpec(BaseModel):
+    """Bi-polar tone settings −50..+50 (UI-SPEC §5.8 Voice tab ToneSlider)."""
+    formal: int = Field(default=0, ge=-50, le=50)
+    warm: int = Field(default=0, ge=-50, le=50)
+    brief: int = Field(default=0, ge=-50, le=50)
+
+
+class QAPair(BaseModel):
+    """Single Q&A entry in agent.qa_pairs (UI-SPEC §5.8 FAQ tab)."""
+    q: constr(min_length=1, max_length=2000)
+    a: constr(min_length=1, max_length=4000)
+
+
 class AgentCreate(BaseModel):
-    """POST /api/v1/agents body (D-02)."""
-    name: str = Field(..., min_length=1, max_length=100)
+    """POST /api/v1/agents body (D-02 + UI-SPEC §5.8 v2)."""
+    name: constr(min_length=1, max_length=100)
+    # Legacy fields (Phase 3) — kept Optional for back-compat:
     system_prompt: Optional[str] = None
     rules: Optional[str] = None
     tone_of_voice: Optional[str] = None
     faq: List[FaqItem] = Field(default_factory=list)
     company_info: Optional[str] = None
     product_info: Optional[str] = None
+    # 05.1 v2 fields (UI-SPEC §5.8):
+    who_is_agent: Optional[str] = None
+    company_knowledge: Optional[str] = None
+    knowledge_base: Optional[str] = None
+    voice_baseline: Optional[Literal["Professional", "Friendly", "Playful"]] = None
+    tone: Optional[ToneSpec] = None
+    max_message_length: Optional[int] = Field(default=None, ge=1, le=4096)
+    mirror_language: Optional[bool] = None
+    allow_emoji: Optional[bool] = None
+    banlist: Optional[List[str]] = None
+    qa_pairs: Optional[List[QAPair]] = None
+    auto_pause_triggers: Optional[List[str]] = None
+    auto_pause_scope: Optional[Literal["conversation", "contact", "campaign"]] = None
 
 
 class AgentUpdate(BaseModel):
     """PATCH /api/v1/agents/{id} body. Partial PATCH (C-03 Phase 2 convention)."""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    name: Optional[constr(min_length=1, max_length=100)] = None
     system_prompt: Optional[str] = None
     rules: Optional[str] = None
     tone_of_voice: Optional[str] = None
@@ -433,6 +463,19 @@ class AgentUpdate(BaseModel):
     faq: Optional[List[FaqItem]] = None
     company_info: Optional[str] = None
     product_info: Optional[str] = None
+    # 05.1 v2 fields (UI-SPEC §5.8) — all Optional, same semantics as AgentCreate:
+    who_is_agent: Optional[str] = None
+    company_knowledge: Optional[str] = None
+    knowledge_base: Optional[str] = None
+    voice_baseline: Optional[Literal["Professional", "Friendly", "Playful"]] = None
+    tone: Optional[ToneSpec] = None
+    max_message_length: Optional[int] = Field(default=None, ge=1, le=4096)
+    mirror_language: Optional[bool] = None
+    allow_emoji: Optional[bool] = None
+    banlist: Optional[List[str]] = None
+    qa_pairs: Optional[List[QAPair]] = None
+    auto_pause_triggers: Optional[List[str]] = None
+    auto_pause_scope: Optional[Literal["conversation", "contact", "campaign"]] = None
 
 
 class AgentResponse(BaseModel):
@@ -440,12 +483,27 @@ class AgentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     name: str
-    system_prompt: Optional[str]
-    rules: Optional[str]
-    tone_of_voice: Optional[str]
+    system_prompt: Optional[str] = None
+    rules: Optional[str] = None
+    tone_of_voice: Optional[str] = None
     faq: List[FaqItem] = []
-    company_info: Optional[str]
-    product_info: Optional[str]
+    company_info: Optional[str] = None
+    product_info: Optional[str] = None
+    # 05.1 v2 fields (UI-SPEC §5.8) — serialised straight from JSONB/TEXT[]:
+    who_is_agent: Optional[str] = None
+    company_knowledge: Optional[str] = None
+    knowledge_base: Optional[str] = None
+    voice_baseline: Optional[str] = None
+    # tone serialised as dict (NOT ToneSpec) — DB JSONB round-trip without
+    # re-validating the response payload (back-compat: pre-05.1 rows have NULL).
+    tone: Optional[dict] = None
+    max_message_length: Optional[int] = None
+    mirror_language: Optional[bool] = None
+    allow_emoji: Optional[bool] = None
+    banlist: Optional[List[str]] = None
+    qa_pairs: Optional[List[dict]] = None
+    auto_pause_triggers: Optional[List[str]] = None
+    auto_pause_scope: Optional[str] = None
     campaign_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -475,14 +533,22 @@ class ToolSpec(BaseModel):
 
     Shape matches the internal `webhook_functions` form (AUDIT Section 4).
     NOT OpenAI's JSON Schema form — `ai_engine.build_tools()` converts at runtime.
+
+    Phase 05.1 (Pitfall 6): per-tool webhook_url DEPRECATED — campaign-level
+    webhook_url (CampaignCreate.webhook_url) unifies signal + tool dispatch.
+    Kept Optional for Phase 4 back-compat (test_custom_tools_wiring.py).
     """
     model_config = ConfigDict(from_attributes=True)
 
+    # 05.1 NEW: client-supplied id for UI editor stable React keys
+    # (UI-SPEC §10 CampaignTools shape).
+    id: Optional[constr(min_length=1, max_length=40)] = None
     name: constr(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$", max_length=64)
     description: constr(max_length=1024)
     parameters: List[ToolParamSpec] = Field(default_factory=list)
-    webhook_url: HttpUrl
-    webhook_method: Literal["POST", "GET"] = "POST"
+    # Deprecated in 05.1 (UI-SPEC §10) — kept Optional for Phase 4 back-compat.
+    webhook_url: Optional[HttpUrl] = None
+    webhook_method: Optional[Literal["POST", "GET"]] = "POST"
 
 
 class CampaignSenderAttach(BaseModel):
@@ -519,6 +585,13 @@ class CampaignCreate(BaseModel):
     handoff_trigger_hint: Optional[str] = None
     finish_trigger_hint: Optional[str] = None
     tools: List[ToolSpec] = Field(default_factory=list)
+    # ── 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6). ──
+    audience_hints: Optional[str] = None
+    primary_goal: Optional[Literal["book_meeting", "qualify", "click", "engage"]] = None
+    success_criteria: Optional[str] = None
+    # Unified webhook URL — supersedes per-tool webhook_url + 3 legacy signal URLs
+    # for new campaigns. Legacy URLs remain Optional above for Phase 4 back-compat.
+    webhook_url: Optional[HttpUrl] = None
 
     @model_validator(mode="after")
     def _check_work_hours(self) -> "CampaignCreate":
@@ -551,6 +624,11 @@ class CampaignUpdate(BaseModel):
     handoff_trigger_hint: Optional[str] = None
     finish_trigger_hint: Optional[str] = None
     tools: Optional[List[ToolSpec]] = None
+    # ── 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6). ──
+    audience_hints: Optional[str] = None
+    primary_goal: Optional[Literal["book_meeting", "qualify", "click", "engage"]] = None
+    success_criteria: Optional[str] = None
+    webhook_url: Optional[HttpUrl] = None
 
 
 class CampaignResponse(BaseModel):
@@ -578,6 +656,13 @@ class CampaignResponse(BaseModel):
     handoff_trigger_hint: Optional[str] = None
     finish_trigger_hint: Optional[str] = None
     tools: List[dict[str, Any]] = Field(default_factory=list)
+    # ── 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6) — all Optional / NULL on
+    # pre-05.1 rows; CampaignResponse keeps str (not HttpUrl) for the response
+    # half so DB → JSON serialisation is a flat passthrough. ──
+    audience_hints: Optional[str] = None
+    primary_goal: Optional[str] = None
+    success_criteria: Optional[str] = None
+    webhook_url: Optional[str] = None
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
     is_exhausted: bool = False
     created_at: datetime
@@ -749,3 +834,32 @@ class LLMCallListResponse(BaseModel):
 
     llm_calls: list[LLMCallResponse]
     total: int
+
+
+# === Phase 05.1: Telemetry ingest + Core Value KPI (UI-TEL-01) ================
+
+
+class TelemetryEventIn(BaseModel):
+    """POST /api/v1/telemetry/events body (UI-SPEC §9).
+
+    event_id is client-supplied for navigator.sendBeacon idempotency
+    (retry on flaky networks → same event lands once). Default factory
+    generates a fresh UUIDv4 when the client omits it.
+    """
+
+    event_id: Optional[UUID] = Field(default=None)
+    event: constr(min_length=1, max_length=80)
+    props: dict = Field(default_factory=dict)
+    client_timestamp: Optional[datetime] = None
+
+
+class CoreValueResponse(BaseModel):
+    """GET /api/v1/telemetry/core-value response (UI-SPEC §9 KPI #9).
+
+    All three fields may be None for workspaces that have not yet signed up or
+    launched a campaign; UI renders them as "—" in that case.
+    """
+
+    time_to_first_campaign_seconds: Optional[int] = None
+    signup_at: Optional[datetime] = None
+    first_launch_at: Optional[datetime] = None

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Integer, LargeBinary, ForeignKey, Enum as SQLEnum
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func, text
 from app.database import Base
@@ -157,10 +157,27 @@ class AIContext(Base):
     company_info = Column(Text, nullable=True)
     product_info = Column(Text, nullable=True)
     faq = Column(JSONB, default={})
+    # ── 05.1 v2 columns (UI-SPEC §5.8 — additive, nullable; legacy fields kept). ──
+    # auto_pause_triggers was dropped in migration 015 (Phase 3) and resurrected
+    # in migration 018 — see SUMMARY for the reality check.
+    who_is_agent = Column(Text, nullable=True)
+    company_knowledge = Column(Text, nullable=True)
+    knowledge_base = Column(Text, nullable=True)
+    voice_baseline = Column(String(20), nullable=True)
+    # tone JSONB default {"formal":0,"warm":0,"brief":0} — server_default lives in migration.
+    tone = Column(JSONB, nullable=True)
+    max_message_length = Column(Integer, nullable=True, server_default="280")
+    mirror_language = Column(Boolean, nullable=True, server_default="true")
+    allow_emoji = Column(Boolean, nullable=True, server_default="false")
+    banlist = Column(ARRAY(Text), nullable=True)
+    qa_pairs = Column(JSONB, nullable=True)
+    auto_pause_triggers = Column(ARRAY(Text), nullable=True)
+    auto_pause_scope = Column(String(20), nullable=True, server_default="conversation")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    # NB: max_message_length, response_delay_seconds, auto_pause_triggers, is_active dropped
-    # (Phase 3 D-01) — концерны кампании, переезжают в Phase 4 (CAMP-10/CAMP-12/CAMP-14/CAMP-15).
+    # NB: response_delay_seconds, is_active dropped (Phase 3 D-01).
+    # max_message_length re-added в Phase 05.1 (UI-SPEC §5.8 length cap setting).
+    # auto_pause_triggers re-added в Phase 05.1 (UI-SPEC §5.8 banned triggers).
     # NB: senders relationship dropped (Phase 3 D-04) — связь sender↔agent больше не через FK.
 
 
@@ -474,6 +491,12 @@ class Campaign(Base):
     handoff_trigger_hint = Column(Text, nullable=True)
     finish_trigger_hint = Column(Text, nullable=True)
     tools = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    # ── 05.1 v2 columns (UI-SPEC §5.5 step 2 + step 6 — additive, nullable;
+    # legacy 3-webhook cols above kept for Phase 4 back-compat / Pitfall 6). ──
+    audience_hints = Column(Text, nullable=True)
+    primary_goal = Column(String(20), nullable=True)
+    success_criteria = Column(Text, nullable=True)
+    webhook_url = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(),
                         onupdate=func.now(), nullable=False)
@@ -571,3 +594,33 @@ class LLMCall(Base):
     latency_ms = Column(Integer, nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+# ─── Phase 05.1: Telemetry event ingest (UI-TEL-01) ───────────────────────────
+
+
+class TelemetryEvent(Base):
+    """UI telemetry event ingest (UI-SPEC §9, Phase 05.1).
+
+    Storage for the 15-event whitelist (enforced at router-level in
+    app/routers/telemetry.py — Wave 2). event_id is a client-supplied UUID
+    for idempotency (navigator.sendBeacon retries on flaky networks).
+    server_ts is authoritative for KPI queries; the core "time to first
+    campaign" metric is computed as
+        MIN(launch.server_ts) - MIN(signup_completed.server_ts)
+    per (workspace_id, user_id).
+    """
+    __tablename__ = "telemetry_events"
+
+    event_id = Column(UUID(as_uuid=True), primary_key=True)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    user_id = Column(Text, nullable=True)
+    event = Column(String(80), nullable=False)
+    props = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    client_ts = Column(DateTime(timezone=True), nullable=True)
+    server_ts = Column(DateTime(timezone=True),
+                       server_default=func.now(), nullable=False)
+
+    workspace = relationship("Workspace")
