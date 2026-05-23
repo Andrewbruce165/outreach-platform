@@ -103,127 +103,180 @@ function KpiCard({ label, value, delta, up, sub, icon, color, spark }) {
 }
 
 // ============================================================
-// Live pulse — the AI-first fishka
+// Conversion funnel + live stream — the AI-first fishka
 // ============================================================
 function LivePulseCard({ onOpenCampaign }) {
-  // Active senders -> active leads
-  const senders = [
-  { name: "Anna", at: [0.12, 0.82], color: "#3390ec", sent: 18 },
-  { name: "Marco", at: [0.18, 0.18], color: "#3390ec", sent: 14 },
-  { name: "Sasha", at: [0.08, 0.5], color: "#8774e1", sent: 19 },
-  { name: "Elena", at: [0.22, 0.62], color: "#8774e1", sent: 16 },
-  { name: "Priya", at: [0.15, 0.34], color: "#4dcd5e", sent: 12 }];
-
-  const leads = [
-  { name: "Sophie T.", at: [0.85, 0.16], status: "lead", color: "#3390ec" },
-  { name: "Liam K.", at: [0.92, 0.30], status: "active", color: "#3390ec" },
-  { name: "Olivia R.", at: [0.78, 0.46], status: "active", color: "#8774e1" },
-  { name: "Noah J.", at: [0.88, 0.6], status: "handoff", color: "#4dcd5e" },
-  { name: "Sara O.", at: [0.82, 0.76], status: "active", color: "#3390ec" },
-  { name: "Maya I.", at: [0.95, 0.88], status: "lead", color: "#4dcd5e" }];
-
-  // Wire pairs
-  const wires = [
-  [0, 0], [0, 4], [1, 1], [2, 2], [2, 3], [3, 3], [4, 5], [4, 3], [1, 0]];
-
+  const stages = [
+    { id: "sent",    label: "Sent",    value: 2106, color: "#3390ec" },
+    { id: "replied", label: "Replied", value: 517,  color: "#5eaef4" },
+    { id: "engaged", label: "Engaged", value: 310,  color: "#8774e1" },
+    { id: "lead",    label: "Lead",    value: 86,   color: "#4dcd5e" },
+    { id: "handoff", label: "Handoff", value: 28,   color: "#16a34a" },
+  ];
 
   return (
-    <div className="card" style={{ overflow: "hidden", position: "relative" }}>
+    <div className="card" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <div className="card__header">
-        <div className="row">
-          <span className="live-dot" />
-          <div>
-            <div className="card__title">Live conversations</div>
-            <div className="card__sub">9 active threads · 5 senders engaged right now</div>
-          </div>
+        <div>
+          <div className="card__title">Conversion funnel</div>
+          <div className="card__sub">Sent → Handoff · last 7 days</div>
         </div>
-        <div className="spacer" />
-        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <Legend swatch="#3390ec" label="SaaS Q2" />
-          <Legend swatch="#8774e1" label="Crypto whales" />
-          <Legend swatch="#4dcd5e" label="YT sponsorship" />
+        <div className="spacer"/>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 11.5 }}>
+          <span className="live-dot"/>
+          <span>updating live</span>
         </div>
       </div>
-      <div style={{ position: "relative", height: 280, background: "linear-gradient(180deg, #fafbfd 0%, #f4f6f9 100%)" }}>
-        <svg viewBox="0 0 1 1" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
-          {/* Wires */}
-          {wires.map(([si, li], i) => {
-            const s = senders[si];
-            const l = leads[li];
-            return <LiveWire key={i} from={s.at} to={l.at} color={s.color} duration={1800 + i * 200} delay={i * 300} />;
-          })}
-        </svg>
+      <div style={{ padding: "22px 26px 24px", flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <SankeyFunnel stages={stages}/>
+      </div>
+    </div>
+  );
+}
 
-        {/* Left column label */}
-        <div style={{ position: "absolute", left: 18, top: 14, fontSize: 11, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
-          Senders
-        </div>
-        <div style={{ position: "absolute", right: 18, top: 14, fontSize: 11, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
-          Leads
-        </div>
+function SankeyFunnel({ stages }) {
+  const W = 720;
+  const H = 200;
+  const colW = 46;
+  const labelGap = 46;
+  const gap = (W - colW * stages.length) / (stages.length - 1);
+  const max = stages[0].value;
+  const hFor = v => Math.max(2, (v / max) * (H - 16));
+  const yTop = v => (H - hFor(v)) / 2;
+  const yBot = v => yTop(v) + hFor(v);
 
-        {/* Sender nodes */}
-        {senders.map((s, i) =>
-        <Node key={i} pos={s.at}>
-            <Avatar name={s.name} size="sm" />
-            <NodeLabel>
-              <div style={{ fontSize: 12, fontWeight: 500 }}>{s.name}</div>
-              <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{s.sent}/20 today</div>
-            </NodeLabel>
-          </Node>
-        )}
-        {/* Lead nodes */}
-        {leads.map((l, i) =>
-        <Node key={i} pos={l.at} alignRight>
-            <NodeLabel align="right">
-              <div style={{ fontSize: 12, fontWeight: 500 }}>{l.name}</div>
-              <div style={{ fontSize: 10 }}>
-                <StatusPillMini status={l.status} />
+  const ribbon = (a, b, ax, bx) => {
+    const x1 = ax + colW, x2 = bx;
+    const cx = x1 + (x2 - x1) * 0.5;
+    return [
+      `M ${x1} ${yTop(a.value)}`,
+      `C ${cx} ${yTop(a.value)}, ${cx} ${yTop(b.value)}, ${x2} ${yTop(b.value)}`,
+      `L ${x2} ${yBot(b.value)}`,
+      `C ${cx} ${yBot(b.value)}, ${cx} ${yBot(a.value)}, ${x1} ${yBot(a.value)}`,
+      "Z",
+    ].join(" ");
+  };
+
+  const dropoff = (a, b, ax, bx) => {
+    const x1 = ax + colW, x2 = bx;
+    const cx = x1 + (x2 - x1) * 0.5;
+    const topA = yBot(a.value);
+    const topB = yBot(b.value);
+    const tailY = H + 6;
+    return [
+      `M ${x1} ${topA}`,
+      `C ${cx} ${topA}, ${cx} ${topB}, ${x2} ${topB}`,
+      `L ${x2} ${tailY}`,
+      `L ${x1} ${tailY}`,
+      "Z",
+    ].join(" ");
+  };
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H + labelGap}`} width="100%" style={{ display: "block", overflow: "visible" }}>
+      <defs>
+        {stages.slice(0, -1).map((s, i) => (
+          <linearGradient key={s.id} id={`band-${s.id}`} x1="0" x2="1">
+            <stop offset="0%" stopColor={s.color}/>
+            <stop offset="100%" stopColor={stages[i + 1].color}/>
+          </linearGradient>
+        ))}
+      </defs>
+
+      {/* Drop-off bleed */}
+      {stages.slice(0, -1).map((s, i) => {
+        const next = stages[i + 1];
+        const ax = i * (colW + gap);
+        const bx = (i + 1) * (colW + gap);
+        return (
+          <path key={`drop-${s.id}`} d={dropoff(s, next, ax, bx)} fill={s.color} opacity="0.08"/>
+        );
+      })}
+
+      {/* Flow ribbons */}
+      {stages.slice(0, -1).map((s, i) => {
+        const next = stages[i + 1];
+        const ax = i * (colW + gap);
+        const bx = (i + 1) * (colW + gap);
+        return (
+          <path key={`flow-${s.id}`} d={ribbon(s, next, ax, bx)} fill={`url(#band-${s.id})`} opacity="0.4"/>
+        );
+      })}
+
+      {/* Stage bars */}
+      {stages.map((s, i) => {
+        const x = i * (colW + gap);
+        return (
+          <g key={s.id}>
+            <rect x={x} y={yTop(s.value)} width={colW} height={hFor(s.value)} rx="4" fill={s.color}/>
+            <text x={x + colW / 2} y={H + 20} textAnchor="middle" fontSize="10" fill="var(--text-faint)" fontWeight="600" style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              {s.label}
+            </text>
+            <text x={x + colW / 2} y={H + 40} textAnchor="middle" fontSize="17" fontWeight="600" fill="var(--text)" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {s.value.toLocaleString()}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* Conversion ratio chips between stages */}
+      {stages.slice(0, -1).map((s, i) => {
+        const next = stages[i + 1];
+        const pct = (next.value / s.value) * 100;
+        const label = pct < 10 ? pct.toFixed(1) + "%" : Math.round(pct) + "%";
+        const cx = i * (colW + gap) + colW + gap / 2;
+        return (
+          <g key={`cr-${s.id}`}>
+            <rect x={cx - 22} y={yTop(next.value) - 22} width="44" height="18" rx="9" fill="white" stroke="var(--border)"/>
+            <text x={cx} y={yTop(next.value) - 9} textAnchor="middle" fontSize="10.5" fill="var(--text-soft)" fontWeight="600" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+const LIVE_EVENTS = [
+  { who: "Sophie T.", what: "booked a meeting", via: "Maya", t: "12s", color: "var(--success)", icon: "flag" },
+  { who: "Liam K.", what: "asked about pricing", via: "Maya", t: "48s", color: "var(--tg-blue)", icon: "message_circle" },
+  { who: "Noah J.", what: "handed off to manager", via: "Cleo", t: "2m", color: "var(--ai-purple)", icon: "user" },
+  { who: "Olivia R.", what: "replied to follow-up", via: "Theo", t: "3m", color: "var(--tg-blue)", icon: "message_circle" },
+  { who: "Maya I.", what: "loop'd in CFO", via: "Cleo", t: "4m", color: "var(--success)", icon: "flag" },
+  { who: "@anna_p", what: "sent 18th message today", via: null, t: "5m", color: "var(--text-muted)", icon: "send" },
+  { who: "Ava M.", what: "asked for case studies", via: "Theo", t: "7m", color: "var(--tg-blue)", icon: "message_circle" },
+  { who: "@hirot", what: "session revoked", via: null, t: "9m", color: "var(--danger)", icon: "alert_triangle" },
+];
+
+function LiveActivityRail() {
+  return (
+    <div style={{ width: 280, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div className="card__header" style={{ paddingLeft: 16, paddingRight: 14 }}>
+        <div>
+          <div className="card__title">Live stream</div>
+          <div className="card__sub">Signals · last 10 min</div>
+        </div>
+      </div>
+      <div className="scroll" style={{ flex: 1, padding: "4px 6px 8px" }}>
+        {LIVE_EVENTS.map((e, i) => (
+          <div key={i} style={{ display: "flex", gap: 10, padding: "9px 10px", alignItems: "flex-start", borderRadius: 8 }}>
+            <div style={{ width: 22, height: 22, borderRadius: 7, background: `${e.color}15`, color: e.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+              <Icon name={e.icon} size={11}/>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>
+                <b>{e.who}</b> <span className="muted">{e.what}</span>
               </div>
-            </NodeLabel>
-            <Avatar name={l.name} size="sm" />
-          </Node>
-        )}
+              <div className="muted text-xs" style={{ marginTop: 2 }}>
+                {e.via && <>via {e.via} · </>}{e.t} ago
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
-    </div>);
-
-}
-
-function Node({ pos, alignRight, children }) {
-  return (
-    <div style={{
-      position: "absolute",
-      left: `${pos[0] * 100}%`, top: `${pos[1] * 100}%`,
-      transform: "translate(-50%, -50%)",
-      display: "flex", alignItems: "center", gap: 8,
-      flexDirection: alignRight ? "row-reverse" : "row"
-    }}>
-      {children}
-    </div>);
-
-}
-function NodeLabel({ children, align }) {
-  return (
-    <div style={{ background: "white", borderRadius: 8, padding: "5px 9px",
-      boxShadow: "0 4px 10px rgba(15,20,25,0.08), 0 0 0 1px rgba(15,20,25,0.05)",
-      textAlign: align === "right" ? "right" : "left", minWidth: 80,
-      whiteSpace: "nowrap" }}>
-      {children}
-    </div>);
-
-}
-function StatusPillMini({ status }) {
-  const s = STATUS_STYLES[status] || STATUS_STYLES.active;
-  return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: s.dot, fontWeight: 600 }}>
-    <span style={{ width: 5, height: 5, borderRadius: 50, background: s.dot }} /> {s.label}
-  </span>;
-}
-function Legend({ swatch, label }) {
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--text-muted)" }}>
-      <span style={{ width: 8, height: 8, borderRadius: 2, background: swatch }} /> {label}
-    </span>);
-
+    </div>
+  );
 }
 
 // ============================================================

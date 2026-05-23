@@ -98,6 +98,8 @@ const AGENTS = [
   {
     id: "a1", name: "Maya", role: "Discovery SDR",
     desc: "Books intros with SaaS founders. Warm, curious, never pushy.",
+    who: "Friendly, curious SDR for AI SaaS startups. Always ends with a single, easy ask.",
+    voiceBaseline: "Friendly",
     tone: "Friendly · concise", lang: "EN",
     campaigns: 3, conversations: 1076, leads: 45,
     accent: "#3390ec",
@@ -107,6 +109,8 @@ const AGENTS = [
   {
     id: "a2", name: "Theo", role: "Friendly opener",
     desc: "Opens cold dialogs with a soft, on-brand intro. Handles small talk.",
+    who: "Warm opener who reads the room. Small talk first, value second.",
+    voiceBaseline: "Friendly",
     tone: "Warm · informal", lang: "EN/RU",
     campaigns: 2, conversations: 599, leads: 21,
     accent: "#8774e1",
@@ -116,6 +120,8 @@ const AGENTS = [
   {
     id: "a3", name: "Cleo", role: "Partnerships",
     desc: "Pitches sponsorship & integration deals. Knows our deck cold.",
+    who: "Professional partnerships rep. Confident with numbers, deck cold-memorized.",
+    voiceBaseline: "Professional",
     tone: "Professional · upbeat", lang: "EN",
     campaigns: 2, conversations: 620, leads: 55,
     accent: "#4dcd5e",
@@ -125,6 +131,8 @@ const AGENTS = [
   {
     id: "a4", name: "Vito", role: "Recruiter",
     desc: "Reaches out to Solidity devs with role context. Filters availability.",
+    who: "Direct, respectful recruiter. Talks tech-to-tech, filters fast.",
+    voiceBaseline: "Professional",
     tone: "Direct · respectful", lang: "EN",
     campaigns: 1, conversations: 0, leads: 0,
     accent: "#f5a623",
@@ -134,6 +142,8 @@ const AGENTS = [
   {
     id: "a5", name: "Lyra", role: "Onboarding nudger",
     desc: "Re-engages trial users who haven't logged in for 7+ days.",
+    who: "Patient nudger for trial drop-offs. Helpful, never guilt-trips.",
+    voiceBaseline: "Playful",
     tone: "Helpful · patient", lang: "EN",
     campaigns: 0, conversations: 0, leads: 0,
     accent: "#e13b30",

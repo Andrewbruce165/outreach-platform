@@ -57,46 +57,29 @@ function Sparkline({ data = [], width = 100, height = 30, color = "var(--tg-blue
   );
 }
 
-// CSS-flex bar chart (group of bars) — replaces previous SVG preserveAspectRatio="none"
-// which stretched bars and labels unevenly. Flex layout scales honestly.
-function BarChart({ data = [], width = 240, height = 80, color = "var(--tg-blue)", labels }) {
+// CSS-based bar chart — scales cleanly without SVG distortion
+function BarChart({ data = [], height = 80, color = "var(--tg-blue)", labels }) {
   if (!data.length) return null;
   const max = Math.max(...data, 1);
   return (
-    <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: labels ? 4 : 0 }}>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height, width: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height, padding: "0 2px" }}>
         {data.map((v, i) => (
-          <div
-            key={i}
+          <div key={i} title={`${labels && labels[i] ? labels[i] + " — " : ""}${v}`}
             style={{
-              flex: 1,
-              minWidth: 0,
+              flex: 1, minWidth: 0,
               height: `${(v / max) * 100}%`,
-              minHeight: v > 0 ? 2 : 0,
-              background: color,
-              opacity: 0.85,
+              background: color, opacity: 0.85,
               borderRadius: 4,
-            }}
-          />
+              transition: "height 0.4s",
+            }}/>
         ))}
       </div>
       {labels && (
-        <div style={{ display: "flex", gap: 6, width: "100%" }}>
-          {labels.map((label, i) => (
-            <div
-              key={i}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                textAlign: "center",
-                fontSize: 10,
-                color: "var(--text-faint)",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {label}
+        <div style={{ display: "flex", gap: 4, padding: "0 2px" }}>
+          {labels.map((l, i) => (
+            <div key={i} style={{ flex: 1, textAlign: "center", fontSize: 10, color: "var(--text-faint)", whiteSpace: "nowrap" }}>
+              {l}
             </div>
           ))}
         </div>

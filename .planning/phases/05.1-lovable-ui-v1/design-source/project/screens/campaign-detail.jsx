@@ -358,28 +358,187 @@ function CDLlmTrace({ c }) {
 }
 
 // ============================================================
-// Settings tab (stub)
+// Settings tab — campaign-level configuration
 // ============================================================
 function CDSettings({ c }) {
+  const [primaryGoal, setPrimaryGoal] = React.useState("meeting");
+  const [audienceHints, setAudienceHints] = React.useState("Cold US AI SaaS founders, seed → Series A.");
+  const [successCriteria, setSuccessCriteria] = React.useState("Demo booked with calendar confirmation, OR clear timeline + budget shared.");
+  const [webhookUrl, setWebhookUrl] = React.useState("https://hooks.acme.co/aimly/signals");
+  const [tools, setTools] = React.useState(["schedule.find_slots", "kb.search", "calendar.book"]);
+
+  const GOALS = [
+    { id: "meeting", label: "Book a meeting",   icon: "calendar" },
+    { id: "qualify", label: "Qualify the lead", icon: "flag" },
+    { id: "click",   label: "Get a click",       icon: "link" },
+    { id: "engage",  label: "Engage",            icon: "smile" },
+  ];
+
   return (
-    <div className="card">
-      <div className="card__header">
-        <div className="card__title">Campaign settings</div>
-        <div className="card__sub">Working hours, signals, webhooks, custom tools</div>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "flex-start" }}>
+      {/* LEFT: campaign-level overrides */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="card">
+          <div className="card__header">
+            <div>
+              <div className="card__title">Customize for this campaign</div>
+              <div className="card__sub">Overrides agent's defaults for this run only</div>
+            </div>
+          </div>
+          <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="field">
+              <div className="field__label">Audience hints</div>
+              <textarea className="textarea" rows={3} value={audienceHints} onChange={e => setAudienceHints(e.target.value)}/>
+            </div>
+            <div className="field">
+              <div className="field__label">Primary goal</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {GOALS.map(g => {
+                  const on = primaryGoal === g.id;
+                  return (
+                    <button key={g.id} onClick={() => setPrimaryGoal(g.id)} style={{
+                      padding: "10px 12px", borderRadius: 9, textAlign: "left", display: "flex", gap: 10, alignItems: "center",
+                      border: `1.5px solid ${on ? "var(--tg-blue)" : "var(--border)"}`,
+                      background: on ? "var(--tg-blue-softer)" : "white",
+                    }}>
+                      <div style={{ width: 24, height: 24, borderRadius: 7, background: on ? "var(--tg-blue)" : "var(--bg-soft)", color: on ? "white" : "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <Icon name={g.icon} size={12}/>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 500 }}>{g.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="field">
+              <div className="field__label">Success criteria</div>
+              <textarea className="textarea" rows={2} value={successCriteria} onChange={e => setSuccessCriteria(e.target.value)}/>
+              <div className="field__hint">Free-text rule for emitting the <b>lead</b> signal.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card__header">
+            <div>
+              <div className="card__title">Schedule</div>
+              <div className="card__sub">Working hours & rate corridor</div>
+            </div>
+          </div>
+          <div style={{ padding: "6px 18px 16px" }}>
+            <SettingRow label="Working hours" value={c.hours}/>
+            <SettingRow label="Working days" value="Mon–Fri"/>
+            <SettingRow label="Start / End" value={c.startedAt}/>
+            <SettingRow label="Rate corridor" value="4 / 20 / 150 (hour / day / week)"/>
+          </div>
+        </div>
       </div>
-      <div style={{ padding: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-        <div>
-          <SettingRow label="Working hours" value={`${c.hours}`}/>
-          <SettingRow label="Working days" value="Mon–Fri"/>
-          <SettingRow label="Start / End" value={c.startedAt}/>
-          <SettingRow label="Rate corridor" value="4 / 20 / 150 (hour / day / week)"/>
+
+      {/* RIGHT: integrations */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="card">
+          <div className="card__header">
+            <div>
+              <div className="card__title">Built-in signals</div>
+              <div className="card__sub">Always on · built into every agent</div>
+            </div>
+          </div>
+          <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+            <CDBuiltinSignal icon="flag" color="var(--success)"
+              title="Mark as lead"
+              desc="Fires when the user expresses interest or matches your success criteria."
+              count={c.leads}/>
+            <CDBuiltinSignal icon="user" color="var(--ai-purple)"
+              title="Transfer to manager"
+              desc="Fires when the user asks for a human or pushes back on AI."
+              count={c.handoffs}/>
+            <CDBuiltinSignal icon="check" color="var(--text-muted)"
+              title="Finish conversation"
+              desc="Fires when the conversation reaches a natural end."
+              count={Math.round((c.replied || 0) * 0.4)}/>
+          </div>
         </div>
-        <div>
-          <SettingRow label="Lead signal" value="Webhook → Slack #leads"/>
-          <SettingRow label="Handoff signal" value="Webhook → CRM API"/>
-          <SettingRow label="Finish signal" value="Email digest"/>
-          <SettingRow label="Custom tools" value="3 tools active (schedule, kb, crm)"/>
+
+        <div className="card">
+          <div className="card__header">
+            <div>
+              <div className="card__title">Webhook & tools</div>
+              <div className="card__sub">Where signals push and which tools the agent may call</div>
+            </div>
+          </div>
+          <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="field">
+              <div className="field__label">Push signal events to</div>
+              <input className="input" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} placeholder="https://your-app.com/webhook"/>
+              <div className="field__hint" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>Last fired 12m ago · 217 events in 7d</span>
+                <button className="btn btn--ghost btn--sm" style={{ height: 22, padding: "0 8px", fontSize: 11 }}>
+                  <Icon name="flask" size={10}/> Send test
+                </button>
+              </div>
+            </div>
+            <div className="field">
+              <div className="field__label">Custom tools</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {tools.map(t => (
+                  <span key={t} className="pill pill--blue">
+                    <Icon name="tool" size={10}/> <span className="mono">{t}</span>
+                    <button onClick={() => setTools(ts => ts.filter(x => x !== t))} style={{ marginLeft: 4, color: "var(--tg-blue)", opacity: 0.6 }}>
+                      <Icon name="x" size={9}/>
+                    </button>
+                  </span>
+                ))}
+                <button className="pill" style={{ background: "transparent", border: "1px dashed var(--border-strong)", color: "var(--text-muted)", cursor: "pointer" }}>
+                  <Icon name="plus" size={10}/> Add tool
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
+
+        <div className="card" style={{ position: "relative", opacity: 0.78 }}>
+          <div className="card__header">
+            <div>
+              <div className="card__title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                Custom signals
+                <span className="pill pill--purple" style={{ height: 18, fontSize: 10 }}>
+                  <Icon name="sparkles" size={9}/> In development
+                </span>
+              </div>
+              <div className="card__sub">Define your own signals beyond the built-in three</div>
+            </div>
+          </div>
+          <div style={{ padding: 18 }}>
+            <div className="muted text-sm" style={{ lineHeight: 1.5, marginBottom: 10 }}>
+              Custom triggers, dedicated webhooks per signal, and per-signal rate limits — coming soon.
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <span className="pill" style={{ background: "transparent", border: "1px dashed var(--border-strong)" }}>competitor_mentioned</span>
+              <span className="pill" style={{ background: "transparent", border: "1px dashed var(--border-strong)" }}>enterprise_intent</span>
+              <span className="pill" style={{ background: "transparent", border: "1px dashed var(--border-strong)" }}>budget_revealed</span>
+            </div>
+          </div>
+          <div style={{ position: "absolute", inset: 0, cursor: "not-allowed" }}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CDBuiltinSignal({ icon, color, title, desc, count }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+      <div style={{ width: 28, height: 28, borderRadius: 8, background: `${color}1A`, color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
+        <Icon name={icon} size={14}/>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="check" size={12} color="var(--success)"/>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
+          <span className="spacer"/>
+          <span className="text-xs muted">fired <b style={{ color: "var(--text)" }}>{count}×</b> / 7d</span>
+        </div>
+        <div className="muted text-xs" style={{ marginTop: 4, lineHeight: 1.5 }}>{desc}</div>
       </div>
     </div>
   );

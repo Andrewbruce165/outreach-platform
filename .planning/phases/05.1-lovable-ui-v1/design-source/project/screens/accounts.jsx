@@ -111,6 +111,7 @@ function AccountsScreen() {
             <div style={{ padding: "16px 18px" }}>
               <BarChart
                 data={[12,16,21,28,33,40,46,52,58,61,68,72,78,82,80,76,68,52,38,22,14,10,8,6]}
+                width={600}
                 color="var(--tg-blue)"
                 labels={Array.from({length: 24}, (_, i) => i % 4 === 0 ? `${i}:00` : "")}
                 height={100}
