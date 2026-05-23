@@ -601,3 +601,97 @@ a { color: inherit; text-decoration: none; }
   content: "Loading aimly…";
   display: block; padding: 40px; color: var(--text-muted);
 }
+
+/* ============================================================
+   Onboarding flow (OB)
+   ============================================================ */
+.ob { display: flex; flex-direction: column; gap: 18px; }
+.ob--compact { gap: 14px; }
+.ob__head { display: flex; flex-direction: column; gap: 4px; }
+.ob__title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.ob__sub { font-size: 13px; line-height: 1.5; }
+.ob__tabs { display: flex; gap: 4px; padding: 3px; background: var(--bg-soft); border-radius: 10px; }
+.ob__tab {
+  flex: 1; height: 32px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-muted);
+}
+.ob__tab.is-active { background: var(--bg); color: var(--text); box-shadow: var(--shadow-sm); }
+.ob__panel { display: flex; flex-direction: column; gap: 16px; }
+.ob__form { display: flex; flex-direction: column; gap: 14px; }
+.ob__err { font-size: 12px; color: var(--danger); }
+.ob__phoneRecap { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bg-soft); border-radius: 8px; }
+.ob__link {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--tg-blue); font-size: 12px; font-weight: 500;
+}
+.ob__link:hover { text-decoration: underline; }
+.ob__spin { animation: ob-spin 0.9s linear infinite; }
+@keyframes ob-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ob__spin { animation: none; } }
+
+.ob__success { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 0; text-align: center; }
+.ob__successIcon {
+  width: 64px; height: 64px; border-radius: 32px;
+  background: var(--success-soft); color: var(--success);
+  display: grid; place-items: center;
+}
+.ob__successTitle { font-size: 16px; font-weight: 600; }
+
+.ob__stepper { list-style: none; padding: 0; margin: 0; display: flex; gap: 8px; align-items: center; }
+.ob__step { display: flex; align-items: center; gap: 6px; flex: 1; font-size: 12px; color: var(--text-muted); }
+.ob__step + .ob__step::before {
+  content: ""; height: 1px; background: var(--border); flex: 1; margin-right: 6px;
+}
+.ob__stepDot {
+  width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--bg-soft); color: var(--text-muted); border: 1px solid var(--border);
+}
+.ob__step.is-active .ob__stepDot { background: var(--tg-blue); color: #fff; border-color: var(--tg-blue); }
+.ob__step.is-active .ob__stepLabel { color: var(--text); font-weight: 500; }
+.ob__step.is-done .ob__stepDot { background: var(--success); color: #fff; border-color: var(--success); }
+
+.ob__qrSteps { font-size: 13px; color: var(--text-soft); padding-left: 18px; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.ob__qrBox {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 20px; background: var(--bg-soft); border-radius: 12px; min-height: 200px;
+  justify-content: center;
+}
+.ob__qrImg { width: 200px; height: 200px; background: #fff; border-radius: 8px; padding: 8px; }
+
+/* Row action menu */
+.ob__menuScrim { position: fixed; inset: 0; z-index: 40; }
+.ob__menu {
+  position: absolute; right: 8px; top: 100%; z-index: 50;
+  min-width: 180px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column;
+}
+.ob__menu button {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px;
+  font-size: 13px; color: var(--text); text-align: left; width: 100%;
+}
+.ob__menu button:hover { background: var(--bg-soft); }
+.ob__menu button.is-danger { color: var(--danger); }
+.ob__menu button.is-danger:hover { background: var(--danger-soft); }
+
+/* ============================================================
+   Modal
+   ============================================================ */
+.modal__scrim {
+  position: fixed; inset: 0; background: rgba(15, 20, 25, 0.42);
+  display: grid; place-items: center; z-index: 100; padding: 16px;
+  animation: modal-fade 140ms ease-out;
+}
+.modal {
+  width: 100%; max-width: 520px; background: var(--bg);
+  border-radius: 14px; box-shadow: var(--shadow-lg);
+  max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+  animation: modal-pop 160ms ease-out;
+}
+.modal__head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.modal__head h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.modal__body { padding: 18px; overflow-y: auto; }
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-pop { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .modal__scrim, .modal { animation: none; }
+}
