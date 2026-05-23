@@ -11,7 +11,7 @@ type CampaignList = components["schemas"]["CampaignListResponse"];
 type Agent = components["schemas"]["AgentResponse"];
 type Folder = components["schemas"]["FolderResponse"];
 
-export const Route = createFileRoute("/_authenticated/campaigns")({
+export const Route = createFileRoute("/_authenticated/campaigns/")({
   component: CampaignsPage,
 });
 
