@@ -164,11 +164,11 @@ Plans:
 **Goal:** Клиент через UI Lovable проходит весь v1-флоу — регистрируется (Supabase), создаёт workspace, подключает TG-аккаунт, загружает контакты, настраивает агента, запускает кампанию и смотрит inbox + analytics. Закрывает Core Value ("за 10 минут запустил кампанию") и 7 пунктов HUMAN-UAT, открытых после Phase 5.
 **Requirements**: UI-MIG-018, UI-AGNT-01, UI-CAMPB-01, UI-CAMPL-01, UI-ACCT-01, UI-DASH-01, UI-CAMPD-01, UI-TEL-01, UI-TEL-02, UI-CORS, UI-AUTH-01, UI-CONT-01, UI-INBX-01, UI-HANDOFF, Core-Value-E2E
 **Depends on:** Phase 5
-**Plans:** 6 plans (3 waves)
+**Plans:** 2/6 plans executed
 
 Plans:
-- [ ] 05.1-01-PLAN.md — Migration 018 + ORM/Pydantic widening (telemetry_events + 11 agent cols + 4 campaign cols + ToolSpec.webhook_url Optional) [Wave 1, no deps]
-- [ ] 05.1-02-PLAN.md — CORS regex для *.lovableproject.com + Pitfall 3 (HS256 pin) комментарий в auth.py [Wave 1, no deps]
+- [x] 05.1-01-PLAN.md — Migration 018 + ORM/Pydantic widening (telemetry_events + 11 agent cols + 4 campaign cols + ToolSpec.webhook_url Optional) [Wave 1, no deps]
+- [x] 05.1-02-PLAN.md — CORS regex для *.lovableproject.com + Pitfall 3 (HS256 pin) комментарий в auth.py [Wave 1, no deps]
 - [ ] 05.1-03-PLAN.md — Campaign /stop alias + /auto-fill stub + Senders /pause /resume + Agent v2 passthrough + ai_engine COALESCE(new, legacy) [Wave 2, depends_on: 05.1-01]
 - [ ] 05.1-04-PLAN.md — Analytics /funnel (5 stages incl. engaged) + /llm aggregates + Telemetry /events + /core-value [Wave 2, depends_on: 05.1-01]
 - [ ] 05.1-05-PLAN.md — lovable-handoff/ bundle (AGENTS/KNOWLEDGE/openapi.json/types/api.ts/design-source) + UI-SPEC reconciliation patches + 2 CI scripts [Wave 3, depends_on: 05.1-03, 05.1-04]
