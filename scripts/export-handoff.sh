@@ -23,17 +23,33 @@ mkdir -p "$HANDOFF_DIR/types"
 echo "==> Booting backend (docker compose up -d db api)..."
 docker compose up -d db api
 
-echo "==> Waiting for /openapi.json..."
-timeout 60 bash -c 'until curl -sf http://localhost:8000/openapi.json > /dev/null; do sleep 1; done'
+echo "==> Waiting for /openapi.json (inside api container)..."
+# Use docker compose exec to hit the api container directly via its container network.
+# Avoids any host port mapping ambiguity (multiple FastAPI services may share host port 8000).
+timeout 60 bash -c '
+  until docker compose exec -T api curl -sf http://localhost:8000/openapi.json > /dev/null 2>&1; do
+    sleep 1
+  done
+'
 
 echo "==> Exporting openapi.json..."
-curl -s http://localhost:8000/openapi.json | jq . > "$HANDOFF_DIR/openapi.json"
+docker compose exec -T api curl -s http://localhost:8000/openapi.json | jq . > "$HANDOFF_DIR/openapi.json"
+
+# Sanity check: the openapi.json must be from THIS project (Outreach Platform), not a neighbouring FastAPI.
+PROJECT_TITLE=$(jq -r '.info.title // ""' "$HANDOFF_DIR/openapi.json")
+case "$PROJECT_TITLE" in
+  *"Outreach"*|*"outreach"*|*"aimly"*) : ;;  # OK
+  *)
+    echo "ERROR: openapi.json title is '$PROJECT_TITLE' — expected Outreach Platform / aimly." >&2
+    echo "       The wrong container's OpenAPI was scraped. Check 'docker compose ps' and 'docker compose config'." >&2
+    exit 1 ;;
+esac
 
 echo "==> Generating types/api.ts via openapi-typescript..."
 npx -y openapi-typescript@7 "$HANDOFF_DIR/openapi.json" -o "$HANDOFF_DIR/types/api.ts"
 
 echo "==> Checking UI-SPEC endpoint drift..."
-python scripts/check-uispec-endpoints.py \
+python3 scripts/check-uispec-endpoints.py \
     "$HANDOFF_DIR/openapi.json" \
     ".planning/phases/05.1-lovable-ui-v1/05.1-UI-SPEC.md"
 
