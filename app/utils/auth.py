@@ -13,6 +13,14 @@ Lazy workspace creation (D-08, TENT-02):
 # TODO(v2): migrate from python-jose to PyJWT (deprecation — RESEARCH Pitfall 2)
 # TODO(v2): migrate JWT validation from HS256 to ES256/JWKS (Supabase
 #           default since Oct 2025 — RESEARCH Pitfall 1)
+#
+# Phase 05.1 decision (Pitfall 3 — RESEARCH.md §"Common Pitfalls"):
+#   Lovable's auto-bootstrapped Supabase project MUST be pinned to HS256 in
+#   Supabase Dashboard → Settings → API → JWT Settings → Algorithm = HS256.
+#   This is documented in lovable-handoff/AGENTS.md (created in plan 05.1-05)
+#   so customers running through the handoff bundle know to flip the toggle.
+#   Migration to ES256 + JWKS is v2 work — full PyJWT swap in one focused
+#   refactor (likely Phase 7+). Do NOT attempt it during 05.1 launch window.
 # TODO(v2-rls): app-level workspace filter replaced by Postgres RLS policy
 """
 
@@ -129,6 +137,11 @@ async def auth_dep(
 def _decode_supabase_jwt(token: str) -> dict:
     """
     Decode + verify Supabase HS256 JWT.
+
+    Phase 05.1: HS256 only. Asymmetric / JWKS support is deferred to v2 (see
+    top-of-file TODOs and lovable-handoff/AGENTS.md Pitfall 3 entry). Customers
+    using Lovable's Supabase native integration must pin the project's JWT
+    algorithm to HS256 in Supabase Dashboard → Settings → API → JWT Settings.
 
     Raises HTTPException(401) for expired, invalid claims, or signature errors.
     """
