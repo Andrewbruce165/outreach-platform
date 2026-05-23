@@ -17,13 +17,34 @@ from pathlib import Path
 # Match /api/v1/<segment>[/<segment>]+ where segments can be:
 #   - literal (lowercase letters, digits, hyphens, dots)
 #   - path params {x}, {x_y}
-#   - query strings stripped off via re.split('?', ...)
-ENDPOINT_RE = re.compile(r"/api/v1/[a-z0-9_./\-{}]+", re.IGNORECASE)
+#   - brace alternatives {a,b,c} — UI-SPEC shorthand for multiple endpoints sharing a prefix
+#   - query strings stripped via re.split('?', ...)
+# The character class includes ',' so brace-alt segments stay attached to the path on findall.
+ENDPOINT_RE = re.compile(r"/api/v1/[a-z0-9_./,\-{}]+", re.IGNORECASE)
+
+# Detect a {a,b,c}-style brace expansion segment. Single-token braces ({id}, {slug}) are param names,
+# not expansions — they have no comma.
+BRACE_ALT_RE = re.compile(r"\{([a-z0-9_\-,]+,[a-z0-9_\-,]+)\}", re.IGNORECASE)
+
+
+def _expand_brace_alternatives(path: str) -> list[str]:
+    """Expand UI-SPEC shorthand like /foo/{a,b,c} into /foo/a, /foo/b, /foo/c.
+
+    Only the first brace-alt segment is expanded per call — that's enough because UI-SPEC never
+    nests alternatives. If a path has zero brace-alts, returns [path] unchanged.
+    """
+    m = BRACE_ALT_RE.search(path)
+    if not m:
+        return [path]
+    alts = m.group(1).split(",")
+    prefix = path[: m.start()]
+    suffix = path[m.end() :]
+    return [prefix + alt + suffix for alt in alts]
 
 
 def extract_uispec_paths(uispec: str) -> set[str]:
     """Extract canonical paths from UI-SPEC. Strips query strings.
-    Normalises {session_id}/{id}/{slug} param names to a wildcard for matching.
+    Expands brace alternatives {a,b,c}. Normalises {session_id}/{id}/{slug} param names happens later.
     """
     raw = set(ENDPOINT_RE.findall(uispec))
     cleaned: set[str] = set()
@@ -32,8 +53,9 @@ def extract_uispec_paths(uispec: str) -> set[str]:
         r = r.rstrip(",.;:)\"'`")
         # Strip query string
         r = r.split("?", 1)[0]
-        # Normalise path params — backend openapi uses the same {name} syntax
-        cleaned.add(r)
+        # Expand brace alternatives — UI-SPEC writes /campaigns/{id}/{start,pause,resume,stop,duplicate}
+        for expanded in _expand_brace_alternatives(r):
+            cleaned.add(expanded)
     return cleaned
 
 
