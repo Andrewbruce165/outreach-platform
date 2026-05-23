@@ -3,15 +3,10 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { supabase, hasSupabaseEnv } from "@/lib/supabase";
 import { api, ApiError } from "@/lib/api";
-import { track } from "@/lib/telemetry";
+import type { components } from "@/types/api";
 
-interface AuthMeResponse {
-  workspace_id: string;
-  user_id: string;
-  email: string;
-  senders: { slug: string }[];
-  is_first_session?: boolean;
-}
+type AuthMeResponse = components["schemas"]["AuthMeResponse"];
+type SenderListResponse = components["schemas"]["SenderListResponse"];
 
 export const Route = createFileRoute("/auth/callback")({
   ssr: false,
@@ -51,12 +46,10 @@ function AuthCallback() {
       }
 
       try {
-        const me = await api<AuthMeResponse>("/api/v1/auth/me", { method: "POST" });
-        if (me.is_first_session) {
-          track("signup_completed", { workspace_id: me.workspace_id, is_first_session: true });
-        }
+        await api<AuthMeResponse>("/api/v1/auth/me", { method: "POST" });
+        const senderList = await api<SenderListResponse>("/api/v1/senders");
         if (!cancelled) {
-          navigate({ to: me.senders.length === 0 ? "/onboarding" : "/" });
+          navigate({ to: senderList.senders.length === 0 ? "/onboarding" : "/" });
         }
       } catch (err) {
         const message = err instanceof ApiError ? err.message : "Could not validate session.";
