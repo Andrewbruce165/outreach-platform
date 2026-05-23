@@ -40,27 +40,22 @@ async def _setup_database():
 
     # Migrations are multi-statement files (BEGIN ... COMMIT with many DDL inside).
     # SQLAlchemy's exec_driver_sql goes through asyncpg's `prepare`, which only accepts
-    # a single SQL statement — so multi-statement files fail with
-    # "cannot insert multiple commands into a prepared statement". The workaround is
-    # to bypass SQLAlchemy and call asyncpg's raw `.execute()` directly, which DOES
-    # batch-execute multi-statement strings.
-    async def _run_migration(sql_path: pathlib.Path) -> None:
-        sql_text = sql_path.read_text()
-        # Acquire a raw asyncpg connection from the pool. Use _connection_dialect of the engine.
-        # NOTE: engine.pool gives sync-style API; for asyncpg we go through the dialect connection.
-        async with engine.connect() as conn_:
-            raw_conn = await conn_.get_raw_connection()
-            asyncpg_conn = raw_conn.driver_connection  # actual asyncpg.Connection
-            await asyncpg_conn.execute(sql_text)
-            await conn_.commit()
+    # one statement — so multi-statement files fail. Use a standalone asyncpg connection
+    # (NOT from the sqlalchemy pool — that caused event-loop crosstalk in 1M tests).
+    import asyncpg
+
+    # Build asyncpg DSN from sqlalchemy URL (strip the "+asyncpg" driver suffix).
+    settings = get_settings()
+    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
     PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-    # Defensive: Base.metadata is post-Phase-4 (context_contact_assignments dropped in 016).
-    # Migration 012 ALTERs that table; without a stub, the ALTER on missing table fails.
-    # Migration 016 then drops it cleanly, restoring the post-Phase-4 state.
-    async with engine.begin() as conn:
-        await conn.exec_driver_sql(
+    asyncpg_conn = await asyncpg.connect(dsn=dsn)
+    try:
+        # Defensive: Base.metadata is post-Phase-4 (context_contact_assignments dropped in 016).
+        # Migration 012 ALTERs that table; without a stub, the ALTER on missing table fails.
+        # Migration 016 then drops it cleanly, restoring the post-Phase-4 state.
+        await asyncpg_conn.execute(
             "CREATE TABLE IF NOT EXISTS context_contact_assignments ("
             "id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
             "context_id UUID, contact_phone VARCHAR(20), sender_id UUID, "
@@ -68,18 +63,21 @@ async def _setup_database():
             "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
         )
 
-    # Phase 1 (012), Phase 2 (013), Phase 02.1 (014), Phase 3 (015), Phase 4 (016),
-    # Phase 5 (017), Phase 05.1 (018) — applied in order via raw asyncpg execute.
-    for filename in (
-        "012_workspace.sql",
-        "013_phase2.sql",
-        "014_phase2_1_hardening.sql",
-        "015_phase3.sql",
-        "016_phase4.sql",
-        "017_phase5.sql",
-        "018_phase5_1.sql",
-    ):
-        await _run_migration(PROJECT_ROOT / "migrations" / filename)
+        # Phase 1 (012), Phase 2 (013), Phase 02.1 (014), Phase 3 (015), Phase 4 (016),
+        # Phase 5 (017), Phase 05.1 (018) — applied in order via raw asyncpg execute.
+        for filename in (
+            "012_workspace.sql",
+            "013_phase2.sql",
+            "014_phase2_1_hardening.sql",
+            "015_phase3.sql",
+            "016_phase4.sql",
+            "017_phase5.sql",
+            "018_phase5_1.sql",
+        ):
+            sql_text = (PROJECT_ROOT / "migrations" / filename).read_text()
+            await asyncpg_conn.execute(sql_text)
+    finally:
+        await asyncpg_conn.close()
 
     yield
 
