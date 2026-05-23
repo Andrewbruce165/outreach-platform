@@ -127,16 +127,24 @@ function PhoneFlow({
     setBusy(true);
     setAccountName(values.name);
     try {
-      const res = await api<unknown>("/api/v1/onboarding/verify-code", {
-        method: "POST",
-        body: {
-          session_id: sessionId,
-          code: values.code,
-          name: values.name,
-          role: "sender",
+      const res = await api<{ status?: string; session_id?: string; sender?: SenderResponse }>(
+        "/api/v1/onboarding/verify-code",
+        {
+          method: "POST",
+          body: {
+            session_id: sessionId,
+            code: values.code,
+            name: values.name,
+            role: "sender",
+          },
         },
-      });
-      const sender = (res as { sender?: SenderResponse }).sender;
+      );
+      if (res.status === "2fa_required" || res.status === "two_fa_required") {
+        if (res.session_id) setSessionId(res.session_id);
+        setStep("2fa");
+        return;
+      }
+      const sender = res.sender;
       track("sender_added", { sender_id: sender?.id ?? sessionId, method: "phone" });
       setStep("done");
       onComplete?.(sender ?? { slug: undefined });
