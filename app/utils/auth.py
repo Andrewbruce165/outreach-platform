@@ -324,9 +324,21 @@ async def _resolve_or_create_workspace(
         )
 
     # Lazy auto-create (D-08, D-09)
+    #
+    # Phase 05.1-DEBUG (2026-05-23 agents-500-cors): we MUST NOT use
+    # `async with db.begin()` here. `AsyncSession` runs with `autobegin=True`,
+    # and the preceding `await db.execute(select(...))` already opened an
+    # implicit transaction on this session. Calling `db.begin()` on top
+    # raises `sqlalchemy.exc.InvalidRequestError: A transaction is already
+    # begun on this Session`. The error surfaced as a 500 on every
+    # JWT-authenticated request (every new user hits this branch).
+    #
+    # Switching to the same flush+commit pattern used by all routers
+    # (agents.py, campaigns.py, contacts.py): the implicit transaction
+    # is committed atomically — both inserts succeed or both roll back.
     workspace_name = email if email else "My Workspace"
 
-    async with db.begin():
+    try:
         workspace = Workspace(name=workspace_name)
         db.add(workspace)
         await db.flush()  # получаем workspace.id
@@ -337,7 +349,10 @@ async def _resolve_or_create_workspace(
             role="owner",
         )
         db.add(new_uw)
-        # commit на выходе из async with
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
     # Post-commit re-SELECT (Pitfall 5 защита от race)
     result = await db.execute(
