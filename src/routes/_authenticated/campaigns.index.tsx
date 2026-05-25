@@ -563,21 +563,19 @@ function CampaignRow({
     queryFn: () =>
       api<{
         sent?: number;
-        replied?: number;
+        replied?: { conversation_count?: number; message_count?: number };
         leads?: number;
-        contacts_total?: number;
-        contacts_messaged?: number;
+        finishes?: number;
       }>(`/api/v1/analytics/campaigns/${c.id}`),
     staleTime: 30_000,
     retry: false,
   });
 
   const sent = statsQ.data?.sent ?? 0;
-  const replied = statsQ.data?.replied ?? 0;
+  const replied = statsQ.data?.replied?.conversation_count ?? 0;
   const leads = statsQ.data?.leads ?? 0;
-  const total = statsQ.data?.contacts_total ?? 0;
-  const done = statsQ.data?.contacts_messaged ?? 0;
-  const progress = total > 0 ? Math.min(1, done / total) : 0;
+  const finishes = statsQ.data?.finishes ?? 0;
+  const progress = sent > 0 ? Math.min(1, finishes / sent) : 0;
 
   const startedAt =
     c.start_date
