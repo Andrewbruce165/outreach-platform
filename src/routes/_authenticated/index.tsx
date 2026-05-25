@@ -670,7 +670,10 @@ function AccountHealthCard({
                     {s.name || s.phone}
                   </span>
                 </div>
-                <CorridorBar value={0} limit={s.rate_limits?.per_day ?? 300} />
+                <CorridorBar
+                  value={sentBySenderId[s.id] ?? 0}
+                  limit={s.rate_limits?.per_day ?? 300}
+                />
                 <span
                   style={{
                     fontSize: 11.5,
@@ -679,7 +682,8 @@ function AccountHealthCard({
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
-                  0/{s.rate_limits?.per_day ?? 300}
+                  {(sentBySenderId[s.id] ?? 0).toLocaleString()}/
+                  {s.rate_limits?.per_day ?? 300}
                 </span>
               </div>
             ))}
