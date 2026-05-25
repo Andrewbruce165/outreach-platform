@@ -347,6 +347,7 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
 
   const contactsQ = useQuery({
     queryKey: ["contacts", folder?.id],
