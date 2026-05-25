@@ -474,6 +474,12 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
           )}
         </div>
         <button
+          className="btn btn--primary btn--sm"
+          onClick={() => setAddOpen(true)}
+        >
+          <UserPlus size={13} /> Add contact
+        </button>
+        <button
           className="btn btn--ghost btn--sm"
           onClick={() => recheckMut.mutate()}
           disabled={recheckMut.isPending}
