@@ -13,7 +13,7 @@ import {
   RefreshCw,
   AlertTriangle,
   Check,
-  Upload,
+  
   Rocket,
   ChevronDown,
   ArrowRight,
