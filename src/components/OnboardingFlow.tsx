@@ -339,7 +339,7 @@ function PhoneFlow({
 }
 
 /* ---------------- QR flow ---------------- */
-function QrFlow({ onComplete }: { onComplete?: Props["onComplete"] }) {
+function QrFlow({ onComplete, role }: { onComplete?: Props["onComplete"]; role: Role }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("idle");
