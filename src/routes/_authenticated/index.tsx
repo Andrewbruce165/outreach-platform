@@ -1085,7 +1085,3 @@ function ActivityFeedCard({
     </div>
   );
 }
-      </div>
-    </div>
-  );
-}
