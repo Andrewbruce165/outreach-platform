@@ -541,6 +541,8 @@ function CampaignRow({
   agentLabel,
   folderLabel,
   busy,
+  selected,
+  onToggleSelect,
   onLifecycle,
   onDuplicate,
   onDelete,
@@ -549,6 +551,8 @@ function CampaignRow({
   agentLabel: string;
   folderLabel: string;
   busy: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
   onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
