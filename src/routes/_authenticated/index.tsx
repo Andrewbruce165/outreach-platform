@@ -561,11 +561,14 @@ function AccountHealthCard({
           </div>
         </div>
         <div className="spacer" />
-        <Link to="/accounts">
-          <button className="btn btn--sm btn--ghost" type="button" aria-label="Refresh">
-            <RefreshCw size={12} />
-          </button>
-        </Link>
+        <button
+          className="btn btn--sm btn--ghost"
+          type="button"
+          aria-label="Refresh"
+          onClick={onRefresh}
+        >
+          <RefreshCw size={12} />
+        </button>
       </div>
 
       {total === 0 && !loading ? (
