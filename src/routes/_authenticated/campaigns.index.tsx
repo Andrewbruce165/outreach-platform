@@ -72,6 +72,7 @@ function CampaignsPage() {
   const [tab, setTab] = useState<TabId>("all");
   const [search, setSearch] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const listQ = useQuery({
     queryKey: ["campaigns"],
@@ -161,6 +162,43 @@ function CampaignsPage() {
 
   const busy =
     lifecycleMut.isPending || duplicateMut.isPending || deleteMut.isPending;
+
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const allVisibleSelected =
+    items.length > 0 && items.every((c) => selected.has(c.id));
+  const toggleAll = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) items.forEach((c) => next.delete(c.id));
+      else items.forEach((c) => next.add(c.id));
+      return next;
+    });
+
+  const runBulk = async (
+    action: "pause" | "stop" | "delete",
+  ) => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (action === "delete" && !confirm(`Delete ${ids.length} campaign(s)?`)) return;
+    setActionError(null);
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          action === "delete"
+            ? deleteMut.mutateAsync(id)
+            : lifecycleMut.mutateAsync({ id, action }),
+        ),
+      );
+      setSelected(new Set());
+    } catch (e) {
+      setActionError(errMsg(e));
+    }
+  };
 
   return (
     <>
@@ -260,13 +298,64 @@ function CampaignsPage() {
           <EmptyState filtered={tab !== "all" || search.length > 0} />
         )}
 
+        {selected.size > 0 && (
+          <div
+            className="card"
+            style={{
+              padding: "10px 14px",
+              marginBottom: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 500 }}>
+              {selected.size} selected
+            </span>
+            <div style={{ flex: 1 }} />
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={busy}
+              onClick={() => runBulk("pause")}
+            >
+              <Pause size={14} /> Pause
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={busy}
+              onClick={() => runBulk("stop")}
+            >
+              Stop
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={busy}
+              onClick={() => runBulk("delete")}
+              style={{ color: "var(--danger)" }}
+            >
+              Delete
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         {items.length > 0 && (
           <div className="card">
             <table className="tbl">
               <thead>
                 <tr>
                   <th style={{ width: 32 }}>
-                    <input type="checkbox" disabled />
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleAll}
+                      aria-label="Select all"
+                    />
                   </th>
                   <th>Campaign</th>
                   <th>Status</th>
@@ -285,6 +374,8 @@ function CampaignsPage() {
                     agentLabel={agentName.get(c.agent_id) ?? "—"}
                     folderLabel={folderName.get(c.folder_id) ?? "—"}
                     busy={busy}
+                    selected={selected.has(c.id)}
+                    onToggleSelect={() => toggleOne(c.id)}
                     onLifecycle={(action) => {
                       setActionError(null);
                       lifecycleMut.mutate({ id: c.id, action });
@@ -450,6 +541,8 @@ function CampaignRow({
   agentLabel,
   folderLabel,
   busy,
+  selected,
+  onToggleSelect,
   onLifecycle,
   onDuplicate,
   onDelete,
@@ -458,6 +551,8 @@ function CampaignRow({
   agentLabel: string;
   folderLabel: string;
   busy: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
   onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -504,7 +599,12 @@ function CampaignRow({
   return (
     <tr style={{ cursor: "pointer" }}>
       <td onClick={(e) => e.stopPropagation()}>
-        <input type="checkbox" />
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          aria-label={`Select ${c.name}`}
+        />
       </td>
       <td>
         <Link
@@ -649,7 +749,7 @@ function RowMenu({
     pause: s === "running",
     resume: s === "paused",
     stop: s === "running" || s === "paused",
-    delete: s === "draft" || s === "finished" || s === "stopped",
+    delete: true,
   };
 
   const itemStyle: React.CSSProperties = {
