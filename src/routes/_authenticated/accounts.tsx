@@ -222,17 +222,28 @@ function FleetTable({
 function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
 
-  const action = useMutation({
-    mutationFn: async (kind: "pause" | "resume" | "delete") => {
-      if (kind === "delete") {
-        await api(`/api/v1/senders/${sender.slug}`, { method: "DELETE" });
-      } else {
-        await api(`/api/v1/senders/${sender.slug}/${kind}`, { method: "POST" });
-      }
+  const deleteMut = useMutation({
+    mutationFn: () => api(`/api/v1/senders/${sender.slug}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Account deleted");
+      qc.invalidateQueries({ queryKey: ["senders"] });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["senders"] }),
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed"),
+  });
+
+  const refreshMut = useMutation({
+    mutationFn: () => api<Sender>(`/api/v1/senders/${sender.slug}`),
+    onSuccess: (fresh) => {
+      qc.setQueryData<{ senders: Sender[] }>(["senders"], (prev) =>
+        prev
+          ? { senders: prev.senders.map((x) => (x.slug === sender.slug ? fresh : x)) }
+          : prev,
+      );
+      toast.success(`Status: ${fresh.status}`);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Refresh failed"),
   });
 
   const statusStyle: Record<string, { pill: string; dot: string }> = {
@@ -320,53 +331,128 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
           <>
             <div className="ob__menuScrim" onClick={() => setOpen(false)} />
             <div className="ob__menu" role="menu">
-              {sender.status === "paused" ? (
-                <button
-                  onClick={() => {
-                    setOpen(false);
-                    action.mutate("resume");
-                  }}
-                >
-                  <Play size={13} /> Resume
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    setOpen(false);
-                    action.mutate("pause");
-                  }}
-                >
-                  <Pause size={13} /> Pause
-                </button>
-              )}
               <button
                 onClick={() => {
                   setOpen(false);
-                  onReauth();
+                  setEditing(true);
                 }}
               >
-                <RefreshCcw size={13} /> Re-authenticate
+                <Pencil size={13} /> Изменить
+              </button>
+              <button
+                disabled={refreshMut.isPending}
+                onClick={() => {
+                  setOpen(false);
+                  refreshMut.mutate();
+                }}
+              >
+                <RefreshCcw size={13} /> Обновить статус
               </button>
               <button
                 className="is-danger"
+                disabled={deleteMut.isPending}
                 onClick={() => {
                   setOpen(false);
                   if (
                     confirm(
-                      `Delete ${sender.name || sender.phone}? This stops any campaign using it.`,
+                      `Удалить ${sender.name || sender.phone}? Это остановит все кампании, где он используется.`,
                     )
                   ) {
-                    action.mutate("delete");
+                    deleteMut.mutate();
                   }
                 }}
               >
-                <Trash2 size={13} /> Delete
+                <Trash2 size={13} /> Удалить
               </button>
             </div>
           </>
         )}
       </td>
+      {editing && (
+        <EditSenderModal sender={sender} onClose={() => setEditing(false)} />
+      )}
     </tr>
+  );
+}
+
+function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(sender.name ?? "");
+  const [role, setRole] = useState<"sender" | "checker">(
+    sender.role === "checker" ? "checker" : "sender",
+  );
+
+  const mut = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/senders/${sender.slug}`, {
+        method: "PATCH",
+        body: { name: name.trim() || null, role },
+      }),
+    onSuccess: () => {
+      toast.success("Сохранено");
+      qc.invalidateQueries({ queryKey: ["senders"] });
+      onClose();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось сохранить"),
+  });
+
+  return (
+    <Modal title="Изменить аккаунт" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div>
+          <label className="muted text-xs" style={{ display: "block", marginBottom: 6 }}>
+            Имя
+          </label>
+          <input
+            className="ob__input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={sender.phone}
+            style={{ width: "100%" }}
+          />
+        </div>
+        <div>
+          <label className="muted text-xs" style={{ display: "block", marginBottom: 6 }}>
+            Роль
+          </label>
+          <div className="ob__roles">
+            <button
+              type="button"
+              className={`ob__role ${role === "sender" ? "is-active" : ""}`}
+              onClick={() => setRole("sender")}
+            >
+              <span className="ob__roleTitle">
+                <PhoneIcon size={14} /> Sender
+              </span>
+              <span className="ob__roleHint">Отправляет outreach (4/мин · 20/ч · 150/день)</span>
+            </button>
+            <button
+              type="button"
+              className={`ob__role ${role === "checker" ? "is-active" : ""}`}
+              onClick={() => setRole("checker")}
+            >
+              <span className="ob__roleTitle">
+                <ShieldCheck size={14} /> Checker
+              </span>
+              <span className="ob__roleHint">Проверяет номера в Telegram</span>
+            </button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button className="btn btn--ghost" type="button" onClick={onClose}>
+            Отмена
+          </button>
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled={mut.isPending}
+            onClick={() => mut.mutate()}
+          >
+            {mut.isPending ? "Сохранение…" : "Сохранить"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
