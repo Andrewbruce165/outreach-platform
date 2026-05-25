@@ -155,7 +155,7 @@ function PhoneFlow({
     try {
       const res = await api<StartResponse>("/api/v1/onboarding/start", {
         method: "POST",
-        body: { phone: values.phone.replace(/\s+/g, ""), role: "sender" },
+        body: { phone: values.phone.replace(/\s+/g, ""), role },
       });
       setSessionId(res.session_id);
       setPhone(res.phone);
