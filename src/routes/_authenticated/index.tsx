@@ -235,7 +235,12 @@ function Dashboard() {
             items={campaigns}
             loading={campaignsQ.isLoading}
           />
-          <ActivityFeedCard />
+          <ActivityFeedCard
+            conversations={conversations}
+            campaigns={campaigns}
+            senders={senders}
+            loading={conversationsQ.isLoading}
+          />
         </div>
       </div>
     </>
