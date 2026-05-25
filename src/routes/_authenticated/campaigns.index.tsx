@@ -298,13 +298,64 @@ function CampaignsPage() {
           <EmptyState filtered={tab !== "all" || search.length > 0} />
         )}
 
+        {selected.size > 0 && (
+          <div
+            className="card"
+            style={{
+              padding: "10px 14px",
+              marginBottom: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 500 }}>
+              {selected.size} selected
+            </span>
+            <div style={{ flex: 1 }} />
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={busy}
+              onClick={() => runBulk("pause")}
+            >
+              <Pause size={14} /> Pause
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={busy}
+              onClick={() => runBulk("stop")}
+            >
+              Stop
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={busy}
+              onClick={() => runBulk("delete")}
+              style={{ color: "var(--danger)" }}
+            >
+              Delete
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         {items.length > 0 && (
           <div className="card">
             <table className="tbl">
               <thead>
                 <tr>
                   <th style={{ width: 32 }}>
-                    <input type="checkbox" disabled />
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleAll}
+                      aria-label="Select all"
+                    />
                   </th>
                   <th>Campaign</th>
                   <th>Status</th>
@@ -323,6 +374,8 @@ function CampaignsPage() {
                     agentLabel={agentName.get(c.agent_id) ?? "—"}
                     folderLabel={folderName.get(c.folder_id) ?? "—"}
                     busy={busy}
+                    selected={selected.has(c.id)}
+                    onToggleSelect={() => toggleOne(c.id)}
                     onLifecycle={(action) => {
                       setActionError(null);
                       lifecycleMut.mutate({ id: c.id, action });
