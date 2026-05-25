@@ -19,6 +19,7 @@ import {
   Check,
   Clock,
   Shuffle,
+  UserPlus,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
@@ -346,6 +347,7 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
 
   const contactsQ = useQuery({
     queryKey: ["contacts", folder?.id],
@@ -471,6 +473,12 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
             </>
           )}
         </div>
+        <button
+          className="btn btn--primary btn--sm"
+          onClick={() => setAddOpen(true)}
+        >
+          <UserPlus size={13} /> Add contact
+        </button>
         <button
           className="btn btn--ghost btn--sm"
           onClick={() => recheckMut.mutate()}
@@ -657,6 +665,16 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
           </table>
         )}
       </div>
+      {addOpen && (
+        <AddContactModal
+          folderId={folder.id}
+          onClose={() => setAddOpen(false)}
+          onDone={() => {
+            void qc.invalidateQueries({ queryKey: ["contacts", folder.id] });
+            void qc.invalidateQueries({ queryKey: ["folders"] });
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -1082,5 +1100,130 @@ function ImportStepper({ stage }: { stage: ImportStage }) {
         );
       })}
     </ol>
+  );
+}
+
+/* ---------------- Add single contact modal ---------------- */
+function AddContactModal({
+  folderId,
+  onClose,
+  onDone,
+}: {
+  folderId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [phone, setPhone] = useState("");
+  const [username, setUsername] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [source, setSource] = useState("");
+
+  const createMut = useMutation({
+    mutationFn: () => {
+      const body: Record<string, unknown> = { folder_id: folderId };
+      const p = phone.trim();
+      const u = username.trim().replace(/^@/, "");
+      const n = fullName.trim();
+      const s = source.trim();
+      if (p) body.phone = p;
+      if (u) body.username = u;
+      if (n) body.full_name = n;
+      if (s) body.source = s;
+      return api<ImportSummary>("/api/v1/contacts", { method: "POST", body });
+    },
+    onSuccess: (res) => {
+      if (res.imported > 0) {
+        toast.success("Contact added");
+      } else if (res.skipped_duplicates > 0) {
+        toast.info("Contact already exists in this folder");
+      } else {
+        toast.error("Contact was not added (invalid data)");
+      }
+      onDone();
+      onClose();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't add contact"),
+  });
+
+  const canSubmit = phone.trim().length > 0 || username.trim().length > 0;
+
+  return (
+    <div className="modal__scrim" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <header className="modal__head">
+          <h3>Add contact</h3>
+          <button className="tb__icon-btn" aria-label="Close" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+        <form
+          className="modal__body"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSubmit && !createMut.isPending) createMut.mutate();
+          }}
+          style={{ display: "flex", flexDirection: "column", gap: 12 }}
+        >
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Phone</label>
+            <input
+              className="input"
+              placeholder="+1 555 123 4567"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Telegram username</label>
+            <input
+              className="input"
+              placeholder="@durov"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </div>
+          <div className="muted text-xs" style={{ marginTop: -4 }}>
+            At least one of <b>Phone</b> or <b>Username</b> is required.
+          </div>
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Full name</label>
+            <input
+              className="input"
+              placeholder="Pavel Durov"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+            />
+          </div>
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Source</label>
+            <input
+              className="input"
+              placeholder="manual, website, event…"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+            <button type="button" className="btn btn--ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={!canSubmit || createMut.isPending}
+            >
+              {createMut.isPending ? (
+                <>
+                  <Loader2 size={14} className="ob__spin" /> Adding…
+                </>
+              ) : (
+                "Add contact"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
