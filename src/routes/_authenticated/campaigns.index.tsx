@@ -261,7 +261,7 @@ function CampaignsPage() {
         )}
 
         {items.length > 0 && (
-          <div className="card" style={{ overflow: "hidden" }}>
+          <div className="card">
             <table className="tbl">
               <thead>
                 <tr>
