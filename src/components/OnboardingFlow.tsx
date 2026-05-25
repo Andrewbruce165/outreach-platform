@@ -13,6 +13,7 @@ type SenderResponse = components["schemas"]["SenderResponse"];
 
 type Tab = "phone" | "qr";
 type PhoneStep = "phone" | "code" | "2fa" | "done";
+type Role = "sender" | "checker";
 
 interface Props {
   /** Optional pre-filled phone (re-auth flow) */
@@ -21,6 +22,8 @@ interface Props {
   onComplete?: (sender: SenderResponse | { slug?: string }) => void;
   /** Render compact (inside modal) vs full-page */
   compact?: boolean;
+  /** Optional pre-selected role (e.g. when re-authing an existing account) */
+  initialRole?: Role;
 }
 
 const phoneSchema = z.object({
@@ -37,8 +40,9 @@ const twofaSchema = z.object({
   password: z.string().min(1, "Enter your 2FA password"),
 });
 
-export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Props) {
+export function OnboardingFlow({ initialPhone, onComplete, compact = false, initialRole = "sender" }: Props) {
   const [tab, setTab] = useState<Tab>("phone");
+  const [role, setRole] = useState<Role>(initialRole);
 
   return (
     <div className={compact ? "ob ob--compact" : "ob"}>
@@ -50,6 +54,45 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Pr
           </p>
         </header>
       )}
+
+      <div
+        className="ob__roles"
+        role="radiogroup"
+        aria-label="Account role"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}
+      >
+        <button
+          type="button"
+          role="radio"
+          aria-checked={role === "sender"}
+          className={`ob__tab ${role === "sender" ? "is-active" : ""}`}
+          onClick={() => setRole("sender")}
+          style={{ flexDirection: "column", alignItems: "flex-start", textAlign: "left", padding: 12 }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Phone size={14} /> Sender
+          </span>
+          <span className="field__hint" style={{ marginTop: 4 }}>
+            Sends outreach messages (4/min · 20/hr · 150/day)
+          </span>
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={role === "checker"}
+          className={`ob__tab ${role === "checker" ? "is-active" : ""}`}
+          onClick={() => setRole("checker")}
+          style={{ flexDirection: "column", alignItems: "flex-start", textAlign: "left", padding: 12 }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <ShieldCheck size={14} /> Checker
+          </span>
+          <span className="field__hint" style={{ marginTop: 4 }}>
+            Verifies whether phone numbers exist on Telegram
+          </span>
+        </button>
+      </div>
+
       <div className="ob__tabs" role="tablist">
         <button
           role="tab"
@@ -70,9 +113,9 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Pr
       </div>
 
       {tab === "phone" ? (
-        <PhoneFlow initialPhone={initialPhone} onComplete={onComplete} />
+        <PhoneFlow initialPhone={initialPhone} onComplete={onComplete} role={role} />
       ) : (
-        <QrFlow onComplete={onComplete} />
+        <QrFlow onComplete={onComplete} role={role} />
       )}
     </div>
   );
@@ -82,9 +125,11 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Pr
 function PhoneFlow({
   initialPhone,
   onComplete,
+  role,
 }: {
   initialPhone?: string;
   onComplete?: Props["onComplete"];
+  role: Role;
 }) {
   const [step, setStep] = useState<PhoneStep>("phone");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -110,7 +155,7 @@ function PhoneFlow({
     try {
       const res = await api<StartResponse>("/api/v1/onboarding/start", {
         method: "POST",
-        body: { phone: values.phone.replace(/\s+/g, ""), role: "sender" },
+        body: { phone: values.phone.replace(/\s+/g, ""), role },
       });
       setSessionId(res.session_id);
       setPhone(res.phone);
@@ -135,7 +180,7 @@ function PhoneFlow({
             session_id: sessionId,
             code: values.code,
             name: values.name,
-            role: "sender",
+            role,
           },
         },
       );
@@ -294,7 +339,7 @@ function PhoneFlow({
 }
 
 /* ---------------- QR flow ---------------- */
-function QrFlow({ onComplete }: { onComplete?: Props["onComplete"] }) {
+function QrFlow({ onComplete, role }: { onComplete?: Props["onComplete"]; role: Role }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("idle");
@@ -306,7 +351,7 @@ function QrFlow({ onComplete }: { onComplete?: Props["onComplete"] }) {
     try {
       const res = await api<{ session_id: string; qr_code?: string; qr_url?: string }>(
         "/api/v1/onboarding/qr-start",
-        { method: "POST", body: { role: "sender" } },
+        { method: "POST", body: { role } },
       );
       setSessionId(res.session_id);
       setQrUrl(res.qr_code ?? res.qr_url ?? null);
