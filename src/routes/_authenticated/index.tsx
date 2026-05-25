@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import {
   Send,
   MessageCircle,
@@ -13,7 +13,7 @@ import {
   RefreshCw,
   AlertTriangle,
   Check,
-  Upload,
+  
   Rocket,
   ChevronDown,
   ArrowRight,
@@ -26,7 +26,10 @@ import type { components } from "@/types/api";
 type AnalyticsCards = components["schemas"]["AnalyticsCards"];
 type Funnel = components["schemas"]["FunnelResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
+type Campaign = components["schemas"]["CampaignResponse"];
 type Sender = components["schemas"]["SenderResponse"];
+type ConversationList = components["schemas"]["ConversationListResponse"];
+type Conversation = components["schemas"]["ConversationResponse"];
 
 export const Route = createFileRoute("/_authenticated/")({
   component: Dashboard,
@@ -65,11 +68,36 @@ function Dashboard() {
     queryFn: () => api<{ senders: Sender[] }>("/api/v1/senders"),
     refetchInterval: 30_000,
   });
+  const conversationsQ = useQuery({
+    queryKey: ["conversations", { dashboard: true }],
+    queryFn: () =>
+      api<ConversationList>("/api/v1/conversations", { query: { limit: 50 } }),
+    refetchInterval: 30_000,
+  });
 
   const a = analyticsQ.data;
   const f = funnelQ.data;
   const senders = sendersQ.data?.senders ?? [];
   const campaigns = campaignsQ.data?.items ?? [];
+  const conversations = conversationsQ.data?.conversations ?? [];
+
+  // Per-sender analytics to power the daily-rate bars in Account health.
+  const senderAnalyticsQs = useQueries({
+    queries: senders.map((s) => ({
+      queryKey: ["analytics", "sender", s.id],
+      queryFn: () => api<AnalyticsCards>(`/api/v1/analytics/senders/${s.id}`),
+      refetchInterval: 30_000,
+      staleTime: 15_000,
+    })),
+  });
+  const sentBySenderId = useMemo(() => {
+    const m: Record<string, number> = {};
+    senders.forEach((s, i) => {
+      const d = senderAnalyticsQs[i]?.data;
+      if (d) m[s.id] = d.sent ?? 0;
+    });
+    return m;
+  }, [senders, senderAnalyticsQs]);
 
   const sent = a?.sent ?? 0;
   const replyCount = a?.replied.conversation_count ?? 0;
@@ -190,7 +218,15 @@ function Dashboard() {
             </div>
           </div>
 
-          <AccountHealthCard senders={senders} loading={sendersQ.isLoading} />
+          <AccountHealthCard
+            senders={senders}
+            loading={sendersQ.isLoading}
+            sentBySenderId={sentBySenderId}
+            onRefresh={() => {
+              void sendersQ.refetch();
+              senderAnalyticsQs.forEach((q) => void q.refetch());
+            }}
+          />
         </div>
 
         {/* Campaign performance + Activity */}
@@ -199,7 +235,12 @@ function Dashboard() {
             items={campaigns}
             loading={campaignsQ.isLoading}
           />
-          <ActivityFeedCard />
+          <ActivityFeedCard
+            conversations={conversations}
+            campaigns={campaigns}
+            senders={senders}
+            loading={conversationsQ.isLoading}
+          />
         </div>
       </div>
     </>
@@ -295,6 +336,7 @@ function SankeyFunnel({ funnel }: { funnel: Funnel }) {
     { id: "lead", label: "Lead", value: funnel.lead, color: "#4dcd5e" },
     { id: "handoff", label: "Handoff", value: funnel.handoff, color: "#16a34a" },
   ];
+  const [hovered, setHovered] = useState<number | null>(null);
   const W = 720;
   const H = 200;
   const labelGap = 46;
@@ -323,104 +365,212 @@ function SankeyFunnel({ funnel }: { funnel: Funnel }) {
     ].join(" ");
   };
 
+  const totalSent = stages[0].value || 1;
+  const h = hovered != null ? stages[hovered] : null;
+  const hPrev = hovered != null && hovered > 0 ? stages[hovered - 1] : null;
+  const stepPct = h && hPrev ? (hPrev.value > 0 ? (h.value / hPrev.value) * 100 : 0) : null;
+  const overallPct = h ? (h.value / totalSent) * 100 : null;
+  const dropoff = h && hPrev ? Math.max(0, hPrev.value - h.value) : null;
+  // Tooltip horizontal position (% of card width)
+  const tipLeft =
+    hovered != null
+      ? ((hovered * (colW + gap) + colW / 2) / W) * 100
+      : 0;
+
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H + labelGap}`}
-      width="100%"
-      style={{ display: "block", overflow: "visible" }}
-    >
-      <defs>
-        {stages.slice(0, -1).map((s, i) => (
-          <linearGradient key={s.id} id={`band-${s.id}`} x1="0" x2="1">
-            <stop offset="0%" stopColor={s.color} />
-            <stop offset="100%" stopColor={stages[i + 1].color} />
-          </linearGradient>
-        ))}
-      </defs>
+    <div style={{ position: "relative", width: "100%" }}>
+      <svg
+        viewBox={`0 0 ${W} ${H + labelGap}`}
+        width="100%"
+        style={{ display: "block", overflow: "visible" }}
+        onMouseLeave={() => setHovered(null)}
+      >
+        <defs>
+          {stages.slice(0, -1).map((s, i) => (
+            <linearGradient key={s.id} id={`band-${s.id}`} x1="0" x2="1">
+              <stop offset="0%" stopColor={s.color} />
+              <stop offset="100%" stopColor={stages[i + 1].color} />
+            </linearGradient>
+          ))}
+        </defs>
 
-      {stages.slice(0, -1).map((s, i) => {
-        const next = stages[i + 1];
-        const ax = i * (colW + gap);
-        const bx = (i + 1) * (colW + gap);
-        return (
-          <path
-            key={`flow-${s.id}`}
-            d={ribbon(s, next, ax, bx)}
-            fill={`url(#band-${s.id})`}
-            opacity="0.4"
-          />
-        );
-      })}
-
-      {stages.map((s, i) => {
-        const x = i * (colW + gap);
-        return (
-          <g key={s.id}>
-            <rect
-              x={x}
-              y={yTop(s.value)}
-              width={colW}
-              height={hFor(s.value)}
-              rx="4"
-              fill={s.color}
+        {stages.slice(0, -1).map((s, i) => {
+          const next = stages[i + 1];
+          const ax = i * (colW + gap);
+          const bx = (i + 1) * (colW + gap);
+          const dimmed = hovered != null && hovered !== i && hovered !== i + 1;
+          return (
+            <path
+              key={`flow-${s.id}`}
+              d={ribbon(s, next, ax, bx)}
+              fill={`url(#band-${s.id})`}
+              opacity={dimmed ? 0.18 : 0.4}
+              style={{ transition: "opacity 120ms ease" }}
             />
-            <text
-              x={x + colW / 2}
-              y={H + 20}
-              textAnchor="middle"
-              fontSize="10"
-              fill="var(--text-faint)"
-              fontWeight="600"
-              style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}
-            >
-              {s.label}
-            </text>
-            <text
-              x={x + colW / 2}
-              y={H + 40}
-              textAnchor="middle"
-              fontSize="17"
-              fontWeight="600"
-              fill="var(--text)"
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {s.value.toLocaleString()}
-            </text>
-          </g>
-        );
-      })}
+          );
+        })}
 
-      {stages.slice(0, -1).map((s, i) => {
-        const next = stages[i + 1];
-        const pct = s.value > 0 ? (next.value / s.value) * 100 : 0;
-        const label = pct < 10 ? pct.toFixed(1) + "%" : Math.round(pct) + "%";
-        const cx = i * (colW + gap) + colW + gap / 2;
-        return (
-          <g key={`cr-${s.id}`}>
+        {stages.map((s, i) => {
+          const x = i * (colW + gap);
+          const isActive = hovered === i;
+          return (
+            <g key={s.id}>
+              <rect
+                x={x}
+                y={yTop(s.value)}
+                width={colW}
+                height={hFor(s.value)}
+                rx="4"
+                fill={s.color}
+                opacity={hovered != null && !isActive ? 0.55 : 1}
+                style={{ transition: "opacity 120ms ease" }}
+              />
+              <text
+                x={x + colW / 2}
+                y={H + 20}
+                textAnchor="middle"
+                fontSize="10"
+                fill="var(--text-faint)"
+                fontWeight="600"
+                style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}
+              >
+                {s.label}
+              </text>
+              <text
+                x={x + colW / 2}
+                y={H + 40}
+                textAnchor="middle"
+                fontSize="17"
+                fontWeight="600"
+                fill="var(--text)"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {s.value.toLocaleString()}
+              </text>
+            </g>
+          );
+        })}
+
+        {stages.slice(0, -1).map((s, i) => {
+          const next = stages[i + 1];
+          const pct = s.value > 0 ? (next.value / s.value) * 100 : 0;
+          const label = pct < 10 ? pct.toFixed(1) + "%" : Math.round(pct) + "%";
+          const cx = i * (colW + gap) + colW + gap / 2;
+          return (
+            <g key={`cr-${s.id}`}>
+              <rect
+                x={cx - 22}
+                y={yTop(next.value) - 22}
+                width="44"
+                height="18"
+                rx="9"
+                fill="white"
+                stroke="var(--border)"
+              />
+              <text
+                x={cx}
+                y={yTop(next.value) - 9}
+                textAnchor="middle"
+                fontSize="10.5"
+                fill="var(--text-soft)"
+                fontWeight="600"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Invisible hit-areas for hover per stage */}
+        {stages.map((s, i) => {
+          const x = i * (colW + gap);
+          return (
             <rect
-              x={cx - 22}
-              y={yTop(next.value) - 22}
-              width="44"
-              height="18"
-              rx="9"
-              fill="white"
-              stroke="var(--border)"
+              key={`hit-${s.id}`}
+              x={x - gap / 2}
+              y={0}
+              width={colW + gap}
+              height={H + labelGap}
+              fill="transparent"
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => setHovered(i)}
             />
-            <text
-              x={cx}
-              y={yTop(next.value) - 9}
-              textAnchor="middle"
-              fontSize="10.5"
-              fill="var(--text-soft)"
-              fontWeight="600"
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+          );
+        })}
+      </svg>
+
+      {h && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${tipLeft}%`,
+            top: 0,
+            transform: "translate(-50%, -100%)",
+            background: "var(--text, #0f1419)",
+            color: "white",
+            borderRadius: 8,
+            padding: "10px 12px",
+            fontSize: 12,
+            lineHeight: 1.45,
+            minWidth: 180,
+            boxShadow: "0 6px 20px rgba(15, 20, 25, 0.18)",
+            pointerEvents: "none",
+            zIndex: 5,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 6,
+              fontWeight: 600,
+              fontSize: 12.5,
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 50,
+                background: h.color,
+                display: "inline-block",
+              }}
+            />
+            {h.label}
+            <span style={{ marginLeft: "auto", opacity: 0.65, fontWeight: 500 }}>
+              {h.value.toLocaleString()}
+            </span>
+          </div>
+          <div style={{ opacity: 0.8, display: "grid", rowGap: 3 }}>
+            <Row k="% of sent" v={`${overallPct!.toFixed(1)}%`} />
+            {stepPct != null && hPrev && (
+              <Row
+                k={`vs ${hPrev.label}`}
+                v={`${stepPct < 10 ? stepPct.toFixed(1) : Math.round(stepPct)}%`}
+              />
+            )}
+            {dropoff != null && hPrev && (
+              <Row
+                k="Drop-off"
+                v={`−${dropoff.toLocaleString()} (${hPrev.label})`}
+              />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+      <span style={{ opacity: 0.7 }}>{k}</span>
+      <span style={{ fontWeight: 600 }}>{v}</span>
+    </div>
   );
 }
 
@@ -499,9 +649,13 @@ function CorridorBar({ value, limit }: { value: number; limit: number }) {
 function AccountHealthCard({
   senders,
   loading,
+  sentBySenderId,
+  onRefresh,
 }: {
   senders: Sender[];
   loading: boolean;
+  sentBySenderId: Record<string, number>;
+  onRefresh: () => void;
 }) {
   const total = senders.length;
   const active = senders.filter((s) => s.status === "active").length;
@@ -521,11 +675,14 @@ function AccountHealthCard({
           </div>
         </div>
         <div className="spacer" />
-        <Link to="/accounts">
-          <button className="btn btn--sm btn--ghost" type="button" aria-label="Refresh">
-            <RefreshCw size={12} />
-          </button>
-        </Link>
+        <button
+          className="btn btn--sm btn--ghost"
+          type="button"
+          aria-label="Refresh"
+          onClick={onRefresh}
+        >
+          <RefreshCw size={12} />
+        </button>
       </div>
 
       {total === 0 && !loading ? (
@@ -627,7 +784,10 @@ function AccountHealthCard({
                     {s.name || s.phone}
                   </span>
                 </div>
-                <CorridorBar value={0} limit={s.rate_limits?.per_day ?? 300} />
+                <CorridorBar
+                  value={sentBySenderId[s.id] ?? 0}
+                  limit={s.rate_limits?.per_day ?? 300}
+                />
                 <span
                   style={{
                     fontSize: 11.5,
@@ -636,7 +796,8 @@ function AccountHealthCard({
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
-                  0/{s.rate_limits?.per_day ?? 300}
+                  {(sentBySenderId[s.id] ?? 0).toLocaleString()}/
+                  {s.rate_limits?.per_day ?? 300}
                 </span>
               </div>
             ))}
@@ -836,65 +997,144 @@ function CampaignPerformanceCard({
   );
 }
 
-/* ----- Activity feed (static demo content) ----- */
-const ACTIVITY: {
+/* ----- Activity feed (derived from live workspace data) ----- */
+type ActivityItem = {
+  key: string;
   who: string;
   what: string;
   whom?: string;
-  at: string;
+  ts: number;
   icon: React.ReactNode;
   color: string;
-}[] = [
-  {
-    who: "Maya",
-    what: "booked a meeting with",
-    whom: "Sophie Turner · UpperCode",
-    at: "2m ago",
-    icon: <Flag size={13} />,
-    color: "var(--success)",
-  },
-  {
-    who: "Theo",
-    what: "handed off to manager:",
-    whom: "Noah Jansen · Bitline",
-    at: "18m ago",
-    icon: <User size={13} />,
-    color: "var(--ai-purple, #8774e1)",
-  },
-  {
-    who: "System",
-    what: "session revoked for @hirot",
-    at: "1h ago",
-    icon: <AlertTriangle size={13} />,
-    color: "var(--danger)",
-  },
-  {
-    who: "Cleo",
-    what: "marked finished:",
-    whom: "Maya Iwata · Drifthouse",
-    at: "3h ago",
-    icon: <Check size={13} />,
-    color: "var(--text-muted)",
-  },
-  {
-    who: "System",
-    what: "added 248 contacts to",
-    whom: "SaaS founders · US",
-    at: "5h ago",
-    icon: <Upload size={13} />,
-    color: "var(--tg-blue, #3390ec)",
-  },
-  {
-    who: "Andrew",
-    what: "launched campaign",
-    whom: "Crypto YouTubers — sponsorship",
-    at: "Yesterday",
-    icon: <Rocket size={13} />,
-    color: "var(--tg-blue, #3390ec)",
-  },
-];
+};
 
-function ActivityFeedCard() {
+function relativeTime(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts);
+  const s = Math.round(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d === 1) return "Yesterday";
+  if (d < 7) return `${d}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function ActivityFeedCard({
+  conversations,
+  campaigns,
+  senders,
+  loading,
+}: {
+  conversations: Conversation[];
+  campaigns: Campaign[];
+  senders: Sender[];
+  loading: boolean;
+}) {
+  const items = useMemo<ActivityItem[]>(() => {
+    const out: ActivityItem[] = [];
+
+    // Notable conversation events (lead / handoff / finished)
+    for (const c of conversations) {
+      const status = (c.status || "").toLowerCase();
+      const ts = c.last_message_at
+        ? new Date(c.last_message_at).getTime()
+        : new Date(c.updated_at).getTime();
+      const name = c.contact_name || c.contact_phone;
+      const sender = senders.find((s) => s.id === c.sender_id);
+      const senderName = sender?.name || sender?.slug || "Agent";
+      if (status === "lead") {
+        out.push({
+          key: `lead-${c.id}`,
+          who: senderName,
+          what: "captured a lead:",
+          whom: name,
+          ts,
+          icon: <Flag size={13} />,
+          color: "var(--success)",
+        });
+      } else if (status === "handoff") {
+        out.push({
+          key: `handoff-${c.id}`,
+          who: senderName,
+          what: "handed off to manager:",
+          whom: name,
+          ts,
+          icon: <User size={13} />,
+          color: "var(--ai-purple, #8774e1)",
+        });
+      } else if (status === "finished") {
+        out.push({
+          key: `finished-${c.id}`,
+          who: senderName,
+          what: "marked finished:",
+          whom: name,
+          ts,
+          icon: <Check size={13} />,
+          color: "var(--text-muted)",
+        });
+      }
+    }
+
+    // Campaign lifecycle events
+    for (const c of campaigns) {
+      const ts = new Date(c.updated_at || c.created_at).getTime();
+      if (c.status === "running") {
+        out.push({
+          key: `launched-${c.id}`,
+          who: "You",
+          what: "launched campaign",
+          whom: c.name,
+          ts,
+          icon: <Rocket size={13} />,
+          color: "var(--tg-blue, #3390ec)",
+        });
+      } else if (c.status === "paused") {
+        out.push({
+          key: `paused-${c.id}`,
+          who: "System",
+          what: "paused campaign",
+          whom: c.name,
+          ts,
+          icon: <AlertTriangle size={13} />,
+          color: "var(--warning, #f59e0b)",
+        });
+      } else if (c.status === "finished" || c.status === "stopped") {
+        out.push({
+          key: `done-${c.id}`,
+          who: "You",
+          what: c.status === "stopped" ? "stopped campaign" : "finished campaign",
+          whom: c.name,
+          ts,
+          icon: <Check size={13} />,
+          color: "var(--text-muted)",
+        });
+      }
+    }
+
+    // Sender errors surface as system events
+    for (const s of senders) {
+      if (s.status === "error") {
+        const ts = s.last_used_at
+          ? new Date(s.last_used_at).getTime()
+          : Date.now();
+        out.push({
+          key: `sender-err-${s.id}`,
+          who: "System",
+          what: "needs re-auth:",
+          whom: s.name || s.phone,
+          ts,
+          icon: <AlertTriangle size={13} />,
+          color: "var(--danger)",
+        });
+      }
+    }
+
+    return out.sort((a, b) => b.ts - a.ts).slice(0, 8);
+  }, [conversations, campaigns, senders]);
+
   return (
     <div className="card">
       <div className="card__header">
@@ -903,10 +1143,20 @@ function ActivityFeedCard() {
           <div className="card__sub">Live signals &amp; events</div>
         </div>
       </div>
+      {loading && items.length === 0 && (
+        <div className="muted" style={{ padding: 18, fontSize: 13 }}>
+          Loading…
+        </div>
+      )}
+      {!loading && items.length === 0 && (
+        <div className="muted" style={{ padding: 24, fontSize: 13, textAlign: "center" }}>
+          No activity yet. Launch a campaign to see live signals here.
+        </div>
+      )}
       <div style={{ padding: "8px 4px" }}>
-        {ACTIVITY.map((a, i) => (
+        {items.map((a) => (
           <div
-            key={i}
+            key={a.key}
             style={{
               display: "flex",
               gap: 12,
@@ -931,15 +1181,11 @@ function ActivityFeedCard() {
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13 }}>
-                <b>{a.who}</b>{" "}
-                <span className="muted">{a.what}</span>{" "}
+                <b>{a.who}</b> <span className="muted">{a.what}</span>{" "}
                 {a.whom && <span style={{ fontWeight: 500 }}>{a.whom}</span>}
               </div>
-              <div
-                className="muted"
-                style={{ fontSize: 11, marginTop: 2 }}
-              >
-                {a.at}
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                {relativeTime(a.ts)}
               </div>
             </div>
           </div>
