@@ -180,7 +180,7 @@ function PhoneFlow({
             session_id: sessionId,
             code: values.code,
             name: values.name,
-            role: "sender",
+            role,
           },
         },
       );
