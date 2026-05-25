@@ -351,7 +351,7 @@ function QrFlow({ onComplete, role }: { onComplete?: Props["onComplete"]; role: 
     try {
       const res = await api<{ session_id: string; qr_code?: string; qr_url?: string }>(
         "/api/v1/onboarding/qr-start",
-        { method: "POST", body: { role: "sender" } },
+        { method: "POST", body: { role } },
       );
       setSessionId(res.session_id);
       setQrUrl(res.qr_code ?? res.qr_url ?? null);
