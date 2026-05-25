@@ -163,6 +163,43 @@ function CampaignsPage() {
   const busy =
     lifecycleMut.isPending || duplicateMut.isPending || deleteMut.isPending;
 
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const allVisibleSelected =
+    items.length > 0 && items.every((c) => selected.has(c.id));
+  const toggleAll = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) items.forEach((c) => next.delete(c.id));
+      else items.forEach((c) => next.add(c.id));
+      return next;
+    });
+
+  const runBulk = async (
+    action: "pause" | "stop" | "delete",
+  ) => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (action === "delete" && !confirm(`Delete ${ids.length} campaign(s)?`)) return;
+    setActionError(null);
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          action === "delete"
+            ? deleteMut.mutateAsync(id)
+            : lifecycleMut.mutateAsync({ id, action }),
+        ),
+      );
+      setSelected(new Set());
+    } catch (e) {
+      setActionError(errMsg(e));
+    }
+  };
+
   return (
     <>
       <Topbar
