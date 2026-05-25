@@ -1,6 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Calendar,
+  Edit3,
+  Filter,
+  Flag,
+  MoreHorizontal,
+  Pause,
+  Play,
+  Plus,
+  Search,
+} from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
@@ -15,15 +26,40 @@ export const Route = createFileRoute("/_authenticated/campaigns/")({
   component: CampaignsPage,
 });
 
-const FILTERS = [
+const TABS = [
   { id: "all", label: "All" },
-  { id: "draft", label: "Draft" },
   { id: "running", label: "Running" },
   { id: "paused", label: "Paused" },
+  { id: "scheduled", label: "Scheduled" },
+  { id: "draft", label: "Drafts" },
   { id: "finished", label: "Finished" },
 ] as const;
+type TabId = (typeof TABS)[number]["id"];
 
-type FilterId = (typeof FILTERS)[number]["id"];
+const STATUS_PILL: Record<
+  string,
+  { label: string; pill: string; dot: string }
+> = {
+  running:   { label: "Running",   pill: "pill--green",  dot: "var(--success)" },
+  paused:    { label: "Paused",    pill: "pill--orange", dot: "var(--warning)" },
+  draft:     { label: "Draft",     pill: "pill--ghost",  dot: "var(--text-faint)" },
+  scheduled: { label: "Scheduled", pill: "pill--blue",   dot: "var(--tg-blue)" },
+  finished:  { label: "Finished",  pill: "pill--ghost",  dot: "var(--text-faint)" },
+  stopped:   { label: "Stopped",   pill: "pill--red",    dot: "var(--danger)" },
+};
+
+const AVATAR_COLORS: [string, string][] = [
+  ["#3390ec", "#6cb8ff"], ["#8774e1", "#c4b5fd"], ["#4dcd5e", "#94e8a0"],
+  ["#f5a623", "#fcd57f"], ["#e13b30", "#f59289"], ["#5eaef4", "#a4d2fa"],
+  ["#34a4a4", "#7cd3d3"], ["#b069dc", "#dab1f3"],
+];
+function avatarStyle(seed: string): React.CSSProperties {
+  const i =
+    seed.split("").reduce((a, c) => a + c.charCodeAt(0), 0) %
+    AVATAR_COLORS.length;
+  const [a, b] = AVATAR_COLORS[i];
+  return { background: `linear-gradient(135deg, ${a}, ${b})` };
+}
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.message;
@@ -33,7 +69,8 @@ function errMsg(e: unknown): string {
 
 function CampaignsPage() {
   const qc = useQueryClient();
-  const [filter, setFilter] = useState<FilterId>("all");
+  const [tab, setTab] = useState<TabId>("all");
+  const [search, setSearch] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
 
   const listQ = useQuery({
@@ -66,22 +103,42 @@ function CampaignsPage() {
     return m;
   }, [foldersQ.data]);
 
+  const all = listQ.data?.items ?? [];
+
+  const counts: Record<TabId, number> = useMemo(() => {
+    return {
+      all: all.length,
+      running: all.filter((c) => c.status === "running").length,
+      paused: all.filter((c) => c.status === "paused").length,
+      scheduled: all.filter((c) => c.status === "scheduled").length,
+      draft: all.filter((c) => c.status === "draft").length,
+      finished: all.filter((c) => c.status === "finished").length,
+    };
+  }, [all]);
+
   const items = useMemo(() => {
-    const all = listQ.data?.items ?? [];
-    if (filter === "all") return all;
-    return all.filter((c) => c.status === filter);
-  }, [listQ.data, filter]);
+    const q = search.trim().toLowerCase();
+    return all
+      .filter((c) => tab === "all" || c.status === tab)
+      .filter((c) => !q || c.name.toLowerCase().includes(q));
+  }, [all, tab, search]);
 
   const lifecycleMut = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "start" | "pause" | "resume" | "stop" | "finish" }) =>
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "start" | "pause" | "resume" | "stop";
+    }) =>
       api<Campaign>(`/api/v1/campaigns/${id}/${action}`, { method: "POST" }),
     onSuccess: (_d, v) => {
-      const eventMap = {
+      const map = {
         start: "campaign_launched",
         pause: "campaign_paused",
         resume: "campaign_resumed",
       } as const;
-      const e = eventMap[v.action as keyof typeof eventMap];
+      const e = map[v.action as keyof typeof map];
       if (e) track(e, { campaign_id: v.id });
       void qc.invalidateQueries({ queryKey: ["campaigns"] });
     },
@@ -102,44 +159,74 @@ function CampaignsPage() {
     onError: (e) => setActionError(errMsg(e)),
   });
 
+  const busy =
+    lifecycleMut.isPending || duplicateMut.isPending || deleteMut.isPending;
+
   return (
     <>
       <Topbar
         title="Campaigns"
         right={
-          <Link to="/campaigns/new">
-
-            <button className="btn btn--primary btn--sm">+ New campaign</button>
-          </Link>
+          <>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "0 12px",
+                height: 36,
+                background: "var(--bg-soft)",
+                borderRadius: 9,
+                color: "var(--text-muted)",
+              }}
+            >
+              <Search size={14} />
+              <input
+                placeholder="Search campaigns…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  outline: "none",
+                  width: 220,
+                  fontSize: 13,
+                  color: "var(--text)",
+                }}
+              />
+            </div>
+            <button className="btn btn--ghost btn--sm" disabled title="Filters (v2)">
+              <Filter size={14} /> Filters
+            </button>
+            <Link to="/campaigns/new">
+              <button className="btn btn--primary btn--sm">
+                <Plus size={14} /> New campaign
+              </button>
+            </Link>
+          </>
         }
       />
-      <div className="scroll" style={{ padding: 24, flex: 1 }}>
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-          {FILTERS.map((f) => {
-            const count =
-              f.id === "all"
-                ? listQ.data?.items.length ?? 0
-                : listQ.data?.items.filter((c) => c.status === f.id).length ?? 0;
-            const active = filter === f.id;
-            return (
-              <button
-                key={f.id}
-                className={`btn btn--sm ${active ? "btn--primary" : "btn--ghost"}`}
-                onClick={() => setFilter(f.id)}
-              >
-                {f.label} <span style={{ opacity: 0.7, marginLeft: 4 }}>{count}</span>
-              </button>
-            );
-          })}
-        </div>
 
+      <div className="tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            className={`tab ${tab === t.id ? "is-active" : ""}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label} <span className="count">{counts[t.id]}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="scroll" style={{ flex: 1, padding: 24 }}>
         {actionError && (
           <div
             className="card"
             style={{
               padding: 12,
               marginBottom: 14,
-              color: "var(--danger, #c0392b)",
+              color: "var(--danger)",
               fontSize: 13,
             }}
             role="alert"
@@ -155,89 +242,64 @@ function CampaignsPage() {
           </div>
         )}
 
-        {listQ.isLoading && <div className="muted">Loading campaigns…</div>}
+        {listQ.isLoading && (
+          <div className="muted" style={{ padding: 24 }}>
+            Loading campaigns…
+          </div>
+        )}
         {listQ.error && (
-          <div className="card" style={{ padding: 16, color: "var(--danger, #c0392b)" }}>
+          <div
+            className="card"
+            style={{ padding: 16, color: "var(--danger)" }}
+          >
             {errMsg(listQ.error)}
           </div>
         )}
 
         {listQ.data && items.length === 0 && (
-          <EmptyState filter={filter} />
+          <EmptyState filtered={tab !== "all" || search.length > 0} />
         )}
 
         {items.length > 0 && (
           <div className="card" style={{ overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="tbl">
               <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
-                  <th style={th}>Campaign</th>
-                  <th style={th}>Status</th>
-                  <th style={th}>Agent</th>
-                  <th style={th}>Folder</th>
-                  <th style={th}>Senders</th>
-                  <th style={th}>Updated</th>
-                  <th style={{ ...th, width: 1 }}>Actions</th>
+                <tr>
+                  <th style={{ width: 32 }}>
+                    <input type="checkbox" disabled />
+                  </th>
+                  <th>Campaign</th>
+                  <th>Status</th>
+                  <th>Agent · Folder</th>
+                  <th>Senders</th>
+                  <th>Progress</th>
+                  <th style={{ textAlign: "right" }}>Funnel (sent → leads)</th>
+                  <th style={{ width: 40 }} />
                 </tr>
               </thead>
               <tbody>
                 {items.map((c) => (
-                  <tr key={c.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={td}>
-                      <Link
-                        to="/campaigns"
-                        search={{ id: c.id } as never}
-                        style={{ fontWeight: 600, color: "var(--tg-blue)" }}
-                      >
-                        {c.name}
-                      </Link>
-                      {c.is_exhausted && (
-                        <span
-                          title="No more contacts to message"
-                          style={{
-                            marginLeft: 8,
-                            fontSize: 11,
-                            color: "var(--text-soft)",
-                          }}
-                        >
-                          (exhausted)
-                        </span>
-                      )}
-                    </td>
-                    <td style={td}>
-                      <StatusPill status={c.status} />
-                    </td>
-                    <td style={{ ...td, color: "var(--text-soft)" }}>
-                      {agentName.get(c.agent_id) ?? "—"}
-                    </td>
-                    <td style={{ ...td, color: "var(--text-soft)" }}>
-                      {folderName.get(c.folder_id) ?? "—"}
-                    </td>
-                    <td style={td}>{c.attached_senders?.length ?? 0}</td>
-                    <td style={{ ...td, color: "var(--text-soft)" }}>
-                      {new Date(c.updated_at).toLocaleDateString()}
-                    </td>
-                    <td style={td}>
-                      <RowActions
-                        campaign={c}
-                        busy={lifecycleMut.isPending || duplicateMut.isPending || deleteMut.isPending}
-                        onLifecycle={(action) => {
-                          setActionError(null);
-                          lifecycleMut.mutate({ id: c.id, action });
-                        }}
-                        onDuplicate={() => {
-                          setActionError(null);
-                          duplicateMut.mutate(c.id);
-                        }}
-                        onDelete={() => {
-                          if (confirm(`Delete campaign "${c.name}"?`)) {
-                            setActionError(null);
-                            deleteMut.mutate(c.id);
-                          }
-                        }}
-                      />
-                    </td>
-                  </tr>
+                  <CampaignRow
+                    key={c.id}
+                    campaign={c}
+                    agentLabel={agentName.get(c.agent_id) ?? "—"}
+                    folderLabel={folderName.get(c.folder_id) ?? "—"}
+                    busy={busy}
+                    onLifecycle={(action) => {
+                      setActionError(null);
+                      lifecycleMut.mutate({ id: c.id, action });
+                    }}
+                    onDuplicate={() => {
+                      setActionError(null);
+                      duplicateMut.mutate(c.id);
+                    }}
+                    onDelete={() => {
+                      if (confirm(`Delete campaign "${c.name}"?`)) {
+                        setActionError(null);
+                        deleteMut.mutate(c.id);
+                      }
+                    }}
+                  />
                 ))}
               </tbody>
             </table>
@@ -248,43 +310,315 @@ function CampaignsPage() {
   );
 }
 
-const th: React.CSSProperties = {
-  padding: "10px 14px",
-  fontSize: 12,
-  fontWeight: 500,
-  color: "var(--text-soft)",
-};
-const td: React.CSSProperties = { padding: "12px 14px", fontSize: 13 };
+function statusIcon(status: string) {
+  switch (status) {
+    case "running":
+      return <Play size={15} />;
+    case "paused":
+      return <Pause size={15} />;
+    case "scheduled":
+      return <Calendar size={15} />;
+    case "draft":
+      return <Edit3 size={15} />;
+    case "finished":
+      return <Flag size={15} />;
+    default:
+      return <Play size={15} />;
+  }
+}
 
-const STATUS_STYLES: Record<string, { bg: string; fg: string; label: string }> = {
-  draft: { bg: "#eef0f3", fg: "#5b6470", label: "Draft" },
-  running: { bg: "#e6f4ea", fg: "#1e7a3a", label: "Running" },
-  paused: { bg: "#fff4d6", fg: "#8a6a00", label: "Paused" },
-  finished: { bg: "#eef0f3", fg: "#5b6470", label: "Finished" },
-  stopped: { bg: "#fde7e7", fg: "#a02525", label: "Stopped" },
-};
+function statusIconStyle(status: string): React.CSSProperties {
+  const map: Record<string, { bg: string; fg: string }> = {
+    running: { bg: "var(--success-soft)", fg: "#1e8a3a" },
+    paused: { bg: "var(--warning-soft)", fg: "#a86200" },
+    scheduled: { bg: "var(--tg-blue-soft)", fg: "var(--tg-blue)" },
+    draft: { bg: "var(--bg-soft)", fg: "var(--text-muted)" },
+    finished: { bg: "var(--bg-soft)", fg: "var(--text-muted)" },
+  };
+  const s = map[status] ?? map.draft;
+  return {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    background: s.bg,
+    color: s.fg,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  };
+}
 
 function StatusPill({ status }: { status: string }) {
-  const s = STATUS_STYLES[status] ?? { bg: "#eef0f3", fg: "#5b6470", label: status };
+  const s = STATUS_PILL[status] ?? STATUS_PILL.draft;
   return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 999,
-        background: s.bg,
-        color: s.fg,
-        fontSize: 11,
-        fontWeight: 500,
-        textTransform: "capitalize",
-      }}
-    >
+    <span className={`pill ${s.pill}`}>
+      <span className="pill__dot" style={{ background: s.dot }} />
       {s.label}
     </span>
   );
 }
 
-function RowActions({
+function SenderAvatars({ campaign }: { campaign: Campaign }) {
+  const senders = campaign.attached_senders ?? [];
+  const n = senders.length;
+  if (n === 0) return <span className="muted text-xs">—</span>;
+  const shown = senders.slice(0, 3);
+  return (
+    <div style={{ display: "flex", alignItems: "center" }}>
+      {shown.map((s, i) => (
+        <div
+          key={s.sender_id}
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: "50%",
+            marginLeft: i ? -6 : 0,
+            ...avatarStyle(s.sender_id),
+            border: "2px solid white",
+            fontSize: 9,
+            color: "white",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 600,
+          }}
+        >
+          {String.fromCharCode(65 + i)}
+        </div>
+      ))}
+      {n > 3 && (
+        <span
+          style={{ marginLeft: 6, fontSize: 11.5, color: "var(--text-muted)" }}
+        >
+          +{n - 3}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function FunnelMini({
+  sent,
+  replied,
+  leads,
+}: {
+  sent: number;
+  replied: number;
+  leads: number;
+}) {
+  const max = Math.max(sent, 1);
+  const bar = (v: number, color: string) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div
+        style={{
+          width: 50,
+          height: 4,
+          background: "var(--bg-soft)",
+          borderRadius: 999,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${(v / max) * 100}%`,
+            height: "100%",
+            background: color,
+            borderRadius: 999,
+          }}
+        />
+      </div>
+      <span
+        className="num text-xs"
+        style={{ minWidth: 36, textAlign: "right", color: "var(--text-soft)" }}
+      >
+        {v.toLocaleString()}
+      </span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {bar(sent, "var(--tg-blue)")}
+      {bar(replied, "var(--ai-purple)")}
+      {bar(leads, "var(--success)")}
+    </div>
+  );
+}
+
+function CampaignRow({
+  campaign: c,
+  agentLabel,
+  folderLabel,
+  busy,
+  onLifecycle,
+  onDuplicate,
+  onDelete,
+}: {
+  campaign: Campaign;
+  agentLabel: string;
+  folderLabel: string;
+  busy: boolean;
+  onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  // Per-campaign analytics (sent / replied / leads, progress)
+  const statsQ = useQuery({
+    queryKey: ["campaign-analytics", c.id],
+    queryFn: () =>
+      api<{
+        sent?: number;
+        replied?: number;
+        leads?: number;
+        contacts_total?: number;
+        contacts_messaged?: number;
+      }>(`/api/v1/analytics/campaigns/${c.id}`),
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const sent = statsQ.data?.sent ?? 0;
+  const replied = statsQ.data?.replied ?? 0;
+  const leads = statsQ.data?.leads ?? 0;
+  const total = statsQ.data?.contacts_total ?? 0;
+  const done = statsQ.data?.contacts_messaged ?? 0;
+  const progress = total > 0 ? Math.min(1, done / total) : 0;
+
+  const startedAt =
+    c.start_date
+      ? new Date(c.start_date).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        })
+      : c.status === "draft"
+        ? "—"
+        : new Date(c.created_at).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+          });
+
+  const hours = `${String(c.work_hour_start).padStart(2, "0")}:00 – ${String(
+    c.work_hour_end,
+  ).padStart(2, "0")}:00 ${c.timezone}`;
+
+  return (
+    <tr style={{ cursor: "pointer" }}>
+      <td onClick={(e) => e.stopPropagation()}>
+        <input type="checkbox" />
+      </td>
+      <td>
+        <Link
+          to="/campaigns"
+          search={{ id: c.id } as never}
+          style={{ display: "flex", alignItems: "center", gap: 12 }}
+        >
+          <div style={statusIconStyle(c.status)}>{statusIcon(c.status)}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{
+                fontWeight: 500,
+                fontSize: 13.5,
+                color: "var(--text)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: 260,
+              }}
+            >
+              {c.name}
+              {c.is_exhausted && (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 11,
+                    color: "var(--text-faint)",
+                    fontWeight: 400,
+                  }}
+                >
+                  (exhausted)
+                </span>
+              )}
+            </div>
+            <div
+              className="muted text-xs"
+              style={{
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {startedAt} · {hours}
+            </div>
+          </div>
+        </Link>
+      </td>
+      <td>
+        <StatusPill status={c.status} />
+      </td>
+      <td>
+        <div style={{ fontSize: 12.5 }}>{agentLabel}</div>
+        <div className="muted text-xs">{folderLabel}</div>
+      </td>
+      <td>
+        <SenderAvatars campaign={c} />
+      </td>
+      <td>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            minWidth: 100,
+          }}
+        >
+          <div
+            style={{
+              flex: 1,
+              height: 5,
+              background: "var(--bg-soft)",
+              borderRadius: 999,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${progress * 100}%`,
+                height: "100%",
+                background: "var(--tg-blue)",
+                borderRadius: 999,
+              }}
+            />
+          </div>
+          <span className="num text-xs muted">
+            {Math.round(progress * 100)}%
+          </span>
+        </div>
+      </td>
+      <td>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+          }}
+        >
+          <FunnelMini sent={sent} replied={replied} leads={leads} />
+        </div>
+      </td>
+      <td onClick={(e) => e.stopPropagation()}>
+        <RowMenu
+          campaign={c}
+          busy={busy}
+          onLifecycle={onLifecycle}
+          onDuplicate={onDuplicate}
+          onDelete={onDelete}
+        />
+      </td>
+    </tr>
+  );
+}
+
+function RowMenu({
   campaign,
   busy,
   onLifecycle,
@@ -293,10 +627,22 @@ function RowActions({
 }: {
   campaign: Campaign;
   busy: boolean;
-  onLifecycle: (action: "start" | "pause" | "resume" | "stop") => void;
+  onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
   const s = campaign.status;
   const can = {
     start: s === "draft",
@@ -305,58 +651,112 @@ function RowActions({
     stop: s === "running" || s === "paused",
     delete: s === "draft" || s === "finished" || s === "stopped",
   };
+
+  const itemStyle: React.CSSProperties = {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "8px 12px",
+    fontSize: 13,
+    color: "var(--text)",
+    background: "none",
+  };
+
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-      {can.start && (
-        <button
-          className="btn btn--primary btn--sm"
-          onClick={() => onLifecycle("start")}
-          disabled={busy}
-        >
-          Start
-        </button>
-      )}
-      {can.pause && (
-        <button
-          className="btn btn--ghost btn--sm"
-          onClick={() => onLifecycle("pause")}
-          disabled={busy}
-        >
-          Pause
-        </button>
-      )}
-      {can.resume && (
-        <button
-          className="btn btn--primary btn--sm"
-          onClick={() => onLifecycle("resume")}
-          disabled={busy}
-        >
-          Resume
-        </button>
-      )}
-      {can.stop && (
-        <button
-          className="btn btn--ghost btn--sm"
-          onClick={() => onLifecycle("stop")}
-          disabled={busy}
-        >
-          Stop
-        </button>
-      )}
-      <button className="btn btn--ghost btn--sm" onClick={onDuplicate} disabled={busy}>
-        Duplicate
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        className="tb__icon-btn"
+        style={{ width: 28, height: 28 }}
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Campaign actions"
+        disabled={busy}
+      >
+        <MoreHorizontal size={16} />
       </button>
-      {can.delete && (
-        <button className="btn btn--ghost btn--sm" onClick={onDelete} disabled={busy}>
-          Delete
-        </button>
+      {open && (
+        <div
+          className="card"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 4px)",
+            minWidth: 160,
+            padding: 4,
+            zIndex: 30,
+            boxShadow: "var(--shadow-lg)",
+          }}
+        >
+          {can.start && (
+            <button
+              style={itemStyle}
+              onClick={() => {
+                setOpen(false);
+                onLifecycle("start");
+              }}
+            >
+              Start
+            </button>
+          )}
+          {can.pause && (
+            <button
+              style={itemStyle}
+              onClick={() => {
+                setOpen(false);
+                onLifecycle("pause");
+              }}
+            >
+              Pause
+            </button>
+          )}
+          {can.resume && (
+            <button
+              style={itemStyle}
+              onClick={() => {
+                setOpen(false);
+                onLifecycle("resume");
+              }}
+            >
+              Resume
+            </button>
+          )}
+          {can.stop && (
+            <button
+              style={itemStyle}
+              onClick={() => {
+                setOpen(false);
+                onLifecycle("stop");
+              }}
+            >
+              Stop
+            </button>
+          )}
+          <button
+            style={itemStyle}
+            onClick={() => {
+              setOpen(false);
+              onDuplicate();
+            }}
+          >
+            Duplicate
+          </button>
+          {can.delete && (
+            <button
+              style={{ ...itemStyle, color: "var(--danger)" }}
+              onClick={() => {
+                setOpen(false);
+                onDelete();
+              }}
+            >
+              Delete
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function EmptyState({ filter }: { filter: FilterId }) {
-  const isFiltered = filter !== "all";
+function EmptyState({ filtered }: { filtered: boolean }) {
   return (
     <div
       style={{
@@ -368,15 +768,17 @@ function EmptyState({ filter }: { filter: FilterId }) {
     >
       <div style={{ fontSize: 40, marginBottom: 12 }}>📣</div>
       <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>
-        {isFiltered ? `No ${filter} campaigns` : "No campaigns yet"}
+        {filtered ? "No matching campaigns" : "No campaigns yet"}
       </h3>
       <p className="muted" style={{ fontSize: 13, marginBottom: 16 }}>
-        {isFiltered
-          ? "Try a different filter, or create a new campaign."
+        {filtered
+          ? "Try a different filter or search term."
           : "A campaign sends your agent's message from your accounts to a folder of contacts."}
       </p>
       <Link to="/campaigns/new">
-        <button className="btn btn--primary">+ New campaign</button>
+        <button className="btn btn--primary">
+          <Plus size={14} /> New campaign
+        </button>
       </Link>
     </div>
   );
