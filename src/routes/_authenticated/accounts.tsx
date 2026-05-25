@@ -5,10 +5,9 @@ import { toast } from "sonner";
 import {
   Plus,
   MoreHorizontal,
-  Pause,
-  Play,
   RefreshCcw,
   Trash2,
+  Pencil,
   Activity,
   X,
   AlertCircle,
