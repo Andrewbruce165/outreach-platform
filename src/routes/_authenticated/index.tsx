@@ -888,65 +888,144 @@ function CampaignPerformanceCard({
   );
 }
 
-/* ----- Activity feed (static demo content) ----- */
-const ACTIVITY: {
+/* ----- Activity feed (derived from live workspace data) ----- */
+type ActivityItem = {
+  key: string;
   who: string;
   what: string;
   whom?: string;
-  at: string;
+  ts: number;
   icon: React.ReactNode;
   color: string;
-}[] = [
-  {
-    who: "Maya",
-    what: "booked a meeting with",
-    whom: "Sophie Turner · UpperCode",
-    at: "2m ago",
-    icon: <Flag size={13} />,
-    color: "var(--success)",
-  },
-  {
-    who: "Theo",
-    what: "handed off to manager:",
-    whom: "Noah Jansen · Bitline",
-    at: "18m ago",
-    icon: <User size={13} />,
-    color: "var(--ai-purple, #8774e1)",
-  },
-  {
-    who: "System",
-    what: "session revoked for @hirot",
-    at: "1h ago",
-    icon: <AlertTriangle size={13} />,
-    color: "var(--danger)",
-  },
-  {
-    who: "Cleo",
-    what: "marked finished:",
-    whom: "Maya Iwata · Drifthouse",
-    at: "3h ago",
-    icon: <Check size={13} />,
-    color: "var(--text-muted)",
-  },
-  {
-    who: "System",
-    what: "added 248 contacts to",
-    whom: "SaaS founders · US",
-    at: "5h ago",
-    icon: <Upload size={13} />,
-    color: "var(--tg-blue, #3390ec)",
-  },
-  {
-    who: "Andrew",
-    what: "launched campaign",
-    whom: "Crypto YouTubers — sponsorship",
-    at: "Yesterday",
-    icon: <Rocket size={13} />,
-    color: "var(--tg-blue, #3390ec)",
-  },
-];
+};
 
-function ActivityFeedCard() {
+function relativeTime(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts);
+  const s = Math.round(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d === 1) return "Yesterday";
+  if (d < 7) return `${d}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function ActivityFeedCard({
+  conversations,
+  campaigns,
+  senders,
+  loading,
+}: {
+  conversations: Conversation[];
+  campaigns: Campaign[];
+  senders: Sender[];
+  loading: boolean;
+}) {
+  const items = useMemo<ActivityItem[]>(() => {
+    const out: ActivityItem[] = [];
+
+    // Notable conversation events (lead / handoff / finished)
+    for (const c of conversations) {
+      const status = (c.status || "").toLowerCase();
+      const ts = c.last_message_at
+        ? new Date(c.last_message_at).getTime()
+        : new Date(c.updated_at).getTime();
+      const name = c.contact_name || c.contact_phone;
+      const sender = senders.find((s) => s.id === c.sender_id);
+      const senderName = sender?.name || sender?.slug || "Agent";
+      if (status === "lead") {
+        out.push({
+          key: `lead-${c.id}`,
+          who: senderName,
+          what: "captured a lead:",
+          whom: name,
+          ts,
+          icon: <Flag size={13} />,
+          color: "var(--success)",
+        });
+      } else if (status === "handoff") {
+        out.push({
+          key: `handoff-${c.id}`,
+          who: senderName,
+          what: "handed off to manager:",
+          whom: name,
+          ts,
+          icon: <User size={13} />,
+          color: "var(--ai-purple, #8774e1)",
+        });
+      } else if (status === "finished") {
+        out.push({
+          key: `finished-${c.id}`,
+          who: senderName,
+          what: "marked finished:",
+          whom: name,
+          ts,
+          icon: <Check size={13} />,
+          color: "var(--text-muted)",
+        });
+      }
+    }
+
+    // Campaign lifecycle events
+    for (const c of campaigns) {
+      const ts = new Date(c.updated_at || c.created_at).getTime();
+      if (c.status === "running") {
+        out.push({
+          key: `launched-${c.id}`,
+          who: "You",
+          what: "launched campaign",
+          whom: c.name,
+          ts,
+          icon: <Rocket size={13} />,
+          color: "var(--tg-blue, #3390ec)",
+        });
+      } else if (c.status === "paused") {
+        out.push({
+          key: `paused-${c.id}`,
+          who: "System",
+          what: "paused campaign",
+          whom: c.name,
+          ts,
+          icon: <AlertTriangle size={13} />,
+          color: "var(--warning, #f59e0b)",
+        });
+      } else if (c.status === "finished" || c.status === "stopped") {
+        out.push({
+          key: `done-${c.id}`,
+          who: "You",
+          what: c.status === "stopped" ? "stopped campaign" : "finished campaign",
+          whom: c.name,
+          ts,
+          icon: <Check size={13} />,
+          color: "var(--text-muted)",
+        });
+      }
+    }
+
+    // Sender errors surface as system events
+    for (const s of senders) {
+      if (s.status === "error") {
+        const ts = s.last_used_at
+          ? new Date(s.last_used_at).getTime()
+          : Date.now();
+        out.push({
+          key: `sender-err-${s.id}`,
+          who: "System",
+          what: "needs re-auth:",
+          whom: s.name || s.phone,
+          ts,
+          icon: <AlertTriangle size={13} />,
+          color: "var(--danger)",
+        });
+      }
+    }
+
+    return out.sort((a, b) => b.ts - a.ts).slice(0, 8);
+  }, [conversations, campaigns, senders]);
+
   return (
     <div className="card">
       <div className="card__header">
@@ -955,10 +1034,20 @@ function ActivityFeedCard() {
           <div className="card__sub">Live signals &amp; events</div>
         </div>
       </div>
+      {loading && items.length === 0 && (
+        <div className="muted" style={{ padding: 18, fontSize: 13 }}>
+          Loading…
+        </div>
+      )}
+      {!loading && items.length === 0 && (
+        <div className="muted" style={{ padding: 24, fontSize: 13, textAlign: "center" }}>
+          No activity yet. Launch a campaign to see live signals here.
+        </div>
+      )}
       <div style={{ padding: "8px 4px" }}>
-        {ACTIVITY.map((a, i) => (
+        {items.map((a) => (
           <div
-            key={i}
+            key={a.key}
             style={{
               display: "flex",
               gap: 12,
@@ -983,19 +1072,19 @@ function ActivityFeedCard() {
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13 }}>
-                <b>{a.who}</b>{" "}
-                <span className="muted">{a.what}</span>{" "}
+                <b>{a.who}</b> <span className="muted">{a.what}</span>{" "}
                 {a.whom && <span style={{ fontWeight: 500 }}>{a.whom}</span>}
               </div>
-              <div
-                className="muted"
-                style={{ fontSize: 11, marginTop: 2 }}
-              >
-                {a.at}
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                {relativeTime(a.ts)}
               </div>
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
       </div>
     </div>
   );
