@@ -7,7 +7,6 @@ import {
   Folder as FolderIcon,
   Upload,
   Search,
-  MoreHorizontal,
   Trash2,
   Edit3,
   RefreshCcw,
@@ -16,11 +15,16 @@ import {
   CheckCircle2,
   Users,
   Loader2,
+  Filter,
+  Check,
+  Clock,
+  Shuffle,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
+
 
 type Folder = components["schemas"]["FolderResponse"];
 type Contact = components["schemas"]["ContactResponse"];
@@ -57,12 +61,30 @@ function ContactsPage() {
       <Topbar
         title="Contacts"
         right={
-          <button className="btn btn--primary btn--sm" onClick={() => setImportOpen(true)}>
-            <Upload size={14} /> Import CSV
-          </button>
+          <>
+            <button className="btn btn--ghost btn--sm" onClick={() => setImportOpen(true)}>
+              <Upload size={14} /> Import CSV
+            </button>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={() => {
+                // Focus sidebar create form via event flag in URL hash
+                window.dispatchEvent(new CustomEvent("aimly:new-folder"));
+              }}
+            >
+              <Plus size={14} /> New folder
+            </button>
+          </>
         }
       />
-      <div className="ct" style={{ flex: 1, minHeight: 0 }}>
+      <div
+        style={{
+          flex: 1,
+          display: "grid",
+          gridTemplateColumns: "280px 1fr",
+          minHeight: 0,
+        }}
+      >
         <FolderSidebar
           folders={foldersQ.data ?? []}
           isLoading={foldersQ.isLoading}
@@ -87,6 +109,44 @@ function ContactsPage() {
   );
 }
 
+/* ---------------- Helpers ---------------- */
+const FOLDER_PALETTE = [
+  "#3b82f6",
+  "#8774e1",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#06b6d4",
+  "#ec4899",
+  "#84cc16",
+];
+
+function folderColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return FOLDER_PALETTE[h % FOLDER_PALETTE.length];
+}
+
+function initials(name: string | null | undefined, fallback = "?"): string {
+  const n = (name ?? "").trim();
+  if (!n) return fallback;
+  const parts = n.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || fallback;
+}
+
+function ContactAvatar({ name, phone }: { name: string | null; phone: string | null }) {
+  const seed = (name || phone || "?") as string;
+  const color = folderColor(seed);
+  return (
+    <div
+      className="avatar avatar--sm"
+      style={{ background: `${color}1A`, color }}
+    >
+      {initials(name, (phone ?? "?").slice(-2))}
+    </div>
+  );
+}
+
 /* ---------------- Folder sidebar ---------------- */
 function FolderSidebar({
   folders,
@@ -103,6 +163,14 @@ function FolderSidebar({
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
 
+  // Allow the topbar "New folder" button to open the create form
+  if (typeof window !== "undefined") {
+    // Attach once
+    (window as unknown as { __aimlyNewFolderBound?: boolean }).__aimlyNewFolderBound ||
+      window.addEventListener("aimly:new-folder", () => setCreating(true));
+    (window as unknown as { __aimlyNewFolderBound?: boolean }).__aimlyNewFolderBound = true;
+  }
+
   const createMut = useMutation({
     mutationFn: (n: string) =>
       api<Folder>("/api/v1/folders", { method: "POST", body: { name: n } }),
@@ -116,73 +184,158 @@ function FolderSidebar({
   });
 
   return (
-    <aside className="ct__side">
-      <div className="ct__sideHead">
-        <span className="ct__sideTitle">Folders</span>
-        <button
-          className="tb__icon-btn"
-          aria-label="New folder"
-          onClick={() => setCreating((v) => !v)}
-        >
-          <Plus size={14} />
-        </button>
+    <aside
+      style={{
+        background: "var(--bg)",
+        borderRight: "1px solid var(--border)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          padding: "12px 14px 8px",
+          color: "var(--text-faint)",
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          fontSize: 11,
+          fontWeight: 600,
+        }}
+      >
+        Folders ({folders.length})
       </div>
-      {creating && (
-        <form
-          className="ct__newFolder"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (name.trim()) createMut.mutate(name.trim());
-          }}
-        >
-          <input
-            className="input"
-            autoFocus
-            placeholder="Folder name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <div className="row">
-            <button type="submit" className="btn btn--primary btn--sm" disabled={createMut.isPending}>
-              Create
-            </button>
+      <div className="scroll" style={{ flex: 1, padding: "0 8px" }}>
+        {creating && (
+          <form
+            style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) createMut.mutate(name.trim());
+            }}
+          >
+            <input
+              className="input"
+              autoFocus
+              placeholder="Folder name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="submit"
+                className="btn btn--primary btn--sm"
+                disabled={createMut.isPending}
+                style={{ flex: 1 }}
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => {
+                  setCreating(false);
+                  setName("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {isLoading && (
+          <div className="muted text-sm" style={{ padding: 12 }}>
+            Loading…
+          </div>
+        )}
+
+        {!isLoading && folders.length === 0 && !creating && (
+          <div style={{ textAlign: "center", padding: "24px 12px" }}>
+            <FolderIcon size={20} style={{ color: "var(--text-faint)" }} />
+            <p className="muted text-sm" style={{ margin: "8px 0 12px" }}>
+              No folders yet
+            </p>
+          </div>
+        )}
+
+        {folders.map((f) => {
+          const sel = f.id === activeId;
+          const color = folderColor(f.id);
+          return (
             <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => {
-                setCreating(false);
-                setName("");
+              key={f.id}
+              onClick={() => onSelect(f.id)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 9,
+                marginBottom: 1,
+                background: sel ? "var(--tg-blue-soft)" : "transparent",
+                color: sel ? "var(--tg-blue)" : "var(--text-soft)",
+                textAlign: "left",
               }}
             >
-              Cancel
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 7,
+                  background: `${color}1A`,
+                  color,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <FolderIcon size={14} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {f.name}
+                </div>
+                <div className="muted text-xs">
+                  {f.contact_count.toLocaleString()} contacts
+                </div>
+              </div>
             </button>
-          </div>
-        </form>
-      )}
-      {isLoading && <div className="muted text-sm" style={{ padding: 12 }}>Loading…</div>}
-      {!isLoading && folders.length === 0 && !creating && (
-        <div className="ct__sideEmpty">
-          <FolderIcon size={20} />
-          <p>No folders yet</p>
-          <button className="btn btn--soft btn--sm" onClick={() => setCreating(true)}>
-            <Plus size={12} /> Create folder
+          );
+        })}
+
+        {!creating && (
+          <button
+            onClick={() => setCreating(true)}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "10px 12px",
+              borderRadius: 9,
+              marginTop: 6,
+              border: "1px dashed var(--border-strong)",
+              color: "var(--text-muted)",
+              fontSize: 12.5,
+              background: "transparent",
+            }}
+          >
+            <Plus size={13} /> New folder
           </button>
-        </div>
-      )}
-      <ul className="ct__list">
-        {folders.map((f) => (
-          <li key={f.id}>
-            <button
-              className={`ct__listItem ${f.id === activeId ? "is-active" : ""}`}
-              onClick={() => onSelect(f.id)}
-            >
-              <FolderIcon size={14} />
-              <span className="ct__listName">{f.name}</span>
-              <span className="ct__listCount num">{f.contact_count}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
+        )}
+      </div>
     </aside>
   );
 }
@@ -196,7 +349,8 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
 
   const contactsQ = useQuery({
     queryKey: ["contacts", folder?.id],
-    queryFn: () => api<Contact[]>("/api/v1/contacts", { query: { folder_id: folder!.id, limit: 200 } }),
+    queryFn: () =>
+      api<Contact[]>("/api/v1/contacts", { query: { folder_id: folder!.id, limit: 200 } }),
     enabled: !!folder,
   });
 
@@ -241,115 +395,263 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
     );
   }, [contacts, search]);
 
+  const stats = useMemo(() => {
+    const inTg = contacts.filter((c) => c.tg_status === "ok").length;
+    const checking = contacts.filter(
+      (c) => c.tg_status === "checking" || c.tg_status === "unknown",
+    ).length;
+    const notFound = contacts.filter(
+      (c) => c.tg_status === "not_found" || c.tg_status === "privacy",
+    ).length;
+    return { inTg, checking, notFound };
+  }, [contacts]);
+
   if (!folder) {
     return (
-      <section className="ct__main">
-        <EmptyState onImport={onImport} title="No folder selected" body="Pick a folder on the left or import a CSV to get started." />
+      <section className="scroll" style={{ background: "var(--bg-soft)", padding: 24 }}>
+        <EmptyState
+          onImport={onImport}
+          title="No folder selected"
+          body="Pick a folder on the left or import a CSV to get started."
+        />
       </section>
     );
   }
 
-
-
+  const color = folderColor(folder.id);
+  const total = folder.contact_count;
 
   return (
-    <section className="ct__main">
-      <header className="ct__mainHead">
-        {renaming ? (
-          <form
-            className="row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (renameValue.trim()) renameMut.mutate(renameValue.trim());
-            }}
-          >
-            <input
-              className="input"
-              autoFocus
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => setRenaming(false)}
+    <section className="scroll" style={{ background: "var(--bg-soft)", padding: 24 }}>
+      {/* Folder header */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 14 }}>
+        <div
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: 11,
+            background: `${color}1A`,
+            color,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <FolderIcon size={22} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {renaming ? (
+            <form
+              style={{ display: "flex", gap: 8 }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (renameValue.trim()) renameMut.mutate(renameValue.trim());
+              }}
+            >
+              <input
+                className="input"
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => setRenaming(false)}
+              />
+              <button type="submit" className="btn btn--primary btn--sm">
+                Save
+              </button>
+            </form>
+          ) : (
+            <>
+              <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>
+                {folder.name}
+              </div>
+              <div className="muted text-sm">
+                {total.toLocaleString()} contacts · updated {relativeDate(folder.updated_at)}
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={() => recheckMut.mutate()}
+          disabled={recheckMut.isPending}
+        >
+          <RefreshCcw size={13} /> Recheck
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={() => {
+            setRenameValue(folder.name);
+            setRenaming(true);
+          }}
+        >
+          <Edit3 size={13} /> Rename
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={() => toast.info("Move to… coming soon")}
+        >
+          <Shuffle size={13} /> Move to…
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          style={{ color: "var(--danger)" }}
+          onClick={() => {
+            if (confirm(`Delete folder "${folder.name}"? Contacts will be removed.`)) {
+              deleteMut.mutate();
+            }
+          }}
+          aria-label="Delete folder"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {/* Stats */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <MiniMetric label="Total" value={total} sub="All sources" color="var(--tg-blue)" />
+        <MiniMetric
+          label="In Telegram"
+          value={stats.inTg}
+          sub={total > 0 ? `${Math.round((stats.inTg / total) * 100)}% match` : "—"}
+          color="var(--success)"
+        />
+        <MiniMetric
+          label="Checking"
+          value={stats.checking}
+          sub="Awaiting resolve"
+          color="var(--ai-purple)"
+        />
+        <MiniMetric
+          label="Not found"
+          value={stats.notFound}
+          sub="Privacy or missing"
+          color="var(--warning)"
+        />
+      </div>
+
+      {/* Contacts table */}
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div
+          className="card__header"
+          style={{ gap: 10, display: "flex", alignItems: "center", padding: "12px 14px" }}
+        >
+          <div style={{ position: "relative" }}>
+            <Search
+              size={14}
+              style={{ position: "absolute", left: 10, top: 9, color: "var(--text-faint)" }}
             />
-            <button type="submit" className="btn btn--primary btn--sm">Save</button>
-          </form>
-        ) : (
-          <div>
-            <h2 className="ct__mainTitle">{folder.name}</h2>
-            <p className="muted text-sm">{folder.contact_count} contacts</p>
-          </div>
-        )}
-        <div className="row">
-          <div className="ct__search">
-            <Search size={14} />
             <input
               className="input"
-              placeholder="Search contacts"
+              style={{ paddingLeft: 30, height: 32, fontSize: 12.5, width: 240 }}
+              placeholder="Search contacts…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={() => recheckMut.mutate()}
-            disabled={recheckMut.isPending}
-          >
-            <RefreshCcw size={13} /> Recheck
+          <button className="btn btn--ghost btn--sm" type="button">
+            <Filter size={12} /> Filters
           </button>
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={() => {
-              setRenameValue(folder.name);
-              setRenaming(true);
-            }}
-          >
-            <Edit3 size={13} /> Rename
-          </button>
-          <button
-            className="btn btn--ghost btn--sm"
-            style={{ color: "var(--danger)" }}
-            onClick={() => {
-              if (confirm(`Delete folder "${folder.name}"? Contacts will be removed.`)) {
-                deleteMut.mutate();
-              }
-            }}
-          >
-            <Trash2 size={13} /> Delete
-          </button>
+          <span style={{ flex: 1 }} />
+          <span className="muted text-xs">
+            Showing {filtered.length.toLocaleString()} of {total.toLocaleString()}
+          </span>
         </div>
-      </header>
 
-      <div className="scroll" style={{ flex: 1 }}>
         {contactsQ.isLoading && (
-          <div className="muted" style={{ padding: 24 }}>Loading contacts…</div>
+          <div className="muted" style={{ padding: 24 }}>
+            Loading contacts…
+          </div>
         )}
+
         {!contactsQ.isLoading && contacts.length === 0 && (
-          <EmptyState onImport={onImport} title="No contacts in this folder" body="Import a CSV to add people." />
+          <EmptyState
+            onImport={onImport}
+            title="No contacts in this folder"
+            body="Import a CSV to add people."
+          />
         )}
+
         {!contactsQ.isLoading && contacts.length > 0 && (
           <table className="tbl">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Phone</th>
+                <th style={{ width: 32 }}>
+                  <input type="checkbox" disabled />
+                </th>
+                <th>Contact</th>
+                <th>Company · Role</th>
                 <th>Username</th>
-                <th>Telegram</th>
+                <th>Phone</th>
                 <th>Source</th>
+                <th>In TG</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c) => (
-                <tr key={c.id}>
-                  <td className="fw5">{c.full_name || <span className="faint">—</span>}</td>
-                  <td className="mono text-sm">{c.phone || <span className="faint">—</span>}</td>
-                  <td className="mono text-sm">{c.username || <span className="faint">—</span>}</td>
-                  <td><TgStatus status={c.tg_status} /></td>
-                  <td className="muted text-sm">{c.source || "—"}</td>
-                </tr>
-              ))}
+              {filtered.map((c) => {
+                const company =
+                  typeof c.custom?.company === "string" ? (c.custom.company as string) : "";
+                const role =
+                  typeof c.custom?.role === "string" ? (c.custom.role as string) : "";
+                return (
+                  <tr key={c.id}>
+                    <td>
+                      <input type="checkbox" />
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <ContactAvatar name={c.full_name} phone={c.phone} />
+                        <span style={{ fontWeight: 500, fontSize: 13 }}>
+                          {c.full_name || <span className="faint">—</span>}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      {company || role ? (
+                        <>
+                          <div style={{ fontSize: 12.5 }}>{company || "—"}</div>
+                          <div className="muted text-xs">{role || ""}</div>
+                        </>
+                      ) : (
+                        <span className="faint">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {c.username ? (
+                        <span className="mono text-sm" style={{ color: "var(--tg-blue)" }}>
+                          {c.username.startsWith("@") ? c.username : `@${c.username}`}
+                        </span>
+                      ) : (
+                        <span className="muted text-xs">— phone only</span>
+                      )}
+                    </td>
+                    <td className="muted text-xs mono">{c.phone || "—"}</td>
+                    <td>
+                      {c.source ? (
+                        <span className="pill">{c.source}</span>
+                      ) : (
+                        <span className="faint">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <TgInline status={c.tg_status} />
+                    </td>
+                  </tr>
+                );
+              })}
               {filtered.length === 0 && (
-                <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: 24 }}>
-                  No matches for &quot;{search}&quot;
-                </td></tr>
+                <tr>
+                  <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>
+                    No matches for &quot;{search}&quot;
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -359,36 +661,134 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
   );
 }
 
-function TgStatus({ status }: { status: string }) {
-  const map: Record<string, { cls: string; label: string }> = {
-    ok: { cls: "pill--green", label: "On Telegram" },
-    unknown: { cls: "pill--ghost", label: "Unchecked" },
-    not_found: { cls: "pill--red", label: "Not found" },
-    privacy: { cls: "pill--orange", label: "Privacy locked" },
-    checking: { cls: "pill--blue", label: "Checking…" },
-  };
-  const s = map[status] ?? { cls: "pill--ghost", label: status };
-  return <span className={`pill ${s.cls}`}><span className="pill__dot" />{s.label}</span>;
+function MiniMetric({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string;
+  value: number;
+  sub: string;
+  color: string;
+}) {
+  return (
+    <div
+      className="card"
+      style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}
+    >
+      <span className="muted text-xs" style={{ fontWeight: 500, letterSpacing: 0.2 }}>
+        {label}
+      </span>
+      <span
+        className="num"
+        style={{ fontSize: 24, fontWeight: 600, color, lineHeight: 1.1 }}
+      >
+        {value.toLocaleString()}
+      </span>
+      <span className="muted text-xs">{sub}</span>
+    </div>
+  );
 }
 
-function EmptyState({ title, body, onImport }: { title: string; body: string; onImport: () => void }) {
+function TgInline({ status }: { status: string }) {
+  if (status === "ok") {
+    return (
+      <span
+        style={{
+          color: "var(--success)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          fontSize: 12,
+        }}
+      >
+        <Check size={12} /> Yes
+      </span>
+    );
+  }
+  if (status === "checking" || status === "unknown") {
+    return (
+      <span
+        style={{
+          color: "var(--text-faint)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          fontSize: 12,
+        }}
+      >
+        <Clock size={12} /> Checking…
+      </span>
+    );
+  }
+  if (status === "not_found") {
+    return (
+      <span className="pill pill--red">
+        <span className="pill__dot" /> Not found
+      </span>
+    );
+  }
+  if (status === "privacy") {
+    return (
+      <span className="pill pill--orange">
+        <span className="pill__dot" /> Privacy
+      </span>
+    );
+  }
+  return (
+    <span className="pill pill--ghost">
+      <span className="pill__dot" /> {status}
+    </span>
+  );
+}
+
+function relativeDate(iso: string): string {
+  const d = new Date(iso).getTime();
+  if (Number.isNaN(d)) return "—";
+  const diff = (Date.now() - d) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function EmptyState({
+  title,
+  body,
+  onImport,
+}: {
+  title: string;
+  body: string;
+  onImport: () => void;
+}) {
   return (
     <div style={{ padding: 48, textAlign: "center" }}>
-      <div style={{
-        width: 56, height: 56, borderRadius: 28, margin: "0 auto 16px",
-        background: "var(--tg-blue-soft)", color: "var(--tg-blue)",
-        display: "grid", placeItems: "center",
-      }}>
+      <div
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          margin: "0 auto 16px",
+          background: "var(--tg-blue-soft)",
+          color: "var(--tg-blue)",
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
         <Users size={24} />
       </div>
       <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>{title}</h3>
-      <p className="muted text-sm" style={{ maxWidth: 320, margin: "0 auto 16px" }}>{body}</p>
+      <p className="muted text-sm" style={{ maxWidth: 320, margin: "0 auto 16px" }}>
+        {body}
+      </p>
       <button className="btn btn--primary" onClick={onImport}>
         <Upload size={14} /> Import CSV
       </button>
     </div>
   );
 }
+
 
 /* ---------------- 4-stage import modal ---------------- */
 type ImportStage = "upload" | "mapping" | "importing" | "done";
