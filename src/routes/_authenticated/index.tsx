@@ -365,104 +365,212 @@ function SankeyFunnel({ funnel }: { funnel: Funnel }) {
     ].join(" ");
   };
 
+  const totalSent = stages[0].value || 1;
+  const h = hovered != null ? stages[hovered] : null;
+  const hPrev = hovered != null && hovered > 0 ? stages[hovered - 1] : null;
+  const stepPct = h && hPrev ? (hPrev.value > 0 ? (h.value / hPrev.value) * 100 : 0) : null;
+  const overallPct = h ? (h.value / totalSent) * 100 : null;
+  const dropoff = h && hPrev ? Math.max(0, hPrev.value - h.value) : null;
+  // Tooltip horizontal position (% of card width)
+  const tipLeft =
+    hovered != null
+      ? ((hovered * (colW + gap) + colW / 2) / W) * 100
+      : 0;
+
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H + labelGap}`}
-      width="100%"
-      style={{ display: "block", overflow: "visible" }}
-    >
-      <defs>
-        {stages.slice(0, -1).map((s, i) => (
-          <linearGradient key={s.id} id={`band-${s.id}`} x1="0" x2="1">
-            <stop offset="0%" stopColor={s.color} />
-            <stop offset="100%" stopColor={stages[i + 1].color} />
-          </linearGradient>
-        ))}
-      </defs>
+    <div style={{ position: "relative", width: "100%" }}>
+      <svg
+        viewBox={`0 0 ${W} ${H + labelGap}`}
+        width="100%"
+        style={{ display: "block", overflow: "visible" }}
+        onMouseLeave={() => setHovered(null)}
+      >
+        <defs>
+          {stages.slice(0, -1).map((s, i) => (
+            <linearGradient key={s.id} id={`band-${s.id}`} x1="0" x2="1">
+              <stop offset="0%" stopColor={s.color} />
+              <stop offset="100%" stopColor={stages[i + 1].color} />
+            </linearGradient>
+          ))}
+        </defs>
 
-      {stages.slice(0, -1).map((s, i) => {
-        const next = stages[i + 1];
-        const ax = i * (colW + gap);
-        const bx = (i + 1) * (colW + gap);
-        return (
-          <path
-            key={`flow-${s.id}`}
-            d={ribbon(s, next, ax, bx)}
-            fill={`url(#band-${s.id})`}
-            opacity="0.4"
-          />
-        );
-      })}
-
-      {stages.map((s, i) => {
-        const x = i * (colW + gap);
-        return (
-          <g key={s.id}>
-            <rect
-              x={x}
-              y={yTop(s.value)}
-              width={colW}
-              height={hFor(s.value)}
-              rx="4"
-              fill={s.color}
+        {stages.slice(0, -1).map((s, i) => {
+          const next = stages[i + 1];
+          const ax = i * (colW + gap);
+          const bx = (i + 1) * (colW + gap);
+          const dimmed = hovered != null && hovered !== i && hovered !== i + 1;
+          return (
+            <path
+              key={`flow-${s.id}`}
+              d={ribbon(s, next, ax, bx)}
+              fill={`url(#band-${s.id})`}
+              opacity={dimmed ? 0.18 : 0.4}
+              style={{ transition: "opacity 120ms ease" }}
             />
-            <text
-              x={x + colW / 2}
-              y={H + 20}
-              textAnchor="middle"
-              fontSize="10"
-              fill="var(--text-faint)"
-              fontWeight="600"
-              style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}
-            >
-              {s.label}
-            </text>
-            <text
-              x={x + colW / 2}
-              y={H + 40}
-              textAnchor="middle"
-              fontSize="17"
-              fontWeight="600"
-              fill="var(--text)"
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {s.value.toLocaleString()}
-            </text>
-          </g>
-        );
-      })}
+          );
+        })}
 
-      {stages.slice(0, -1).map((s, i) => {
-        const next = stages[i + 1];
-        const pct = s.value > 0 ? (next.value / s.value) * 100 : 0;
-        const label = pct < 10 ? pct.toFixed(1) + "%" : Math.round(pct) + "%";
-        const cx = i * (colW + gap) + colW + gap / 2;
-        return (
-          <g key={`cr-${s.id}`}>
+        {stages.map((s, i) => {
+          const x = i * (colW + gap);
+          const isActive = hovered === i;
+          return (
+            <g key={s.id}>
+              <rect
+                x={x}
+                y={yTop(s.value)}
+                width={colW}
+                height={hFor(s.value)}
+                rx="4"
+                fill={s.color}
+                opacity={hovered != null && !isActive ? 0.55 : 1}
+                style={{ transition: "opacity 120ms ease" }}
+              />
+              <text
+                x={x + colW / 2}
+                y={H + 20}
+                textAnchor="middle"
+                fontSize="10"
+                fill="var(--text-faint)"
+                fontWeight="600"
+                style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}
+              >
+                {s.label}
+              </text>
+              <text
+                x={x + colW / 2}
+                y={H + 40}
+                textAnchor="middle"
+                fontSize="17"
+                fontWeight="600"
+                fill="var(--text)"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {s.value.toLocaleString()}
+              </text>
+            </g>
+          );
+        })}
+
+        {stages.slice(0, -1).map((s, i) => {
+          const next = stages[i + 1];
+          const pct = s.value > 0 ? (next.value / s.value) * 100 : 0;
+          const label = pct < 10 ? pct.toFixed(1) + "%" : Math.round(pct) + "%";
+          const cx = i * (colW + gap) + colW + gap / 2;
+          return (
+            <g key={`cr-${s.id}`}>
+              <rect
+                x={cx - 22}
+                y={yTop(next.value) - 22}
+                width="44"
+                height="18"
+                rx="9"
+                fill="white"
+                stroke="var(--border)"
+              />
+              <text
+                x={cx}
+                y={yTop(next.value) - 9}
+                textAnchor="middle"
+                fontSize="10.5"
+                fill="var(--text-soft)"
+                fontWeight="600"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Invisible hit-areas for hover per stage */}
+        {stages.map((s, i) => {
+          const x = i * (colW + gap);
+          return (
             <rect
-              x={cx - 22}
-              y={yTop(next.value) - 22}
-              width="44"
-              height="18"
-              rx="9"
-              fill="white"
-              stroke="var(--border)"
+              key={`hit-${s.id}`}
+              x={x - gap / 2}
+              y={0}
+              width={colW + gap}
+              height={H + labelGap}
+              fill="transparent"
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => setHovered(i)}
             />
-            <text
-              x={cx}
-              y={yTop(next.value) - 9}
-              textAnchor="middle"
-              fontSize="10.5"
-              fill="var(--text-soft)"
-              fontWeight="600"
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+          );
+        })}
+      </svg>
+
+      {h && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${tipLeft}%`,
+            top: 0,
+            transform: "translate(-50%, -100%)",
+            background: "var(--text, #0f1419)",
+            color: "white",
+            borderRadius: 8,
+            padding: "10px 12px",
+            fontSize: 12,
+            lineHeight: 1.45,
+            minWidth: 180,
+            boxShadow: "0 6px 20px rgba(15, 20, 25, 0.18)",
+            pointerEvents: "none",
+            zIndex: 5,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 6,
+              fontWeight: 600,
+              fontSize: 12.5,
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 50,
+                background: h.color,
+                display: "inline-block",
+              }}
+            />
+            {h.label}
+            <span style={{ marginLeft: "auto", opacity: 0.65, fontWeight: 500 }}>
+              {h.value.toLocaleString()}
+            </span>
+          </div>
+          <div style={{ opacity: 0.8, display: "grid", rowGap: 3 }}>
+            <Row k="% of sent" v={`${overallPct!.toFixed(1)}%`} />
+            {stepPct != null && hPrev && (
+              <Row
+                k={`vs ${hPrev.label}`}
+                v={`${stepPct < 10 ? stepPct.toFixed(1) : Math.round(stepPct)}%`}
+              />
+            )}
+            {dropoff != null && hPrev && (
+              <Row
+                k="Drop-off"
+                v={`−${dropoff.toLocaleString()} (${hPrev.label})`}
+              />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+      <span style={{ opacity: 0.7 }}>{k}</span>
+      <span style={{ fontWeight: 600 }}>{v}</span>
+    </div>
   );
 }
 
