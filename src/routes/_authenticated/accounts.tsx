@@ -195,7 +195,7 @@ function FleetTable({
   }
 
   return (
-    <div className="card" style={{ overflow: "hidden" }}>
+    <div className="card">
       <table className="tbl">
         <thead>
           <tr>
