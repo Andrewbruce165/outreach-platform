@@ -13,6 +13,7 @@ type SenderResponse = components["schemas"]["SenderResponse"];
 
 type Tab = "phone" | "qr";
 type PhoneStep = "phone" | "code" | "2fa" | "done";
+type Role = "sender" | "checker";
 
 interface Props {
   /** Optional pre-filled phone (re-auth flow) */
@@ -21,6 +22,8 @@ interface Props {
   onComplete?: (sender: SenderResponse | { slug?: string }) => void;
   /** Render compact (inside modal) vs full-page */
   compact?: boolean;
+  /** Optional pre-selected role (e.g. when re-authing an existing account) */
+  initialRole?: Role;
 }
 
 const phoneSchema = z.object({
@@ -37,8 +40,9 @@ const twofaSchema = z.object({
   password: z.string().min(1, "Enter your 2FA password"),
 });
 
-export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Props) {
+export function OnboardingFlow({ initialPhone, onComplete, compact = false, initialRole = "sender" }: Props) {
   const [tab, setTab] = useState<Tab>("phone");
+  const [role, setRole] = useState<Role>(initialRole);
 
   return (
     <div className={compact ? "ob ob--compact" : "ob"}>
@@ -50,6 +54,45 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Pr
           </p>
         </header>
       )}
+
+      <div
+        className="ob__roles"
+        role="radiogroup"
+        aria-label="Account role"
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}
+      >
+        <button
+          type="button"
+          role="radio"
+          aria-checked={role === "sender"}
+          className={`ob__tab ${role === "sender" ? "is-active" : ""}`}
+          onClick={() => setRole("sender")}
+          style={{ flexDirection: "column", alignItems: "flex-start", textAlign: "left", padding: 12 }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Phone size={14} /> Sender
+          </span>
+          <span className="field__hint" style={{ marginTop: 4 }}>
+            Sends outreach messages (4/min · 20/hr · 150/day)
+          </span>
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={role === "checker"}
+          className={`ob__tab ${role === "checker" ? "is-active" : ""}`}
+          onClick={() => setRole("checker")}
+          style={{ flexDirection: "column", alignItems: "flex-start", textAlign: "left", padding: 12 }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <ShieldCheck size={14} /> Checker
+          </span>
+          <span className="field__hint" style={{ marginTop: 4 }}>
+            Verifies whether phone numbers exist on Telegram
+          </span>
+        </button>
+      </div>
+
       <div className="ob__tabs" role="tablist">
         <button
           role="tab"
@@ -70,9 +113,9 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false }: Pr
       </div>
 
       {tab === "phone" ? (
-        <PhoneFlow initialPhone={initialPhone} onComplete={onComplete} />
+        <PhoneFlow initialPhone={initialPhone} onComplete={onComplete} role={role} />
       ) : (
-        <QrFlow onComplete={onComplete} />
+        <QrFlow onComplete={onComplete} role={role} />
       )}
     </div>
   );
