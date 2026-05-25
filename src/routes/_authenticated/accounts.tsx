@@ -12,6 +12,9 @@ import {
   Activity,
   X,
   AlertCircle,
+  Filter,
+  ShieldCheck,
+  Phone as PhoneIcon,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
@@ -35,19 +38,50 @@ function AccountsPage() {
     refetchInterval: 15000,
   });
 
+  const senders = data?.senders ?? [];
+  const counts = {
+    total: senders.length,
+    active: senders.filter((s) => s.status === "active").length,
+    warmup: senders.filter((s) => s.status === "warmup").length,
+    paused: senders.filter((s) => s.status === "paused").length,
+    error: senders.filter((s) => s.status === "error").length,
+  };
+
   return (
     <>
       <Topbar
         title="Telegram accounts"
         right={
-          <button className="btn btn--primary btn--sm" onClick={() => setModal({ mode: "new" })}>
-            <Plus size={14} /> Add account
-          </button>
+          <>
+            <button className="btn btn--ghost btn--sm" type="button">
+              <Filter size={14} /> Filters
+            </button>
+            <button className="btn btn--primary btn--sm" onClick={() => setModal({ mode: "new" })}>
+              <Plus size={14} /> Connect account
+            </button>
+          </>
         }
       />
-      <div className="scroll" style={{ flex: 1, padding: 24 }}>
+      <div className="scroll" style={{ flex: 1, padding: 24, background: "var(--bg-soft)" }}>
+        {senders.length > 0 && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(5, 1fr)",
+              gap: 12,
+              marginBottom: 16,
+            }}
+          >
+            <MiniMetric label="Connected" value={counts.total} sub="All accounts" color="var(--tg-blue)" />
+            <MiniMetric label="Active" value={counts.active} sub="Sending now" color="var(--success)" />
+            <MiniMetric label="Warm-up" value={counts.warmup} sub="≤ 30 days" color="var(--warning)" />
+            <MiniMetric label="Paused" value={counts.paused} sub="Idle" color="var(--text-muted)" />
+            <MiniMetric label="Errors" value={counts.error} sub="Need attention" color="var(--danger)" />
+          </div>
+        )}
+
         <FleetTable
-          senders={data?.senders ?? []}
+          senders={senders}
           isLoading={isLoading}
           errorMsg={error instanceof ApiError ? error.message : null}
           onEmpty={() => setModal({ mode: "new" })}
@@ -56,7 +90,10 @@ function AccountsPage() {
       </div>
 
       {modal && (
-        <Modal onClose={() => setModal(null)} title={modal.mode === "reauth" ? "Re-authenticate account" : "Connect a Telegram account"}>
+        <Modal
+          onClose={() => setModal(null)}
+          title={modal.mode === "reauth" ? "Re-authenticate account" : "Connect a Telegram account"}
+        >
           <OnboardingFlow
             compact
             initialPhone={modal.phone}
@@ -68,6 +105,30 @@ function AccountsPage() {
         </Modal>
       )}
     </>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string;
+  value: number;
+  sub: string;
+  color: string;
+}) {
+  return (
+    <div className="card" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+      <span className="muted text-xs" style={{ fontWeight: 500, letterSpacing: 0.2 }}>
+        {label}
+      </span>
+      <span className="num" style={{ fontSize: 24, fontWeight: 600, color, lineHeight: 1.1 }}>
+        {value}
+      </span>
+      <span className="muted text-xs">{sub}</span>
+    </div>
   );
 }
 
@@ -86,31 +147,45 @@ function FleetTable({
 }) {
   if (isLoading) {
     return (
-      <div className="card"><div className="card__body muted">Loading accounts…</div></div>
+      <div className="card">
+        <div className="card__body muted">Loading accounts…</div>
+      </div>
     );
   }
   if (errorMsg) {
     return (
-      <div className="card"><div className="card__body" style={{ color: "var(--danger)" }}>
-        <AlertCircle size={14} /> {errorMsg}
-      </div></div>
+      <div className="card">
+        <div className="card__body" style={{ color: "var(--danger)" }}>
+          <AlertCircle size={14} /> {errorMsg}
+        </div>
+      </div>
     );
   }
   if (senders.length === 0) {
     return (
       <div className="card">
         <div className="card__body" style={{ textAlign: "center", padding: "48px 24px" }}>
-          <div style={{
-            margin: "0 auto 16px",
-            width: 56, height: 56, borderRadius: 28,
-            background: "var(--tg-blue-soft)", display: "grid", placeItems: "center",
-            color: "var(--tg-blue)",
-          }}>
+          <div
+            style={{
+              margin: "0 auto 16px",
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              background: "var(--tg-blue-soft)",
+              display: "grid",
+              placeItems: "center",
+              color: "var(--tg-blue)",
+            }}
+          >
             <Activity size={24} />
           </div>
           <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>No accounts yet</h3>
-          <p className="muted" style={{ fontSize: 13, marginBottom: 16, maxWidth: 360, margin: "0 auto 16px" }}>
-            Connect a Telegram phone number so aimly can send messages. We warm new accounts up automatically.
+          <p
+            className="muted"
+            style={{ fontSize: 13, marginBottom: 16, maxWidth: 360, margin: "0 auto 16px" }}
+          >
+            Connect a Telegram phone number so aimly can send messages. We warm new accounts up
+            automatically.
           </p>
           <button className="btn btn--primary" onClick={onEmpty}>
             <Plus size={14} /> Connect first account
@@ -127,14 +202,18 @@ function FleetTable({
           <tr>
             <th>Account</th>
             <th>Status</th>
-            <th>Today</th>
+            <th>Role</th>
+            <th>Today · ceiling</th>
             <th>Limits (min · hr · day)</th>
+            <th>Proxy</th>
             <th>Last used</th>
-            <th aria-label="actions" />
+            <th style={{ width: 40 }} aria-label="actions" />
           </tr>
         </thead>
         <tbody>
-          {senders.map((s) => <SenderRow key={s.id} sender={s} onReauth={() => onReauth(s)} />)}
+          {senders.map((s) => (
+            <SenderRow key={s.id} sender={s} onReauth={() => onReauth(s)} />
+          ))}
         </tbody>
       </table>
     </div>
@@ -157,32 +236,51 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Action failed"),
   });
 
-  const statusPill =
-    sender.status === "active"
-      ? "pill--green"
-      : sender.status === "warmup"
-        ? "pill--blue"
-        : sender.status === "paused"
-          ? "pill--ghost"
-          : "pill--red";
+  const statusStyle: Record<string, { pill: string; dot: string }> = {
+    active: { pill: "pill--green", dot: "var(--success)" },
+    warmup: { pill: "pill--blue", dot: "var(--tg-blue)" },
+    paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
+    error: { pill: "pill--red", dot: "var(--danger)" },
+  };
+  const sty = statusStyle[sender.status] ?? statusStyle.paused;
 
   const lastUsed = sender.last_used_at ? relativeTime(sender.last_used_at) : "—";
+  const isChecker = sender.role === "checker";
+  const dailyLimit = sender.rate_limits.per_day;
 
   return (
     <tr>
       <td>
-        <div className="row">
-          <div className="avatar avatar--sm" style={{ background: "var(--tg-blue-soft)", color: "var(--tg-blue)" }}>
-            {(sender.name || sender.phone).slice(0, 1).toUpperCase()}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ position: "relative" }}>
+            <div
+              className="avatar avatar--sm"
+              style={{ background: "var(--tg-blue-soft)", color: "var(--tg-blue)" }}
+            >
+              {(sender.name || sender.phone).slice(0, 1).toUpperCase()}
+            </div>
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                bottom: -1,
+                right: -1,
+                width: 11,
+                height: 11,
+                borderRadius: 50,
+                background: sty.dot,
+                border: "2px solid var(--bg)",
+              }}
+            />
           </div>
-          <div className="col" style={{ gap: 2 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="fw5">{sender.name || sender.phone}</span>
             <span className="muted text-xs mono">{sender.phone}</span>
           </div>
         </div>
       </td>
       <td>
-        <span className={`pill ${statusPill}`}>
+        <span className={`pill ${sty.pill}`}>
           <span className="pill__dot" /> {sender.status}
         </span>
         {sender.auth_status !== "ok" && (
@@ -191,9 +289,28 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
           </button>
         )}
       </td>
-      <td className="num muted">—</td>
+      <td>
+        <span
+          className={`pill ${isChecker ? "pill--purple" : "pill--ghost"}`}
+          title={isChecker ? "Verifies phone numbers on Telegram" : "Sends outreach messages"}
+        >
+          {isChecker ? <ShieldCheck size={11} /> : <PhoneIcon size={11} />}
+          {isChecker ? "Checker" : "Sender"}
+        </span>
+      </td>
+      <td>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
+          <span className="num text-xs muted">— / {dailyLimit}</span>
+          <CorridorBar value={0} limit={dailyLimit} />
+        </div>
+      </td>
       <td className="num mono text-sm">
         {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} · {sender.rate_limits.per_day}
+      </td>
+      <td>
+        <span className="pill pill--ghost">
+          {sender.proxy ? proxyLabel(sender.proxy) : "Direct"}
+        </span>
       </td>
       <td className="muted text-sm">{lastUsed}</td>
       <td style={{ textAlign: "right", position: "relative" }}>
@@ -205,22 +322,41 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
             <div className="ob__menuScrim" onClick={() => setOpen(false)} />
             <div className="ob__menu" role="menu">
               {sender.status === "paused" ? (
-                <button onClick={() => { setOpen(false); action.mutate("resume"); }}>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    action.mutate("resume");
+                  }}
+                >
                   <Play size={13} /> Resume
                 </button>
               ) : (
-                <button onClick={() => { setOpen(false); action.mutate("pause"); }}>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    action.mutate("pause");
+                  }}
+                >
                   <Pause size={13} /> Pause
                 </button>
               )}
-              <button onClick={() => { setOpen(false); onReauth(); }}>
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onReauth();
+                }}
+              >
                 <RefreshCcw size={13} /> Re-authenticate
               </button>
               <button
                 className="is-danger"
                 onClick={() => {
                   setOpen(false);
-                  if (confirm(`Delete ${sender.name || sender.phone}? This stops any campaign using it.`)) {
+                  if (
+                    confirm(
+                      `Delete ${sender.name || sender.phone}? This stops any campaign using it.`,
+                    )
+                  ) {
                     action.mutate("delete");
                   }
                 }}
@@ -235,9 +371,48 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
   );
 }
 
-function Modal({ children, onClose, title }: { children: React.ReactNode; onClose: () => void; title: string }) {
+function CorridorBar({ value, limit }: { value: number; limit: number }) {
+  const pct = limit > 0 ? Math.min(100, (value / limit) * 100) : 0;
+  const color =
+    pct > 90 ? "var(--danger)" : pct > 70 ? "var(--warning)" : "var(--tg-blue)";
   return (
-    <div className="modal__scrim" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
+    <div
+      style={{
+        height: 4,
+        background: "var(--bg-soft)",
+        borderRadius: 999,
+        overflow: "hidden",
+      }}
+    >
+      <div style={{ width: `${pct}%`, height: "100%", background: color }} />
+    </div>
+  );
+}
+
+function proxyLabel(proxy: NonNullable<Sender["proxy"]>): string {
+  const p = proxy as { host?: string; type?: string };
+  if (p.host) return p.host;
+  if (p.type) return p.type;
+  return "Proxy";
+}
+
+function Modal({
+  children,
+  onClose,
+  title,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  title: string;
+}) {
+  return (
+    <div
+      className="modal__scrim"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={onClose}
+    >
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal__head">
           <h3>{title}</h3>
