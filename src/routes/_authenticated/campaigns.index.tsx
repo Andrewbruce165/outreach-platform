@@ -599,7 +599,12 @@ function CampaignRow({
   return (
     <tr style={{ cursor: "pointer" }}>
       <td onClick={(e) => e.stopPropagation()}>
-        <input type="checkbox" />
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          aria-label={`Select ${c.name}`}
+        />
       </td>
       <td>
         <Link
