@@ -218,7 +218,15 @@ function Dashboard() {
             </div>
           </div>
 
-          <AccountHealthCard senders={senders} loading={sendersQ.isLoading} />
+          <AccountHealthCard
+            senders={senders}
+            loading={sendersQ.isLoading}
+            sentBySenderId={sentBySenderId}
+            onRefresh={() => {
+              void sendersQ.refetch();
+              senderAnalyticsQs.forEach((q) => void q.refetch());
+            }}
+          />
         </div>
 
         {/* Campaign performance + Activity */}
