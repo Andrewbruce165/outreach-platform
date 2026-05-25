@@ -626,14 +626,14 @@ function AgentStep({
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13.5 }}>{a.name}</div>
                       <div className="muted text-xs">
-                        {a.role_template || "Custom agent"}
+                        {a.tone_of_voice || "Custom agent"}
                       </div>
                     </div>
                     {on && <Check size={16} style={{ color: "var(--tg-blue)" }} />}
                   </div>
-                  {a.description && (
-                    <div className="text-sm muted" style={{ lineHeight: 1.45 }}>
-                      {a.description}
+                  {a.system_prompt && (
+                    <div className="text-sm muted" style={{ lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                      {a.system_prompt}
                     </div>
                   )}
                 </button>
