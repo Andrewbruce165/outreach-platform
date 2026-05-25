@@ -7,7 +7,6 @@ import {
   Folder as FolderIcon,
   Upload,
   Search,
-  MoreHorizontal,
   Trash2,
   Edit3,
   RefreshCcw,
@@ -16,11 +15,16 @@ import {
   CheckCircle2,
   Users,
   Loader2,
+  Filter,
+  Check,
+  Clock,
+  Shuffle,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
+
 
 type Folder = components["schemas"]["FolderResponse"];
 type Contact = components["schemas"]["ContactResponse"];
