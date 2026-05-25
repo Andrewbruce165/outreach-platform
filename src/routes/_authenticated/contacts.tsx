@@ -19,6 +19,7 @@ import {
   Check,
   Clock,
   Shuffle,
+  UserPlus,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
