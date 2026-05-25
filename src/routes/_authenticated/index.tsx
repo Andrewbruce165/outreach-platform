@@ -68,11 +68,36 @@ function Dashboard() {
     queryFn: () => api<{ senders: Sender[] }>("/api/v1/senders"),
     refetchInterval: 30_000,
   });
+  const conversationsQ = useQuery({
+    queryKey: ["conversations", { dashboard: true }],
+    queryFn: () =>
+      api<ConversationList>("/api/v1/conversations", { query: { limit: 50 } }),
+    refetchInterval: 30_000,
+  });
 
   const a = analyticsQ.data;
   const f = funnelQ.data;
   const senders = sendersQ.data?.senders ?? [];
   const campaigns = campaignsQ.data?.items ?? [];
+  const conversations = conversationsQ.data?.conversations ?? [];
+
+  // Per-sender analytics to power the daily-rate bars in Account health.
+  const senderAnalyticsQs = useQueries({
+    queries: senders.map((s) => ({
+      queryKey: ["analytics", "sender", s.id],
+      queryFn: () => api<AnalyticsCards>(`/api/v1/analytics/senders/${s.id}`),
+      refetchInterval: 30_000,
+      staleTime: 15_000,
+    })),
+  });
+  const sentBySenderId = useMemo(() => {
+    const m: Record<string, number> = {};
+    senders.forEach((s, i) => {
+      const d = senderAnalyticsQs[i]?.data;
+      if (d) m[s.id] = d.sent ?? 0;
+    });
+    return m;
+  }, [senders, senderAnalyticsQs]);
 
   const sent = a?.sent ?? 0;
   const replyCount = a?.replied.conversation_count ?? 0;
