@@ -535,9 +535,13 @@ function CorridorBar({ value, limit }: { value: number; limit: number }) {
 function AccountHealthCard({
   senders,
   loading,
+  sentBySenderId,
+  onRefresh,
 }: {
   senders: Sender[];
   loading: boolean;
+  sentBySenderId: Record<string, number>;
+  onRefresh: () => void;
 }) {
   const total = senders.length;
   const active = senders.filter((s) => s.status === "active").length;
