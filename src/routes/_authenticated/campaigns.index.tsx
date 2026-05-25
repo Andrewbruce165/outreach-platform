@@ -72,6 +72,7 @@ function CampaignsPage() {
   const [tab, setTab] = useState<TabId>("all");
   const [search, setSearch] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const listQ = useQuery({
     queryKey: ["campaigns"],
