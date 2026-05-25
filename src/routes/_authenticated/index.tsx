@@ -336,6 +336,7 @@ function SankeyFunnel({ funnel }: { funnel: Funnel }) {
     { id: "lead", label: "Lead", value: funnel.lead, color: "#4dcd5e" },
     { id: "handoff", label: "Handoff", value: funnel.handoff, color: "#16a34a" },
   ];
+  const [hovered, setHovered] = useState<number | null>(null);
   const W = 720;
   const H = 200;
   const labelGap = 46;
