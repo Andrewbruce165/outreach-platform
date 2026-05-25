@@ -367,10 +367,10 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
             </div>
           </>
         )}
+        {editing && (
+          <EditSenderModal sender={sender} onClose={() => setEditing(false)} />
+        )}
       </td>
-      {editing && (
-        <EditSenderModal sender={sender} onClose={() => setEditing(false)} />
-      )}
     </tr>
   );
 }
