@@ -26,7 +26,10 @@ import type { components } from "@/types/api";
 type AnalyticsCards = components["schemas"]["AnalyticsCards"];
 type Funnel = components["schemas"]["FunnelResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
+type Campaign = components["schemas"]["CampaignResponse"];
 type Sender = components["schemas"]["SenderResponse"];
+type ConversationList = components["schemas"]["ConversationListResponse"];
+type Conversation = components["schemas"]["ConversationResponse"];
 
 export const Route = createFileRoute("/_authenticated/")({
   component: Dashboard,
