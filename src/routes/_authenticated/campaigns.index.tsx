@@ -749,7 +749,7 @@ function RowMenu({
     pause: s === "running",
     resume: s === "paused",
     stop: s === "running" || s === "paused",
-    delete: s === "draft" || s === "finished" || s === "stopped",
+    delete: true,
   };
 
   const itemStyle: React.CSSProperties = {
