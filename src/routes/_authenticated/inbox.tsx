@@ -69,6 +69,10 @@ function InboxPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [campaignFilter, setCampaignFilter] = useState<string>("all");
   const [showTrace, setShowTrace] = useState(true);
+  const queryClient = useQueryClient();
+  // Conversations viewed in this session — used to suppress the unread badge
+  // since the backend has no mark-as-read endpoint in v1.
+  const viewedRef = useRef<Set<string>>(new Set());
 
   const listQ = useQuery({
     queryKey: ["conversations", { search }],
@@ -84,7 +88,13 @@ function InboxPage() {
     queryFn: () => api<CampaignList>("/api/v1/campaigns"),
   });
 
-  const allConversations = listQ.data?.conversations ?? [];
+  const allConversations = useMemo(
+    () =>
+      (listQ.data?.conversations ?? []).map((c) =>
+        viewedRef.current.has(c.id) ? { ...c, unread_count: 0 } : c,
+      ),
+    [listQ.data],
+  );
   const campaigns = campaignsQ.data?.items ?? [];
 
   const conversations = useMemo(
@@ -100,6 +110,20 @@ function InboxPage() {
       setSelectedId(conversations[0].id);
     }
   }, [conversations, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    viewedRef.current.add(selectedId);
+    queryClient.setQueriesData<ConversationList>({ queryKey: ["conversations"] }, (old) => {
+      if (!old) return old;
+      return {
+        ...old,
+        conversations: old.conversations.map((c) =>
+          c.id === selectedId ? { ...c, unread_count: 0 } : c,
+        ),
+      };
+    });
+  }, [selectedId, queryClient]);
 
   return (
     <>
