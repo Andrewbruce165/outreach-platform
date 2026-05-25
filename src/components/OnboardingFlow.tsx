@@ -55,24 +55,18 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false, init
         </header>
       )}
 
-      <div
-        className="ob__roles"
-        role="radiogroup"
-        aria-label="Account role"
-        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}
-      >
+      <div className="ob__roles" role="radiogroup" aria-label="Account role">
         <button
           type="button"
           role="radio"
           aria-checked={role === "sender"}
-          className={`ob__tab ${role === "sender" ? "is-active" : ""}`}
+          className={`ob__role ${role === "sender" ? "is-active" : ""}`}
           onClick={() => setRole("sender")}
-          style={{ flexDirection: "column", alignItems: "flex-start", textAlign: "left", padding: 12 }}
         >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span className="ob__roleTitle">
             <Phone size={14} /> Sender
           </span>
-          <span className="field__hint" style={{ marginTop: 4 }}>
+          <span className="ob__roleHint">
             Sends outreach messages (4/min · 20/hr · 150/day)
           </span>
         </button>
@@ -80,14 +74,13 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false, init
           type="button"
           role="radio"
           aria-checked={role === "checker"}
-          className={`ob__tab ${role === "checker" ? "is-active" : ""}`}
+          className={`ob__role ${role === "checker" ? "is-active" : ""}`}
           onClick={() => setRole("checker")}
-          style={{ flexDirection: "column", alignItems: "flex-start", textAlign: "left", padding: 12 }}
         >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span className="ob__roleTitle">
             <ShieldCheck size={14} /> Checker
           </span>
-          <span className="field__hint" style={{ marginTop: 4 }}>
+          <span className="ob__roleHint">
             Verifies whether phone numbers exist on Telegram
           </span>
         </button>
