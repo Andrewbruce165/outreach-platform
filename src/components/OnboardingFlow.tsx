@@ -125,9 +125,11 @@ export function OnboardingFlow({ initialPhone, onComplete, compact = false, init
 function PhoneFlow({
   initialPhone,
   onComplete,
+  role,
 }: {
   initialPhone?: string;
   onComplete?: Props["onComplete"];
+  role: Role;
 }) {
   const [step, setStep] = useState<PhoneStep>("phone");
   const [sessionId, setSessionId] = useState<string | null>(null);
