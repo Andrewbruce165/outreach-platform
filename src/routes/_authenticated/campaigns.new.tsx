@@ -386,6 +386,12 @@ function CampaignBuilder() {
                   senders={senders}
                   senderIds={senderIds}
                   setSenderIds={setSenderIds}
+                  leadHint={leadHint}
+                  setLeadHint={setLeadHint}
+                  handoffHint={handoffHint}
+                  setHandoffHint={setHandoffHint}
+                  finishHint={finishHint}
+                  setFinishHint={setFinishHint}
                 />
               )}
               {cur.id === "audience" && (
