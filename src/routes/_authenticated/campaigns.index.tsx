@@ -400,6 +400,12 @@ function CampaignsPage() {
           </div>
         )}
       </div>
+      {editing && (
+        <EditCampaignModal
+          campaign={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   );
 }
