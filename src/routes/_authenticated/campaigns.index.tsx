@@ -392,6 +392,7 @@ function CampaignsPage() {
                         deleteMut.mutate(c.id);
                       }
                     }}
+                    onEdit={() => setEditing(c)}
                   />
                 ))}
               </tbody>
