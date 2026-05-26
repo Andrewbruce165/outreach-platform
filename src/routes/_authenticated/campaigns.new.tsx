@@ -175,6 +175,9 @@ function CampaignBuilder() {
         success_criteria: successCriteria || null,
         webhook_url: webhookUrl || null,
         tools: tools.length ? tools : undefined,
+        lead_trigger_hint: leadHint || null,
+        handoff_trigger_hint: handoffHint || null,
+        finish_trigger_hint: finishHint || null,
       };
       return api<Campaign>("/api/v1/campaigns", {
         method: "POST",
