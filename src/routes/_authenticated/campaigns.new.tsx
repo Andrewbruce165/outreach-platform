@@ -113,8 +113,15 @@ function CampaignBuilder() {
   const [days, setDays] = useState<string[]>(["mon", "tue", "wed", "thu", "fri"]);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
+  // lead_trigger_hint — plain-English condition that tells the AI when a conversation
+  // should be classified as a qualified lead (fires the `lead` signal to the webhook).
+  // Lives on the Agent step because it's a per-campaign override of the agent's lead detection.
   const [leadHint, setLeadHint] = useState("");
+  // handoff_trigger_hint — plain-English condition for when the AI should stop and pass
+  // the conversation to a human (fires the `handoff` signal). Per-campaign override.
   const [handoffHint, setHandoffHint] = useState("");
+  // finish_trigger_hint — plain-English condition for when the conversation is done
+  // (contact declined, unsubscribed, deal closed). Fires the `finished` signal.
   const [finishHint, setFinishHint] = useState("");
 
   // --- queries ---
@@ -379,6 +386,12 @@ function CampaignBuilder() {
                   setPrimaryGoal={setPrimaryGoal}
                   successCriteria={successCriteria}
                   setSuccessCriteria={setSuccessCriteria}
+                  leadHint={leadHint}
+                  setLeadHint={setLeadHint}
+                  handoffHint={handoffHint}
+                  setHandoffHint={setHandoffHint}
+                  finishHint={finishHint}
+                  setFinishHint={setFinishHint}
                 />
               )}
               {cur.id === "accounts" && (
@@ -386,12 +399,6 @@ function CampaignBuilder() {
                   senders={senders}
                   senderIds={senderIds}
                   setSenderIds={setSenderIds}
-                  leadHint={leadHint}
-                  setLeadHint={setLeadHint}
-                  handoffHint={handoffHint}
-                  setHandoffHint={setHandoffHint}
-                  finishHint={finishHint}
-                  setFinishHint={setFinishHint}
                 />
               )}
               {cur.id === "audience" && (
@@ -580,6 +587,12 @@ function AgentStep({
   setPrimaryGoal,
   successCriteria,
   setSuccessCriteria,
+  leadHint,
+  setLeadHint,
+  handoffHint,
+  setHandoffHint,
+  finishHint,
+  setFinishHint,
 }: {
   agents: Agent[];
   agentId: string;
@@ -590,6 +603,14 @@ function AgentStep({
   setPrimaryGoal: (v: PrimaryGoal | "") => void;
   successCriteria: string;
   setSuccessCriteria: (v: string) => void;
+  // Signal-trigger hints — see state declarations in CampaignBuilder for full context.
+  // Mapped to payload as: lead_trigger_hint / handoff_trigger_hint / finish_trigger_hint.
+  leadHint: string;
+  setLeadHint: (v: string) => void;
+  handoffHint: string;
+  setHandoffHint: (v: string) => void;
+  finishHint: string;
+  setFinishHint: (v: string) => void;
 }) {
   const GOALS: Array<{ id: PrimaryGoal; label: string; desc: string; Icon: typeof Calendar }> = [
     { id: "book_meeting", label: "Book a meeting", desc: "Calendar invite confirmed", Icon: Calendar },
@@ -737,6 +758,67 @@ function AgentStep({
           </span>
         </div>
       </div>
+
+      {/*
+        Signal trigger hints — sent to the backend as lead_trigger_hint /
+        handoff_trigger_hint / finish_trigger_hint on CampaignCreate.
+        These are plain-English overrides that tell the AI when to fire each
+        webhook signal for this specific campaign. Living on the Agent step
+        because they're agent behavior tweaks, not sender configuration.
+      */}
+      <div style={{ paddingTop: 20, borderTop: "1px solid var(--divider, var(--border))" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+          Signal triggers <span className="muted" style={{ fontWeight: 400 }}>· optional</span>
+        </div>
+        <div className="muted text-xs" style={{ marginBottom: 16 }}>
+          Plain-English hints the AI uses to detect when to fire each signal in this conversation.
+        </div>
+
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label className="field__label">
+            <Flag size={12} style={{ display: "inline", marginRight: 6, color: "var(--success)" }} />
+            Lead trigger hint
+          </label>
+          {/* lead_trigger_hint: fires the `lead` webhook signal when matched. */}
+          <textarea
+            className="input"
+            rows={2}
+            value={leadHint}
+            onChange={(e) => setLeadHint(e.target.value)}
+            placeholder="e.g. The contact agrees to a demo or asks for pricing details."
+          />
+        </div>
+
+        <div className="field" style={{ marginBottom: 14 }}>
+          <label className="field__label">
+            <Users size={12} style={{ display: "inline", marginRight: 6, color: "var(--warning, var(--tg-blue))" }} />
+            Handoff trigger hint
+          </label>
+          {/* handoff_trigger_hint: fires the `handoff` signal — AI stops, human takes over. */}
+          <textarea
+            className="input"
+            rows={2}
+            value={handoffHint}
+            onChange={(e) => setHandoffHint(e.target.value)}
+            placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Check size={12} style={{ display: "inline", marginRight: 6, color: "var(--text-muted)" }} />
+            Finish trigger hint
+          </label>
+          {/* finish_trigger_hint: fires the `finished` signal — conversation is closed. */}
+          <textarea
+            className="input"
+            rows={2}
+            value={finishHint}
+            onChange={(e) => setFinishHint(e.target.value)}
+            placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -746,22 +828,10 @@ function AccountsStep({
   senders,
   senderIds,
   setSenderIds,
-  leadHint,
-  setLeadHint,
-  handoffHint,
-  setHandoffHint,
-  finishHint,
-  setFinishHint,
 }: {
   senders: Sender[];
   senderIds: string[];
   setSenderIds: (v: string[]) => void;
-  leadHint: string;
-  setLeadHint: (v: string) => void;
-  handoffHint: string;
-  setHandoffHint: (v: string) => void;
-  finishHint: string;
-  setFinishHint: (v: string) => void;
 }) {
   const toggle = (id: string) =>
     setSenderIds(senderIds.includes(id) ? senderIds.filter((x) => x !== id) : [...senderIds, id]);
@@ -851,68 +921,6 @@ function AccountsStep({
           })}
         </div>
       )}
-
-      <div
-        style={{
-          marginTop: 24,
-          paddingTop: 20,
-          borderTop: "1px solid var(--border)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 2 }}>
-            Signal triggers <span className="muted" style={{ fontWeight: 400 }}>· optional</span>
-          </div>
-          <div className="text-xs muted">
-            Plain-English hints the AI uses to detect when to fire each signal in this conversation.
-          </div>
-        </div>
-
-        <div className="field">
-          <label className="field__label">
-            <Flag size={12} style={{ display: "inline", marginRight: 6, color: "var(--success)" }} />
-            Lead trigger hint
-          </label>
-          <textarea
-            className="input"
-            rows={2}
-            value={leadHint}
-            onChange={(e) => setLeadHint(e.target.value)}
-            placeholder="e.g. The contact agrees to a demo or asks for pricing details."
-          />
-        </div>
-
-        <div className="field">
-          <label className="field__label">
-            <Users size={12} style={{ display: "inline", marginRight: 6, color: "var(--warning, var(--tg-blue))" }} />
-            Handoff trigger hint
-          </label>
-          <textarea
-            className="input"
-            rows={2}
-            value={handoffHint}
-            onChange={(e) => setHandoffHint(e.target.value)}
-            placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
-          />
-        </div>
-
-        <div className="field">
-          <label className="field__label">
-            <Check size={12} style={{ display: "inline", marginRight: 6, color: "var(--text-muted)" }} />
-            Finish trigger hint
-          </label>
-          <textarea
-            className="input"
-            rows={2}
-            value={finishHint}
-            onChange={(e) => setFinishHint(e.target.value)}
-            placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."
-          />
-        </div>
-      </div>
     </div>
   );
 }
