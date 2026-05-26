@@ -549,6 +549,7 @@ function CampaignRow({
   onLifecycle,
   onDuplicate,
   onDelete,
+  onEdit,
 }: {
   campaign: Campaign;
   agentLabel: string;
@@ -559,6 +560,7 @@ function CampaignRow({
   onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   // Per-campaign analytics (sent / replied / leads, progress)
   const statsQ = useQuery({
