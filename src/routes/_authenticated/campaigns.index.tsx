@@ -13,6 +13,7 @@ import {
   Search,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
+import { EditCampaignModal } from "@/components/EditCampaignModal";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
@@ -73,6 +74,7 @@ function CampaignsPage() {
   const [search, setSearch] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [editing, setEditing] = useState<Campaign | null>(null);
 
   const listQ = useQuery({
     queryKey: ["campaigns"],
@@ -390,6 +392,7 @@ function CampaignsPage() {
                         deleteMut.mutate(c.id);
                       }
                     }}
+                    onEdit={() => setEditing(c)}
                   />
                 ))}
               </tbody>
@@ -397,6 +400,12 @@ function CampaignsPage() {
           </div>
         )}
       </div>
+      {editing && (
+        <EditCampaignModal
+          campaign={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   );
 }
@@ -546,6 +555,7 @@ function CampaignRow({
   onLifecycle,
   onDuplicate,
   onDelete,
+  onEdit,
 }: {
   campaign: Campaign;
   agentLabel: string;
@@ -556,6 +566,7 @@ function CampaignRow({
   onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   // Per-campaign analytics (sent / replied / leads, progress)
   const statsQ = useQuery({
@@ -710,6 +721,7 @@ function CampaignRow({
           onLifecycle={onLifecycle}
           onDuplicate={onDuplicate}
           onDelete={onDelete}
+          onEdit={onEdit}
         />
       </td>
     </tr>
@@ -722,12 +734,14 @@ function RowMenu({
   onLifecycle,
   onDuplicate,
   onDelete,
+  onEdit,
 }: {
   campaign: Campaign;
   busy: boolean;
   onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -784,6 +798,15 @@ function RowMenu({
             boxShadow: "var(--shadow-lg)",
           }}
         >
+          <button
+            style={itemStyle}
+            onClick={() => {
+              setOpen(false);
+              onEdit();
+            }}
+          >
+            Edit
+          </button>
           {can.start && (
             <button
               style={itemStyle}
