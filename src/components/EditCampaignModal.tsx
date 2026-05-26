@@ -113,7 +113,11 @@ export function EditCampaignModal({
 
   const saveMut = useMutation({
     mutationFn: () => {
-      const body: CampaignUpdate = {
+      // Build a PATCH body containing ONLY fields the user actually changed.
+      // Sending unchanged values for immutable-on-running fields like agent_id /
+      // folder_id makes the backend reject the whole update with a 409
+      // CAMPAIGN_RUNNING_IMMUTABLE_FIELDS even when those fields weren't touched.
+      const next = {
         name,
         description: description || null,
         agent_id: agentId,
@@ -136,9 +140,49 @@ export function EditCampaignModal({
         handoff_webhook_url: handoffWebhook || null,
         finish_webhook_url: finishWebhook || null,
       };
+
+      // Compare new value to original campaign value, normalising "" / undefined → null
+      // and ISO date strings → YYYY-MM-DD slice (start_date / stop_date come back as
+      // full ISO timestamps but are edited as date inputs).
+      const norm = (v: unknown): unknown => {
+        if (v === undefined || v === "") return null;
+        return v;
+      };
+      const origDate = (v?: string | null) =>
+        v ? new Date(v).toISOString() : null;
+
+      const original: Record<string, unknown> = {
+        name: campaign.name,
+        description: campaign.description ?? null,
+        agent_id: campaign.agent_id,
+        folder_id: campaign.folder_id,
+        message_template: campaign.message_template ?? null,
+        timezone: campaign.timezone ?? null,
+        work_hour_start: campaign.work_hour_start ?? null,
+        work_hour_end: campaign.work_hour_end ?? null,
+        work_days_mask: campaign.work_days_mask ?? null,
+        start_date: origDate(campaign.start_date),
+        stop_date: origDate(campaign.stop_date),
+        audience_hints: campaign.audience_hints ?? null,
+        primary_goal: campaign.primary_goal ?? null,
+        success_criteria: campaign.success_criteria ?? null,
+        lead_trigger_hint: campaign.lead_trigger_hint ?? null,
+        handoff_trigger_hint: campaign.handoff_trigger_hint ?? null,
+        finish_trigger_hint: campaign.finish_trigger_hint ?? null,
+        webhook_url: campaign.webhook_url ?? null,
+        lead_webhook_url: campaign.lead_webhook_url ?? null,
+        handoff_webhook_url: campaign.handoff_webhook_url ?? null,
+        finish_webhook_url: campaign.finish_webhook_url ?? null,
+      };
+
+      const body: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(next)) {
+        if (norm(v) !== norm(original[k])) body[k] = v;
+      }
+
       return api(`/api/v1/campaigns/${campaign.id}`, {
         method: "PATCH",
-        body: body as unknown as Record<string, unknown>,
+        body,
       });
     },
     onSuccess: () => {
