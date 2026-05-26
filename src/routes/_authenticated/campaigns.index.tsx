@@ -728,12 +728,14 @@ function RowMenu({
   onLifecycle,
   onDuplicate,
   onDelete,
+  onEdit,
 }: {
   campaign: Campaign;
   busy: boolean;
   onLifecycle: (a: "start" | "pause" | "resume" | "stop") => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
