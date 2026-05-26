@@ -746,10 +746,22 @@ function AccountsStep({
   senders,
   senderIds,
   setSenderIds,
+  leadHint,
+  setLeadHint,
+  handoffHint,
+  setHandoffHint,
+  finishHint,
+  setFinishHint,
 }: {
   senders: Sender[];
   senderIds: string[];
   setSenderIds: (v: string[]) => void;
+  leadHint: string;
+  setLeadHint: (v: string) => void;
+  handoffHint: string;
+  setHandoffHint: (v: string) => void;
+  finishHint: string;
+  setFinishHint: (v: string) => void;
 }) {
   const toggle = (id: string) =>
     setSenderIds(senderIds.includes(id) ? senderIds.filter((x) => x !== id) : [...senderIds, id]);
