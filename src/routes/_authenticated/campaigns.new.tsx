@@ -113,6 +113,9 @@ function CampaignBuilder() {
   const [days, setDays] = useState<string[]>(["mon", "tue", "wed", "thu", "fri"]);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
+  const [leadHint, setLeadHint] = useState("");
+  const [handoffHint, setHandoffHint] = useState("");
+  const [finishHint, setFinishHint] = useState("");
 
   // --- queries ---
   const agentsQ = useQuery({
