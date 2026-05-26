@@ -113,6 +113,9 @@ function CampaignBuilder() {
   const [days, setDays] = useState<string[]>(["mon", "tue", "wed", "thu", "fri"]);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
+  const [leadHint, setLeadHint] = useState("");
+  const [handoffHint, setHandoffHint] = useState("");
+  const [finishHint, setFinishHint] = useState("");
 
   // --- queries ---
   const agentsQ = useQuery({
@@ -172,6 +175,9 @@ function CampaignBuilder() {
         success_criteria: successCriteria || null,
         webhook_url: webhookUrl || null,
         tools: tools.length ? tools : undefined,
+        lead_trigger_hint: leadHint || null,
+        handoff_trigger_hint: handoffHint || null,
+        finish_trigger_hint: finishHint || null,
       };
       return api<Campaign>("/api/v1/campaigns", {
         method: "POST",
@@ -380,6 +386,12 @@ function CampaignBuilder() {
                   senders={senders}
                   senderIds={senderIds}
                   setSenderIds={setSenderIds}
+                  leadHint={leadHint}
+                  setLeadHint={setLeadHint}
+                  handoffHint={handoffHint}
+                  setHandoffHint={setHandoffHint}
+                  finishHint={finishHint}
+                  setFinishHint={setFinishHint}
                 />
               )}
               {cur.id === "audience" && (
@@ -734,10 +746,22 @@ function AccountsStep({
   senders,
   senderIds,
   setSenderIds,
+  leadHint,
+  setLeadHint,
+  handoffHint,
+  setHandoffHint,
+  finishHint,
+  setFinishHint,
 }: {
   senders: Sender[];
   senderIds: string[];
   setSenderIds: (v: string[]) => void;
+  leadHint: string;
+  setLeadHint: (v: string) => void;
+  handoffHint: string;
+  setHandoffHint: (v: string) => void;
+  finishHint: string;
+  setFinishHint: (v: string) => void;
 }) {
   const toggle = (id: string) =>
     setSenderIds(senderIds.includes(id) ? senderIds.filter((x) => x !== id) : [...senderIds, id]);
@@ -827,6 +851,68 @@ function AccountsStep({
           })}
         </div>
       )}
+
+      <div
+        style={{
+          marginTop: 24,
+          paddingTop: 20,
+          borderTop: "1px solid var(--border)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 2 }}>
+            Signal triggers <span className="muted" style={{ fontWeight: 400 }}>· optional</span>
+          </div>
+          <div className="text-xs muted">
+            Plain-English hints the AI uses to detect when to fire each signal in this conversation.
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Flag size={12} style={{ display: "inline", marginRight: 6, color: "var(--success)" }} />
+            Lead trigger hint
+          </label>
+          <textarea
+            className="input"
+            rows={2}
+            value={leadHint}
+            onChange={(e) => setLeadHint(e.target.value)}
+            placeholder="e.g. The contact agrees to a demo or asks for pricing details."
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Users size={12} style={{ display: "inline", marginRight: 6, color: "var(--warning, var(--tg-blue))" }} />
+            Handoff trigger hint
+          </label>
+          <textarea
+            className="input"
+            rows={2}
+            value={handoffHint}
+            onChange={(e) => setHandoffHint(e.target.value)}
+            placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Check size={12} style={{ display: "inline", marginRight: 6, color: "var(--text-muted)" }} />
+            Finish trigger hint
+          </label>
+          <textarea
+            className="input"
+            rows={2}
+            value={finishHint}
+            onChange={(e) => setFinishHint(e.target.value)}
+            placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."
+          />
+        </div>
+      </div>
     </div>
   );
 }
