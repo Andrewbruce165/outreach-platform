@@ -200,17 +200,71 @@ function CampaignBuilder() {
     onError: (e) => toast.error(errMsg(e)),
   });
 
-  // step validation
+  // step validation — every field on every step is required before you can advance.
   const canNext = useMemo(() => {
     const id = STEPS[step].id;
-    if (id === "brief") return name.trim().length > 0;
-    if (id === "agent") return !!agentId;
+    if (id === "brief") return name.trim().length > 0 && brief.trim().length > 0;
+    if (id === "agent")
+      return (
+        !!agentId &&
+        audienceHints.trim().length > 0 &&
+        !!primaryGoal &&
+        successCriteria.trim().length > 0 &&
+        leadHint.trim().length > 0 &&
+        handoffHint.trim().length > 0 &&
+        finishHint.trim().length > 0
+      );
     if (id === "accounts") return senderIds.length > 0;
     if (id === "audience") return !!folderId;
-    if (id === "schedule") return days.length > 0 && hourEnd > hourStart;
-    if (id === "integrations") return messageTemplate.trim().length > 0;
+    if (id === "schedule")
+      return (
+        days.length > 0 &&
+        hourEnd > hourStart &&
+        tz.trim().length > 0 &&
+        messageTemplate.trim().length > 0
+      );
+    if (id === "integrations") return webhookUrl.trim().length > 0;
     return true;
-  }, [step, name, agentId, senderIds, folderId, days, hourStart, hourEnd, messageTemplate]);
+  }, [
+    step,
+    name,
+    brief,
+    agentId,
+    audienceHints,
+    primaryGoal,
+    successCriteria,
+    leadHint,
+    handoffHint,
+    finishHint,
+    senderIds,
+    folderId,
+    days,
+    hourStart,
+    hourEnd,
+    tz,
+    messageTemplate,
+    webhookUrl,
+  ]);
+
+  // Launch must require every step to be valid — `canNext` only knows about the
+  // current step, so a user could otherwise jump to Review and launch early.
+  const allValid =
+    name.trim().length > 0 &&
+    brief.trim().length > 0 &&
+    !!agentId &&
+    audienceHints.trim().length > 0 &&
+    !!primaryGoal &&
+    successCriteria.trim().length > 0 &&
+    leadHint.trim().length > 0 &&
+    handoffHint.trim().length > 0 &&
+    finishHint.trim().length > 0 &&
+    senderIds.length > 0 &&
+    !!folderId &&
+    days.length > 0 &&
+    hourEnd > hourStart &&
+    tz.trim().length > 0 &&
+    messageTemplate.trim().length > 0 &&
+    webhookUrl.trim().length > 0;
 
   const cur = STEPS[step];
 
@@ -228,7 +282,7 @@ function CampaignBuilder() {
             </button>
             <button
               className="btn btn--primary btn--sm"
-              disabled={!canNext || launchMut.isPending}
+              disabled={!allValid || launchMut.isPending}
               onClick={() => launchMut.mutate()}
             >
               {launchMut.isPending ? (
@@ -479,7 +533,7 @@ function CampaignBuilder() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  disabled={!canNext || launchMut.isPending}
+                  disabled={!allValid || launchMut.isPending}
                   onClick={() => launchMut.mutate()}
                 >
                   {launchMut.isPending ? (
@@ -768,7 +822,7 @@ function AgentStep({
       */}
       <div style={{ paddingTop: 20, borderTop: "1px solid var(--divider, var(--border))" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-          Signal triggers <span className="muted" style={{ fontWeight: 400 }}>· optional</span>
+          Signal triggers
         </div>
         <div className="muted text-xs" style={{ marginBottom: 16 }}>
           Plain-English hints the AI uses to detect when to fire each signal in this conversation.
