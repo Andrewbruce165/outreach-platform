@@ -792,6 +792,15 @@ function RowMenu({
             boxShadow: "var(--shadow-lg)",
           }}
         >
+          <button
+            style={itemStyle}
+            onClick={() => {
+              setOpen(false);
+              onEdit();
+            }}
+          >
+            Edit
+          </button>
           {can.start && (
             <button
               style={itemStyle}
