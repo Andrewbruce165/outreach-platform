@@ -715,6 +715,7 @@ function CampaignRow({
           onLifecycle={onLifecycle}
           onDuplicate={onDuplicate}
           onDelete={onDelete}
+          onEdit={onEdit}
         />
       </td>
     </tr>
