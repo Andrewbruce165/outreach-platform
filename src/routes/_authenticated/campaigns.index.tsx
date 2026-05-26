@@ -13,6 +13,7 @@ import {
   Search,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
+import { EditCampaignModal } from "@/components/EditCampaignModal";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
