@@ -851,6 +851,68 @@ function AccountsStep({
           })}
         </div>
       )}
+
+      <div
+        style={{
+          marginTop: 24,
+          paddingTop: 20,
+          borderTop: "1px solid var(--border)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 2 }}>
+            Signal triggers <span className="muted" style={{ fontWeight: 400 }}>· optional</span>
+          </div>
+          <div className="text-xs muted">
+            Plain-English hints the AI uses to detect when to fire each signal in this conversation.
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Flag size={12} style={{ display: "inline", marginRight: 6, color: "var(--success)" }} />
+            Lead trigger hint
+          </label>
+          <textarea
+            className="input"
+            rows={2}
+            value={leadHint}
+            onChange={(e) => setLeadHint(e.target.value)}
+            placeholder="e.g. The contact agrees to a demo or asks for pricing details."
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Users size={12} style={{ display: "inline", marginRight: 6, color: "var(--warning, var(--tg-blue))" }} />
+            Handoff trigger hint
+          </label>
+          <textarea
+            className="input"
+            rows={2}
+            value={handoffHint}
+            onChange={(e) => setHandoffHint(e.target.value)}
+            placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label">
+            <Check size={12} style={{ display: "inline", marginRight: 6, color: "var(--text-muted)" }} />
+            Finish trigger hint
+          </label>
+          <textarea
+            className="input"
+            rows={2}
+            value={finishHint}
+            onChange={(e) => setFinishHint(e.target.value)}
+            placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."
+          />
+        </div>
+      </div>
     </div>
   );
 }
