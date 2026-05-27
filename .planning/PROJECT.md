@@ -100,6 +100,7 @@ Brownfield-проект: базовая механика (очередь, rate l
 | Расписание по тайм-зонам контакта | v2 — ADVN-03 |
 | Несколько пользователей в одном workspace | v2 — TEAM-01..02 |
 | Экспорт аналитики в CSV | v2 — карточек метрик в v1 достаточно |
+| Self-serve редактирование профиля TG-аккаунта (имя/bio/фото/username) | v2 — PROF-01 (see seed `account-profile-self-serve.md`) |
 
 ## Context
 
