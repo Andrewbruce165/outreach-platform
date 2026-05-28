@@ -95,12 +95,22 @@ Brownfield-проект: базовая механика (очередь, rate l
 | Real-time чат между операторами | Telegram inbox достаточен |
 | Другие мессенджеры (WhatsApp, Instagram) | Платформа Telegram-специфична |
 | Собственный AI (fine-tuning) | GPT-4o-mini достаточно для v1 |
-| Многошаговые follow-up последовательности | v2 — ADVN-01 |
+| Многошаговые follow-up последовательности | v2 — ADVN-01 (see seed `nudge-and-followup-sequences.md`) |
 | A/B тестирование текстов | v2 — ADVN-02 |
 | Расписание по тайм-зонам контакта | v2 — ADVN-03 |
-| Несколько пользователей в одном workspace | v2 — TEAM-01..02 |
+| Несколько пользователей в одном workspace (инвайт + роли + управление) | v2 — TEAM-01..02 (see seed `multi-user-workspace.md`) |
 | Экспорт аналитики в CSV | v2 — карточек метрик в v1 достаточно |
 | Self-serve редактирование профиля TG-аккаунта (имя/bio/фото/username) | v2 — PROF-01 (see seed `account-profile-self-serve.md`) |
+| Admin Master Bot — уведомления ручника + ошибок аккаунтов (deferred Phase 6) | v2 — ADMN-01..03 (see seed `admin-master-bot.md`) |
+| Редактирование данных workspace (имя/аватар/soft-delete/экспорт) | v2 — WSPC-01 (see seed `workspace-metadata.md`) |
+| Несколько workspace на одного пользователя + UI switcher | v2 — WSPC-02 (see seed `multi-workspace-per-user.md`) |
+| Свой OpenAI ключ на workspace (Bring Your Own Key) | v2 — BYOK-01 (see seed `byo-openai-key.md`) |
+| Workspace-level настройки очереди (вынести захардкоженные числа в UI) | v2 — QUEUE-01 (see seed `queue-settings-workspace.md`) |
+| Скорость ответа AI (debounce) — workspace/agent override | v2 — REPLY-01 (see seed `ai-reply-speed.md`) |
+| Re-engagement nudge после read+silent (single-shot) | v2 — NUDGE-01 (see seed `nudge-and-followup-sequences.md`) |
+| Обработка входящих от ранее незнакомых пользователей (AI/ignore/notify) | v2 — INBD-01 (see seed `inbound-from-unknown.md`) |
+| AI-ассистент при заполнении текстовых полей агента/кампании | v2 — AIUX-01 (see seed `ai-assist-content-editor.md`) |
+| Кастомные переменные при загрузке базы контактов (UX над готовым backend) | v2 — CVAR-01 (see seed `custom-contact-variables.md`) |
 
 ## Context
 

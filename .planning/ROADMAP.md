@@ -14,7 +14,7 @@
 - [ ] **Phase 3: Agents (AI Templates)** — переиспользуемые AI-агенты на уровне workspace
 - [ ] **Phase 4: Campaigns** — модель кампании + расписание + сигналы + webhook/tools + рерайт очереди
 - [ ] **Phase 5: Inbox & Analytics** — inbox с фильтром по кампании + ручник + метрики + лог LLM-запросов
-- [ ] **Phase 6: Admin Master Bot** — TG-бот workspace для уведомлений (ручник, ошибки аккаунтов)
+- [~] **Phase 6: Admin Master Bot** — TG-бот workspace для уведомлений (ручник, ошибки аккаунтов) — **DEFERRED TO v2** (see `.planning/seeds/admin-master-bot.md`, PROJECT.md → ADMN-01..03)
 
 ## Phase Details
 
@@ -174,7 +174,9 @@ Plans:
 - [x] 05.1-05-PLAN.md — lovable-handoff/ bundle (AGENTS/KNOWLEDGE/openapi.json/types/api.ts/design-source) + UI-SPEC reconciliation patches + 2 CI scripts [Wave 3, depends_on: 05.1-03, 05.1-04]
 - [x] 05.1-06-PLAN.md — Core Value E2E pytest + HUMAN-UAT mapping (7 items) + phase sentinel test [Wave 3, depends_on: 05.1-05]
 
-### Phase 6: Admin Master Bot
+### Phase 6: Admin Master Bot — **DEFERRED TO v2**
+
+> **Status:** Перенесено в v2 (ADMN-01..03). См. seed `.planning/seeds/admin-master-bot.md` и PROJECT.md "Out of Scope for v1". Причина: v1 завершён без Phase 6; admin-bot не блокирует первого платящего клиента, но входит в обязательный v2 scope.
 
 **Goal**: Workspace имеет свой Telegram-бот, который шлёт админу уведомления при срабатывании ручника и при ошибках TG-аккаунтов.
 **Depends on**: Phase 4 (нужны кампании и сигналы для уведомлений)
@@ -204,6 +206,6 @@ Plans:
 | 3. Agents (AI Templates) | 0/2 | Planned (2 plans, both Wave 1) | - |
 | 4. Campaigns | 0/5 | Planned (5 plans, waves 1→4) | - |
 | 5. Inbox & Analytics | 0/3 | Planned (3 plans, waves 1→2) | - |
-| 6. Admin Master Bot | 0/2 | Not started | - |
+| 6. Admin Master Bot | 0/2 | Deferred to v2 | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
