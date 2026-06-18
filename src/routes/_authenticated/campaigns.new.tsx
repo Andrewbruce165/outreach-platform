@@ -620,7 +620,46 @@ function CampaignBuilder() {
   );
 }
 
+/* ---------------- Draft auto-save indicator ---------------- */
+function DraftStatus({
+  saving,
+  savedAt,
+  hasDraft,
+}: {
+  saving: boolean;
+  savedAt: number | null;
+  hasDraft: boolean;
+}) {
+  let label = "";
+  if (saving) label = "Saving draft…";
+  else if (savedAt) {
+    const secs = Math.max(0, Math.round((Date.now() - savedAt) / 1000));
+    label = secs < 5 ? "Draft saved" : hasDraft ? "Draft" : "";
+  } else if (hasDraft) label = "Draft";
+  if (!label) return null;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 12,
+        color: "var(--text-muted)",
+        padding: "0 10px",
+      }}
+    >
+      {saving ? (
+        <Loader2 size={12} className="ob__spin" />
+      ) : (
+        <Check size={12} style={{ color: "var(--success)" }} />
+      )}
+      {label}
+    </span>
+  );
+}
+
 /* ---------------- Step 1: Brief ---------------- */
+
 function BriefStep({
   name,
   setName,
