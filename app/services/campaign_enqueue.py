@@ -37,6 +37,7 @@ from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.rotation import get_or_assign_sender
 from app.services.template import render_template
+from app.utils.phone import contact_identity_key
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +122,20 @@ class CampaignEnqueueWorker:
                 WHERE folder_id = :fid
                   AND workspace_id = :wid
                   AND tg_status = 'registered'
-                  AND phone NOT IN (
+                  AND (phone IS NOT NULL OR username IS NOT NULL)
+                  -- identity key: phone wins, else '@username' (migration 025)
+                  AND COALESCE(phone, '@' || username) NOT IN (
                       SELECT contact_phone FROM campaign_contact_assignments
                       WHERE campaign_id = :cid
+                  )
+                  -- Cross-campaign dedup: never re-touch a contact who already
+                  -- has a conversation in this workspace. Survives campaign
+                  -- deletion (conversations.campaign_id is SET NULL, not CASCADE),
+                  -- so a re-run / copied campaign over the same folder won't
+                  -- re-introduce itself to someone we're already talking to.
+                  AND COALESCE(phone, '@' || username) NOT IN (
+                      SELECT contact_phone FROM conversations
+                      WHERE workspace_id = :wid AND contact_phone IS NOT NULL
                   )
                 LIMIT :lim
             """),
@@ -143,17 +155,24 @@ class CampaignEnqueueWorker:
 
         enqueued = 0
         for contact in contacts:
+            # Identity key: phone (+7…) or '@username'. Used as the pipeline key
+            # across rotation, queue and conversation (migration 025).
+            identity = contact_identity_key(contact.phone, contact.username)
+            if identity is None:
+                # Defensive: SELECT already filters this out, but never enqueue
+                # a contact with neither phone nor username.
+                continue
             try:
                 # Q5: atomic per-contact transaction (savepoint inside outer).
                 async with db.begin_nested():
                     # 1. Rotation — assign sender (commit=False per M2 revision).
                     sender = await get_or_assign_sender(
-                        c.id, contact.phone, db, commit=False
+                        c.id, identity, db, commit=False
                     )
                     if sender is None:
                         logger.warning(
                             "CampaignEnqueueWorker: no sender for contact %s in campaign %s",
-                            contact.phone, c.id,
+                            identity, c.id,
                         )
                         # Skip this contact — savepoint will commit (no-op since nothing inserted).
                         continue
@@ -170,7 +189,7 @@ class CampaignEnqueueWorker:
                         c.message_template,
                         contact_dict,
                         campaign_id=str(c.id),
-                        phone=contact.phone,
+                        phone=identity,
                     )
 
                     # 3. INSERT queue item.
@@ -190,7 +209,7 @@ class CampaignEnqueueWorker:
                             "wid": str(c.workspace_id),
                             "cid": str(c.id),
                             "sid": str(sender.id),
-                            "phone": contact.phone,
+                            "phone": identity,
                             "name": contact.full_name or "",
                             "text": rendered,
                             "scheduled": scheduled_at,
@@ -200,7 +219,7 @@ class CampaignEnqueueWorker:
             except Exception as exc:  # noqa: BLE001 — savepoint rolled back; try next
                 logger.error(
                     "CampaignEnqueueWorker: error enqueuing contact %s in campaign %s: %s",
-                    contact.phone, c.id, exc, exc_info=True,
+                    identity, c.id, exc, exc_info=True,
                 )
                 continue
 

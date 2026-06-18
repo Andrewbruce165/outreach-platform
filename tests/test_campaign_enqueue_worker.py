@@ -55,6 +55,49 @@ async def test_worker_tick_inserts_queue_item_for_new_contact(
     assert cca_cnt == 1
 
 
+async def test_worker_enqueues_username_only_contact(
+    async_db_session,
+    test_running_campaign_factory,
+):
+    """Migration 025: a registered contact with only a username (no phone) is
+    enqueued under the '@username' identity key — in message_queue and cca."""
+    camp, _ = await test_running_campaign_factory(sender_count=1)
+    # Username-only contact in the campaign folder (factory forces a phone, so
+    # insert raw). workspace_id must match the campaign's folder workspace.
+    wid = (await async_db_session.execute(text("""
+        SELECT workspace_id FROM folders WHERE id = :fid
+    """), {"fid": str(camp["folder_id"])})).scalar()
+    await async_db_session.execute(text("""
+        INSERT INTO contacts (workspace_id, folder_id, phone, username, full_name, tg_status)
+        VALUES (:wid, :fid, NULL, 'romanvdr', 'Roman', 'registered')
+    """), {"wid": str(wid), "fid": str(camp["folder_id"])})
+    await async_db_session.commit()
+
+    worker = await _make_worker()
+    enqueued = await worker._tick()
+    assert enqueued >= 1
+
+    q_cnt = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = '@romanvdr'
+    """), {"cid": str(camp["id"])})).scalar()
+    assert q_cnt == 1
+
+    cca_cnt = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM campaign_contact_assignments
+        WHERE campaign_id = :cid AND contact_phone = '@romanvdr'
+    """), {"cid": str(camp["id"])})).scalar()
+    assert cca_cnt == 1
+
+    # Idempotent: a second tick must not duplicate (dedup by identity key).
+    await worker._tick()
+    q_cnt2 = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = '@romanvdr'
+    """), {"cid": str(camp["id"])})).scalar()
+    assert q_cnt2 == 1
+
+
 async def test_worker_renders_template_at_enqueue(
     async_db_session,
     test_running_campaign_factory,
@@ -102,6 +145,35 @@ async def test_worker_skips_already_assigned_contact(
         SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid
     """), {"cid": str(camp["id"])})).scalar()
     assert cnt == 1
+
+
+async def test_worker_skips_contact_with_existing_conversation(
+    async_db_session,
+    test_running_campaign_factory,
+    test_contacts_factory,
+    test_conversation_factory,
+):
+    """Cross-campaign dedup: contact already has a conversation in the workspace
+    → worker does NOT enqueue a first-touch (regression for the duplicate-intro
+    incident, where a copied campaign re-introduced itself to an active lead)."""
+    camp, _ = await test_running_campaign_factory(sender_count=1)
+    contact = await test_contacts_factory(count=1, tg_status="registered")
+    await async_db_session.execute(text("""
+        UPDATE contacts SET folder_id = :fid WHERE id = :cid
+    """), {"fid": str(camp["folder_id"]), "cid": str(contact.id)})
+    # Existing conversation for this phone in the same workspace.
+    await test_conversation_factory(contact_phone=contact.phone, status="lead")
+    await async_db_session.commit()
+
+    worker = await _make_worker()
+    enqueued = await worker._tick()
+    assert enqueued == 0
+
+    cnt = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = :p
+    """), {"cid": str(camp["id"]), "p": contact.phone})).scalar()
+    assert cnt == 0
 
 
 async def test_worker_skips_unregistered_contact(

@@ -225,6 +225,49 @@ async def test_delete_done_keeps_queue_history_via_set_null(
     assert row[0] is None
 
 
+async def test_delete_cancels_pending_queue_items(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Hard delete cancels still-pending queue items (no zombie 'pending' rows
+    left with a dangling NULL campaign_id). 'sent' rows keep SET-NULL history."""
+    import uuid
+    agent = await test_agent_factory()
+    sender = await test_sender_factory()
+    await _bind(async_db_session, test_workspace.id, "u-del-pend")
+
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-del-pend",
+                             agent.id, test_folder.id, sender_ids=[sender.id], name="DelPend")
+    await async_client.post(f"/api/v1/campaigns/{c['id']}/start",
+                            headers=_auth_headers(valid_supabase_jwt, "u-del-pend"))
+
+    pending_id = str(uuid.uuid4())
+    sent_id = str(uuid.uuid4())
+    await async_db_session.execute(text("""
+        INSERT INTO message_queue (id, workspace_id, sender_id, campaign_id, item_type, status, recipient_phone, message_text)
+        VALUES (:pid, :wid, :sid, :cid, 'message', 'pending', '+79990000888', 'p'),
+               (:sid2, :wid, :sid, :cid, 'message', 'sent', '+79990000999', 's')
+    """), {"pid": pending_id, "sid2": sent_id, "wid": str(test_workspace.id),
+           "sid": str(sender.id), "cid": c["id"]})
+    await async_db_session.commit()
+
+    await async_client.post(f"/api/v1/campaigns/{c['id']}/finish",
+                            headers=_auth_headers(valid_supabase_jwt, "u-del-pend"))
+    r = await async_client.delete(f"/api/v1/campaigns/{c['id']}",
+                                  headers=_auth_headers(valid_supabase_jwt, "u-del-pend"))
+    assert r.status_code == 204
+
+    rows = (await async_db_session.execute(text(
+        "SELECT id, status, campaign_id FROM message_queue WHERE id = ANY(:ids)"
+    ), {"ids": [pending_id, sent_id]})).all()
+    by_id = {str(row[0]): (row[1], row[2]) for row in rows}
+    # pending → cancelled on finish (campaign_id then nulled by delete FK)
+    assert by_id[pending_id][0] == "cancelled"
+    # sent → untouched status, history preserved via SET NULL
+    assert by_id[sent_id][0] == "sent"
+    assert by_id[sent_id][1] is None
+
+
 async def test_lifecycle_draft_to_running_via_start(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder, test_sender_factory,

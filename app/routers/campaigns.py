@@ -83,6 +83,25 @@ async def _load_campaign(db: AsyncSession, ctx: AuthCtx, campaign_id: UUID) -> C
     return c
 
 
+async def _cancel_pending_queue(db: AsyncSession, campaign_id: UUID, reason: str) -> None:
+    """Cancel still-pending queue items of a campaign on terminal transition/delete.
+
+    The queue dispatcher already refuses to send items whose campaign is not
+    'running' (queue.py INNER JOIN + c.status='running'), so this is not a
+    send-leak guard — it prevents zombie 'pending' rows lingering forever after
+    finish/stop/delete (delete also nulls campaign_id via FK SET NULL).
+    Pause is intentionally excluded: paused items resume when the campaign does.
+    """
+    await db.execute(
+        text("""
+            UPDATE message_queue
+            SET status = 'cancelled', finished_at = NOW(), error_message = :reason
+            WHERE campaign_id = :cid AND status = 'pending'
+        """),
+        {"cid": str(campaign_id), "reason": reason},
+    )
+
+
 async def _validate_workspace_owns_agent(
     db: AsyncSession, ctx: AuthCtx, agent_id: UUID
 ) -> None:
@@ -155,9 +174,12 @@ async def _compute_is_exhausted(
         FROM contacts c
         WHERE c.folder_id = :fid
           AND c.tg_status = 'registered'
+          AND (c.phone IS NOT NULL OR c.username IS NOT NULL)
           AND NOT EXISTS (
               SELECT 1 FROM campaign_contact_assignments cca
-              WHERE cca.campaign_id = :cid AND cca.contact_phone = c.phone
+              WHERE cca.campaign_id = :cid
+                -- identity key: phone wins, else '@username' (migration 025)
+                AND cca.contact_phone = COALESCE(c.phone, '@' || c.username)
           )
     """), {"fid": str(folder_id), "cid": str(campaign_id)})).scalar() or 0
 
@@ -537,6 +559,7 @@ async def delete_campaign(
             detail={"code": "CAMPAIGN_RUNNING",
                     "message": "Stop campaign before deleting"},
         )
+    await _cancel_pending_queue(db, campaign_id, "campaign deleted")
     await db.delete(c)
     await db.commit()
     logger.info(f"[campaigns] deleted workspace={ctx.workspace_id} id={campaign_id}")
@@ -668,6 +691,7 @@ async def finish_campaign(
                     "from": c.status, "to": "done"},
         )
     c.status = "done"
+    await _cancel_pending_queue(db, campaign_id, "campaign finished")
     await db.commit()
     await db.refresh(c)
     logger.info(f"[campaigns] finished id={campaign_id}")
