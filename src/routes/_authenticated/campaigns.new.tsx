@@ -96,6 +96,8 @@ function CampaignBuilder() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [step, setStep] = useState(0);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
 
   // --- form state ---
   const [name, setName] = useState("");
@@ -164,37 +166,95 @@ function CampaignBuilder() {
     onError: (e) => toast.error(errMsg(e)),
   });
 
-  const launchMut = useMutation({
-    mutationFn: () => {
-      const payload: CampaignCreate = {
-        name,
-        description: brief || null,
-        agent_id: agentId,
-        folder_id: folderId,
-        sender_ids: senderIds,
-        message_template: messageTemplate,
-        timezone: tz,
-        work_hour_start: hourStart,
-        work_hour_end: hourEnd,
-        work_days_mask: maskFromDays(days),
-        audience_hints: audienceHints || null,
-        primary_goal: primaryGoal || null,
-        success_criteria: successCriteria || null,
-        webhook_url: webhookUrl || null,
-        tools: tools.length ? tools : undefined,
-        lead_trigger_hint: leadHint || null,
-        handoff_trigger_hint: handoffHint || null,
-        finish_trigger_hint: finishHint || null,
-      };
+  // Build the full campaign payload from current form state. Used both for
+  // auto-saving drafts on step transition and for the final launch.
+  const buildPayload = (): CampaignCreate => ({
+    name: name || "Untitled campaign",
+    description: brief || null,
+    agent_id: agentId,
+    folder_id: folderId,
+    sender_ids: senderIds,
+    message_template: messageTemplate,
+    timezone: tz,
+    work_hour_start: hourStart,
+    work_hour_end: hourEnd,
+    work_days_mask: maskFromDays(days),
+    audience_hints: audienceHints || null,
+    primary_goal: primaryGoal || null,
+    success_criteria: successCriteria || null,
+    webhook_url: webhookUrl || null,
+    tools: tools.length ? tools : undefined,
+    lead_trigger_hint: leadHint || null,
+    handoff_trigger_hint: handoffHint || null,
+    finish_trigger_hint: finishHint || null,
+  });
+
+  // Auto-save draft after each completed step. POST creates the draft the first
+  // time we have the backend-required minimum (name + agent + folder + template);
+  // subsequent saves PATCH the existing draft.
+  const saveDraftMut = useMutation({
+    mutationFn: async (): Promise<Campaign | null> => {
+      const hasMinimum =
+        name.trim().length > 0 && !!agentId && !!folderId && messageTemplate.trim().length > 0;
+      if (!hasMinimum && !draftId) return null;
+      const payload = buildPayload();
+      if (draftId) {
+        return api<Campaign>(`/api/v1/campaigns/${draftId}`, {
+          method: "PATCH",
+          body: payload as unknown as Record<string, unknown>,
+        });
+      }
       return api<Campaign>("/api/v1/campaigns", {
         method: "POST",
         body: payload as unknown as Record<string, unknown>,
       });
     },
     onSuccess: (c) => {
-      track("campaign_created", { campaign_id: c.id });
+      if (!c) return;
+      if (!draftId) {
+        setDraftId(c.id);
+        track("campaign_created", { campaign_id: c.id });
+      }
+      setSavedAt(Date.now());
       void qc.invalidateQueries({ queryKey: ["campaigns"] });
-      toast.success("Campaign created");
+    },
+    onError: (e) => toast.error(`Draft not saved: ${errMsg(e)}`),
+  });
+
+  // Continue to next step, saving a draft first. UI advances even if save fails
+  // (error shown via toast) so the user can keep editing.
+  const goNext = async () => {
+    try {
+      await saveDraftMut.mutateAsync();
+    } catch {
+      /* handled by onError */
+    }
+    setStep((s) => Math.min(STEPS.length - 1, s + 1));
+  };
+
+  const launchMut = useMutation({
+    mutationFn: async () => {
+      const payload = buildPayload();
+      let campaign: Campaign;
+      if (draftId) {
+        campaign = await api<Campaign>(`/api/v1/campaigns/${draftId}`, {
+          method: "PATCH",
+          body: payload as unknown as Record<string, unknown>,
+        });
+      } else {
+        campaign = await api<Campaign>("/api/v1/campaigns", {
+          method: "POST",
+          body: payload as unknown as Record<string, unknown>,
+        });
+        setDraftId(campaign.id);
+        track("campaign_created", { campaign_id: campaign.id });
+      }
+      await api(`/api/v1/campaigns/${campaign.id}/start`, { method: "POST" });
+      return campaign;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["campaigns"] });
+      toast.success("Campaign launched");
       navigate({ to: "/campaigns" });
     },
     onError: (e) => toast.error(errMsg(e)),
@@ -274,11 +334,16 @@ function CampaignBuilder() {
         title="New campaign"
         right={
           <>
+            <DraftStatus
+              saving={saveDraftMut.isPending}
+              savedAt={savedAt}
+              hasDraft={!!draftId}
+            />
             <button
               className="btn btn--ghost btn--sm"
               onClick={() => navigate({ to: "/campaigns" })}
             >
-              Cancel
+              {draftId ? "Close" : "Cancel"}
             </button>
             <button
               className="btn btn--primary btn--sm"
@@ -524,10 +589,14 @@ function CampaignBuilder() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  disabled={!canNext}
-                  onClick={() => setStep((s) => s + 1)}
+                  disabled={!canNext || saveDraftMut.isPending}
+                  onClick={() => void goNext()}
                 >
-                  Continue <ChevronRight size={14} />
+                  {saveDraftMut.isPending ? (
+                    <><Loader2 size={14} className="ob__spin" /> Saving…</>
+                  ) : (
+                    <>Continue <ChevronRight size={14} /></>
+                  )}
                 </button>
               ) : (
                 <button
@@ -551,7 +620,46 @@ function CampaignBuilder() {
   );
 }
 
+/* ---------------- Draft auto-save indicator ---------------- */
+function DraftStatus({
+  saving,
+  savedAt,
+  hasDraft,
+}: {
+  saving: boolean;
+  savedAt: number | null;
+  hasDraft: boolean;
+}) {
+  let label = "";
+  if (saving) label = "Saving draft…";
+  else if (savedAt) {
+    const secs = Math.max(0, Math.round((Date.now() - savedAt) / 1000));
+    label = secs < 5 ? "Draft saved" : hasDraft ? "Draft" : "";
+  } else if (hasDraft) label = "Draft";
+  if (!label) return null;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 12,
+        color: "var(--text-muted)",
+        padding: "0 10px",
+      }}
+    >
+      {saving ? (
+        <Loader2 size={12} className="ob__spin" />
+      ) : (
+        <Check size={12} style={{ color: "var(--success)" }} />
+      )}
+      {label}
+    </span>
+  );
+}
+
 /* ---------------- Step 1: Brief ---------------- */
+
 function BriefStep({
   name,
   setName,
