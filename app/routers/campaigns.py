@@ -207,7 +207,12 @@ async def _campaign_to_response(
     db: AsyncSession, ctx: AuthCtx, campaign: Campaign
 ) -> CampaignResponse:
     attached = await _build_attached_senders(db, ctx, campaign.id)
-    is_exhausted = await _compute_is_exhausted(db, campaign.id, campaign.folder_id)
+    # 024: draft без папки не может быть «исчерпан» — рассылать некуда. Short-circuit
+    # вместо вызова _compute_is_exhausted с folder_id=None (даст бессмысленный SQL).
+    if campaign.folder_id is None:
+        is_exhausted = False
+    else:
+        is_exhausted = await _compute_is_exhausted(db, campaign.id, campaign.folder_id)
     return CampaignResponse(
         id=campaign.id,
         workspace_id=campaign.workspace_id,
@@ -287,8 +292,12 @@ async def create_campaign(
     5. Duplicate name → 409
     """
     _validate_timezone(payload.timezone)
-    await _validate_workspace_owns_agent(db, ctx, payload.agent_id)
-    await _validate_workspace_owns_folder(db, ctx, payload.folder_id)
+    # 024: agent/folder опциональны для draft — валидируем принадлежность workspace
+    # только когда значение передано (None = ещё не заполнено в визарде).
+    if payload.agent_id is not None:
+        await _validate_workspace_owns_agent(db, ctx, payload.agent_id)
+    if payload.folder_id is not None:
+        await _validate_workspace_owns_folder(db, ctx, payload.folder_id)
     if payload.sender_ids:
         await _validate_workspace_owns_senders(db, ctx, payload.sender_ids)
 
@@ -312,7 +321,8 @@ async def create_campaign(
         description=payload.description,
         agent_id=payload.agent_id,
         folder_id=payload.folder_id,
-        message_template=payload.message_template,
+        # message_template nullable=False server_default="" — None превращаем в "" для draft.
+        message_template=payload.message_template or "",
         timezone=payload.timezone,
         work_hour_start=payload.work_hour_start,
         work_hour_end=payload.work_hour_end,
@@ -549,6 +559,23 @@ async def start_campaign(
             status_code=409,
             detail={"code": "INVALID_TRANSITION",
                     "from": c.status, "to": "running"},
+        )
+
+    # 024: readiness-guard — draft мог быть сохранён незавершённым; перед запуском
+    # обязательны agent/folder/template. NO_SENDERS_ATTACHED проверяется ниже.
+    missing = []
+    if c.agent_id is None:
+        missing.append("agent_id")
+    if c.folder_id is None:
+        missing.append("folder_id")
+    if not (c.message_template or "").strip():
+        missing.append("message_template")
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CAMPAIGN_INCOMPLETE",
+                    "message": "Campaign is missing required fields before start",
+                    "missing": missing},
         )
 
     sender_count = (await db.execute(

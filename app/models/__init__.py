@@ -467,12 +467,14 @@ class Campaign(Base):
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
+    # 024: nullable для незавершённого draft (agent/folder заполняются позже через PATCH;
+    # обязательность проверяется только на POST /{id}/start). FK RESTRICT остаётся.
     agent_id = Column(UUID(as_uuid=True),
                       ForeignKey("ai_contexts.id", ondelete="RESTRICT"),
-                      nullable=False)
+                      nullable=True)
     folder_id = Column(UUID(as_uuid=True),
                        ForeignKey("folders.id", ondelete="RESTRICT"),
-                       nullable=False)
+                       nullable=True)
     name = Column(String(150), nullable=False)
     description = Column(Text, nullable=True)
     # CHECK ('draft','running','paused','done') enforced in DB (CONSTRAINT campaigns_status_check)
