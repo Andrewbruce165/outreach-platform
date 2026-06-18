@@ -128,6 +128,10 @@ async def _setup_database():
             "016_phase4.sql",
             "017_phase5.sql",
             "018_phase5_1.sql",
+            # 026: allow_recontact columns come from ORM create_all (ADD COLUMN
+            # IF NOT EXISTS are no-ops here), but the conversations.updated_at
+            # freshness trigger is SQL-only — apply it so recontact tests see it.
+            "026_campaign_allow_recontact.sql",
         ):
             sql_text = (PROJECT_ROOT / "migrations" / filename).read_text()
             await asyncpg_conn.execute(sql_text)
@@ -429,15 +433,18 @@ async def test_contacts_factory(
     async def _make(count: int = 1, tg_status: str = "pending", **overrides):
         contacts = []
         for i in range(count):
-            c = Contact(
+            # defaults + update so any field (full_name, phone, …) is overridable
+            # without a duplicate-keyword TypeError.
+            fields = dict(
                 workspace_id=test_workspace.id,
                 folder_id=test_folder.id,
                 phone=f"+7901000{i:04d}",
                 full_name=f"Contact {i}",
                 source="test",
                 tg_status=tg_status,
-                **overrides,
             )
+            fields.update(overrides)
+            c = Contact(**fields)
             async_db_session.add(c)
             contacts.append(c)
         await async_db_session.commit()

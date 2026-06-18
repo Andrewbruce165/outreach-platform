@@ -416,9 +416,17 @@ class TelegramListener:
         Raises: SQLAlchemyError если не удалось выполнить операцию
         """
         try:
-            # Ищем существующий
+            # Ищем существующий. ORDER BY created_at DESC LIMIT 1 — новейший
+            # диалог выигрывает (migration 026): входящие роутятся в свежий
+            # fresh-start диалог, а не в старый. Попутно чинит латентный
+            # недетерминизм fetchone() когда на один peer >1 строки conversations.
             result = await session.execute(
-                text("SELECT id, ai_enabled, ai_context_id, status FROM conversations WHERE sender_id = :sender_id AND contact_telegram_id = :tg_id"),
+                text("""
+                    SELECT id, ai_enabled, ai_context_id, status
+                    FROM conversations
+                    WHERE sender_id = :sender_id AND contact_telegram_id = :tg_id
+                    ORDER BY created_at DESC LIMIT 1
+                """),
                 {"sender_id": sender_id, "tg_id": contact_telegram_id}
             )
             row = result.fetchone()

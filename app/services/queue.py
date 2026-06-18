@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
 from app.models import MessageQueue, QueueItemStatus, QueueItemType, Sender, MessageLog, MessageType
 from app.services.telegram import telegram_service, SessionAuthError
+from app.services.recontact import protected_conversation_sql
 from telethon.errors import FloodWaitError
 from sqlalchemy import text
 
@@ -862,35 +863,65 @@ class QueueWorker:
                 or item.recipient_phone
             )
 
-            r = await db.execute(
-                text("SELECT id FROM conversations WHERE sender_id = :sid AND contact_telegram_id = :tg_id"),
-                {"sid": str(sender.id), "tg_id": recipient_tg_id}
+            # Campaign re-contact policy (migration 026). Fetched once; drives
+            # both ai_context derivation (Phase 4 D-05) and whether a stale/closed
+            # dialog may be reused. Defaults (no campaign / legacy item): strict.
+            #  - campaign_id from item.campaign_id (Phase 4 column).
+            #  - ai_context_id from campaigns.agent_id, else item.extra_data.
+            campaign_id_str: Optional[str] = (
+                str(item.campaign_id) if item.campaign_id else None
             )
-            conv_row = r.fetchone()
+            ai_ctx_id: Optional[str] = None
+            allow_recontact = False
+            recontact_age = 30
+            if campaign_id_str is not None:
+                camp_row = (await db.execute(
+                    text("""
+                        SELECT agent_id, allow_recontact, recontact_min_age_days
+                        FROM campaigns WHERE id = :cid
+                    """),
+                    {"cid": campaign_id_str},
+                )).fetchone()
+                if camp_row is not None:
+                    if camp_row.agent_id is not None:
+                        ai_ctx_id = str(camp_row.agent_id)
+                    allow_recontact = bool(camp_row.allow_recontact)
+                    recontact_age = int(camp_row.recontact_min_age_days)
+            if ai_ctx_id is None:
+                # Legacy fallback for queue items without campaign_id.
+                ai_ctx_id = (item.extra_data or {}).get("ai_context_id")
+
+            # Find an existing conversation for this (sender, peer). Under
+            # allow_recontact only a PROTECTED (live & fresh) dialog is reused —
+            # a closed/stale one falls through to a new row (empty AI history =
+            # real fresh start), sharing the predicate with campaign_enqueue via
+            # recontact.py. Strict mode reuses any match. Both ORDER BY ... LIMIT
+            # 1 for determinism when duplicate rows exist (newest wins).
+            if allow_recontact:
+                lookup_sql = f"""
+                    SELECT id FROM conversations
+                    WHERE sender_id = :sid AND contact_telegram_id = :tg_id
+                      AND {protected_conversation_sql("age_days")}
+                    ORDER BY updated_at DESC LIMIT 1
+                """
+                lookup_params = {
+                    "sid": str(sender.id),
+                    "tg_id": recipient_tg_id,
+                    "age_days": recontact_age,
+                }
+            else:
+                lookup_sql = """
+                    SELECT id FROM conversations
+                    WHERE sender_id = :sid AND contact_telegram_id = :tg_id
+                    ORDER BY created_at DESC LIMIT 1
+                """
+                lookup_params = {"sid": str(sender.id), "tg_id": recipient_tg_id}
+
+            conv_row = (await db.execute(text(lookup_sql), lookup_params)).fetchone()
 
             if conv_row:
                 conversation_id = str(conv_row[0])
             else:
-                # Phase 4 D-05 resolution:
-                #  - campaign_id is taken directly from item.campaign_id (new column).
-                #  - ai_context_id is derived from campaigns.agent_id via JOIN if
-                #    campaign_id is set, else falls back to item.extra_data
-                #    (legacy queue items written before Phase 4).
-                campaign_id_str: Optional[str] = (
-                    str(item.campaign_id) if item.campaign_id else None
-                )
-                ai_ctx_id: Optional[str] = None
-                if campaign_id_str is not None:
-                    camp_row = (await db.execute(
-                        text("SELECT agent_id FROM campaigns WHERE id = :cid"),
-                        {"cid": campaign_id_str},
-                    )).fetchone()
-                    if camp_row is not None and camp_row.agent_id is not None:
-                        ai_ctx_id = str(camp_row.agent_id)
-                if ai_ctx_id is None:
-                    # Legacy fallback for queue items without campaign_id.
-                    ai_ctx_id = (item.extra_data or {}).get("ai_context_id")
-
                 # Phase 02.1 CR-01: workspace_id NOT NULL on conversations after
                 # migration 012 — derive from sender (single source of truth).
                 r2 = await db.execute(

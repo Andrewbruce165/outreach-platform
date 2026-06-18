@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.rotation import get_or_assign_sender
+from app.services.recontact import protected_conversation_sql
 from app.services.template import render_template
 from app.utils.phone import contact_identity_key
 
@@ -88,7 +89,8 @@ class CampaignEnqueueWorker:
         """One tick — process all running campaigns. Returns total enqueued count."""
         async with AsyncSessionLocal() as db:
             campaigns_rows = await db.execute(text("""
-                SELECT id, workspace_id, folder_id, message_template, start_date
+                SELECT id, workspace_id, folder_id, message_template, start_date,
+                       allow_recontact, recontact_min_age_days
                 FROM campaigns
                 WHERE status = 'running'
             """))
@@ -111,11 +113,28 @@ class CampaignEnqueueWorker:
         AUDIT Q5: INSERT cca + INSERT message_queue inside one savepoint —
         rollback if any fails; next tick re-selects the same contact.
         """
+        # Cross-campaign dedup (migration 026): by default never re-touch a
+        # contact who already has ANY conversation in this workspace. When the
+        # campaign opts in via allow_recontact, only a PROTECTED (live & fresh)
+        # dialog blocks — closed/stale ones become eligible again. The protected
+        # predicate is shared with queue._upsert_conversation via recontact.py.
+        params = {
+            "fid": str(c.folder_id),
+            "wid": str(c.workspace_id),
+            "cid": str(c.id),
+            "lim": self.batch_size,
+        }
+        if getattr(c, "allow_recontact", False):
+            conv_dedup_filter = "AND " + protected_conversation_sql("age_days")
+            params["age_days"] = int(c.recontact_min_age_days)
+        else:
+            conv_dedup_filter = ""  # strict: any conversation blocks re-contact
+
         # SELECT eligible contacts (Pitfall 8: explicit workspace_id guard in WHERE).
         # M4 (revision per plan): tg_status='registered' confirmed in CHECK
         # constraint of migration 013 (lines 39-40).
         contacts_rows = await db.execute(
-            text("""
+            text(f"""
                 SELECT id, phone, full_name, username, source, custom,
                        workspace_id, folder_id
                 FROM contacts
@@ -128,23 +147,18 @@ class CampaignEnqueueWorker:
                       SELECT contact_phone FROM campaign_contact_assignments
                       WHERE campaign_id = :cid
                   )
-                  -- Cross-campaign dedup: never re-touch a contact who already
-                  -- has a conversation in this workspace. Survives campaign
-                  -- deletion (conversations.campaign_id is SET NULL, not CASCADE),
-                  -- so a re-run / copied campaign over the same folder won't
+                  -- Cross-campaign dedup: survives campaign deletion
+                  -- (conversations.campaign_id is SET NULL, not CASCADE), so a
+                  -- re-run / copied campaign over the same folder won't
                   -- re-introduce itself to someone we're already talking to.
                   AND COALESCE(phone, '@' || username) NOT IN (
                       SELECT contact_phone FROM conversations
                       WHERE workspace_id = :wid AND contact_phone IS NOT NULL
+                      {conv_dedup_filter}
                   )
                 LIMIT :lim
             """),
-            {
-                "fid": str(c.folder_id),
-                "wid": str(c.workspace_id),
-                "cid": str(c.id),
-                "lim": self.batch_size,
-            },
+            params,
         )
         contacts = contacts_rows.fetchall()
         if not contacts:

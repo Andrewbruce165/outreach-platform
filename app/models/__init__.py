@@ -503,6 +503,13 @@ class Campaign(Base):
     primary_goal = Column(String(20), nullable=True)
     success_criteria = Column(Text, nullable=True)
     webhook_url = Column(Text, nullable=True)
+    # 026: per-campaign re-contact policy. allow_recontact=false (default) keeps
+    # the strict cross-campaign dedup — never re-touch anyone with an existing
+    # conversation. When true, only "protected" (active & fresh) dialogs block;
+    # closed/stale ones are eligible again. recontact_min_age_days = staleness
+    # threshold for "fresh".
+    allow_recontact = Column(Boolean, nullable=False, server_default="false")
+    recontact_min_age_days = Column(Integer, nullable=False, server_default="30")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(),
                         onupdate=func.now(), nullable=False)
