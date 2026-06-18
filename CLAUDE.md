@@ -28,7 +28,7 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 - Python 3.11+, FastAPI, SQLAlchemy 2.0 async, PostgreSQL 16
 - Telethon (Telegram MTProto), OpenAI (gpt-4o-mini)
 - Docker Compose: 3 сервиса — db, api, listener
-- Фронт: Lovable (React, отдельный репо)
+- Фронт: TanStack Start (React, TypeScript, Vite, bun, shadcn), генерится через Lovable. Отдельный репо `AGS-Venture-Lab/aimly-tg-outreach`, локально склонирован сиблингом в `/root/apps/aimly/aimly-tg-outreach`. Деплой — Cloudflare (`wrangler.jsonc`)
 - Хостинг: VPS DigitalOcean
 
 ---
@@ -102,7 +102,9 @@ docker compose up -d --build listener
 
 **Сервер:** /root/apps/aimly/tg-outreach/ (VPS DigitalOcean, 134.209.239.97)
 **Старый продакшн:** /root/apps/telegram-api/ — не трогаем, работает независимо
-**GitHub:** git@github.com:Andrewbruce165/outreach-platform.git
+**GitHub (бэкенд):** git@github.com:Andrewbruce165/outreach-platform.git
+
+**Фронтенд (отдельный репо):** `/root/apps/aimly/aimly-tg-outreach` — origin `https://github.com/AGS-Venture-Lab/aimly-tg-outreach.git`. Это **независимый** репо: коммиты внутри этой папки летят в `AGS-Venture-Lab/aimly-tg-outreach`, коммиты в `tg-outreach` (включая `.planning/`) — в `Andrewbruce165/outreach-platform`. Карта кода `.planning/codebase/` описывает оба репо как единую систему.
 
 ### Сетевая топология (важно)
 
