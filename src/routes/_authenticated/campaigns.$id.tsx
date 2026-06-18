@@ -174,6 +174,16 @@ function CampaignDetailPage() {
       />
 
       <div className="scroll" style={{ flex: 1, padding: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={() => navigate({ to: "/campaigns" })}
+          >
+            <ArrowLeft size={14} /> Back
+          </button>
+          {c && <StatusPill status={c.status} />}
+        </div>
+
         {actionError && (
           <div
             className="card"
