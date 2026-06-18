@@ -22,11 +22,11 @@ const VOICE_OPTIONS = ["Professional", "Friendly", "Playful"] as const;
 
 const agentSchema = z.object({
   name: z.string().min(1, "Required").max(100),
-  who_is_agent: z.string().max(500).optional().or(z.literal("")),
-  company_info: z.string().max(2000).optional().or(z.literal("")),
-  product_info: z.string().max(2000).optional().or(z.literal("")),
+  who_is_agent: z.string().optional().or(z.literal("")),
+  company_info: z.string().optional().or(z.literal("")),
+  product_info: z.string().optional().or(z.literal("")),
   voice_baseline: z.enum(VOICE_OPTIONS).optional().or(z.literal("")),
-  rules: z.string().max(2000).optional().or(z.literal("")),
+  rules: z.string().optional().or(z.literal("")),
   max_message_length: z
     .union([z.coerce.number().int().min(1).max(4096), z.literal("")])
     .optional(),
