@@ -72,6 +72,13 @@ export function EditCampaignModal({
   const [days, setDays] = useState<string[]>(
     daysFromMask(campaign.work_days_mask ?? 0),
   );
+  // 026: per-campaign re-contact policy.
+  const [allowRecontact, setAllowRecontact] = useState(
+    campaign.allow_recontact ?? false,
+  );
+  const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(
+    campaign.recontact_min_age_days ?? 30,
+  );
   const [startDate, setStartDate] = useState(toDateInput(campaign.start_date));
   const [stopDate, setStopDate] = useState(toDateInput(campaign.stop_date));
   const [audienceHints, setAudienceHints] = useState(
@@ -127,6 +134,8 @@ export function EditCampaignModal({
         work_hour_start: hourStart,
         work_hour_end: hourEnd,
         work_days_mask: maskFromDays(days),
+        allow_recontact: allowRecontact,
+        recontact_min_age_days: recontactMinAgeDays,
         start_date: startDate ? new Date(startDate).toISOString() : null,
         stop_date: stopDate ? new Date(stopDate).toISOString() : null,
         audience_hints: audienceHints || null,
@@ -161,6 +170,8 @@ export function EditCampaignModal({
         work_hour_start: campaign.work_hour_start ?? null,
         work_hour_end: campaign.work_hour_end ?? null,
         work_days_mask: campaign.work_days_mask ?? null,
+        allow_recontact: campaign.allow_recontact ?? false,
+        recontact_min_age_days: campaign.recontact_min_age_days ?? 30,
         start_date: origDate(campaign.start_date),
         stop_date: origDate(campaign.stop_date),
         audience_hints: campaign.audience_hints ?? null,
@@ -430,6 +441,61 @@ export function EditCampaignModal({
               })}
             </div>
           </div>
+
+          <div style={fieldStyle}>
+            <label
+              style={{ ...labelStyle, display: "flex", alignItems: "center", justifyContent: "space-between" }}
+            >
+              <span>Re-contact closed conversations</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={allowRecontact}
+                onClick={() => setAllowRecontact(!allowRecontact)}
+                style={{
+                  width: 44,
+                  height: 24,
+                  borderRadius: 999,
+                  background: allowRecontact ? "var(--tg-blue)" : "var(--bg-soft)",
+                  position: "relative",
+                  border: "1px solid var(--border)",
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: allowRecontact ? 22 : 2,
+                    width: 18,
+                    height: 18,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 120ms",
+                    boxShadow: "0 1px 2px rgba(0,0,0,.2)",
+                  }}
+                />
+              </button>
+            </label>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              Message contacts whose dialog is finished or long inactive. Live conversations
+              (lead / handoff / in progress) are never interrupted.
+            </span>
+          </div>
+
+          {allowRecontact && (
+            <div style={fieldStyle}>
+              <label style={labelStyle}>Keep dialogs untouched if active within (days)</label>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                style={inputStyle}
+                value={recontactMinAgeDays}
+                onChange={(e) => setRecontactMinAgeDays(Number(e.target.value))}
+              />
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div style={fieldStyle}>

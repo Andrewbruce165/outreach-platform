@@ -1783,6 +1783,16 @@ export interface components {
             success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
+            /**
+             * Allow Recontact
+             * @default false
+             */
+            allow_recontact: boolean;
+            /**
+             * Recontact Min Age Days
+             * @default 30
+             */
+            recontact_min_age_days: number;
         };
         /** CampaignListResponse */
         CampaignListResponse: {
@@ -1860,6 +1870,16 @@ export interface components {
             success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
+            /**
+             * Allow Recontact
+             * @default false
+             */
+            allow_recontact: boolean;
+            /**
+             * Recontact Min Age Days
+             * @default 30
+             */
+            recontact_min_age_days: number;
             /** Attached Senders */
             attached_senders?: components["schemas"]["CampaignSenderAttach"][];
             /**
@@ -1948,6 +1968,10 @@ export interface components {
             success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
+            /** Allow Recontact */
+            allow_recontact?: boolean | null;
+            /** Recontact Min Age Days */
+            recontact_min_age_days?: number | null;
         };
         /** ContactImportPreviewResponse */
         ContactImportPreviewResponse: {

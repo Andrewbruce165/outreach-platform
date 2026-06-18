@@ -113,6 +113,9 @@ function CampaignBuilder() {
   const [hourStart, setHourStart] = useState(9);
   const [hourEnd, setHourEnd] = useState(20);
   const [days, setDays] = useState<string[]>(["mon", "tue", "wed", "thu", "fri"]);
+  // 026: per-campaign re-contact policy. Off by default — strict no-re-touch.
+  const [allowRecontact, setAllowRecontact] = useState(false);
+  const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(30);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
   // lead_trigger_hint — plain-English condition that tells the AI when a conversation
@@ -179,6 +182,8 @@ function CampaignBuilder() {
     work_hour_start: hourStart,
     work_hour_end: hourEnd,
     work_days_mask: maskFromDays(days),
+    allow_recontact: allowRecontact,
+    recontact_min_age_days: recontactMinAgeDays,
     audience_hints: audienceHints || null,
     primary_goal: primaryGoal || null,
     success_criteria: successCriteria || null,
@@ -539,6 +544,10 @@ function CampaignBuilder() {
                   setTz={setTz}
                   messageTemplate={messageTemplate}
                   setMessageTemplate={setMessageTemplate}
+                  allowRecontact={allowRecontact}
+                  setAllowRecontact={setAllowRecontact}
+                  recontactMinAgeDays={recontactMinAgeDays}
+                  setRecontactMinAgeDays={setRecontactMinAgeDays}
                 />
               )}
               {cur.id === "integrations" && (
@@ -1172,6 +1181,10 @@ function ScheduleStep({
   setTz,
   messageTemplate,
   setMessageTemplate,
+  allowRecontact,
+  setAllowRecontact,
+  recontactMinAgeDays,
+  setRecontactMinAgeDays,
 }: {
   days: string[];
   setDays: (v: string[]) => void;
@@ -1183,6 +1196,10 @@ function ScheduleStep({
   setTz: (v: string) => void;
   messageTemplate: string;
   setMessageTemplate: (v: string) => void;
+  allowRecontact: boolean;
+  setAllowRecontact: (v: boolean) => void;
+  recontactMinAgeDays: number;
+  setRecontactMinAgeDays: (v: number) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1261,6 +1278,65 @@ function ScheduleStep({
           <code>&#123;&#123;username&#125;&#125;</code> as placeholders.
         </span>
       </div>
+
+      <div className="field">
+        <label
+          className="field__label"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        >
+          <span>Re-contact closed conversations</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={allowRecontact}
+            onClick={() => setAllowRecontact(!allowRecontact)}
+            style={{
+              width: 44,
+              height: 24,
+              borderRadius: 999,
+              background: allowRecontact ? "var(--tg-blue)" : "var(--bg-soft)",
+              position: "relative",
+              transition: "background 120ms",
+              border: "1px solid var(--border, rgba(0,0,0,.1))",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: allowRecontact ? 22 : 2,
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: "white",
+                transition: "left 120ms",
+                boxShadow: "0 1px 2px rgba(0,0,0,.2)",
+              }}
+            />
+          </button>
+        </label>
+        <span className="field__hint">
+          Message contacts whose dialog is finished or long inactive. Live conversations
+          (lead / handoff / in progress) are never interrupted by a cold opener.
+        </span>
+      </div>
+
+      {allowRecontact && (
+        <div className="field">
+          <label className="field__label">Keep dialogs untouched if active within (days)</label>
+          <input
+            className="input"
+            type="number"
+            min={1}
+            max={365}
+            value={recontactMinAgeDays}
+            onChange={(e) => setRecontactMinAgeDays(Number(e.target.value))}
+          />
+          <span className="field__hint">
+            A dialog counts as &quot;live&quot; if it had activity within this many days. Default 30.
+          </span>
+        </div>
+      )}
 
       <div
         style={{
