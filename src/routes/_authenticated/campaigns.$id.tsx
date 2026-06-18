@@ -107,20 +107,9 @@ function CampaignDetailPage() {
   return (
     <>
       <Topbar
-        title={
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button
-              className="tb__icon-btn"
-              onClick={() => navigate({ to: "/campaigns" })}
-              aria-label="Back to campaigns"
-              style={{ width: 32, height: 32 }}
-            >
-              <ArrowLeft size={16} />
-            </button>
-            <span>{c?.name ?? "Campaign"}</span>
-            {c && <StatusPill status={c.status} />}
-          </div>
-        }
+        title={c?.name ?? "Campaign"}
+        crumbs={[{ label: "Campaigns", href: "/campaigns" }, { label: c?.name ?? "…" }]}
+
         right={
           c && (
             <>
