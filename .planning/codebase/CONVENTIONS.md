@@ -1,160 +1,248 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-04-02
-
-## Naming Patterns
-
-**Files:**
-- `snake_case.py` for all Python modules (`queue.py`, `ai_engine.py`, `check_contacts.py`)
-- Routers named after the resource they serve (`senders.py`, `contexts.py`, `conversations.py`)
-- Services named after the system they wrap (`telegram.py`, `encryption.py`, `rotation.py`)
-- No test files exist in the codebase
-
-**Functions:**
-- `snake_case` for all functions and methods
-- `async def` for all database-touching and I/O functions — no sync wrappers
-- Private methods prefixed with `_` (e.g., `_run`, `_tick`, `_process_next_for_sender`, `_check_rate_limits`)
-- Standalone private helpers prefixed with `_` (e.g., `_set_auth_status`, `_estimate_send_time`)
-- Worker class methods follow `_verb_noun` pattern (`_get_long_pause_seconds`, `_fail_item`, `_fire_callback`)
-
-**Variables:**
-- `snake_case` for variables and function parameters
-- `UPPER_SNAKE_CASE` for module-level constants (e.g., `MIN_SEND_INTERVAL`, `MAX_MSGS_PER_HOUR`, `LONG_PAUSE_MIN_SECS`)
-- Private instance attributes prefixed with `_` (e.g., `self._task`, `self._running`, `self._idle_event`)
-- DB session parameter always named `db`: `db: AsyncSession`
-- Settings instance always named `settings`
-
-**Types/Classes:**
-- `PascalCase` for all classes (`QueueWorker`, `AIEngine`, `SessionAuthError`, `ResilientTelegramClient`)
-- `PascalCase` for Pydantic models (`SendMessageRequest`, `SenderResponse`, `BatchSendRequest`)
-- `PascalCase` for SQLAlchemy models (`Sender`, `MessageQueue`, `AIContext`, `WarmupSession`)
-- Python `enum.Enum` subclasses use `PascalCase` names, lowercase values (`QueueItemStatus.pending`, `MessageType.sent`)
-- Custom exceptions extend `Exception` with `Error` suffix (`SessionAuthError`)
-
-## Code Style
-
-**Formatting:**
-- No Prettier/Black/Ruff config detected — formatting is manual/editor-driven
-- 4-space indentation throughout
-- Blank lines used to separate logical blocks within functions
-- Section separators use `# ── Section name ──────────────` pattern (visible in `queue.py`, `models/__init__.py`)
-
-**Linting:**
-- No linter config detected (no `.flake8`, `ruff.toml`, `pyproject.toml`)
-- Enforce manually: no `time.sleep()`, no `print()`, no sync `requests`
-
-## Import Organization
-
-**Order observed:**
-1. Standard library (`asyncio`, `logging`, `random`, `datetime`, `os`, `typing`)
-2. Third-party packages (`fastapi`, `sqlalchemy`, `telethon`, `openai`, `pydantic`, `httpx`)
-3. Internal app modules (`from app.config import ...`, `from app.database import ...`, `from app.models import ...`, `from app.schemas import ...`, `from app.services.X import ...`, `from app.routers.X import ...`)
-
-**Grouping:**
-- Blank line between standard library and third-party groups
-- Blank line between third-party and internal groups
-- No blank lines within each group
-
-**Path Aliases:**
-- None — all imports use `app.` prefix (e.g., `from app.models import Sender`)
-- Lazy imports inside function bodies are used in some routers to avoid circular imports (e.g., `from sqlalchemy.orm import selectinload` inside functions in `senders.py`)
-
-## Error Handling
-
-**Patterns in routers:**
-- Return structured error responses (not raise) for expected failures in `/send` and `/send-file`:
-  ```python
-  return EnqueueResponse(
-      success=False,
-      queued=False,
-      timestamp=datetime.now(timezone.utc),
-      error={"code": "SENDER_NOT_FOUND", "message": "..."}
-  )
-  ```
-- Raise `HTTPException` for hard failures (404, 400, 409) in CRUD endpoints like `/senders` and `/send-batch`
-- All `HTTPException` details use dicts with `code` and `message` keys when structured, or plain strings for simple cases
-
-**Patterns in services:**
-- Raise custom exceptions (`SessionAuthError`, `ValueError`) to propagate failures to callers
-- Callers catch specific exception types and convert to HTTP responses
-- `try/except Exception` with `logger.error(..., exc_info=True)` as the outer catch-all in long-running workers
-- `finally` blocks always used to disconnect Telegram clients: `await telegram_service.disconnect_client(client)`
-
-**FloodWait handling:**
-- Telethon `FloodWaitError` caught explicitly throughout `queue.py` and `listener.py`
-- Never break retry logic without explicit discussion (empirically tuned)
-
-## Logging
-
-**Framework:**
-- Standard library `logging` module throughout
-- Each module creates its own logger: `logger = logging.getLogger(__name__)`
-- Root logging configured once in `app/main.py` with format `"%(asctime)s - %(name)s - %(levelname)s - %(message)s"`
-
-**Patterns:**
-- `logger.info(f"...")` for state transitions and successful operations
-- `logger.warning(f"...")` for recoverable issues (rate limits, missing data, partial failures)
-- `logger.error(f"...", exc_info=True)` for unexpected exceptions — always include `exc_info=True`
-- `logger.debug(f"...")` for high-frequency events (per-message details, timer ticks)
-- Emoji prefixes used in `listener.py` log messages for visual scanning (📨, ✅, ⚠️, ❌, 📤)
-- API keys and session strings are never logged — only slugs and truncated IDs
-
-**Log content pattern:**
-- Always include the entity slug or truncated ID for traceability: `f"[{slug}] ..."` or `f"...{queue_id[:8]}..."`
-
-## Comments
-
-**When to Comment:**
-- Module-level docstrings explain the purpose and key constraints of the module (see `queue.py` header with rate limits documented)
-- Class docstrings explain the role of the class
-- Method docstrings explain algorithm steps for non-obvious logic (see `get_or_assign_sender` in `rotation.py`)
-- Inline comments explain the *why* behind hardcoded values: `# conservative: Telegram bans at ~30/h to new contacts`
-- Section dividers group related constants: `# ── Rate-limit config ────────────────`
-
-**Docstrings:**
-- Used on classes and non-trivial methods
-- Plain text style (no Google/NumPy format)
-- FastAPI endpoint docstrings appear in `/docs` — write them as user-facing descriptions
-
-**TODO Comments:**
-- Format: `# TODO: description` — one instance found in `queue.py:480`
-- No issue number tracking
-
-## Function Design
-
-**Size:**
-- Service functions are long (50–200+ lines) because they contain complete workflows — not split into helpers
-- Router handlers are medium (30–80 lines) with inline DB queries rather than extracted service calls
-- Utility functions (`encrypt_session`, `decrypt_session`, `build_proxy_tuple`) are small and focused
-
-**Parameters:**
-- DB session always passed as first or explicit keyword parameter: `db: AsyncSession`
-- Configuration passed via `get_settings()` — not injected into function signatures
-- Functions with many parameters use keyword-only style (no positional `*args`)
-
-**Return Values:**
-- Async functions return domain objects, dicts, or Pydantic models — never plain tuples in public APIs
-- Internal helpers may return `Optional[int]` or `None` as signals
-- Early returns used for guard clauses throughout routers
-
-## Module Design
-
-**Exports:**
-- `app/models/__init__.py` contains all SQLAlchemy models — single import point for models
-- `app/schemas/__init__.py` contains all Pydantic schemas — single import point for schemas
-- Services are imported by name: `from app.services.telegram import telegram_service`
-- Routers register themselves: `router = APIRouter(prefix="/api/v1/...", tags=[...])`
-
-**Barrel Files:**
-- `app/models/__init__.py` and `app/schemas/__init__.py` act as barrels
-- `app/services/__init__.py` and `app/routers/__init__.py` are empty (not used for re-exports)
-
-**Singleton Pattern:**
-- Service instances created at module level and imported: `telegram_service = TelegramService()` in `telegram.py`
-- Worker instances created at module level: `queue_worker = QueueWorker()` in `queue.py`
-- Settings cached with `@lru_cache()` in `config.py`
+**Analysis Date:** 2026-06-18
 
 ---
 
-*Convention analysis: 2026-04-02*
-*Update when patterns change*
+## Backend (Python)
+
+### Naming Patterns
+
+**Files:**
+- Modules use `snake_case`: `ai_engine.py`, `queue.py`, `campaign_enqueue.py`
+- Routers mirror the resource name: `campaigns.py`, `conversations.py`, `senders.py`
+- Tests prefixed `test_`: `test_campaign_router.py`, `test_phase5_1_core_value_e2e.py`
+- Migration files: `NNN_short_name.sql` (e.g. `016_phase4.sql`, `026_campaign_allow_recontact.sql`)
+
+**Functions:**
+- Public service functions: `snake_case` — `enqueue_message`, `get_context`, `notify_signal`
+- Private helpers: leading underscore — `_make_campaign`, `_load_conversation_or_404`, `_campaign_in_working_window`
+- Async functions for all DB/network I/O — no sync variants
+
+**Classes:**
+- ORM models: `PascalCase` — `Workspace`, `CampaignSender`, `WorkspaceApiKey`
+- Pydantic schemas: `PascalCase` with `Request`/`Response` suffix — `CampaignCreate`, `CampaignListResponse`, `SendMessageFromUIRequest`
+- Enum classes: `PascalCase` — `QueueItemStatus`, `MessageType`
+- Service singletons: `snake_case` instance at module level — `ai_engine`, `telegram_service`, `queue_worker`
+
+**Variables:**
+- `snake_case` throughout
+- Constants: `UPPER_SNAKE_CASE` — `MIN_SEND_INTERVAL`, `BUILT_IN_TOOL_NAMES`, `MAX_ATTEMPTS`
+
+### Code Style
+
+**Formatting:**
+- No formatter config present (no Black/isort config); style is consistent but not tooling-enforced
+- Module-level docstrings are standard — every `app/` file begins with a triple-quoted docstring describing phase, endpoints, and constraints
+- Import groups: stdlib → third-party → internal `app.*`, each separated by blank line
+
+**Type annotations:**
+- Function signatures consistently annotated: `async def _load_conversation_or_404(db: AsyncSession, ctx: AuthCtx, conversation_id: UUID) -> dict:`
+- `Optional[str]` used (not `str | None`) in most existing code; `str | None` appears in newer code
+- `from __future__ import annotations` used selectively in newer test files
+
+### Import Organization
+
+**Order (per module):**
+1. `from __future__ import annotations` (when present)
+2. Standard library (`asyncio`, `logging`, `uuid`, `datetime`, etc.)
+3. Third-party (`fastapi`, `sqlalchemy`, `pydantic`, `httpx`, `telethon`)
+4. Internal `app.*` (`app.config`, `app.database`, `app.models`, `app.schemas`, `app.services.*`, `app.utils.*`)
+
+**Deferred imports in tests:**
+- Service-under-test imported inside the test function body to avoid circular or premature module load: `from app.services.ai_engine import ai_engine`
+- ORM models imported at conftest module level only after env vars are set (see `tests/conftest.py`)
+
+### Error Handling
+
+**Router pattern — structured detail dict:**
+```python
+raise HTTPException(
+    status_code=404,
+    detail={"code": "CONVERSATION_NOT_FOUND",
+            "message": "Conversation not found"},
+)
+```
+- Error codes are `UPPER_SNAKE_CASE` strings matching `docs/error-codes.md` on the frontend
+- Cross-workspace resource access returns 404 (not 403) — "cross-workspace = 404, not 403"
+- Global exception handlers in `app/main.py` add CORS headers to all 4xx/5xx responses so browser doesn't mask errors as "CORS blocked"
+
+**Service layer:**
+- Services raise domain exceptions or return `None` for not-found; routers translate to HTTP
+- `SessionAuthError` raised by `app/services/telegram.py` and caught in routers/queue worker
+- `FloodWaitError` from Telethon handled with retry logic — do not modify without explicit discussion
+
+**Validation:**
+- Pydantic `model_validator` used for cross-field validation
+- `AliasChoices` used where frontend sends alternate field names (e.g. `message` vs `message_text` in `SendMessageFromUIRequest`)
+- `Field(...)` required fields annotated with `description=` for OpenAPI docs
+
+### Logging
+
+**Framework:** stdlib `logging`
+
+**Setup pattern (all modules):**
+```python
+logger = logging.getLogger(__name__)
+```
+
+**Log levels:**
+- `logger.info(...)` for lifecycle events (worker start/stop, DB init)
+- `logger.warning(...)` for recoverable anomalies (rate limit hit, FloodWait, invalid timezone)
+- `logger.error(..., exc_info=True)` for unhandled exceptions in background workers
+- `logger.exception(...)` in the global unhandled exception handler in `app/main.py`
+- **Never `print()`** — forbidden by `CLAUDE.md`
+
+### Async Rules
+
+- **Async everywhere**: all DB interactions use `async with AsyncSession`, `await session.execute(...)`, `await session.commit()`
+- `AsyncSessionLocal` used in background workers (no request context); `get_db` dependency used in routers
+- **Never `time.sleep()`** — use `await asyncio.sleep(...)`
+- **Never `requests`** — use `httpx.AsyncClient` or `httpx` async context managers
+
+### Migration Conventions
+
+- Files in `migrations/` named `NNN_short_name.sql`, applied in lexical order
+- Every migration must be **idempotent**: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `DROP TABLE IF EXISTS`, `ON CONFLICT DO NOTHING`, `DO $$ … EXCEPTION duplicate_object $$`
+- Tracked in `schema_migrations` table; auto-applied at api startup via `app/database.py::_apply_migrations`
+- No Alembic — raw SQL only
+
+### Comments
+
+**When to comment:**
+- Every router file has a module-level docstring listing endpoints, phase tags (e.g. `CAMP-01..04`), and key behavioral constraints
+- Inline `# Phase N D-NN:` comments explain non-obvious decisions tied to a specific design decision ID
+- `# TODO(v2):` tags mark deferred work — do not remove
+- `# Pitfall N` comments mark known footguns documented in `AGENTS.md` / `CLAUDE.md`
+
+### Pydantic Schemas
+
+- All schemas in `app/schemas/__init__.py`
+- `BaseModel` with `model_config = ConfigDict(from_attributes=True)` where ORM serialization needed
+- Response models returned by router functions, validated by FastAPI automatically
+- `Optional[X] = None` for nullable fields; `Field(default_factory=dict)` for mutable defaults
+
+---
+
+## Frontend (TypeScript/React)
+
+### AGENTS.md Rules (Authoritative)
+
+The file `/root/apps/aimly/aimly-tg-outreach/AGENTS.md` is the canonical frontend contract. These rules are enforced:
+
+1. **No invented backend types.** Import all `/api/v1/*` request/response types from `@/types/api.ts` (auto-generated from backend OpenAPI via `openapi-typescript`). If a type is missing, flag it — do not guess.
+2. **All forms use `react-hook-form` + `zod`.** Zod schemas live in `src/lib/validators/*.ts`.
+3. **All data fetching uses TanStack Query.** Cache keys pattern: `['<resource>', ...params]`. Use `refetchInterval` only where UI-SPEC §5 specifies (inbox = 10s, dashboard = 30s).
+4. **Design tokens come from `src/styles/aimly.css`.** Do not redefine CSS variables inline.
+5. **No new motion libraries.** CSS keyframes only. Always wrap in `@media (prefers-reduced-motion: reduce) { animation: none }`.
+6. **Rate limits 4/20/150 are not configurable in v1** — never offer a UI control for them (hard backend constraint).
+7. **AI accent `--ai-purple #8774e1`** reserved for `<live-dot>`, `<ai-shimmer>`, thought-trace, AI co-pilot panel, launch overlay, AI suggestion chips only.
+8. **Brand "aimly" is always lowercase**, no exclamation marks.
+9. **No `console.log` in committed code.** Use `import.meta.env.DEV` guards if needed.
+10. **All telemetry through `track(event, props)` from `src/lib/telemetry.ts`** — POST to `/api/v1/telemetry/events`. Use `navigator.sendBeacon` on `pagehide`.
+
+### Naming Patterns
+
+**Files:**
+- Components: `PascalCase.tsx` — `AppSidebar.tsx`, `EditCampaignModal.tsx`, `OnboardingFlow.tsx`
+- Route files: dot-separated segments — `campaigns.index.tsx`, `campaigns.$id.tsx`, `campaigns.new.tsx`
+- Lib modules: `kebab-case.ts` — `api.ts`, `error-codes.ts`, `error-capture.ts`, `supabase.ts`, `telemetry.ts`
+- shadcn/ui primitives: `kebab-case.tsx` in `src/components/ui/`
+
+**Functions and variables:**
+- Components: `PascalCase` function declarations — `function AppSidebar(...)`, `function CampaignsPage()`
+- Hooks: `camelCase` with `use` prefix — `useMobile`, `useQuery`, `useMutation`
+- Constants: `UPPER_SNAKE_CASE` for static lookup data — `STATUS_PILL`, `AVATAR_COLORS`, `TABS`
+- Local helpers: `camelCase` — `avatarStyle`, `errMsg`, `buildUrl`
+
+**Types:**
+- Interface names: `PascalCase` — `NavItem`, `Props`, `ApiOptions`
+- Generated OpenAPI types consumed via: `type Campaign = components["schemas"]["CampaignResponse"]`
+- All backend request/response shapes imported from `@/types/api.ts` only
+
+### Code Style
+
+**Prettier config at `/root/apps/aimly/aimly-tg-outreach/.prettierrc`:**
+- `printWidth: 100`
+- `semi: true`
+- `singleQuote: false` — double quotes everywhere
+- `trailingComma: "all"`
+
+**ESLint config at `/root/apps/aimly/aimly-tg-outreach/eslint.config.js`:**
+- `typescript-eslint` recommended rules
+- `eslint-plugin-react-hooks` recommended rules
+- `eslint-plugin-react-refresh` — warns on non-component exports from route files
+- `eslint-plugin-prettier` — formatting enforced as lint errors
+- `@typescript-eslint/no-unused-vars` is **off** (intentional — Lovable-generated files have unused imports)
+- `no-restricted-imports` blocks the `server-only` package (use `*.server.ts` convention instead)
+
+### Import Organization
+
+**Path aliases:** `@/` maps to `src/` (via `vite-tsconfig-paths`)
+
+**Order:**
+1. Framework imports (`react`, `@tanstack/react-router`, `@tanstack/react-query`)
+2. lucide-react icons
+3. Internal `@/components/...`
+4. Internal `@/lib/...`
+5. Internal `@/types/...`
+
+### API Call Pattern
+
+All HTTP calls go through `api<T>(path, opts)` from `src/lib/api.ts`:
+
+```typescript
+const data = await api<CampaignList>("/api/v1/campaigns", { method: "GET" });
+```
+
+- Returns typed `T`, throws `ApiError` on non-2xx
+- `ApiError` carries `.status`, `.code`, `.message`, `.detail`
+- Error codes mapped to user-facing strings via `src/lib/error-codes.ts`
+- 401 + `TOKEN_EXPIRED` dispatches `aimly:auth-expired` custom event for global sign-out
+
+### Error Handling (Frontend)
+
+**Standard component error helper:**
+```typescript
+function errMsg(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  if (e instanceof Error) return e.message;
+  return "Something went wrong";
+}
+```
+
+**Per AGENTS.md requirements:**
+- 401 redirects to `/login` with toast "Your session expired. Sign in again."
+- Error envelope `{code, message}` mapped via `src/lib/error-codes.ts`
+- Empty states use 4-element formula: icon + heading + body + CTA
+
+### Routing
+
+**Framework:** TanStack Router (file-based routing)
+- Route files in `src/routes/`
+- Authenticated subtree: `src/routes/_authenticated.tsx` — `ssr: false`, Supabase session guard in `beforeLoad`
+- Dev bypass in auth guard: `if (import.meta.env.DEV) return` (for Lovable preview)
+- Route tree auto-generated into `src/routeTree.gen.ts` — do not edit manually
+
+### Telemetry
+
+All product events fired via `track(event, props)` from `src/lib/telemetry.ts`. Events are batched and flushed with a 1.5s debounce; `navigator.sendBeacon` is used on `pagehide`. The `TelemetryEvent` union type in `src/lib/telemetry.ts` is the authoritative frontend event list — it must stay in sync with the backend whitelist in `app/routers/telemetry.py::_EVENT_WHITELIST`.
+
+### Authentication
+
+- Supabase magic link auth — `src/lib/supabase.ts`
+- JWT passed as `Authorization: Bearer <token>` on every API call by the `api()` helper
+- Token retrieved via `supabase.auth.getSession()` with 20-retry wait loop (handles auth state hydration lag)
+- Backend verifies via ES256 JWKS (primary) or HS256 secret (legacy fallback) — `app/utils/auth.py`
+- Supabase JWT algorithm must be pinned to HS256 in Supabase Dashboard for legacy path; ES256 is default for new projects
+
+### Accessibility Requirements (per AGENTS.md)
+
+Before a screen is considered done:
+- Lighthouse accessibility >= 90
+- Reduced-motion CSS guard present on all animations
+- All icon-only buttons have `aria-label`
+
+---
+
+*Convention analysis: 2026-06-18*
