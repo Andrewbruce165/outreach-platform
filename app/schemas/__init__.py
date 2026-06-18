@@ -568,10 +568,12 @@ class CampaignCreate(BaseModel):
 
     name: constr(min_length=1, max_length=150)
     description: Optional[str] = None
-    agent_id: UUID
-    folder_id: UUID
+    # 024: optional для draft — кампанию можно сохранить незавершённой и докрутить через PATCH.
+    # Обязательность agent/folder/template проверяется только на POST /{id}/start.
+    agent_id: Optional[UUID] = None
+    folder_id: Optional[UUID] = None
     sender_ids: List[UUID] = Field(default_factory=list)
-    message_template: constr(min_length=1)
+    message_template: Optional[constr(min_length=1)] = None
     timezone: str = "Europe/Moscow"
     work_hour_start: int = Field(default=9, ge=0, le=23)
     work_hour_end: int = Field(default=20, ge=1, le=24)
@@ -639,8 +641,9 @@ class CampaignResponse(BaseModel):
     workspace_id: UUID
     name: str
     description: Optional[str] = None
-    agent_id: UUID
-    folder_id: UUID
+    # 024: nullable на incomplete-draft (agent/folder ещё не заданы).
+    agent_id: Optional[UUID] = None
+    folder_id: Optional[UUID] = None
     status: str  # draft|running|paused|done
     timezone: str
     work_hour_start: int
