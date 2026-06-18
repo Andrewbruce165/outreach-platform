@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 Phase: 6
 Plan: Not started
 Status: Executing Phase 05.1
-Last activity: 2026-05-23
+Last activity: 2026-06-18 - Completed quick task 260618-a97: incomplete-draft campaign support
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
@@ -109,6 +109,37 @@ None yet.
 
 - Phase 4 первым планом — аудит существующего webhook + function calling (вынести с уровня sender/AIContext на уровень кампании)
 - rotation.py:59,89,122,138 still references DROPPED context_contact_assignments table — 04-04 must rewrite per AUDIT TODO #6 (context_id → campaign_id signature)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260618-a97 | Разрешить сохранять неполный draft кампании (agent_id/folder_id/message_template опциональны; обязательность — на /start) | 2026-06-18 | 1b04e9c | [260618-a97-draft-agent-id-folder-id-message-templat](./quick/260618-a97-draft-agent-id-folder-id-message-templat/) |
+
+### Hotfix Log — 2026-05-26 (ui-data-missing incident)
+
+- 13:18:21 UTC: prod outreach_platform schema rebuilt by accidental `docker compose run --rm api pytest` — conftest.py::_setup_database ran `DROP SCHEMA public CASCADE` against the prod DB (`DATABASE_URL` inherited from docker-compose, no test-DB override). All operational data lost; no backups existed.
+- 14:08 UTC: conftest.py guarded against non-test DSN (lines 49–77 + teardown guard at line 156). Smoke test confirms RuntimeError raised before DROP executes.
+- 14:13 UTC: daily pg_dump installed at `/root/apps/aimly/tg-outreach/backup.sh`, crontab `5 3 * * *`, retention 14 days, dump path `/root/backups/tg-outreach/outreach_*.sql.gz`.
+- 14:13 UTC: migrations 017-022 applied idempotently to prod (`messages` table restored, UUID `gen_random_uuid()` defaults on 13 tables, conversations.status default 'active').
+- 14:14 UTC: Task 2 — race condition fix shipped. Migration 023 adds UNIQUE(user_workspaces.supabase_user_id); 3 duplicate workspaces for Andrew deleted (canonical: bb96789d-…); `_resolve_or_create_workspace` rewritten on INSERT ... ON CONFLICT DO NOTHING with orphan-Workspace cleanup. Verified by 3 parallel `[auth] resolved existing workspace=bb96789d-…` log entries.
+- 14:20 UTC: follow-up — `/api/v1/conversations` returned 500 on `senders.telegram_id does not exist`. Root cause: after DROP SCHEMA, `init_db()::create_all` only rebuilt ORM columns; columns added by raw-SQL migrations 001–016 (like `senders.telegram_id` from 006) were not restored because they live in migrations only. Fix: idempotent re-apply of ALL migrations 001-023 to prod. Now `/api/v1/conversations` returns 200.
+
+### Anti-Drift Hotfix — 2026-05-26 (follow-up to ui-data-missing)
+
+Three structural preventatives shipped to make the schema-wipe class of incident impossible:
+
+- 14:37 UTC: **Task A** — `log_statement=ddl` + `log_min_duration_statement=1000` set on db service via docker-compose `command:`. Successful DDL now visible in `docker logs outreach-platform-db`. Smoke verified.
+- 14:42 UTC: **Task B** — `docker-compose.test.yml` overlay with `db-test` service (postgres:16 in tmpfs, ephemeral). Pytest path now `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest`. Smoke verified — conftest guard does not fire, prod file_mtime unchanged after run.
+- 14:45 UTC: **Task C** — migration auto-applier in `app/database.py::_apply_migrations`. Bootstrap migration `_schema_migrations.sql` creates tracking table; on every api start, `init_db()` runs all pending `migrations/*.sql` in lexical order behind `pg_advisory_lock(7261841720260526)`. 23 existing migrations backfilled into `schema_migrations`. Fix `001` to use idempotent `DO $$ EXCEPTION duplicate_object $$` for ALTER ADD CONSTRAINT. Dockerfile now COPIES `migrations/` into image. Smoke (migration 024 round-trip) + stress test (DROP proxy_pool → restart api → applier restored it) both passed.
+- CLAUDE.md updated: migrations are auto-applied (no more manual `psql -f`); pytest requires test-overlay.
+
+### Prompt/Template Polish — 2026-05-26 (post test-campaign feedback)
+
+- **Tone fields wired through to system prompt.** `ai_engine.get_context_for_conversation` SQL now SELECTS `voice_baseline` + `tone` JSONB. `build_system_prompt` composes `<tone>` block from voice_baseline ("Professional"/...) + tone calibration ({formal, warm, brief} 0-5) + legacy tone_of_voice TEXT. Verified by mock prompt: `<tone>Baseline persona: Professional. Tone calibration: formal=4/5, warm=2/5, brief=5/5.</tone>`.
+- **Template variable `{{full_name}}` now resolves.** Added `full_name` + `fullname` as aliases to canonical `name` in `RUSSIAN_ALIASES` (despite the name). Plus smart whitespace+punctuation cleanup when a variable is empty: `"Hi {{full_name}}!"` + empty → `"Hi!"`; `"Hi {{full_name}}, how?"` + empty → `"Hi, how?"`. Sentinel-based approach avoids double-spaces and dangling punctuation. Smoke test inside container verified 5 cases.
+- **POST /conversations/{id}/send accepts `message_text` (Lovable variant).** Lovable's generated client diverged from openapi.json — sends `{"message_text": "..."}` instead of canonical `{"message": "..."}`, producing 422 from Pydantic. Backend now accepts both via `validation_alias=AliasChoices("message", "message_text")`. Canonical name unchanged in spec / serialization. Smoke verified.
+- **POST /conversations/{id}/send 500 → 200.** After the 422 was fixed, the next call hit `AttributeError: module 'app.services.telegram' has no attribute 'send_message_by_telegram_id'`. Root cause: `conversations.py:52` did `from app.services import telegram as telegram_service` (module rename), while every other caller uses `from app.services.telegram import telegram_service` (singleton instance). Fixed import to match the rest of the codebase.
 
 ## Session Continuity
 
