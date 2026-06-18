@@ -617,10 +617,11 @@ function CampaignRow({
       </td>
       <td>
         <Link
-          to="/campaigns"
-          search={{ id: c.id } as never}
+          to="/campaigns/$id"
+          params={{ id: c.id }}
           style={{ display: "flex", alignItems: "center", gap: 12 }}
         >
+
           <div style={statusIconStyle(c.status)}>{statusIcon(c.status)}</div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
