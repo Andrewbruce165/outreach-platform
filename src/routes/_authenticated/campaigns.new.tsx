@@ -589,10 +589,14 @@ function CampaignBuilder() {
                 <button
                   type="button"
                   className="btn btn--primary"
-                  disabled={!canNext}
-                  onClick={() => setStep((s) => s + 1)}
+                  disabled={!canNext || saveDraftMut.isPending}
+                  onClick={() => void goNext()}
                 >
-                  Continue <ChevronRight size={14} />
+                  {saveDraftMut.isPending ? (
+                    <><Loader2 size={14} className="ob__spin" /> Saving…</>
+                  ) : (
+                    <>Continue <ChevronRight size={14} /></>
+                  )}
                 </button>
               ) : (
                 <button
