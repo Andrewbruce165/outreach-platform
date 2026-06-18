@@ -1723,20 +1723,14 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /**
-             * Folder Id
-             * Format: uuid
-             */
-            folder_id: string;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /** Sender Ids */
             sender_ids?: string[];
             /** Message Template */
-            message_template: string;
+            message_template?: string | null;
             /**
              * Timezone
              * @default Europe/Moscow
@@ -1783,6 +1777,16 @@ export interface components {
             success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
+            /**
+             * Allow Recontact
+             * @default false
+             */
+            allow_recontact: boolean;
+            /**
+             * Recontact Min Age Days
+             * @default 30
+             */
+            recontact_min_age_days: number;
         };
         /** CampaignListResponse */
         CampaignListResponse: {
@@ -1810,16 +1814,10 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /**
-             * Folder Id
-             * Format: uuid
-             */
-            folder_id: string;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /** Status */
             status: string;
             /** Timezone */
@@ -1860,6 +1858,16 @@ export interface components {
             success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
+            /**
+             * Allow Recontact
+             * @default false
+             */
+            allow_recontact: boolean;
+            /**
+             * Recontact Min Age Days
+             * @default 30
+             */
+            recontact_min_age_days: number;
             /** Attached Senders */
             attached_senders?: components["schemas"]["CampaignSenderAttach"][];
             /**
@@ -1948,6 +1956,10 @@ export interface components {
             success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
+            /** Allow Recontact */
+            allow_recontact?: boolean | null;
+            /** Recontact Min Age Days */
+            recontact_min_age_days?: number | null;
         };
         /** ContactImportPreviewResponse */
         ContactImportPreviewResponse: {
@@ -2511,6 +2523,11 @@ export interface components {
         /**
          * SendMessageFromUIRequest
          * @description POST /api/v1/conversations/{id}/send body (D-04 auto-takeover).
+         *
+         *     2026-05-26: Accepts both ``message`` (canonical, per openapi spec) and
+         *     ``message_text`` (what Lovable's generated client sends). Pydantic's
+         *     ``AliasChoices`` lets us read either name without forcing the frontend
+         *     to ship a hotfix. Outgoing serialization still uses canonical ``message``.
          */
         SendMessageFromUIRequest: {
             /** Message */

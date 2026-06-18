@@ -594,6 +594,11 @@ class CampaignCreate(BaseModel):
     # Unified webhook URL — supersedes per-tool webhook_url + 3 legacy signal URLs
     # for new campaigns. Legacy URLs remain Optional above for Phase 4 back-compat.
     webhook_url: Optional[HttpUrl] = None
+    # 026: per-campaign re-contact policy. Default false → strict cross-campaign
+    # dedup (any existing conversation blocks). When true, only live & fresh
+    # dialogs block; closed/stale ones are re-contactable.
+    allow_recontact: bool = False
+    recontact_min_age_days: int = Field(default=30, ge=1, le=365)
 
     @model_validator(mode="after")
     def _check_work_hours(self) -> "CampaignCreate":
@@ -631,6 +636,9 @@ class CampaignUpdate(BaseModel):
     primary_goal: Optional[Literal["book_meeting", "qualify", "click", "engage"]] = None
     success_criteria: Optional[str] = None
     webhook_url: Optional[HttpUrl] = None
+    # 026: per-campaign re-contact policy (partial PATCH).
+    allow_recontact: Optional[bool] = None
+    recontact_min_age_days: Optional[int] = Field(default=None, ge=1, le=365)
 
 
 class CampaignResponse(BaseModel):
@@ -666,6 +674,9 @@ class CampaignResponse(BaseModel):
     primary_goal: Optional[str] = None
     success_criteria: Optional[str] = None
     webhook_url: Optional[str] = None
+    # 026: per-campaign re-contact policy.
+    allow_recontact: bool = False
+    recontact_min_age_days: int = 30
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
     is_exhausted: bool = False
     created_at: datetime

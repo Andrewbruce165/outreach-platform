@@ -137,6 +137,50 @@ async def test_patch_campaign_partial_update(
     assert r.json()["description"] == "new desc"
 
 
+async def test_recontact_fields_default_and_roundtrip(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder,
+):
+    """026: allow_recontact defaults to false/30 on create, and PATCH round-trips
+    both fields back through the response."""
+    agent = await test_agent_factory()
+    await _bind(async_db_session, test_workspace.id, "u-rc")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-rc",
+                             agent.id, test_folder.id, name="Recontactable")
+    # Defaults present in response.
+    assert c["allow_recontact"] is False
+    assert c["recontact_min_age_days"] == 30
+
+    r = await async_client.patch(
+        f"/api/v1/campaigns/{c['id']}",
+        json={"allow_recontact": True, "recontact_min_age_days": 45},
+        headers=_auth_headers(valid_supabase_jwt, "u-rc"),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["allow_recontact"] is True
+    assert body["recontact_min_age_days"] == 45
+
+
+async def test_recontact_min_age_days_validation(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder,
+):
+    """026: recontact_min_age_days is bounded (ge=1, le=365) — 0 is rejected."""
+    agent = await test_agent_factory()
+    await _bind(async_db_session, test_workspace.id, "u-rcv")
+    r = await async_client.post(
+        "/api/v1/campaigns",
+        json={
+            "name": "BadAge", "agent_id": str(agent.id),
+            "folder_id": str(test_folder.id), "sender_ids": [],
+            "message_template": "Hi", "recontact_min_age_days": 0,
+        },
+        headers=_auth_headers(valid_supabase_jwt, "u-rcv"),
+    )
+    assert r.status_code == 422
+
+
 async def test_delete_running_409(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder, test_sender_factory,

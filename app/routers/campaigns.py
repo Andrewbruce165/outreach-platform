@@ -262,6 +262,9 @@ async def _campaign_to_response(
         primary_goal=campaign.primary_goal,
         success_criteria=campaign.success_criteria,
         webhook_url=campaign.webhook_url,
+        # 026: per-campaign re-contact policy.
+        allow_recontact=campaign.allow_recontact,
+        recontact_min_age_days=campaign.recontact_min_age_days,
         attached_senders=attached,
         is_exhausted=is_exhausted,
         created_at=campaign.created_at,
@@ -363,6 +366,9 @@ async def create_campaign(
         primary_goal=payload.primary_goal,
         success_criteria=payload.success_criteria,
         webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
+        # 026: per-campaign re-contact policy.
+        allow_recontact=payload.allow_recontact,
+        recontact_min_age_days=payload.recontact_min_age_days,
         status="draft",
     )
     db.add(camp)
@@ -771,6 +777,9 @@ async def duplicate_campaign(
         primary_goal=src.primary_goal,
         success_criteria=src.success_criteria,
         webhook_url=src.webhook_url,
+        # 026: per-campaign re-contact policy — copy for parity with src.
+        allow_recontact=src.allow_recontact,
+        recontact_min_age_days=src.recontact_min_age_days,
         status="draft",
     )
     db.add(new_c)

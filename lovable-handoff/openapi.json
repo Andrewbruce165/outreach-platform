@@ -6921,13 +6921,27 @@
             "title": "Description"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
           },
           "folder_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Folder Id"
           },
           "sender_ids": {
@@ -6939,8 +6953,15 @@
             "title": "Sender Ids"
           },
           "message_template": {
-            "type": "string",
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Message Template"
           },
           "timezone": {
@@ -7127,14 +7148,23 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "type": "boolean",
+            "title": "Allow Recontact",
+            "default": false
+          },
+          "recontact_min_age_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Recontact Min Age Days",
+            "default": 30
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "agent_id",
-          "folder_id",
-          "message_template"
+          "name"
         ],
         "title": "CampaignCreate",
         "description": "POST /api/v1/campaigns body."
@@ -7188,13 +7218,27 @@
             "title": "Description"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
           },
           "folder_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Folder Id"
           },
           "status": {
@@ -7363,6 +7407,16 @@
             ],
             "title": "Webhook Url"
           },
+          "allow_recontact": {
+            "type": "boolean",
+            "title": "Allow Recontact",
+            "default": false
+          },
+          "recontact_min_age_days": {
+            "type": "integer",
+            "title": "Recontact Min Age Days",
+            "default": 30
+          },
           "attached_senders": {
             "items": {
               "$ref": "#/components/schemas/CampaignSenderAttach"
@@ -7391,8 +7445,6 @@
           "id",
           "workspace_id",
           "name",
-          "agent_id",
-          "folder_id",
           "status",
           "timezone",
           "work_hour_start",
@@ -7720,6 +7772,30 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Recontact"
+          },
+          "recontact_min_age_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recontact Min Age Days"
           }
         },
         "type": "object",
@@ -9122,7 +9198,7 @@
           "message"
         ],
         "title": "SendMessageFromUIRequest",
-        "description": "POST /api/v1/conversations/{id}/send body (D-04 auto-takeover)."
+        "description": "POST /api/v1/conversations/{id}/send body (D-04 auto-takeover).\n\n2026-05-26: Accepts both ``message`` (canonical, per openapi spec) and\n``message_text`` (what Lovable's generated client sends). Pydantic's\n``AliasChoices`` lets us read either name without forcing the frontend\nto ship a hotfix. Outgoing serialization still uses canonical ``message``."
       },
       "SendMessageFromUIResponse": {
         "properties": {
