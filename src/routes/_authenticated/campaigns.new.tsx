@@ -334,11 +334,16 @@ function CampaignBuilder() {
         title="New campaign"
         right={
           <>
+            <DraftStatus
+              saving={saveDraftMut.isPending}
+              savedAt={savedAt}
+              hasDraft={!!draftId}
+            />
             <button
               className="btn btn--ghost btn--sm"
               onClick={() => navigate({ to: "/campaigns" })}
             >
-              Cancel
+              {draftId ? "Close" : "Cancel"}
             </button>
             <button
               className="btn btn--primary btn--sm"
