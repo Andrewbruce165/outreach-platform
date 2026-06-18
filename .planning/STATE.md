@@ -116,6 +116,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260618-a97 | Разрешить сохранять неполный draft кампании (agent_id/folder_id/message_template опциональны; обязательность — на /start) | 2026-06-18 | 1b04e9c | [260618-a97-draft-agent-id-folder-id-message-templat](./quick/260618-a97-draft-agent-id-folder-id-message-templat/) |
 | 260618-e9r | Анти-AI-слоп паттерн в дефолтном `<message_style>`: типографика, рус/англ запрещённая лексика, лимит «однако»/«например», естественность | 2026-06-18 | 0c84389 | [260618-e9r-anti-ai-slop-message-style](./quick/260618-e9r-anti-ai-slop-message-style/) |
+| 260618-r7k | Per-campaign re-contact policy: флаг `allow_recontact` + `recontact_min_age_days` + триггер свежести `updated_at`; закрытые/старые диалоги снова eligible, fresh-start новой строкой, детерминированный роутинг входящих | 2026-06-18 | 08a1c5a | [260618-r7k-campaign-allow-recontact](./quick/260618-r7k-campaign-allow-recontact/) |
 
 ### Hotfix Log — 2026-05-26 (ui-data-missing incident)
 
