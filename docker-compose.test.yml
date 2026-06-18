@@ -1,0 +1,61 @@
+# Test overlay — gives pytest an isolated postgres so destructive setup never
+# touches prod. Use:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
+#
+# Triggered by the 2026-05-26 incident where `docker compose run --rm api pytest`
+# inherited DATABASE_URL from docker-compose.yml (pointing at prod) and
+# tests/conftest.py::_setup_database executed `DROP SCHEMA public CASCADE`
+# against the live outreach_platform DB.
+#
+# See:
+#   .planning/debug/ui-data-missing.md
+#   .planning/debug/anti-drift-HOTFIX-PLAN.md (Task B)
+#   /root/.claude/projects/-root/memory/feedback_pytest_drop_schema_prod.md
+
+services:
+  db-test:
+    image: postgres:16
+    # No container_name on purpose — compose run creates ephemeral instances.
+    # No restart, no persistent volume — ephemeral by design.
+    command:
+      - "postgres"
+      - "-c"
+      - "fsync=off"           # tests don't care about durability — speed > safety
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "log_statement=ddl"   # mirror prod logging for trail visibility
+    environment:
+      POSTGRES_USER: outreach_user
+      POSTGRES_PASSWORD: outreach_test_pass
+      POSTGRES_DB: outreach_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outreach_user -d outreach_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  api:
+    environment:
+      # Override prod DSN with test target — `outreach_test` substring matches
+      # the conftest guard's _ALLOWED_TEST_DSN_MARKERS, so setup runs.
+      DATABASE_URL: postgresql+asyncpg://outreach_user:outreach_test_pass@db-test:5432/outreach_test
+    # The prod image only COPYs app/ + migrations/ — it has NO tests/ and NO
+    # pyproject.toml. pytest needs both: tests/ to collect, and pyproject.toml
+    # for the pytest-asyncio config (asyncio_default_fixture_loop_scope=session).
+    # WITHOUT pyproject.toml the session-scoped async engine binds to a different
+    # event loop than the tests, and every DB test dies with "another operation
+    # is in progress" / "Future attached to a different loop".
+    # We mount source + tests + config but NOT .env — the prod .env carries keys
+    # that Settings(extra=forbid) rejects. Mounting app/ also lets test runs pick
+    # up source edits without an image rebuild.
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./migrations:/app/migrations
+      - ./pyproject.toml:/app/pyproject.toml:ro
+    depends_on:
+      db-test:
+        condition: service_healthy

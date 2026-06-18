@@ -47,6 +47,35 @@ async def _setup_database():
     dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+    # ⚠ HARD GUARD against destructive setup on prod DB.
+    # 2026-05-26: `docker compose run --rm api pytest …` resolves DATABASE_URL from
+    # docker-compose.yml::api::environment, which points at prod (`outreach_user@db:5432/
+    # outreach_platform`). The DROP SCHEMA on line below WILL execute against prod under
+    # that invocation and has done so before — the full outreach_platform schema was
+    # rebuilt at 2026-05-26 13:18:21 UTC (proven by identical `file_mtime` across all
+    # 22 relations). Refuse to run unless the DSN clearly identifies a test DB.
+    _ALLOWED_TEST_DSN_MARKERS = (
+        "outreach_test",        # explicit test DB
+        "_test@", "_test/",     # *_test user/db suffix
+        "/test_",               # /test_db naming
+        "@localhost",           # host-run pytest with local DB
+        "@127.0.0.1",
+    )
+    if not any(marker in dsn for marker in _ALLOWED_TEST_DSN_MARKERS):
+        raise RuntimeError(
+            f"REFUSING TO RUN DESTRUCTIVE TEST SETUP AGAINST {dsn!r}. "
+            f"None of the allowed test-DSN markers {_ALLOWED_TEST_DSN_MARKERS!r} are present. "
+            "DATABASE_URL must point at a test database (containing one of the markers above). "
+            "Inside `docker compose run/exec api`, DATABASE_URL is inherited from "
+            "docker-compose.yml and points at PROD outreach_platform — pytest must NOT run "
+            "in that context. Options: "
+            "(a) run pytest on the host with localhost DSN, "
+            "(b) add a `db-test` service in docker-compose.yml and override DATABASE_URL via "
+            "`docker compose run --rm -e DATABASE_URL=postgresql://...outreach_test ...`, "
+            "(c) ask before running pytest in an unfamiliar service. "
+            "See .claude/projects/-root/memory/feedback_pytest_drop_schema_prod.md."
+        )
+
     # 1. Wipe + create base tables from ORM
     asyncpg_conn = await asyncpg.connect(dsn=dsn)
     try:
@@ -121,6 +150,13 @@ async def _setup_database():
 
     # Teardown: drop schema with CASCADE (drop_all can't handle FK cycles like
     # messages -> conversations -> messages).
+    # Guard re-checked here defensively — DSN must still be a test DB at teardown time
+    # (the setup-time guard is the primary defense; this is belt-and-suspenders).
+    if not any(marker in dsn for marker in _ALLOWED_TEST_DSN_MARKERS):
+        raise RuntimeError(
+            f"REFUSING TO RUN DESTRUCTIVE TEARDOWN AGAINST {dsn!r}. "
+            "See .claude/projects/-root/memory/feedback_pytest_drop_schema_prod.md."
+        )
     asyncpg_conn = await asyncpg.connect(dsn=dsn)
     try:
         await asyncpg_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")

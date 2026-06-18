@@ -3,6 +3,14 @@ services:
     image: postgres:16
     container_name: outreach-platform-db
     restart: unless-stopped
+    # 2026-05-26 anti-drift: log all DDL (CREATE/ALTER/DROP/TRUNCATE) and slow queries.
+    # Default log_statement=none made the prod-wipe incident invisible in db logs.
+    command:
+      - "postgres"
+      - "-c"
+      - "log_statement=ddl"
+      - "-c"
+      - "log_min_duration_statement=1000"
     environment:
       POSTGRES_USER: outreach_user
       POSTGRES_PASSWORD: outreach_secure_pass_2026

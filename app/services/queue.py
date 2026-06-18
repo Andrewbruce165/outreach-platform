@@ -578,7 +578,8 @@ class QueueWorker:
                         file_url=item.file_url,
                         file_name=item.file_name,
                         caption=item.caption,
-                        sender_id=str(sender.id)
+                        sender_id=str(sender.id),
+                        workspace_id=str(item.workspace_id),
                     )
                 else:
                     result = await telegram_service.send_message(
@@ -587,7 +588,8 @@ class QueueWorker:
                         recipient_name=item.recipient_name,
                         message=item.message_text,
                         as_draft=item.as_draft,
-                        sender_id=str(sender.id)
+                        sender_id=str(sender.id),
+                        workspace_id=str(item.workspace_id),
                     )
 
                 if result["success"]:

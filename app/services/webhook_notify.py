@@ -104,11 +104,15 @@ async def notify_signal(
         logger.error("notify_signal: invalid event_type=%s", event_type)
         return
 
+    # Phase 5.1 unification: prefer event-specific URL, fall back to unified
+    # `campaign.webhook_url` (UI-only field, populated by Lovable). Closes the
+    # backwards-compat gap between Phase 4 (per-event URL) and Phase 5.1 UI
+    # (single URL for all events).
     url_key = f"{event_type}_webhook_url"
-    url = campaign.get(url_key)
+    url = campaign.get(url_key) or campaign.get("webhook_url")
     if not url:
         logger.info(
-            "notify_signal: %s URL is NULL for campaign %s — skip",
+            "notify_signal: no webhook URL (%s + webhook_url both NULL) for campaign %s — skip",
             url_key,
             campaign.get("id"),
         )

@@ -1,8 +1,12 @@
 """Phase 3 — ai_engine.get_context adapter (RESEARCH Pitfall 1).
 
-After migration 015 dropped is_active / max_message_length / webhook_functions
-from ai_contexts, get_context() must not SELECT them — it provides defaults
-so build_system_prompt + build_tools keep working unchanged.
+После миграции 015 в ai_contexts больше нет is_active / max_message_length /
+webhook_functions — get_context() не должен их SELECTить и проставляет
+max_message_length дефолтом, чтобы build_system_prompt работал без правок.
+
+Phase 5 (SaaS-чистка): убран DEFAULT_SYSTEM_PROMPT-fallback и поле
+webhook_functions из возвращаемого dict-а. Несуществующий context_id и
+пустой context_id теперь возвращают None — workspace обязан настроить агента.
 """
 import pytest
 
@@ -25,21 +29,33 @@ async def test_get_context_phase3_schema(async_db_session, test_agent_factory):
 
     ctx = await ai_engine.get_context(async_db_session, str(agent.id))
 
+    assert ctx is not None
     assert ctx["system_prompt"] == "test prompt"
     assert ctx["tone_of_voice"] == "friendly"
     assert ctx["rules"] == "rule 1"
     assert ctx["company_info"] == "Test Co."
-    # Phase 3: defaults because columns dropped
+    # Phase 3: default остался, потому что колонка дропнута
     assert ctx["max_message_length"] == 500
-    assert ctx["webhook_functions"] == []
+    # webhook_functions выпилен из возвращаемого dict-а
+    assert "webhook_functions" not in ctx
 
 
-async def test_get_context_returns_defaults_for_missing(async_db_session):
-    """Несуществующий context_id → default_context, без SQL ошибок."""
+async def test_get_context_returns_none_for_missing(async_db_session):
+    """Несуществующий context_id → None (брендового fallback больше нет)."""
     from app.services.ai_engine import ai_engine
 
     ai_engine._context_cache.clear()
     ctx = await ai_engine.get_context(async_db_session, "00000000-0000-0000-0000-000000000000")
 
-    assert ctx["max_message_length"] == 500
-    assert ctx["webhook_functions"] == []
+    assert ctx is None
+
+
+async def test_get_context_returns_none_for_empty_id(async_db_session):
+    """Пустой context_id → None, без обращения к БД."""
+    from app.services.ai_engine import ai_engine
+
+    ctx = await ai_engine.get_context(async_db_session, None)
+    assert ctx is None
+
+    ctx = await ai_engine.get_context(async_db_session, "")
+    assert ctx is None

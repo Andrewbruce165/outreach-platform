@@ -1,8 +1,11 @@
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import logging
+import re
 
 from app.config import get_settings
 from app.database import init_db, engine
@@ -91,17 +94,76 @@ app.add_middleware(
 )
 
 
-# Defense-in-depth (Phase 05.1-DEBUG agents-500-cors): catch any unhandled
-# exception so the response goes through CORSMiddleware. Without this,
-# exceptions bubble to Starlette's outer ServerErrorMiddleware which returns
-# a 500 *without* CORS headers — surfacing on the frontend as a misleading
-# "No Access-Control-Allow-Origin" error and masking the real failure.
+# Defense-in-depth CORS for error responses (Phase 05.1-DEBUG
+# agents-500-cors + contacts-import-cors-400). Browsers strip the body of any
+# response missing Access-Control-Allow-Origin, so a 4xx/5xx that escapes
+# CORSMiddleware surfaces on the frontend as a misleading "blocked by CORS"
+# error and the real failure (e.g. multipart parse error, raw-SQL crash) is
+# invisible. We explicitly echo the request Origin on every error path here,
+# matching settings.cors_origins_list / cors_allowed_origin_regex so we don't
+# widen the policy beyond what CORSMiddleware itself would allow.
+
+
+def _allowed_origin(request: Request) -> str | None:
+    origin = request.headers.get("origin")
+    if not origin:
+        return None
+    if origin in settings.cors_origins_list:
+        return origin
+    pattern = settings.cors_allowed_origin_regex
+    if pattern and re.fullmatch(pattern, origin):
+        return origin
+    return None
+
+
+def _cors_headers(request: Request) -> dict[str, str]:
+    origin = _allowed_origin(request)
+    if not origin:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning(
+        "Validation error on %s %s: %s",
+        request.method, request.url.path, exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "code": "VALIDATION_ERROR",
+                "message": "Request validation failed",
+                "errors": exc.errors(),
+            }
+        },
+        headers=_cors_headers(request),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    # Preserve FastAPI/Starlette HTTPException semantics but guarantee CORS
+    # headers on the response.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={**(exc.headers or {}), **_cors_headers(request)},
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal Server Error", "code": "INTERNAL_ERROR"},
+        headers=_cors_headers(request),
     )
 
 

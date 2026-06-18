@@ -19,16 +19,16 @@ D-20 has_checker fallback: если в workspace нет sender'а с role='check
 См. .planning/phases/02-tg-accounts-contacts/02-04-PLAN.md
 """
 
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sql_func
-from sqlalchemy import select, text
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -46,6 +46,7 @@ from app.schemas import (
 )
 from app.services.csv_import import apply_import, parse_preview, suggest_mapping
 from app.utils.auth import AuthCtx, auth_dep
+from app.utils.names import normalize_full_name
 from app.utils.phone import normalize_to_e164
 
 logger = logging.getLogger(__name__)
@@ -132,28 +133,22 @@ async def _insert_contacts_with_dedup(
     skipped_phones: list[str] = []
 
     for rec in records:
-        result = await db.execute(
-            text(
-                """
-                INSERT INTO contacts
-                    (workspace_id, folder_id, phone, username, full_name, source, custom, tg_status)
-                VALUES
-                    (:wid, :fid, :phone, :username, :full_name, :source, :custom::jsonb, :tg_status)
-                ON CONFLICT DO NOTHING
-                RETURNING id
-                """
-            ),
-            {
-                "wid": str(workspace_id),
-                "fid": str(folder_id),
-                "phone": rec.get("phone"),
-                "username": rec.get("username"),
-                "full_name": rec.get("full_name"),
-                "source": rec.get("source"),
-                "custom": json.dumps(rec.get("custom") or {}),
-                "tg_status": default_tg_status,
-            },
+        stmt = (
+            pg_insert(Contact)
+            .values(
+                workspace_id=workspace_id,
+                folder_id=folder_id,
+                phone=rec.get("phone"),
+                username=rec.get("username"),
+                full_name=rec.get("full_name"),
+                source=rec.get("source"),
+                custom=rec.get("custom") or {},
+                tg_status=default_tg_status,
+            )
+            .on_conflict_do_nothing()
+            .returning(Contact.id)
         )
+        result = await db.execute(stmt)
         row = result.scalar()
         if row is None:
             skipped_duplicates += 1
@@ -260,6 +255,9 @@ async def push_contacts(
             rec["phone"] = normalized
         if rec.get("username"):
             rec["username"] = rec["username"].lstrip("@")
+        # Title-case full_name at the import boundary (single + batch).
+        if rec.get("full_name"):
+            rec["full_name"] = normalize_full_name(rec["full_name"])
         if not rec.get("phone") and not rec.get("username"):
             skipped_invalid += 1
             continue
@@ -320,34 +318,25 @@ async def import_preview(
     mapping = suggest_mapping(preview["columns"])
 
     # Сохраняем в csv_imports BYTEA (RESEARCH C-02 Option B). expires_at
-    # выставит DB через server_default (NOW() + INTERVAL '30 minutes').
-    # ORM требует non-null значение — даём placeholder, который DB
-    # перезапишет default'ом при INSERT (но фактически expires_at NOT NULL
-    # без server_default в ORM — добавим вручную).
-    expires = datetime.now(timezone.utc).replace(microsecond=0)
-    # Используем raw SQL чтобы взять DB-side default.
-    result = await db.execute(
-        text(
-            """
-            INSERT INTO csv_imports
-                (workspace_id, file_data, columns, suggested_mapping, encoding, delimiter)
-            VALUES (:wid, :data, :cols::jsonb, :map::jsonb, :enc, :delim)
-            RETURNING id, expires_at
-            """
-        ),
-        {
-            "wid": str(ctx.workspace_id),
-            "data": raw,
-            "cols": json.dumps(preview["columns"]),
-            "map": json.dumps(mapping),
-            "enc": preview["encoding"],
-            "delim": preview["delimiter"],
-        },
+    # выставляем Python-side (NOW + 30 минут) т.к. ORM-колонка NOT NULL
+    # без server_default. Используем ORM напрямую — раньше тут был raw SQL
+    # с `:cols::jsonb` cast'ом, но SQLAlchemy text() + asyncpg не умеют
+    # парсить named-param сразу перед `::` (Postgres cast-оператор) и
+    # падали с PostgresSyntaxError → endpoint возвращал 500 без CORS.
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+    csv_row = CsvImport(
+        workspace_id=ctx.workspace_id,
+        file_data=raw,
+        columns=preview["columns"],
+        suggested_mapping=mapping,
+        encoding=preview["encoding"],
+        delimiter=preview["delimiter"],
+        expires_at=expires_at,
     )
-    row = result.first()
+    db.add(csv_row)
+    await db.flush()
     await db.commit()
-    import_id = row[0]
-    expires_at = row[1]
+    import_id = csv_row.id
 
     logger.info(
         f"[contacts] import-preview workspace={ctx.workspace_id} "

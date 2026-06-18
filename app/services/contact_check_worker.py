@@ -138,7 +138,7 @@ class ContactCheckWorker:
                             LIMIT 1
                         ) s ON TRUE
                         WHERE c.tg_status = 'pending'
-                          AND c.phone IS NOT NULL
+                          AND (c.phone IS NOT NULL OR c.username IS NOT NULL)
                           AND (c.tg_checked_at IS NULL
                                OR c.tg_checked_at < NOW() - INTERVAL '5 minutes')
                         ORDER BY c.created_at ASC
@@ -173,56 +173,85 @@ class ContactCheckWorker:
         processed = 0
         for checker_id, items_iter in groupby(rows_sorted, key=lambda r: r.checker_id):
             items = list(items_iter)
-            phones = [r.phone for r in items if r.phone]
-            if not phones:
-                continue
             first = items[0]
 
-            try:
-                summary = await checker_service.check_phones(
-                    checker_id=str(checker_id),
-                    checker_slug=first.checker_slug,
-                    encrypted_session=first.session_string,
-                    phones=phones,
-                    proxy=first.proxy,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    f"❌ ContactCheckWorker: checker={first.checker_slug} "
-                    f"failed: {exc}",
-                    exc_info=True,
-                )
-                continue
+            # Phone wins when present; username-only contacts resolve via username.
+            phone_items = [r for r in items if r.phone]
+            username_items = [r for r in items if not r.phone and r.username]
 
-            await self._apply_results(items, summary)
-            processed += len(items)
-
-            logger.info(
-                f"📋 ContactCheckWorker: checker={first.checker_slug} "
-                f"checked={summary.get('checked', 0)} "
-                f"reg={summary.get('registered', 0)} "
-                f"not_reg={summary.get('not_registered', 0)} "
-                f"flood={summary.get('flood_wait_hit', False)}"
+            common = dict(
+                workspace_id=str(first.workspace_id),
+                checker_id=str(checker_id),
+                checker_slug=first.checker_slug,
+                encrypted_session=first.session_string,
+                proxy=first.proxy,
             )
+
+            if phone_items:
+                try:
+                    summary = await checker_service.check_phones(
+                        phones=[r.phone for r in phone_items], **common
+                    )
+                    await self._apply_results(phone_items, summary)
+                    processed += len(phone_items)
+                    logger.info(
+                        f"📋 ContactCheckWorker: checker={first.checker_slug} (phones) "
+                        f"checked={summary.get('checked', 0)} "
+                        f"reg={summary.get('registered', 0)} "
+                        f"not_reg={summary.get('not_registered', 0)} "
+                        f"flood={summary.get('flood_wait_hit', False)}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        f"❌ ContactCheckWorker: checker={first.checker_slug} phones failed: {exc}",
+                        exc_info=True,
+                    )
+
+            if username_items:
+                try:
+                    summary = await checker_service.check_usernames(
+                        usernames=[r.username for r in username_items], **common
+                    )
+                    await self._apply_results(username_items, summary)
+                    processed += len(username_items)
+                    logger.info(
+                        f"📋 ContactCheckWorker: checker={first.checker_slug} (usernames) "
+                        f"checked={summary.get('checked', 0)} "
+                        f"reg={summary.get('registered', 0)} "
+                        f"not_reg={summary.get('not_registered', 0)} "
+                        f"flood={summary.get('flood_wait_hit', False)}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        f"❌ ContactCheckWorker: checker={first.checker_slug} usernames failed: {exc}",
+                        exc_info=True,
+                    )
+
         return processed
 
     async def _apply_results(self, items: list, summary: dict) -> None:
         """UPDATE contacts по результатам checker'а.
 
-        ``summary['results']`` — список ``{phone, is_registered, telegram_id?,
-        error?, from_cache?, username?}``. Сматчиваем по phone (E.164 уже
-        нормализован при импорте). Если phone отсутствует в ``results`` —
-        не трогаем строку: для FloodWait partial run эти контакты останутся
-        в ``'pending'`` и попадут в следующий tick.
+        ``summary['results']`` — список ``{phone|username, is_registered,
+        telegram_id?, error?, from_cache?}``. Phone-контакты сматчиваем по phone
+        (E.164 нормализован при импорте), username-контакты — по bare username.
+        Если ключ отсутствует в ``results`` — не трогаем строку: для FloodWait
+        partial run эти контакты останутся в ``'pending'`` и попадут в след. tick.
         """
         results_by_phone = {
             r.get("phone"): r for r in summary.get("results", []) if r.get("phone")
         }
-        if not results_by_phone:
+        results_by_username = {
+            r.get("username"): r for r in summary.get("results", []) if r.get("username")
+        }
+        if not results_by_phone and not results_by_username:
             return
         async with AsyncSessionLocal() as db:
             for item in items:
-                res = results_by_phone.get(item.phone)
+                if item.phone:
+                    res = results_by_phone.get(item.phone)
+                else:
+                    res = results_by_username.get((item.username or "").lstrip("@"))
                 if res is None:
                     # Не обработан (partial из-за FloodWait) — оставляем pending.
                     continue

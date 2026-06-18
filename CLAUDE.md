@@ -76,11 +76,16 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 ## Архитектурные правила (наследуются)
 
 - **Async everywhere**: все DB через async/await + AsyncSession
-- **Миграции**: только raw SQL в migrations/. Нумерация: 012_, 013_... Всегда идемпотентны (IF NOT EXISTS). Никогда Alembic.
+- **Миграции**: только raw SQL в `migrations/`. Нумерация `NNN_short_name.sql`. **Авто-применяются** при старте api через `app/database.py::_apply_migrations` (с 2026-05-26). Трекинг — таблица `schema_migrations`. Файл обязан быть идемпотентным (`IF NOT EXISTS`, `DO $$ … EXCEPTION duplicate_object $$`, `ON CONFLICT DO NOTHING`) — applier повторно запускает при любом drift. Если миграция падает, api **не стартует** (fail-fast, не half-applied). Никогда Alembic.
 - **Никогда**: time.sleep(), синхронный requests, print() вместо logging
 - **Безопасность**: сессии зашифрованы, API_KEY не в логах
 - **Очередь**: не трогать интервалы без явного обсуждения — подобраны эмпирически
 - **Retry-логика FloodWait**: не ломать без явной просьбы
+- **Тесты**: запускать ТОЛЬКО через test-overlay, иначе conftest guard блокирует:
+  ```
+  docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
+  ```
+  db-test — эфемерный postgres в tmpfs, после run исчезает. Никогда `docker compose run --rm api pytest` без overlay — DATABASE_URL уйдёт в прод. См. `tests/conftest.py::_setup_database` и memory `feedback_pytest_drop_schema_prod.md`.
 
 ---
 
@@ -111,6 +116,75 @@ docker compose up -d --build listener
 - TLS выпускается **только** через `certbot certonly --webroot` (НЕ `--nginx`, иначе сломает SNI stream-схему). Автопродление — `certbot.timer`.
 
 При добавлении новых доменов/сервисов: брать конфиг по шаблону `funnel-api` и согласовывать с devops.
+
+---
+
+## Operations & Recovery
+
+### Бэкапы
+
+- **Скрипт:** [`/root/apps/aimly/tg-outreach/backup.sh`](backup.sh) — `pg_dump outreach_platform --clean --if-exists | gzip`.
+- **Cron:** `5 3 * * *` в `crontab -l` (root). Лог: `/var/log/outreach_backup.log`.
+- **Дамп-папка:** `/root/backups/tg-outreach/outreach_YYYYMMDD_HHMMSS.sql.gz`, retention 14 дней.
+- **Ручной dump:** `/root/apps/aimly/tg-outreach/backup.sh` — выполняется секунду.
+- **Восстановление:**
+  ```bash
+  gunzip -c /root/backups/tg-outreach/outreach_<TS>.sql.gz | \
+    docker exec -i outreach-platform-db psql -U outreach_user -d outreach_platform
+  ```
+  `--clean --if-exists` в pg_dump делает restore идемпотентным.
+
+### Auto-applier миграций
+
+При каждом старте api `app/database.py::init_db()`:
+1. `Base.metadata.create_all` — создаёт ORM-таблицы (no-op если есть).
+2. `_apply_migrations()` — прогоняет все `migrations/*.sql` не записанные в `schema_migrations`, в lexical порядке, под `pg_advisory_lock`.
+
+**Чтобы добавить миграцию:** положить файл `NNN_short_name.sql` в `migrations/`, ребилд api (`docker compose up -d --build api`) — applier подхватит. Идемпотентность обязательна (`IF NOT EXISTS`, `DO $$ EXCEPTION duplicate_object $$`). Если миграция падает, api **не стартует** (fail-fast).
+
+**После прод-инцидента (DROP / fresh DB):** просто `docker compose up -d --build api` — applier восстановит схему с нуля.
+
+### log_statement = ddl
+
+`docker-compose.yml::services.db.command` запускает postgres с `log_statement=ddl` + `log_min_duration_statement=1000`. Любой `CREATE/ALTER/DROP/TRUNCATE` и любой запрос >1s виден в `docker logs outreach-platform-db`. После 2026-05-26 инцидента (DROP SCHEMA из pytest конfтеста ушёл в прод и был невидим в логах).
+
+### Тесты
+
+**Никогда не запускай** `docker compose run --rm api pytest` (DATABASE_URL → прод, conftest сделает DROP SCHEMA). Conftest-guard в `tests/conftest.py:46-77` блокирует это с явным RuntimeError, но **правильный путь — через test-overlay**:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
+```
+
+[`docker-compose.test.yml`](docker-compose.test.yml) поднимает эфемерный `db-test` в tmpfs и переопределяет DATABASE_URL на `outreach_test`. После run контейнер удаляется автоматически.
+
+### Диагностика schema drift
+
+Признаки: `column X does not exist`, `relation Y does not exist`.
+
+Проверка физических timestamps таблиц (видно когда был DROP+CREATE):
+```sql
+SELECT c.relname,
+       (pg_stat_file('base/'||d.oid||'/'||c.relfilenode)).modification AS file_mtime
+  FROM pg_class c
+  JOIN pg_database d ON d.datname = current_database()
+ WHERE c.relkind = 'r'
+   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+ ORDER BY file_mtime DESC;
+```
+Одинаковая секунда у всех relations → был DROP SCHEMA + create_all. **`n_tup_ins=0` в `pg_stat_user_tables` НЕ означает «никогда не вставлялось»** — это «после последнего DROP+CREATE»; счётчик сбрасывается.
+
+### Lovable-фронт quirks
+
+- **Frontend в отдельном репо**, генерится через Lovable из openapi.json (`lovable-handoff/openapi.json`). Иногда расходится со спецификацией.
+- **`/conversations/{id}/send`** — Lovable шлёт `{"message_text": "..."}` вместо канонического `{"message": "..."}`. Pydantic-schema `SendMessageFromUIRequest` принимает оба варианта через `validation_alias=AliasChoices("message", "message_text")`.
+- **`/telemetry/events`** — UI событие может прийти с unknown event-name → 400 `UNKNOWN_EVENT`. Whitelist в `app/routers/telemetry.py::_EVENT_WHITELIST` (17 событий). Если фронт добавляет новое событие — обновить whitelist + UI-SPEC §9.
+
+### Telethon entity-cache cold start
+
+При ручной отправке сообщения через `/conversations/{id}/send` (или любой другой путь по `telegram_id`) Telethon может упасть с `ValueError: Could not find the input entity for PeerUser(user_id=...)`. Это значит entity-cache в SQLite-сессии не содержит `access_hash` для этого peer'а.
+
+Фикс в `TelegramService.send_message_by_telegram_id`: при `ValueError` от `get_input_entity` подгружаем `get_dialogs(limit=200)` — Telethon заполняет access_hash для всех recent dialogs. Дальше повторный `get_input_entity` находит peer. Стоит ~500ms первый раз, далее кеш горячий.
 
 ---
 

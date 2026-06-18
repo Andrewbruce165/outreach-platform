@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, constr, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, constr, model_validator
 from typing import Any, Literal, Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -755,9 +755,20 @@ class MessageListResponse(BaseModel):
 
 
 class SendMessageFromUIRequest(BaseModel):
-    """POST /api/v1/conversations/{id}/send body (D-04 auto-takeover)."""
+    """POST /api/v1/conversations/{id}/send body (D-04 auto-takeover).
 
-    message: str = Field(..., min_length=1, max_length=4096)
+    2026-05-26: Accepts both ``message`` (canonical, per openapi spec) and
+    ``message_text`` (what Lovable's generated client sends). Pydantic's
+    ``AliasChoices`` lets us read either name without forcing the frontend
+    to ship a hotfix. Outgoing serialization still uses canonical ``message``.
+    """
+
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=4096,
+        validation_alias=AliasChoices("message", "message_text"),
+    )
 
 
 class SendMessageFromUIResponse(BaseModel):

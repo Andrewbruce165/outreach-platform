@@ -22,10 +22,21 @@ WHERE id IN (
     SELECT id FROM duplicates WHERE rn > 1
 );
 
--- Step 2: Add the UNIQUE constraint
-ALTER TABLE messages
-ADD CONSTRAINT messages_conversation_telegram_unique
-UNIQUE (conversation_id, telegram_message_id);
+-- Step 2: Add the UNIQUE constraint (idempotent via DO block).
+-- 2026-05-26: switched from bare ALTER ADD CONSTRAINT to exception-swallow so the
+-- auto-applier (app/database.py::_apply_migrations) can re-run this migration on a
+-- DB where it was already applied without erroring.
+DO $$
+BEGIN
+    ALTER TABLE messages
+      ADD CONSTRAINT messages_conversation_telegram_unique
+      UNIQUE (conversation_id, telegram_message_id);
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'messages_conversation_telegram_unique already exists, skipping';
+    WHEN duplicate_table THEN
+        RAISE NOTICE 'messages_conversation_telegram_unique already exists, skipping';
+END$$;
 
 -- Step 3: Add index for better query performance on telegram_message_id
 CREATE INDEX IF NOT EXISTS idx_messages_telegram_message_id

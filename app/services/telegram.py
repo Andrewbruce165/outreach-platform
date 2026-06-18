@@ -3,13 +3,19 @@ import asyncio
 import tempfile
 import os
 import socks
+from contextlib import asynccontextmanager
 from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.functions.contacts import ImportContactsRequest, GetContactsRequest, ResolvePhoneRequest
+from telethon.tl.functions.contacts import (
+    ImportContactsRequest,
+    GetContactsRequest,
+    ResolvePhoneRequest,
+    ResolveUsernameRequest,
+)
 from telethon.tl.types import InputPhoneContact, InputPeerUser
 from telethon.errors import (
     FloodWaitError,
@@ -28,6 +34,7 @@ from sqlalchemy import select, text
 from app.config import get_settings
 from app.services.encryption import decrypt_session
 from app.database import AsyncSessionLocal
+from app.utils.phone import is_username_key, username_from_key
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +105,49 @@ def build_proxy_tuple(proxy: dict | None) -> tuple | None:
     if username:
         return (proxy_type, host, port, True, username, proxy.get("password", ""))
     return (proxy_type, host, port)
+
+
+# ── Visual feedback helpers for AI reply flow ───────────────────────────────
+# Both are best-effort (never raise into caller) so that AI generation /
+# send_message paths remain unaffected if Telegram refuses the side-effect
+# (peer blocked, FloodWait on the action endpoint, etc).
+
+
+async def safe_read_ack(client, peer, max_id):
+    """Mark inbound up to max_id as read on the given peer. Never raises."""
+    if not (client and peer and max_id):
+        return
+    try:
+        await client.send_read_acknowledge(peer, max_id=max_id)
+    except Exception as e:
+        logger.debug(f"safe_read_ack failed for peer={peer}: {e}")
+
+
+@asynccontextmanager
+async def safe_typing(client, peer):
+    """Show "typing..." on the peer for the duration of the context.
+
+    Telethon auto-renews the indicator every ~5s (Telegram clears stale state
+    after 6s). Indicator clears automatically on context exit, including the
+    exception path. Always yields exactly once — caller can use it even when
+    client/peer is None (no-op).
+    """
+    cm = None
+    if client and peer:
+        try:
+            cm = client.action(peer, 'typing')
+            await cm.__aenter__()
+        except Exception as e:
+            logger.debug(f"safe_typing start failed for peer={peer}: {e}")
+            cm = None
+    try:
+        yield
+    finally:
+        if cm is not None:
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"safe_typing exit failed for peer={peer}: {e}")
 
 
 def make_telegram_client(
@@ -236,18 +286,24 @@ class TelegramService:
             logger.error(f"SpamBot check failed: {e}")
             return {"status": "unknown", "raw_text": f"Error: {str(e)}"}
     
-    async def _get_cached_contact(self, sender_id: str, phone: str) -> Optional[dict]:
-        """Look up contact in DB cache (contacts_cache + conversations)."""
+    async def _get_cached_contact(self, workspace_id: str, sender_id: str, phone: str) -> Optional[dict]:
+        """Look up contact in DB cache (contacts_cache + conversations).
+
+        Workspace-isolated by D-03 (Phase 1 multi-tenant): all SELECT'ы фильтруют
+        по workspace_id чтобы исключить cross-tenant data leak через resolve cache.
+        """
         async with AsyncSessionLocal() as db:
             # 1. Check contacts_cache
             row = (await db.execute(
                 text("""
                     SELECT telegram_id, first_name, last_name, username, is_registered, access_hash
                     FROM contacts_cache
-                    WHERE sender_id = :sender_id AND phone = :phone
+                    WHERE workspace_id = :workspace_id
+                      AND sender_id = :sender_id
+                      AND phone = :phone
                       AND updated_at > NOW() - INTERVAL '7 days'
                 """),
-                {"sender_id": sender_id, "phone": phone}
+                {"workspace_id": workspace_id, "sender_id": sender_id, "phone": phone}
             )).fetchone()
 
             if row and row[0] and row[5] is not None:  # telegram_id + access_hash exist
@@ -268,31 +324,33 @@ class TelegramService:
                 text("""
                     SELECT contact_telegram_id, contact_name
                     FROM conversations
-                    WHERE sender_id = :sender_id AND contact_phone = :phone
+                    WHERE workspace_id = :workspace_id
+                      AND sender_id = :sender_id
+                      AND contact_phone = :phone
                       AND contact_telegram_id IS NOT NULL
                     LIMIT 1
                 """),
-                {"sender_id": sender_id, "phone": phone}
+                {"workspace_id": workspace_id, "sender_id": sender_id, "phone": phone}
             )).fetchone()
 
             # conversations table has no access_hash — don't return from cache,
             # let ResolvePhoneRequest fetch it so we get a valid access_hash
             pass
 
-            # 3. Cross-sender lookup — ONLY for is_registered=false
-            # If a checker account already confirmed this number is unregistered,
-            # skip ResolvePhoneRequest entirely (access_hash is not needed for rejections).
-            # For registered numbers we do NOT use another account's cache: each sender
-            # needs its own access_hash, so we let ResolvePhoneRequest run (but only
-            # for confirmed-live numbers — that's the efficiency win).
+            # 3. Cross-sender lookup (внутри того же workspace) — ONLY для
+            # is_registered=false. Если другой чекер этого workspace'а уже
+            # подтвердил что номер не зарегистрирован, пропускаем ResolvePhone.
+            # Для зарегистрированных используем не можем — нужен per-sender access_hash.
             cross_row = (await db.execute(
                 text("""
                     SELECT is_registered FROM contacts_cache
-                    WHERE phone = :phone AND is_registered = false
+                    WHERE workspace_id = :workspace_id
+                      AND phone = :phone
+                      AND is_registered = false
                       AND updated_at > NOW() - INTERVAL '7 days'
                     LIMIT 1
                 """),
-                {"phone": phone}
+                {"workspace_id": workspace_id, "phone": phone}
             )).fetchone()
 
             if cross_row:
@@ -301,15 +359,15 @@ class TelegramService:
 
         return None
 
-    async def _save_contact_cache(self, sender_id: str, phone: str, contact_info: dict):
+    async def _save_contact_cache(self, workspace_id: str, sender_id: str, phone: str, contact_info: dict):
         """Save contact lookup result to DB cache."""
         try:
             async with AsyncSessionLocal() as db:
                 await db.execute(
                     text("""
                         INSERT INTO contacts_cache
-                            (sender_id, phone, telegram_id, access_hash, first_name, last_name, username, is_registered)
-                        VALUES (:sender_id, :phone, :tg_id, :access_hash, :first_name, :last_name, :username, :is_reg)
+                            (workspace_id, sender_id, phone, telegram_id, access_hash, first_name, last_name, username, is_registered)
+                        VALUES (:workspace_id, :sender_id, :phone, :tg_id, :access_hash, :first_name, :last_name, :username, :is_reg)
                         ON CONFLICT (sender_id, phone) DO UPDATE SET
                             telegram_id = EXCLUDED.telegram_id,
                             access_hash = EXCLUDED.access_hash,
@@ -320,6 +378,7 @@ class TelegramService:
                             updated_at = NOW()
                     """),
                     {
+                        "workspace_id": workspace_id,
                         "sender_id": sender_id,
                         "phone": phone,
                         "tg_id": contact_info.get("telegram_id"),
@@ -337,6 +396,7 @@ class TelegramService:
     async def resolve_contact(
         self,
         client: TelegramClient,
+        workspace_id: str,
         sender_id: str,
         phone: str,
         recipient_name: Optional[str] = None
@@ -344,12 +404,18 @@ class TelegramService:
         """Resolve phone to telegram_id using cache first, then ImportContacts as fallback.
 
         This minimizes ImportContactsRequest calls to avoid Telegram spam detection.
+        Workspace-isolated: cache lookups + writes scoped to the caller's workspace.
         """
         # 1. Try cache
-        cached = await self._get_cached_contact(sender_id, phone)
+        cached = await self._get_cached_contact(workspace_id, sender_id, phone)
         if cached:
             logger.debug(f"Contact {phone} resolved from cache: tg_id={cached.get('telegram_id')}")
             return cached
+
+        # 2a. Username identity key ('@handle') — resolve via ResolveUsername.
+        # No phone to import; cache is keyed on the same '@handle' string.
+        if is_username_key(phone):
+            return await self._resolve_username(client, workspace_id, sender_id, phone)
 
         # 2. Cache miss — call Telegram API using ResolvePhoneRequest (no contact import)
         logger.info(f"Contact {phone} not in cache, calling ResolvePhoneRequest")
@@ -370,12 +436,12 @@ class TelegramService:
                 contact_info = {"is_registered": False}
 
             # 3. Cache the result
-            await self._save_contact_cache(sender_id, phone, contact_info)
+            await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
             return contact_info
 
         except PhoneNumberInvalidError:
             contact_info = {"is_registered": False}
-            await self._save_contact_cache(sender_id, phone, contact_info)
+            await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
             return {"is_registered": False, "error": "Invalid phone number"}
         except Exception as e:
             # ResolvePhoneRequest raises an RPC error (e.g. PHONE_NOT_OCCUPIED) when
@@ -383,12 +449,59 @@ class TelegramService:
             err = str(e)
             if "PHONE_NOT_OCCUPIED" in err or "phone_not_occupied" in err.lower():
                 contact_info = {"is_registered": False}
-                await self._save_contact_cache(sender_id, phone, contact_info)
+                await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
                 return {"is_registered": False}
             # Any other exception (frozen account, FloodWait, network error, etc.)
             # must NOT be silently treated as "not registered" — raise so the queue
             # worker records the real error and retries.
             logger.error(f"Error checking contact via ResolvePhone: {e}")
+            raise
+
+    async def _resolve_username(
+        self,
+        client: TelegramClient,
+        workspace_id: str,
+        sender_id: str,
+        key: str,
+    ) -> dict:
+        """Resolve a '@username' identity key to telegram_id + access_hash.
+
+        Mirrors the ResolvePhone path but uses ResolveUsernameRequest. The result
+        is cached in contacts_cache under the '@username' key (same column as
+        phones), so subsequent sends are cache hits.
+        """
+        uname = username_from_key(key)
+        logger.info(f"Contact {key} not in cache, calling ResolveUsernameRequest")
+        try:
+            result = await client(ResolveUsernameRequest(username=uname))
+
+            if result and result.users:
+                user = result.users[0]
+                contact_info = {
+                    "is_registered": True,
+                    "telegram_id": user.id,
+                    "access_hash": user.access_hash,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "username": user.username,
+                }
+            else:
+                contact_info = {"is_registered": False}
+
+            await self._save_contact_cache(workspace_id, sender_id, key, contact_info)
+            return contact_info
+
+        except Exception as e:
+            # USERNAME_NOT_OCCUPIED / USERNAME_INVALID → not registered, cache it.
+            err = str(e)
+            low = err.lower()
+            if "username_not_occupied" in low or "username_invalid" in low:
+                contact_info = {"is_registered": False}
+                await self._save_contact_cache(workspace_id, sender_id, key, contact_info)
+                return {"is_registered": False}
+            # Anything else (FloodWait, frozen account, network) must propagate so
+            # the queue worker records the real error and retries.
+            logger.error(f"Error checking contact via ResolveUsername: {e}")
             raise
 
     async def check_contact(
@@ -432,22 +545,24 @@ class TelegramService:
         recipient_name: Optional[str],
         message: str,
         as_draft: bool = False,
-        sender_id: Optional[str] = None
+        sender_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
     ) -> dict:
         """Send message to phone number. Client is disconnected after the operation."""
         try:
             # Resolve contact (cache first, ImportContacts only for new contacts)
-            if sender_id:
-                contact_info = await self.resolve_contact(client, sender_id, phone, recipient_name)
+            if sender_id and workspace_id:
+                contact_info = await self.resolve_contact(client, workspace_id, sender_id, phone, recipient_name)
             else:
                 contact_info = await self.check_contact(client, phone)
 
             if not contact_info.get("is_registered"):
+                target = phone if is_username_key(phone) else f"Номер {phone}"
                 return {
                     "success": False,
                     "error": {
                         "code": "RECIPIENT_NOT_IN_TELEGRAM",
-                        "message": f"Номер {phone} не зарегистрирован в Telegram"
+                        "message": f"{target} не зарегистрирован в Telegram"
                     }
                 }
 
@@ -534,23 +649,25 @@ class TelegramService:
         file_url: str,
         file_name: Optional[str] = None,
         caption: Optional[str] = None,
-        sender_id: Optional[str] = None
+        sender_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
     ) -> dict:
         """Download file from URL and send to recipient. Client is disconnected after the operation."""
         tmp_path = None
         try:
             # Resolve contact (cache first, ImportContacts only for new contacts)
-            if sender_id:
-                contact_info = await self.resolve_contact(client, sender_id, phone, recipient_name)
+            if sender_id and workspace_id:
+                contact_info = await self.resolve_contact(client, workspace_id, sender_id, phone, recipient_name)
             else:
                 contact_info = await self.check_contact(client, phone)
 
             if not contact_info.get("is_registered"):
+                target = phone if is_username_key(phone) else f"Номер {phone}"
                 return {
                     "success": False,
                     "error": {
                         "code": "RECIPIENT_NOT_IN_TELEGRAM",
-                        "message": f"Номер {phone} не зарегистрирован в Telegram"
+                        "message": f"{target} не зарегистрирован в Telegram"
                     }
                 }
 
@@ -682,13 +799,37 @@ class TelegramService:
         message: str,
         proxy: dict | None = None
     ) -> dict:
-        """Send message directly by Telegram ID (for existing conversations)."""
+        """Send message directly by Telegram ID (for existing conversations).
+
+        Resolution strategy (2026-05-26 fix for /send 500 → "Could not find
+        the input entity"):
+          1. Try `get_input_entity(telegram_id)` — Telethon checks its session-
+             local entity cache (the SQLite file holds access_hash for every
+             peer the client has seen).
+          2. If miss, refresh the cache by enumerating recent dialogs — for any
+             user we have a conversation with, this populates access_hash.
+          3. Retry `get_input_entity`. If it still fails, the contact has never
+             been talked to from this sender → caller must use a different send
+             path (cold-start outreach, which goes through the queue with the
+             pre-resolved peer).
+        """
         client = None
         try:
             client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
 
-            # Send message directly to telegram_id
-            sent = await client.send_message(telegram_id, message)
+            try:
+                peer = await client.get_input_entity(telegram_id)
+            except ValueError:
+                # Cold cache — load recent dialogs so Telethon learns
+                # access_hash for users in our chat list.
+                logger.info(
+                    f"send_by_id: entity {telegram_id} not in cache, "
+                    f"refreshing dialogs for {sender_slug}"
+                )
+                await client.get_dialogs(limit=200)
+                peer = await client.get_input_entity(telegram_id)
+
+            sent = await client.send_message(peer, message)
 
             return {
                 "success": True,

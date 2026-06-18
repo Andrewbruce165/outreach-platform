@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     max_pool_size: int = 10
 
+    # OpenAI
+    openai_model: str = Field(
+        default="gpt-5-mini-2025-08-07",
+        validation_alias="OPENAI_MODEL",
+        description="OpenAI chat model used by ai_engine + warmup. Override via env without redeploy.",
+    )
+
     # Decodo proxy pool (optional)
     decodo_host: Optional[str] = None
     decodo_username: Optional[str] = None

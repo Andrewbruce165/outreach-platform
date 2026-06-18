@@ -23,7 +23,7 @@ from telethon.errors import (
 )
 from telethon.errors.common import TypeNotFoundError
 from telethon.tl.functions.updates import GetDifferenceRequest, GetChannelDifferenceRequest
-from app.services.telegram import make_telegram_client
+from app.services.telegram import make_telegram_client, safe_read_ack, safe_typing
 
 
 class ResilientTelegramClient(TelegramClient):
@@ -105,7 +105,7 @@ def build_proxy_tuple(proxy: dict | None) -> tuple | None:
 
 
 # AI Engine import
-from app.services.ai_engine import ai_engine
+from app.services.ai_engine import ai_engine, get_context_for_conversation
 
 
 # Phase 5 D-08 / Open Question #2: hardcoded antispam IDs that fall through
@@ -249,6 +249,9 @@ class TelegramListener:
 
         # Объединяем тексты сообщений
         combined_text = "\n".join(msg.text for msg in messages)
+        # max telegram_message_id для read_ack — отметим все inbound в буфере
+        # как прочитанные одним вызовом перед AI-генерацией.
+        context["last_msg_id"] = max(m.telegram_message_id for m in messages)
         logger.info(f"📦 Обработка буфера {conversation_id[:8]}: {len(messages)} сообщений")
 
         # Отправляем на AI
@@ -271,15 +274,22 @@ class TelegramListener:
         # we pass it through so generate_response's legacy fallback path works for
         # pre-Phase-4 conversations whose campaign_id is NULL.
         ai_context_id = context.get("ai_context_id")
+        last_msg_id = context.get("last_msg_id")
 
         async with AsyncSessionLocal() as session:
             # Phase 4: resolve through campaign — verify context exists.
-            resolved = await ai_engine.get_context_for_conversation(conversation_id, session)
+            resolved = await get_context_for_conversation(conversation_id, session)
             if resolved is None:
                 logger.warning(
                     f"⚠️ listener._send_to_ai: no context for conversation {conversation_id[:8]} — skip"
                 )
                 return
+
+            # UX feedback: mark inbound as read + show "typing..." for the
+            # duration of AI generation. Both are best-effort (no-raise on
+            # failure). read_ack first, then typing wraps generate_response —
+            # natural visual cue for the contact: «прочитано → набирает → ответ».
+            await safe_read_ack(client, recipient_id, last_msg_id)
 
             conversation_context = {
                 "conversation_id": conversation_id,
@@ -292,14 +302,15 @@ class TelegramListener:
                 "ai_context_id": ai_context_id,
             }
 
-            reply = await ai_engine.generate_response(
-                session=session,
-                conversation_id=conversation_id,
-                context_id=ai_context_id,
-                contact_name=contact_name,
-                new_message=message_text,
-                conversation_context=conversation_context
-            )
+            async with safe_typing(client, recipient_id):
+                reply = await ai_engine.generate_response(
+                    session=session,
+                    conversation_id=conversation_id,
+                    context_id=ai_context_id,
+                    contact_name=contact_name,
+                    new_message=message_text,
+                    conversation_context=conversation_context
+                )
 
         if reply and client:
             try:

@@ -22,6 +22,7 @@ import io
 import logging
 import re
 
+from app.utils.names import normalize_full_name
 from app.utils.phone import normalize_to_e164
 
 logger = logging.getLogger(__name__)
@@ -219,7 +220,8 @@ def apply_import(
             elif field == "username":
                 record["username"] = value.lstrip("@")
             elif field == "full_name":
-                record["full_name"] = value
+                # Title-case at the import boundary so DB holds the display form.
+                record["full_name"] = normalize_full_name(value)
             elif field == "source":
                 record["source"] = value
             elif field.startswith("custom."):

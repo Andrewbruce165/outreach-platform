@@ -506,7 +506,7 @@ class WarmupWorker:
                 })
 
             response = await self._openai.chat.completions.create(
-                model="gpt-5-mini-2025-08-07",
+                model=settings.openai_model,
                 messages=messages,
             )
             return response.choices[0].message.content.strip()
@@ -543,6 +543,7 @@ class WarmupWorker:
             # Резолвим получателя (кэш + ResolvePhoneRequest)
             contact = await telegram_service.resolve_contact(
                 client,
+                from_sender["workspace_id"],
                 from_sender["id"],
                 to_phone
             )

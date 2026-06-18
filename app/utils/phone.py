@@ -52,3 +52,38 @@ def normalize_to_e164(raw: Optional[str]) -> Optional[str]:
     if not _E164_RE.match(e164):
         return None
     return e164
+
+
+# --- Outreach identity key (migration 025: send by @username) -----------------
+# The whole outreach pipeline (rotation assignment, queue item, conversation,
+# contacts_cache) keys recipients by a single string stored in the *_phone
+# columns. For phone contacts that key is the E.164 phone (`+7…`). For contacts
+# that have only a Telegram username, the key is `@username`. The send/resolve
+# layer branches on the leading `@` to pick ResolveUsername vs ResolvePhone.
+
+
+def contact_identity_key(
+    phone: Optional[str], username: Optional[str]
+) -> Optional[str]:
+    """Build the pipeline identity key for a contact.
+
+    Phone wins when present (it's the richer, more stable identity). Otherwise
+    fall back to `@username`. Returns None if neither is usable.
+    """
+    if phone:
+        return phone
+    if username:
+        uname = username.strip().lstrip("@")
+        if uname:
+            return "@" + uname
+    return None
+
+
+def is_username_key(key: Optional[str]) -> bool:
+    """True if the identity key addresses a Telegram username (`@…`)."""
+    return bool(key) and key.startswith("@")
+
+
+def username_from_key(key: str) -> str:
+    """Extract the bare username (no leading `@`) from a username identity key."""
+    return key.lstrip("@")

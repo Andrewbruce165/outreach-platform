@@ -47,6 +47,7 @@ from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -296,13 +297,17 @@ async def _resolve_or_create_workspace(
 ) -> AuthCtx:
     """
     Найти существующий user_workspaces row → вернуть AuthCtx.
-    Если нет — atomic create Workspace + UserWorkspace в одной транзакции (D-08).
+    Если нет — lazy create Workspace + UserWorkspace с защитой от race condition
+    через DB-level UNIQUE constraint (migration 023) + INSERT ... ON CONFLICT.
 
-    Pitfall 5 (race condition): post-commit re-SELECT защищает от двух параллельных
-    первых запросов от одного пользователя — но это hot path в Phase 1
-    минимизируется тем, что Lovable обычно делает один POST /auth/me первым.
+    2026-05-26 hotfix: предыдущая реализация с post-commit re-SELECT НЕ защищала
+    от race — 4 параллельных fetch'а от Lovable создали 4 дубля workspace за 5ms.
+    UNIQUE(supabase_user_id) на user_workspaces + ON CONFLICT DO NOTHING делает
+    duplicate INSERT no-op'ом; затем re-SELECT берёт уже существующий row.
+    Если ON CONFLICT сработал — workspace, созданный текущим request'ом, остался
+    осиротевшим (он закоммитился отдельным INSERT в workspaces), и мы его удаляем.
     """
-    # First lookup (no transaction yet)
+    # First lookup (cheap path — почти всегда сюда попадаем после первого захода)
     result = await db.execute(
         select(UserWorkspace).where(
             UserWorkspace.supabase_user_id == supabase_user_id
@@ -323,47 +328,88 @@ async def _resolve_or_create_workspace(
             role=uw.role,
         )
 
-    # Lazy auto-create (D-08, D-09)
+    # Lazy auto-create — guarded by UNIQUE(user_workspaces.supabase_user_id).
     #
-    # Phase 05.1-DEBUG (2026-05-23 agents-500-cors): we MUST NOT use
-    # `async with db.begin()` here. `AsyncSession` runs with `autobegin=True`,
-    # and the preceding `await db.execute(select(...))` already opened an
-    # implicit transaction on this session. Calling `db.begin()` on top
-    # raises `sqlalchemy.exc.InvalidRequestError: A transaction is already
-    # begun on this Session`. The error surfaced as a 500 on every
-    # JWT-authenticated request (every new user hits this branch).
+    # Race: two parallel requests both see uw is None and both try to create.
+    # The DB-level UNIQUE forces one of them to no-op via ON CONFLICT, and the
+    # post-attempt re-SELECT pulls the canonical row that whichever request won
+    # actually inserted.
     #
-    # Switching to the same flush+commit pattern used by all routers
-    # (agents.py, campaigns.py, contacts.py): the implicit transaction
-    # is committed atomically — both inserts succeed or both roll back.
+    # NOTE about transactions: AsyncSession.autobegin already opened an implicit
+    # transaction via the SELECT above. We continue in that same transaction —
+    # creating db.begin() would raise InvalidRequestError (see Phase 05.1 fix).
     workspace_name = email if email else "My Workspace"
+    orphan_workspace_id = None
 
     try:
+        # 1) Create Workspace row (no UNIQUE constraint there — duplicates are tolerated
+        #    in the schema, but we'll clean up if our UserWorkspace INSERT loses the race).
         workspace = Workspace(name=workspace_name)
         db.add(workspace)
         await db.flush()  # получаем workspace.id
 
-        new_uw = UserWorkspace(
+        # 2) Try to attach this user to this workspace. ON CONFLICT (supabase_user_id)
+        #    DO NOTHING — if another request already created a UserWorkspace for this
+        #    supabase_user_id, our INSERT becomes a no-op (no row returned).
+        ins = pg_insert(UserWorkspace.__table__).values(
             supabase_user_id=supabase_user_id,
             workspace_id=workspace.id,
             role="owner",
-        )
-        db.add(new_uw)
+        ).on_conflict_do_nothing(
+            index_elements=["supabase_user_id"]
+        ).returning(UserWorkspace.__table__.c.workspace_id)
+
+        ins_result = await db.execute(ins)
+        inserted_workspace_id = ins_result.scalar_one_or_none()
+
+        if inserted_workspace_id is None:
+            # Lost the race — our Workspace row is now orphaned (no UserWorkspace
+            # points to it). Mark it for cleanup after commit.
+            orphan_workspace_id = workspace.id
+
         await db.commit()
     except Exception:
         await db.rollback()
         raise
 
-    # Post-commit re-SELECT (Pitfall 5 защита от race)
+    # Cleanup orphaned Workspace row if we lost the race. Separate transaction —
+    # if this fails (it shouldn't), the orphan stays but auth still works.
+    if orphan_workspace_id is not None:
+        try:
+            ws_to_delete = await db.get(Workspace, orphan_workspace_id)
+            if ws_to_delete is not None:
+                await db.delete(ws_to_delete)
+                await db.commit()
+                logger.info(
+                    f"[auth] race lost — cleaned orphan workspace={orphan_workspace_id} "
+                    f"user={supabase_user_id[:8]}..."
+                )
+        except Exception:
+            await db.rollback()
+            logger.warning(
+                f"[auth] failed to clean orphan workspace={orphan_workspace_id} — "
+                "manual cleanup may be required",
+                exc_info=True,
+            )
+
+    # Re-SELECT the canonical UserWorkspace (whoever won the race, including us).
     result = await db.execute(
         select(UserWorkspace).where(
             UserWorkspace.supabase_user_id == supabase_user_id
-        ).order_by(UserWorkspace.created_at.asc())
+        )
     )
     canonical_uw = result.scalars().first()
 
+    if canonical_uw is None:
+        # Should never happen — either our INSERT or the racing one must have succeeded.
+        raise RuntimeError(
+            f"_resolve_or_create_workspace: no user_workspaces row after lazy create "
+            f"for user={supabase_user_id[:8]}..."
+        )
+
+    log_verb = "auto-created" if orphan_workspace_id is None else "joined existing (race)"
     logger.info(
-        f"[auth] auto-created workspace={canonical_uw.workspace_id} "
+        f"[auth] {log_verb} workspace={canonical_uw.workspace_id} "
         f"name='{workspace_name}' user={supabase_user_id[:8]}..."
     )
 

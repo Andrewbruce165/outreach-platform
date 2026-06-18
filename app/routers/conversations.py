@@ -49,7 +49,7 @@ from app.schemas import (
     SendMessageFromUIRequest,
     SendMessageFromUIResponse,
 )
-from app.services import telegram as telegram_service
+from app.services.telegram import telegram_service
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)

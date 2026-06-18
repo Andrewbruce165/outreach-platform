@@ -109,7 +109,8 @@ class MessageLog(Base):
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id"), nullable=False)
-    recipient_phone = Column(String(20), nullable=False)
+    # VARCHAR(40): holds either a phone (+7…) or the '@username' identity key (migration 025).
+    recipient_phone = Column(String(40), nullable=False)
     recipient_name = Column(String(100))
     recipient_telegram_id = Column(BigInteger)
     message_text = Column(Text, nullable=False)
@@ -130,7 +131,8 @@ class ContactCache(Base):
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id"), nullable=False)
-    phone = Column(String(20), nullable=False, index=True)
+    # VARCHAR(40): phone (+7…) or '@username' identity key (migration 025).
+    phone = Column(String(40), nullable=False, index=True)
     telegram_id = Column(BigInteger)
     access_hash = Column(BigInteger)  # required for InputPeerUser when sending
     first_name = Column(String(100))
@@ -194,7 +196,8 @@ class MessageQueue(Base):
     status = Column(SQLEnum(QueueItemStatus), nullable=False, default=QueueItemStatus.pending, index=True)
 
     # Recipient
-    recipient_phone = Column(String(20), nullable=False)
+    # VARCHAR(40): phone (+7…) or '@username' identity key (migration 025).
+    recipient_phone = Column(String(40), nullable=False)
     recipient_name = Column(String(100))
 
     # Payload — for messages
@@ -245,7 +248,8 @@ class Conversation(Base):
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"), nullable=False)
-    contact_phone = Column(String(20), nullable=False)
+    # VARCHAR(40): phone (+7…) or '@username' identity key (migration 025).
+    contact_phone = Column(String(40), nullable=False)
     contact_name = Column(String(100), nullable=True)
     contact_telegram_id = Column(BigInteger, nullable=True)
     ai_enabled = Column(Boolean, default=True, server_default='true')
@@ -254,7 +258,7 @@ class Conversation(Base):
     campaign_id = Column(UUID(as_uuid=True),
                          ForeignKey("campaigns.id", ondelete="SET NULL"),
                          nullable=True)
-    status = Column(String(20), default="active", server_default="'active'")  # active|manual|paused|lead|handoff|finished
+    status = Column(String(20), default="active", server_default="active")  # active|manual|paused|lead|handoff|finished
     paused_at = Column(DateTime(timezone=True), nullable=True)
     paused_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -540,7 +544,8 @@ class CampaignContactAssignment(Base):
     campaign_id = Column(UUID(as_uuid=True),
                          ForeignKey("campaigns.id", ondelete="CASCADE"),
                          nullable=False)
-    contact_phone = Column(String(20), nullable=False)
+    # VARCHAR(40): phone (+7…) or '@username' identity key (migration 025).
+    contact_phone = Column(String(40), nullable=False)
     sender_id = Column(UUID(as_uuid=True),
                        ForeignKey("senders.id", ondelete="CASCADE"),
                        nullable=False)

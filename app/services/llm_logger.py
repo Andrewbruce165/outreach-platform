@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import AsyncSessionLocal
+from app.models import LLMCall
 
 logger = logging.getLogger(__name__)
 
@@ -115,34 +116,26 @@ async def log_llm_call(
                         conversation_id, e,
                     )
 
-            # 3. INSERT one row (15 columns, JSONB bind via ::jsonb cast)
-            await session.execute(text("""
-                INSERT INTO llm_calls (
-                    workspace_id, conversation_id, campaign_id, agent_id, sender_id,
-                    model, prompt, response_text, tool_calls,
-                    prompt_tokens, completion_tokens, total_tokens, latency_ms, error
-                )
-                VALUES (
-                    :wid, :cid, :camp, :agent, :sender,
-                    :model, :prompt::jsonb, :response_text, :tool_calls::jsonb,
-                    :pt, :ct, :tt, :latency, :error
-                )
-            """), {
-                "wid": str(ws_id),
-                "cid": str(conversation_id),
-                "camp": str(campaign_id) if campaign_id else None,
-                "agent": str(agent_id) if agent_id else None,
-                "sender": str(sender_id) if sender_id else None,
-                "model": model,
-                "prompt": _safe_jsonify(prompt),
-                "response_text": response_text,
-                "tool_calls": _safe_jsonify(tool_calls_json) if tool_calls_json else None,
-                "pt": prompt_tokens,
-                "ct": completion_tokens,
-                "tt": total_tokens,
-                "latency": latency_ms,
-                "error": error,
-            })
+            # 3. INSERT one row via ORM — SQLAlchemy сам биндит JSONB-колонки
+            # из dict, без raw `:param::jsonb` (asyncpg dialect ломается на
+            # named bind перед `::` cast'ом). Сериализация через JSON
+            # round-trip для UUID/datetime в prompt — JSONB ожидает простые типы.
+            session.add(LLMCall(
+                workspace_id=ws_id,
+                conversation_id=conversation_id,
+                campaign_id=campaign_id,
+                agent_id=agent_id,
+                sender_id=sender_id,
+                model=model,
+                prompt=_to_jsonb(prompt),
+                response_text=response_text,
+                tool_calls=_to_jsonb(tool_calls_json) if tool_calls_json else None,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                latency_ms=latency_ms,
+                error=error,
+            ))
             await session.commit()
 
     except SQLAlchemyError as e:
@@ -159,10 +152,14 @@ async def log_llm_call(
         )
 
 
-def _safe_jsonify(obj: Any) -> str:
-    """Serialize dict/list to JSON string for PG JSONB binding.
+def _to_jsonb(obj: Any) -> Any:
+    """Round-trip через JSON чтобы UUID/datetime/прочие не-JSON типы стали str.
+
+    SQLAlchemy JSONB-колонка биндится напрямую из dict/list. Но если внутри
+    встретится UUID или datetime — встроенный JSON-encoder упадёт. Делаем
+    round-trip json.dumps(default=str) → json.loads, получаем pure-json
+    dict/list/scalar пригодный для прямого JSONB-bind'а без ::jsonb cast'а.
 
     `ensure_ascii=False` сохраняет Russian text в prompt (FAQ, persona) as-is.
-    `default=str` для UUID/datetime objects, встречающихся в request_params.
     """
-    return json.dumps(obj, ensure_ascii=False, default=str)
+    return json.loads(json.dumps(obj, ensure_ascii=False, default=str))
