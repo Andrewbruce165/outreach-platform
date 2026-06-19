@@ -264,6 +264,9 @@ async def delete_folder(
                     "Move them, delete them, or pass ?force=true."
                 ),
                 "contact_count": contact_count,
+                # Running-campaign use is caught earlier (FOLDER_USED_BY_RUNNING_CAMPAIGN),
+                # so by this point there are none — always [] here.
+                "active_campaigns": [],
             },
         )
 
