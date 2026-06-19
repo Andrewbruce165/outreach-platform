@@ -1,9 +1,11 @@
 import logging
 import asyncio
+import re
 import tempfile
 import os
 import socks
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -51,6 +53,31 @@ def is_frozen_error(exc: Exception) -> bool:
     surfaces these unknown RPC errors generically, so we match on the string.
     """
     return "FROZEN" in str(exc).upper()
+
+
+# SpamBot phrases its release time as e.g. "released on 20 Jun 2026, 11:49 UTC"
+# (also "limited until 20 Jun 2026, 11:49 UTC"). English only — RU/other locales
+# fall back to a fixed recheck interval at the call site.
+_SPAMBOT_DATE_RE = re.compile(
+    r"(\d{1,2})\s+([A-Z][a-z]{2})\s+(\d{4}),?\s+(\d{1,2}):(\d{2})\s*UTC"
+)
+
+
+def parse_spambot_limit_until(text: str) -> Optional[datetime]:
+    """Extract the absolute release time SpamBot quotes, as an aware UTC datetime.
+
+    Returns None if no English-format date is found (caller then uses a fixed
+    recheck interval instead).
+    """
+    m = _SPAMBOT_DATE_RE.search(text or "")
+    if not m:
+        return None
+    day, mon, year, hh, mm = m.groups()
+    try:
+        dt = datetime.strptime(f"{day} {mon} {year} {hh}:{mm}", "%d %b %Y %H:%M")
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc)
 
 
 class SessionAuthError(Exception):
@@ -281,6 +308,11 @@ class TelegramService:
                 result["status"] = "free"
             elif any(phrase in text_lower for phrase in ["limited", "restrict", "ограничен"]):
                 result["status"] = "limited"
+                # Absolute release time SpamBot quotes (English only); None → caller
+                # falls back to a fixed recheck interval.
+                limit_until = parse_spambot_limit_until(text)
+                if limit_until:
+                    result["limit_until"] = limit_until.isoformat()
             elif any(phrase in text_lower for phrase in [
                 "suspended", "blocked", "banned",
                 "заблокирован", "приостановлен", "забанен"

@@ -1405,15 +1405,25 @@ class TelegramListener:
                     banned += 1
                     logger.critical(f"⛔ [restriction] {slug} suspended (SpamBot) → auth_status=banned")
                 else:
-                    # 'limited' or 'unknown' → still restricted, retry next window.
+                    # 'limited' or 'unknown' → still restricted. Prefer SpamBot's quoted
+                    # release time (recheck just after it); else use the fixed interval.
+                    next_at = next_recheck
+                    iso = result.get("limit_until")
+                    if verdict == "limited" and iso:
+                        try:
+                            candidate = datetime.fromisoformat(iso) + timedelta(minutes=5)
+                            if candidate > datetime.now(timezone.utc):
+                                next_at = candidate
+                        except ValueError:
+                            pass
                     await db.execute(
                         text("UPDATE senders SET restricted_until = :next WHERE id = :sid"),
-                        {"next": next_recheck, "sid": str(r[0])})
+                        {"next": next_at, "sid": str(r[0])})
                     await db.commit()
                     extended += 1
                     logger.info(
                         f"🔁 [restriction] {slug} still restricted (SpamBot: {verdict}) — "
-                        f"recheck {next_recheck.strftime('%H:%M UTC')}"
+                        f"recheck {next_at.strftime('%Y-%m-%d %H:%M UTC')}"
                     )
 
         if rows:

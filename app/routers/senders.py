@@ -626,11 +626,21 @@ async def check_spambot(
             sender.auth_status = "banned"
             await db.commit()
             spambot_result["auth_status_updated"] = "banned"
-        elif verdict == "limited" and sender.restriction_status != "spam_limited":
+        elif verdict == "limited":
             sender.restriction_status = "spam_limited"
-            sender.restricted_until = datetime.now(timezone.utc) + timedelta(
+            # Prefer SpamBot's quoted release time (+5min buffer); else fixed interval.
+            iso = spambot_result.get("limit_until")
+            recheck_at = datetime.now(timezone.utc) + timedelta(
                 seconds=get_settings().restriction_recheck_interval_seconds
             )
+            if iso:
+                try:
+                    candidate = datetime.fromisoformat(iso) + timedelta(minutes=5)
+                    if candidate > datetime.now(timezone.utc):
+                        recheck_at = candidate
+                except ValueError:
+                    pass
+            sender.restricted_until = recheck_at
             await db.commit()
             spambot_result["restriction_status_updated"] = "spam_limited"
         elif verdict == "free" and sender.restriction_status != "none":

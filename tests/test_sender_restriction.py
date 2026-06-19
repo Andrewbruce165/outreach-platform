@@ -57,6 +57,30 @@ def test_is_frozen_error():
     assert not is_frozen_error(Exception("network unreachable"))
 
 
+# ─── 2b. parse_spambot_limit_until ───────────────────────────────────────────
+
+
+def test_parse_spambot_limit_until():
+    from datetime import datetime, timezone
+
+    from app.services.telegram import parse_spambot_limit_until
+
+    # Real SpamBot wording (both "limited until" and "released on" appear).
+    text = (
+        "your account is now limited until 20 Jun 2026, 11:49 UTC. "
+        "Your account will be automatically released on 20 Jun 2026, 11:49 UTC."
+    )
+    assert parse_spambot_limit_until(text) == datetime(2026, 6, 20, 11, 49, tzinfo=timezone.utc)
+    # No-comma variant still parses.
+    assert parse_spambot_limit_until("released on 1 Jan 2027 09:05 UTC") == datetime(
+        2027, 1, 1, 9, 5, tzinfo=timezone.utc
+    )
+    # RU / unknown format → None (caller falls back to fixed interval).
+    assert parse_spambot_limit_until("ваш аккаунт ограничен до 20 июн 2026") is None
+    assert parse_spambot_limit_until("good news, no limits") is None
+    assert parse_spambot_limit_until("") is None
+
+
 # ─── 3. restriction reconcile tick ───────────────────────────────────────────
 
 
@@ -92,15 +116,16 @@ class _FakeSession:
         return False
 
 
-def _setup_listener(monkeypatch, select_rows, verdict):
+def _setup_listener(monkeypatch, select_rows, verdict, extra=None):
     from app.services import listener as listener_mod
 
     session = _FakeSession(select_rows)
+    spambot_result = {"status": verdict, **(extra or {})}
     monkeypatch.setattr(listener_mod, "AsyncSessionLocal", MagicMock(return_value=session))
     monkeypatch.setattr(
         listener_mod.telegram_service,
         "check_spambot",
-        AsyncMock(return_value={"status": verdict}),
+        AsyncMock(return_value=spambot_result),
     )
 
     listener = listener_mod.TelegramListener()
@@ -131,6 +156,25 @@ async def test_restriction_tick_extends_on_limited(monkeypatch):
     sqls = " ".join(s for s, _ in session.executed)
     assert "restricted_until = :next" in sqls
     assert "restriction_status = 'none'" not in sqls  # NOT cleared
+
+
+async def test_restriction_tick_uses_spambot_release_date(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    # SpamBot quotes a release far in the future → sweep schedules recheck just after it.
+    release = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0)
+    rows = [("sid-1", "s1", "spam_limited")]
+    listener, session = _setup_listener(
+        monkeypatch, rows, "limited", extra={"limit_until": release.isoformat()}
+    )
+
+    summary = await listener._restriction_reconcile_tick()
+
+    assert summary["extended"] == 1
+    # Find the UPDATE ... restricted_until = :next and check the param.
+    next_params = [p for s, p in session.executed if p and "next" in p]
+    assert next_params, "expected an UPDATE with :next param"
+    assert next_params[0]["next"] == release + timedelta(minutes=5)
 
 
 async def test_restriction_tick_bans_on_suspended(monkeypatch):
