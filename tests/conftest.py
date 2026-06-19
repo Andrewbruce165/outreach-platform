@@ -119,7 +119,11 @@ async def _setup_database():
                 # Table or `id` column not present (e.g. junction tables w/ composite PK).
                 pass
 
-        # Apply Phase 1-5.1 migrations 012-018 in order.
+        # Apply Phase 1-5.1 migrations 012-018 in order, then the 2026-05-26
+        # schema-drift / hotfix batch 019-025 (idempotent), then 026.
+        # 019-025 close gaps create_all can't express (CHECK constraints, partial
+        # UNIQUE indexes for ON CONFLICT dedup, user_workspaces uniqueness) — without
+        # them workspace setup and contact dedup raise InvalidColumnReferenceError.
         for filename in (
             "012_workspace.sql",
             "013_phase2.sql",
@@ -128,10 +132,21 @@ async def _setup_database():
             "016_phase4.sql",
             "017_phase5.sql",
             "018_phase5_1.sql",
+            "019_schema_drift_fix.sql",
+            "020_contacts_cache_unique.sql",
+            "021_uuid_defaults.sql",
+            "022_conversations_status_default.sql",
+            "023_user_workspaces_unique.sql",
+            "024_campaign_draft_nullable.sql",
+            "025_username_outreach.sql",
             # 026: allow_recontact columns come from ORM create_all (ADD COLUMN
             # IF NOT EXISTS are no-ops here), but the conversations.updated_at
             # freshness trigger is SQL-only — apply it so recontact tests see it.
             "026_campaign_allow_recontact.sql",
+            # 027: folders(workspace_id, name) UNIQUE — never landed because 013's
+            # inline constraint is skipped by CREATE TABLE IF NOT EXISTS after
+            # create_all. Required for get_or_create_by_name ON CONFLICT.
+            "027_folders_workspace_name_unique.sql",
         ):
             sql_text = (PROJECT_ROOT / "migrations" / filename).read_text()
             await asyncpg_conn.execute(sql_text)
