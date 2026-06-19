@@ -9474,6 +9474,11 @@
               }
             ],
             "title": "Created At"
+          },
+          "sent_today": {
+            "type": "integer",
+            "title": "Sent Today",
+            "default": 0
           }
         },
         "type": "object",

@@ -310,8 +310,8 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
       </td>
       <td>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
-          <span className="num text-xs muted">— / {dailyLimit}</span>
-          <CorridorBar value={0} limit={dailyLimit} />
+          <span className="num text-xs muted">{sender.sent_today ?? 0} / {dailyLimit}</span>
+          <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
         </div>
       </td>
       <td className="num mono text-sm">

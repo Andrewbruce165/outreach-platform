@@ -2689,6 +2689,12 @@ export interface components {
             last_used_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /**
+             * Sent Today
+             * @description Messages sent in the trailing 24h window (TODAY column numerator).
+             * @default 0
+             */
+            sent_today?: number;
         };
         /**
          * SenderUpdate
