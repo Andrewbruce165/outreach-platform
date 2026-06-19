@@ -407,6 +407,79 @@ async def test_pre_send_guard_passes_when_ai_enabled(
     send_mock.assert_awaited()
 
 
+async def test_pre_send_guard_allows_recontact_over_finished_dialog(
+    async_db_session, test_workspace, test_sender_factory,
+    test_conversation_factory, test_campaign_factory, monkeypatch,
+):
+    """Test 12b — Under allow_recontact a closed (finished) dialog with
+    ai_enabled=false must NOT block a fresh cold opener.
+
+    Regression for the re-contact case: cross-campaign dedup let the contact
+    through (finished = not protected), but the pre-send guard matched the old
+    finished/ai-off conversation and failed the item with 'Conversation taken
+    over manually'. The guard now inspects only a PROTECTED (live & fresh)
+    dialog — a finished one no longer blocks; _upsert_conversation opens a
+    fresh thread.
+    """
+    from app.services.queue import queue_worker
+
+    sender = await test_sender_factory()
+    camp = await test_campaign_factory()
+    # Factory doesn't expose the flag — opt the campaign into re-contact.
+    await async_db_session.execute(text("""
+        UPDATE campaigns SET allow_recontact = true, recontact_min_age_days = 30
+        WHERE id = :cid
+    """), {"cid": str(camp["id"])})
+    await async_db_session.commit()
+
+    # Old dialog: finished + ai off, fresh updated_at. 'finished' is NOT a
+    # protected status, so the guard must ignore it.
+    conv = await test_conversation_factory(
+        sender=sender, contact_phone="+79991403001",
+        contact_telegram_id=603001,
+        status="finished", ai_enabled=False,
+    )
+
+    item_id = _uuid.uuid4()
+    await async_db_session.execute(text("""
+        INSERT INTO message_queue
+            (id, workspace_id, sender_id, campaign_id, item_type, status,
+             recipient_phone, message_text)
+        VALUES (:id, :wid, :sid, :cid, 'message', 'processing',
+                '+79991403001', 'cold opener')
+    """), {
+        "id": str(item_id),
+        "wid": str(test_workspace.id),
+        "sid": str(sender.id),
+        "cid": str(camp["id"]),
+    })
+    await async_db_session.commit()
+
+    send_mock = AsyncMock(
+        return_value={
+            "success": True,
+            "message_id": "987654",
+            "recipient": {"telegram_id": 603001, "name": "Polina", "username": None},
+        }
+    )
+    monkeypatch.setattr(
+        "app.services.queue.telegram_service.get_client",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "app.services.queue.telegram_service.send_message", send_mock
+    )
+
+    await queue_worker._QueueWorker__send_item_inner(item_id)
+
+    send_mock.assert_awaited()
+    row = (await async_db_session.execute(text("""
+        SELECT status, error_message FROM message_queue WHERE id = :id
+    """), {"id": str(item_id)})).first()
+    assert row.status == "sent"
+    assert row.error_message != "Conversation taken over manually"
+
+
 # ── Test 13: CLAUDE.md guard — no empirical constant changes ──────────────────
 
 

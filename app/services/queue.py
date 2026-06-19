@@ -536,17 +536,49 @@ class QueueWorker:
             # CLAUDE.md guard: НЕ трогаем эмпирические интервалы rate-limit /
             # debounce / long-pause / flood-threshold — только один SELECT и
             # одно UPDATE на queue item.
-            guard_row = (await db.execute(text("""
-                SELECT ai_enabled FROM conversations
-                WHERE workspace_id = :wid
-                  AND sender_id = :sid
-                  AND contact_phone = :phone
-                LIMIT 1
-            """), {
+            #
+            # Re-contact (migration 026): под allow_recontact закрытый/протухший
+            # диалог НЕ продолжается — _upsert_conversation откроет новую строку
+            # (чистый старт). Значит guard должен смотреть ai_enabled только у
+            # ЗАЩИЩЁННОГО (живого и свежего) диалога — иначе старый finished-диалог
+            # с ai_enabled=false (закрытый/перехваченный ранее) ложно срубит
+            # легитимный cold opener. Предикат общий с _upsert_conversation и
+            # campaign_enqueue через recontact.protected_conversation_sql.
+            allow_recontact = False
+            recontact_age = 30
+            if item.campaign_id is not None:
+                camp_row = (await db.execute(text("""
+                    SELECT allow_recontact, recontact_min_age_days
+                    FROM campaigns WHERE id = :cid
+                """), {"cid": str(item.campaign_id)})).fetchone()
+                if camp_row is not None:
+                    allow_recontact = bool(camp_row.allow_recontact)
+                    recontact_age = int(camp_row.recontact_min_age_days)
+
+            guard_params = {
                 "wid": str(item.workspace_id),
                 "sid": str(item.sender_id),
                 "phone": item.recipient_phone,
-            })).first()
+            }
+            if allow_recontact:
+                guard_sql = f"""
+                    SELECT ai_enabled FROM conversations
+                    WHERE workspace_id = :wid
+                      AND sender_id = :sid
+                      AND contact_phone = :phone
+                      AND {protected_conversation_sql("age_days")}
+                    ORDER BY updated_at DESC LIMIT 1
+                """
+                guard_params["age_days"] = recontact_age
+            else:
+                guard_sql = """
+                    SELECT ai_enabled FROM conversations
+                    WHERE workspace_id = :wid
+                      AND sender_id = :sid
+                      AND contact_phone = :phone
+                    LIMIT 1
+                """
+            guard_row = (await db.execute(text(guard_sql), guard_params)).first()
 
             if guard_row is not None and guard_row.ai_enabled is False:
                 logger.info(
