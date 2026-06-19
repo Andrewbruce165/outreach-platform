@@ -25,6 +25,7 @@ import httpx
 from sqlalchemy import select, update, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.models import MessageQueue, QueueItemStatus, QueueItemType, Sender, MessageLog, MessageType
 from app.services.telegram import telegram_service, SessionAuthError
@@ -374,7 +375,8 @@ class QueueWorker:
         sender_row = (await db.execute(
             text("""
                 SELECT rate_per_min, rate_per_hour, rate_per_day,
-                       lifecycle_status, auth_status
+                       lifecycle_status, auth_status,
+                       restriction_status, restricted_until
                 FROM senders WHERE id = :sid
             """),
             {"sid": str(sender_id)},
@@ -389,6 +391,17 @@ class QueueWorker:
             logger.debug(
                 f"Sender {sender_id}: not eligible "
                 f"(lifecycle={sender_row.lifecycle_status} auth={sender_row.auth_status})"
+            )
+            return False
+
+        # Migration 028: don't burn sends on a restricted (spam_limited/frozen)
+        # account. The listener reconcile sweep clears the flag once SpamBot says
+        # the account is free again. While restricted_until is in the future we skip;
+        # once it elapses we let the sweep (not the worker) re-check.
+        if sender_row.restriction_status != "none":
+            logger.debug(
+                f"Sender {sender_id}: restricted "
+                f"({sender_row.restriction_status}, until={sender_row.restricted_until}) — skipping tick"
             )
             return False
 
@@ -718,19 +731,72 @@ class QueueWorker:
                         return
 
                     elif error_code == "PEER_FLOOD":
-                        # Spam restriction — worse than FloodWait, pause all tasks 24h
+                        # Spam restriction — worse than FloodWait, pause all tasks 24h.
+                        # Migration 028: also flag the sender as spam_limited so the UI
+                        # stops showing 'active' and the listener reconcile sweep re-checks
+                        # via SpamBot once restricted_until elapses (recheck interval, not
+                        # the 24h queue pause — the empirical pause is left untouched).
                         pause_until = datetime.now(timezone.utc) + timedelta(hours=24)
+                        recheck_at = datetime.now(timezone.utc) + timedelta(
+                            seconds=get_settings().restriction_recheck_interval_seconds
+                        )
                         async with AsyncSessionLocal() as db2:
                             await db2.execute(text("""
                                 UPDATE message_queue SET scheduled_at = :pause_until
                                 WHERE sender_id = :sid AND status = 'pending'
                             """), {"pause_until": pause_until, "sid": str(sender.id)})
+                            await db2.execute(text("""
+                                UPDATE senders
+                                SET restriction_status = 'spam_limited',
+                                    restricted_until = :recheck_at
+                                WHERE id = :sid
+                            """), {"recheck_at": recheck_at, "sid": str(sender.id)})
                             await db2.commit()
                         logger.critical(
                             f"PEER_FLOOD for sender {sender.slug} — all tasks paused 24h "
                             f"until {pause_until.strftime('%Y-%m-%d %H:%M UTC')}. "
+                            f"Sender flagged spam_limited (recheck "
+                            f"{recheck_at.strftime('%Y-%m-%d %H:%M UTC')}). "
                             f"Manual account review required before resuming!"
                             # TODO: add external alert (webhook/email) when monitoring infrastructure is available
+                        )
+                        if item.callback_url:
+                            asyncio.create_task(self._fire_callback(
+                                url=item.callback_url,
+                                queue_id=str(item.id),
+                                status="failed",
+                                sender_slug=sender.slug,
+                                recipient_phone=item.recipient_phone,
+                                error=error_msg,
+                                extra_data=item.extra_data,
+                            ))
+                        await self._fail_item(db, item, error_msg)
+                        return
+
+                    elif error_code == "ACCOUNT_FROZEN":
+                        # Migration 028: Telegram froze the account (FROZEN_*). All writes
+                        # are blocked until appeal — pause pending and flag the sender frozen.
+                        # The reconcile sweep re-checks via SpamBot and lifts on its own.
+                        pause_until = datetime.now(timezone.utc) + timedelta(hours=24)
+                        recheck_at = datetime.now(timezone.utc) + timedelta(
+                            seconds=get_settings().restriction_recheck_interval_seconds
+                        )
+                        async with AsyncSessionLocal() as db2:
+                            await db2.execute(text("""
+                                UPDATE message_queue SET scheduled_at = :pause_until
+                                WHERE sender_id = :sid AND status = 'pending'
+                            """), {"pause_until": pause_until, "sid": str(sender.id)})
+                            await db2.execute(text("""
+                                UPDATE senders
+                                SET restriction_status = 'frozen',
+                                    restricted_until = :recheck_at
+                                WHERE id = :sid
+                            """), {"recheck_at": recheck_at, "sid": str(sender.id)})
+                            await db2.commit()
+                        logger.critical(
+                            f"ACCOUNT_FROZEN for sender {sender.slug} — flagged frozen, "
+                            f"pending paused until {pause_until.strftime('%Y-%m-%d %H:%M UTC')}. "
+                            f"Telegram appeal required."
                         )
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
