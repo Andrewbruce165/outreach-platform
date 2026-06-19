@@ -42,6 +42,17 @@ logger = logging.getLogger(__name__)
 AUTH_ERRORS = (AuthKeyError, AuthKeyUnregisteredError, AuthKeyDuplicatedError, AuthKeyPermEmptyError)
 
 
+def is_frozen_error(exc: Exception) -> bool:
+    """True if the RPC error signals an account freeze (FROZEN_* family).
+
+    Telegram only enforces a freeze on the WRITE path (sending, joining), raising
+    an RPC error whose name starts with ``FROZEN_`` (e.g. FROZEN_METHOD_INVALID on
+    send, FROZEN_PARTICIPANT_MISSING in the update loop — Telethon #4610). Telethon
+    surfaces these unknown RPC errors generically, so we match on the string.
+    """
+    return "FROZEN" in str(exc).upper()
+
+
 class SessionAuthError(Exception):
     """Raised when Telegram session is invalid and needs re-authorization."""
     def __init__(self, slug: str, auth_status: str, detail: str):
@@ -630,6 +641,15 @@ class TelegramService:
                 }
             }
         except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while sending message: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
             logger.error(f"Error sending message: {e}")
             return {
                 "success": False,
@@ -778,6 +798,15 @@ class TelegramService:
                 }
             }
         except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while sending file: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
             logger.error(f"Error sending file: {e}")
             return {
                 "success": False,
