@@ -7,7 +7,7 @@ import asyncio
 import random
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import (
@@ -23,7 +23,7 @@ from telethon.errors import (
 )
 from telethon.errors.common import TypeNotFoundError
 from telethon.tl.functions.updates import GetDifferenceRequest, GetChannelDifferenceRequest
-from app.services.telegram import make_telegram_client, safe_read_ack, safe_typing
+from app.services.telegram import make_telegram_client, safe_read_ack, safe_typing, telegram_service
 
 
 class ResilientTelegramClient(TelegramClient):
@@ -79,6 +79,7 @@ ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", "")
 
 # Decryption — use shared implementation to avoid divergence
 from app.services.encryption import decrypt_session
+from app.config import get_settings
 import base64
 import socks
 
@@ -155,6 +156,10 @@ class TelegramListener:
         # Diff'аем desired senders в БД с currently_connected каждые N секунд.
         self.reconcile_interval = int(os.environ.get("LISTENER_RECONCILE_INTERVAL", "30"))
         self._reconcile_task: Optional[asyncio.Task] = None
+        # Migration 028: restriction reconcile — re-check spam_limited/frozen senders
+        # via SpamBot once restricted_until elapses, and lift/extend automatically.
+        self.restriction_reconcile_interval = get_settings().restriction_reconcile_interval_seconds
+        self._restriction_task: Optional[asyncio.Task] = None
         self._connected_sender_ids: set[str] = set()   # sender uuid str
         self._proxy_snapshot: dict[str, Optional[dict]] = {}
         self._sender_id_to_slug: dict[str, str] = {}
@@ -1332,6 +1337,113 @@ class TelegramListener:
                 logger.error(f"❌ [reconcile] error: {e}", exc_info=True)
         logger.info("🛑 Reconcile loop stopped")
 
+    # ─── Migration 028: restriction reconcile (spam-limit / freeze) ───────────
+
+    async def _restriction_reconcile_tick(self) -> dict:
+        """Re-check senders flagged spam_limited/frozen whose recheck window elapsed.
+
+        For each due sender we ask SpamBot (reusing the live listener client — the
+        sender is still active+ok, so it is connected) and act on the verdict:
+            free      → clear restriction + un-pause that sender's paused queue items
+            limited   → extend restricted_until (still restricted)
+            suspended → real ban → auth_status='banned'
+            unknown   → bump restricted_until to avoid hammering SpamBot every tick
+
+        Single underscore so tests can drive one pass without the loop. Returns counts.
+        """
+        recheck = self.restriction_reconcile_interval
+
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                text("""
+                    SELECT id, slug, restriction_status
+                    FROM senders
+                    WHERE restriction_status <> 'none'
+                      AND restricted_until IS NOT NULL
+                      AND restricted_until <= NOW()
+                """)
+            )).fetchall()
+
+        checked = cleared = extended = banned = skipped = 0
+
+        for r in rows:
+            slug = r[1]
+            client = self.clients.get(slug)
+            if client is None:
+                # Not connected this tick — next reconcile connects it, then we re-check.
+                skipped += 1
+                continue
+
+            result = await telegram_service.check_spambot(client)
+            verdict = result.get("status", "unknown")
+            checked += 1
+            next_recheck = datetime.now(timezone.utc) + timedelta(seconds=recheck)
+
+            async with AsyncSessionLocal() as db:
+                if verdict == "free":
+                    await db.execute(
+                        text("""
+                            UPDATE senders
+                            SET restriction_status = 'none', restricted_until = NULL
+                            WHERE id = :sid
+                        """), {"sid": str(r[0])})
+                    # Un-pause: pull this sender's paused pending items back to now.
+                    await db.execute(
+                        text("""
+                            UPDATE message_queue SET scheduled_at = NOW()
+                            WHERE sender_id = :sid AND status = 'pending'
+                              AND scheduled_at > NOW()
+                        """), {"sid": str(r[0])})
+                    await db.commit()
+                    cleared += 1
+                    logger.info(f"✅ [restriction] {slug} cleared (SpamBot: free) — queue resumed")
+                elif verdict == "suspended":
+                    await db.execute(
+                        text("UPDATE senders SET auth_status = 'banned' WHERE id = :sid"),
+                        {"sid": str(r[0])})
+                    await db.commit()
+                    banned += 1
+                    logger.critical(f"⛔ [restriction] {slug} suspended (SpamBot) → auth_status=banned")
+                else:
+                    # 'limited' or 'unknown' → still restricted, retry next window.
+                    await db.execute(
+                        text("UPDATE senders SET restricted_until = :next WHERE id = :sid"),
+                        {"next": next_recheck, "sid": str(r[0])})
+                    await db.commit()
+                    extended += 1
+                    logger.info(
+                        f"🔁 [restriction] {slug} still restricted (SpamBot: {verdict}) — "
+                        f"recheck {next_recheck.strftime('%H:%M UTC')}"
+                    )
+
+        if rows:
+            logger.info(
+                f"🔁 [restriction] tick: checked={checked} cleared={cleared} "
+                f"extended={extended} banned={banned} skipped={skipped}"
+            )
+        return {
+            "checked": checked, "cleared": cleared,
+            "extended": extended, "banned": banned, "skipped": skipped,
+        }
+
+    async def _restriction_reconcile_loop(self):
+        """Periodic restriction reconcile — every ``restriction_reconcile_interval`` seconds."""
+        logger.info(
+            f"🔁 Restriction reconcile loop started "
+            f"(interval={self.restriction_reconcile_interval}s)"
+        )
+        while self.running:
+            try:
+                await asyncio.sleep(self.restriction_reconcile_interval)
+                if not self.running:
+                    break
+                await self._restriction_reconcile_tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ [restriction] error: {e}", exc_info=True)
+        logger.info("🛑 Restriction reconcile loop stopped")
+
     async def run(self):
         """Запуск всех клиентов"""
         logger.info("🚀 Запуск Telegram Listener с AI Engine...")
@@ -1354,6 +1466,10 @@ class TelegramListener:
         self._reconcile_task = asyncio.create_task(
             self._reconcile_loop(), name="listener-reconcile"
         )
+        # Migration 028: restriction reconcile sweep.
+        self._restriction_task = asyncio.create_task(
+            self._restriction_reconcile_loop(), name="listener-restriction-reconcile"
+        )
 
         # Block until stop() flips the event.
         await self._stop_event.wait()
@@ -1364,12 +1480,13 @@ class TelegramListener:
         self.running = False
         if self._stop_event is not None:
             self._stop_event.set()
-        if self._reconcile_task and not self._reconcile_task.done():
-            self._reconcile_task.cancel()
-            try:
-                await self._reconcile_task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._reconcile_task, self._restriction_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         for slug, client in list(self.clients.items()):
             try:
                 if client.is_connected():
