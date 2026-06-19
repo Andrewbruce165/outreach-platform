@@ -75,11 +75,14 @@ def _derive_status(sender: Sender) -> str:
     return sender.lifecycle_status
 
 
-def _sender_to_response(sender: Sender) -> SenderResponse:
+def _sender_to_response(sender: Sender, sent_today: int = 0) -> SenderResponse:
     """Build SenderResponse с derived status + nested RateLimits.
 
     Phase 3 C-05: ai_context_id / ai_context_name fields removed — sender
     больше не «знает» агента, связь через Campaign в Phase 4.
+
+    `sent_today` — trailing-24h sent count (TODAY column numerator). Computed
+    only on the list endpoint; other paths use the default 0.
     """
     return SenderResponse(
         id=sender.id,
@@ -98,6 +101,7 @@ def _sender_to_response(sender: Sender) -> SenderResponse:
         proxy=ProxyConfig(**sender.proxy) if sender.proxy else None,
         last_used_at=sender.last_used_at,
         created_at=sender.created_at,
+        sent_today=sent_today,
     )
 
 
@@ -221,8 +225,32 @@ async def list_senders(
         .order_by(Sender.name)
     )
     senders = result.scalars().all()
+
+    # TODAY column numerator: messages sent per sender in the trailing 24h.
+    # Single GROUP BY over message_queue (no N+1), scoped to the senders just
+    # loaded. Window + status match the rate-limiter daily cap (queue.py:450-466)
+    # so {sent_today}/{rate_per_day} never desyncs (no "151/150").
+    sent_today_map: dict = {}
+    sender_ids = [s.id for s in senders]
+    if sender_ids:
+        rows = (await db.execute(
+            text("""
+                SELECT sender_id, COUNT(*) AS sent_today
+                  FROM message_queue
+                 WHERE sender_id = ANY(:sender_ids)
+                   AND status = 'sent'
+                   AND finished_at >= now() - interval '24 hours'
+                 GROUP BY sender_id
+            """),
+            {"sender_ids": sender_ids},
+        )).fetchall()
+        sent_today_map = {row[0]: row[1] for row in rows}
+
     return SenderListResponse(
-        senders=[_sender_to_response(s) for s in senders]
+        senders=[
+            _sender_to_response(s, sent_today=sent_today_map.get(s.id, 0))
+            for s in senders
+        ]
     )
 
 

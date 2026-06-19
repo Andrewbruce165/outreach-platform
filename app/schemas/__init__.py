@@ -137,6 +137,11 @@ class SenderResponse(BaseModel):
     # AttributeError because Sender ORM no longer has ai_context_id (RESEARCH Pitfall 4).
     last_used_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    # Messages sent in the trailing 24h window (numerator of the TODAY column).
+    # Same definition as the rate-limiter daily cap (queue.py:450-466):
+    # COUNT(message_queue WHERE status='sent' AND finished_at >= now()-24h).
+    # Only computed on the list endpoint; single-sender paths default to 0.
+    sent_today: int = 0
 
 
 class SenderCreateResponse(BaseModel):

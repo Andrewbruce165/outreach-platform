@@ -102,6 +102,91 @@ async def test_list_senders_workspace_isolated(
     assert "sender-b-1" not in slugs
 
 
+# ─── TODAY column: sent_today (rolling-24h numerator) ────────────────────────
+
+
+async def _insert_queue_item(
+    db: AsyncSession,
+    workspace_id: str,
+    sender_id: str,
+    *,
+    status: str = "sent",
+    finished_hours_ago: float | None = None,
+):
+    """Прямой INSERT в message_queue. finished_hours_ago=None → finished_at NULL."""
+    finished_clause = (
+        "now() - make_interval(hours => :hrs)"
+        if finished_hours_ago is not None
+        else "NULL"
+    )
+    await db.execute(
+        text(f"""
+            INSERT INTO message_queue
+                (id, workspace_id, sender_id, item_type, status,
+                 recipient_phone, finished_at)
+            VALUES
+                (gen_random_uuid(), :wid, :sid, 'message', :status,
+                 '+79990000000', {finished_clause})
+        """),
+        {
+            "wid": workspace_id,
+            "sid": sender_id,
+            "status": status,
+            **({"hrs": finished_hours_ago} if finished_hours_ago is not None else {}),
+        },
+    )
+    await db.commit()
+
+
+async def test_list_senders_includes_sent_today_field(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """GET /senders surfaces sent_today; defaults to 0 with no queue rows."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="today-empty"
+    )
+    await _insert_sender_raw(async_db_session, ws, "today-empty-1")
+
+    r = await async_client.get(
+        "/api/v1/senders", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    sender = next(s for s in r.json()["senders"] if s["slug"] == "today-empty-1")
+    assert "sent_today" in sender
+    assert sender["sent_today"] == 0
+
+
+async def test_list_senders_counts_sent_in_trailing_24h(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """sent_today counts only status='sent' finished within the last 24h.
+
+    Mirrors the rate-limiter daily-cap window (queue.py:450-466):
+      - 2 sent within 24h        → counted
+      - 1 sent 25h ago           → outside window, NOT counted
+      - 1 pending                → wrong status, NOT counted
+      - 1 sent with finished_at NULL → NOT counted (matches cap query)
+    Expected sent_today == 2.
+    """
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="today-count"
+    )
+    sid = await _insert_sender_raw(async_db_session, ws, "today-count-1")
+
+    await _insert_queue_item(async_db_session, ws, sid, status="sent", finished_hours_ago=1)
+    await _insert_queue_item(async_db_session, ws, sid, status="sent", finished_hours_ago=10)
+    await _insert_queue_item(async_db_session, ws, sid, status="sent", finished_hours_ago=25)
+    await _insert_queue_item(async_db_session, ws, sid, status="pending", finished_hours_ago=1)
+    await _insert_queue_item(async_db_session, ws, sid, status="sent", finished_hours_ago=None)
+
+    r = await async_client.get(
+        "/api/v1/senders", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    sender = next(s for s in r.json()["senders"] if s["slug"] == "today-count-1")
+    assert sender["sent_today"] == 2
+
+
 async def test_get_sender_cross_tenant_returns_404(
     async_client, async_db_session, valid_supabase_jwt
 ):
