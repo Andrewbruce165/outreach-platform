@@ -44,6 +44,7 @@ function AccountsPage() {
     warmup: senders.filter((s) => s.status === "warmup").length,
     paused: senders.filter((s) => s.status === "paused").length,
     error: senders.filter((s) => s.status === "error").length,
+    restricted: senders.filter((s) => s.status === "limited" || s.status === "frozen").length,
   };
 
   return (
@@ -66,7 +67,7 @@ function AccountsPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(5, 1fr)",
+              gridTemplateColumns: "repeat(6, 1fr)",
               gap: 12,
               marginBottom: 16,
             }}
@@ -75,6 +76,7 @@ function AccountsPage() {
             <MiniMetric label="Active" value={counts.active} sub="Sending now" color="var(--success)" />
             <MiniMetric label="Warm-up" value={counts.warmup} sub="≤ 30 days" color="var(--warning)" />
             <MiniMetric label="Paused" value={counts.paused} sub="Idle" color="var(--text-muted)" />
+            <MiniMetric label="Restricted" value={counts.restricted} sub="Spam-limit / frozen" color="var(--orange, var(--warning))" />
             <MiniMetric label="Errors" value={counts.error} sub="Need attention" color="var(--danger)" />
           </div>
         )}
@@ -251,8 +253,28 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
     warmup: { pill: "pill--blue", dot: "var(--tg-blue)" },
     paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
     error: { pill: "pill--red", dot: "var(--danger)" },
+    limited: { pill: "pill--orange", dot: "var(--warning)" },
+    frozen: { pill: "pill--red", dot: "var(--danger)" },
+  };
+  const statusLabel: Record<string, string> = {
+    active: "Active",
+    warmup: "Warm-up",
+    paused: "Paused",
+    error: "Error",
+    limited: "Spam-limited",
+    frozen: "Frozen",
   };
   const sty = statusStyle[sender.status] ?? statusStyle.paused;
+  const isRestricted = sender.status === "limited" || sender.status === "frozen";
+  const restrictedUntil =
+    isRestricted && sender.restricted_until
+      ? new Date(sender.restricted_until).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
 
   const lastUsed = sender.last_used_at ? relativeTime(sender.last_used_at) : "—";
   const isChecker = sender.role === "checker";
@@ -291,12 +313,17 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
       </td>
       <td>
         <span className={`pill ${sty.pill}`}>
-          <span className="pill__dot" /> {sender.status}
+          <span className="pill__dot" /> {statusLabel[sender.status] ?? sender.status}
         </span>
         {sender.auth_status !== "ok" && (
           <button className="ob__link" style={{ marginLeft: 8 }} onClick={onReauth}>
             re-auth
           </button>
+        )}
+        {isRestricted && (
+          <div className="muted text-xs" style={{ marginTop: 4 }}>
+            {restrictedUntil ? `Not sending · rechecks ${restrictedUntil}` : "Not sending until cleared"}
+          </div>
         )}
       </td>
       <td>

@@ -2670,7 +2670,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "active" | "warmup" | "paused" | "error";
+            status: "active" | "warmup" | "paused" | "error" | "limited" | "frozen";
             /** Auth Status */
             auth_status: string;
             /**
@@ -2678,6 +2678,18 @@ export interface components {
              * @enum {string}
              */
             lifecycle_status: "active" | "warmup" | "paused";
+            /**
+             * Restriction Status
+             * @description Telegram write-restriction, orthogonal to auth_status (migration 028).
+             * @default none
+             * @enum {string}
+             */
+            restriction_status?: "none" | "spam_limited" | "frozen";
+            /**
+             * Restricted Until
+             * @description When the background sweep re-checks via SpamBot (null if not restricted).
+             */
+            restricted_until?: string | null;
             rate_limits: components["schemas"]["RateLimits"];
             /**
              * Role
