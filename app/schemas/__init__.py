@@ -288,6 +288,10 @@ class MoveContactBatchRequest(BaseModel):
     folder_id: UUID
 
 
+class DeleteContactBatchRequest(BaseModel):
+    contact_ids: List[UUID] = Field(..., min_length=1)
+
+
 class RecheckRequest(BaseModel):
     contact_ids: Optional[List[UUID]] = None
     folder_id: Optional[UUID] = None

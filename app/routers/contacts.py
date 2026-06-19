@@ -41,6 +41,7 @@ from app.schemas import (
     ContactImportRequest,
     ContactImportSummary,
     ContactResponse,
+    DeleteContactBatchRequest,
     MoveContactBatchRequest,
     MoveContactRequest,
 )
@@ -519,6 +520,38 @@ async def move_contacts_batch(
         f"folder={payload.folder_id} moved={moved}"
     )
     return {"moved": moved}
+
+
+# ─── DELETE /api/v1/contacts ─────────────────────────────────────────────────
+
+
+@router.post("/delete", response_model=dict)
+async def delete_contacts_batch(
+    payload: DeleteContactBatchRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch hard-delete. Возвращает {deleted: N}.
+
+    Зеркало move_contacts_batch: workspace-scoped fetch+delete, cross-tenant ids
+    молча пропускаются (не светим существование чужих контактов через 404).
+    """
+    fetch_result = await db.execute(
+        select(Contact).where(
+            Contact.id.in_(payload.contact_ids),
+            Contact.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy
+        )
+    )
+    contacts_to_delete = fetch_result.scalars().all()
+    for contact in contacts_to_delete:
+        await db.delete(contact)
+    await db.commit()
+    deleted = len(contacts_to_delete)
+    logger.info(
+        f"[contacts] batch-delete workspace={ctx.workspace_id} deleted={deleted}"
+    )
+    return {"deleted": deleted}
 
 
 # ─── DELETE /api/v1/contacts/{id} ────────────────────────────────────────────

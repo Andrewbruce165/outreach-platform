@@ -452,3 +452,77 @@ async def test_delete_own_contact(async_client, valid_supabase_jwt):
     cid = contacts.json()[0]["id"]
     response = await async_client.delete(f"/api/v1/contacts/{cid}", headers=headers)
     assert response.status_code == 204
+
+
+# ─── Batch delete ────────────────────────────────────────────────────────────
+
+
+async def test_delete_batch(async_client, valid_supabase_jwt):
+    headers, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "delete-batch"
+    )
+    f1 = await _create_folder(async_client, headers, "DelBatch")
+    await async_client.post(
+        "/api/v1/contacts",
+        headers=headers,
+        json={
+            "contacts": [
+                {"phone": "+79003301001", "folder_id": f1},
+                {"phone": "+79003301002", "folder_id": f1},
+                {"phone": "+79003301003", "folder_id": f1},
+            ]
+        },
+    )
+    contacts = await async_client.get(
+        f"/api/v1/contacts?folder_id={f1}", headers=headers
+    )
+    ids = [c["id"] for c in contacts.json()]
+    assert len(ids) == 3
+
+    response = await async_client.post(
+        "/api/v1/contacts/delete", headers=headers, json={"contact_ids": ids}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted"] == 3
+
+    remaining = await async_client.get(
+        f"/api/v1/contacts?folder_id={f1}", headers=headers
+    )
+    assert remaining.json() == []
+
+
+async def test_delete_batch_cross_tenant_skipped(async_client, valid_supabase_jwt):
+    headers_a, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "del-batch-a"
+    )
+    await async_client.post(
+        "/api/v1/contacts",
+        headers=headers_a,
+        json={"phone": "+79004401001", "folder_name": "PrivateA"},
+    )
+    contacts_a = await async_client.get("/api/v1/contacts", headers=headers_a)
+    cid_a = contacts_a.json()[0]["id"]
+
+    headers_b, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "del-batch-b"
+    )
+    # Tenant B tries to delete tenant A's contact — silently skipped, deleted=0.
+    response = await async_client.post(
+        "/api/v1/contacts/delete", headers=headers_b, json={"contact_ids": [cid_a]}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted"] == 0
+
+    # A's contact still present.
+    still_there = await async_client.get("/api/v1/contacts", headers=headers_a)
+    assert len(still_there.json()) == 1
+
+
+async def test_delete_batch_empty_returns_422(async_client, valid_supabase_jwt):
+    headers, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "del-batch-empty"
+    )
+    response = await async_client.post(
+        "/api/v1/contacts/delete", headers=headers, json={"contact_ids": []}
+    )
+    assert response.status_code == 422
