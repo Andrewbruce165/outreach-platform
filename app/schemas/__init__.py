@@ -126,9 +126,12 @@ class SenderResponse(BaseModel):
     slug: str
     name: str
     phone: str
-    status: Literal["active", "warmup", "paused", "error"]   # derived
+    status: Literal["active", "warmup", "paused", "error", "limited", "frozen"]   # derived
     auth_status: str
     lifecycle_status: Literal["active", "warmup", "paused"]
+    # Migration 028: write-restriction state, orthogonal to auth_status.
+    restriction_status: Literal["none", "spam_limited", "frozen"] = "none"
+    restricted_until: Optional[datetime] = None
     rate_limits: RateLimits
     role: str = "sender"
     proxy: Optional[ProxyConfig] = None

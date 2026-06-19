@@ -25,6 +25,7 @@ Phase 2 ключевые изменения относительно legacy:
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -65,13 +66,23 @@ RATE_SOFT_CAP = {"rate_per_min": 4, "rate_per_hour": 20, "rate_per_day": 150}
 
 
 def _derive_status(sender: Sender) -> str:
-    """D-11: derived status — error > lifecycle_status.
+    """D-11 + migration 028: derived status — error > frozen > limited > lifecycle.
 
-    Если auth_status != 'ok' (session_expired / banned / etc) → status='error'
-    независимо от lifecycle_status.
+    Precedence:
+      auth_status != 'ok' (session_expired / banned / etc) → 'error'
+      restriction_status == 'frozen'                       → 'frozen'
+      restriction_status == 'spam_limited'                 → 'limited'
+      else                                                 → lifecycle_status
+
+    Restriction is orthogonal to auth (a restricted account still authenticates),
+    so it is checked only after auth is confirmed healthy.
     """
     if sender.auth_status != "ok":
         return "error"
+    if sender.restriction_status == "frozen":
+        return "frozen"
+    if sender.restriction_status == "spam_limited":
+        return "limited"
     return sender.lifecycle_status
 
 
@@ -92,6 +103,8 @@ def _sender_to_response(sender: Sender, sent_today: int = 0) -> SenderResponse:
         status=_derive_status(sender),
         auth_status=sender.auth_status,
         lifecycle_status=sender.lifecycle_status,
+        restriction_status=sender.restriction_status,
+        restricted_until=sender.restricted_until,
         rate_limits=RateLimits(
             per_minute=sender.rate_per_min,
             per_hour=sender.rate_per_hour,
@@ -601,12 +614,30 @@ async def check_spambot(
         )
         spambot_result = await telegram_service.check_spambot(client)
 
-        status_map = {"limited": "limited", "suspended": "banned", "free": "ok"}
-        new_auth_status = status_map.get(spambot_result["status"])
-        if new_auth_status and sender.auth_status != new_auth_status:
-            sender.auth_status = new_auth_status
+        # Migration 028: map SpamBot verdict onto the right column.
+        #   free      → clear restriction (restriction_status='none')
+        #   limited   → restriction_status='spam_limited' + recheck window
+        #   suspended → real ban → auth_status='banned' (auth-level, not restriction)
+        # Previously this wrote a bogus auth_status='limited' (not a valid enum value).
+        from app.config import get_settings
+
+        verdict = spambot_result["status"]
+        if verdict == "suspended" and sender.auth_status != "banned":
+            sender.auth_status = "banned"
             await db.commit()
-            spambot_result["auth_status_updated"] = new_auth_status
+            spambot_result["auth_status_updated"] = "banned"
+        elif verdict == "limited" and sender.restriction_status != "spam_limited":
+            sender.restriction_status = "spam_limited"
+            sender.restricted_until = datetime.now(timezone.utc) + timedelta(
+                seconds=get_settings().restriction_recheck_interval_seconds
+            )
+            await db.commit()
+            spambot_result["restriction_status_updated"] = "spam_limited"
+        elif verdict == "free" and sender.restriction_status != "none":
+            sender.restriction_status = "none"
+            sender.restricted_until = None
+            await db.commit()
+            spambot_result["restriction_status_updated"] = "none"
 
         return spambot_result
     except SessionAuthError as e:

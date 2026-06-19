@@ -75,6 +75,19 @@ class Settings(BaseSettings):
         description="Max contacts processed per campaign per tick.",
     )
 
+    # Migration 028: sender write-restriction reconcile (spam-limit / freeze).
+    restriction_recheck_interval_seconds: int = Field(
+        default=6 * 60 * 60,
+        validation_alias="RESTRICTION_RECHECK_INTERVAL",
+        description="How long after a spam_limited hit to re-check via SpamBot (seconds). "
+                    "check_spambot does not expose limit_until, so this is a fixed delay.",
+    )
+    restriction_reconcile_interval_seconds: int = Field(
+        default=15 * 60,
+        validation_alias="RESTRICTION_RECONCILE_INTERVAL",
+        description="Cadence of the listener background sweep that re-checks restricted senders (seconds).",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Парсит CORS_ALLOWED_ORIGINS в list для FastAPI CORSMiddleware."""
