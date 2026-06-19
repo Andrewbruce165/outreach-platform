@@ -88,6 +88,10 @@ class Sender(Base):
     auth_status = Column(String(30), nullable=False, server_default='ok')  # ok, session_expired, session_revoked, deactivated, banned
     # Phase 2 (D-11/D-13): lifecycle_status replaces is_active; rate limits live per-sender.
     lifecycle_status = Column(String(20), nullable=False, server_default='active')  # 'active' | 'warmup' | 'paused'
+    # Migration 028: write-restriction state, orthogonal to auth_status (session validity).
+    # A spam-limited / frozen account still authenticates → auth_status stays 'ok'.
+    restriction_status = Column(String(20), nullable=False, server_default='none')  # 'none' | 'spam_limited' | 'frozen'
+    restricted_until = Column(DateTime(timezone=True), nullable=True)  # when reconcile re-checks via SpamBot
     rate_per_min = Column(Integer, nullable=False, server_default='4')
     rate_per_hour = Column(Integer, nullable=False, server_default='20')
     rate_per_day = Column(Integer, nullable=False, server_default='150')
