@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Plus,
@@ -92,7 +92,11 @@ function ContactsPage() {
           activeId={activeId}
           onSelect={setSelectedId}
         />
-        <FolderDetail folder={activeFolder} onImport={() => setImportOpen(true)} />
+        <FolderDetail
+          folder={activeFolder}
+          folders={foldersQ.data ?? []}
+          onImport={() => setImportOpen(true)}
+        />
       </div>
 
       {importOpen && (
@@ -342,12 +346,29 @@ function FolderSidebar({
 }
 
 /* ---------------- Folder detail (right pane) ---------------- */
-function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: () => void }) {
+function FolderDetail({
+  folder,
+  folders,
+  onImport,
+}: {
+  folder: Folder | null;
+  folders: Folder[];
+  onImport: () => void;
+}) {
   const qc = useQueryClient();
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [moveOpen, setMoveOpen] = useState(false);
+
+  // Reset selection whenever the active folder changes — ids from one folder
+  // must never carry over to another.
+  useEffect(() => {
+    setSelected(new Set());
+    setMoveOpen(false);
+  }, [folder?.id]);
 
   const contactsQ = useQuery({
     queryKey: ["contacts", folder?.id],
@@ -385,6 +406,39 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Recheck failed"),
   });
 
+  const afterBulk = () => {
+    setSelected(new Set());
+    setMoveOpen(false);
+    void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+    void qc.invalidateQueries({ queryKey: ["folders"] });
+  };
+
+  const moveMut = useMutation({
+    mutationFn: (vars: { ids: string[]; folderId: string }) =>
+      api<{ moved: number }>("/api/v1/contacts/move", {
+        method: "POST",
+        body: { contact_ids: vars.ids, folder_id: vars.folderId },
+      }),
+    onSuccess: (res) => {
+      toast.success(`Moved ${res.moved} contact${res.moved === 1 ? "" : "s"}`);
+      afterBulk();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Move failed"),
+  });
+
+  const deleteContactsMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      api<{ deleted: number }>("/api/v1/contacts/delete", {
+        method: "POST",
+        body: { contact_ids: ids },
+      }),
+    onSuccess: (res) => {
+      toast.success(`Deleted ${res.deleted} contact${res.deleted === 1 ? "" : "s"}`);
+      afterBulk();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed"),
+  });
+
   const contacts = contactsQ.data ?? [];
   const filtered = useMemo(() => {
     if (!search.trim()) return contacts;
@@ -407,6 +461,32 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
     ).length;
     return { inTg, checking, notFound };
   }, [contacts]);
+
+  // ── Selection ──────────────────────────────────────────────────────────────
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every((c) => selected.has(c.id));
+  const toggleAllVisible = () =>
+    setSelected((prev) => {
+      if (filtered.length > 0 && filtered.every((c) => prev.has(c.id))) {
+        // deselect the currently-visible set, keep any off-screen selections
+        const next = new Set(prev);
+        filtered.forEach((c) => next.delete(c.id));
+        return next;
+      }
+      const next = new Set(prev);
+      filtered.forEach((c) => next.add(c.id));
+      return next;
+    });
+  const selectedIds = [...selected];
+  const bulkPending = moveMut.isPending || deleteContactsMut.isPending;
+  const otherFolders = folders.filter((f) => f.id !== folder?.id);
 
   if (!folder) {
     return (
@@ -497,12 +577,6 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
         </button>
         <button
           className="btn btn--ghost btn--sm"
-          onClick={() => toast.info("Move to… coming soon")}
-        >
-          <Shuffle size={13} /> Move to…
-        </button>
-        <button
-          className="btn btn--ghost btn--sm"
           style={{ color: "var(--danger)" }}
           onClick={() => {
             if (confirm(`Delete folder "${folder.name}"? Contacts will be removed.`)) {
@@ -573,6 +647,87 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
           </span>
         </div>
 
+        {selected.size > 0 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "8px 14px",
+              background: "var(--bg-soft)",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <span style={{ fontSize: 12.5, fontWeight: 600 }}>{selected.size} selected</span>
+            <span style={{ flex: 1 }} />
+
+            {/* Move to… dropdown */}
+            <div style={{ position: "relative" }}>
+              <button
+                className="btn btn--ghost btn--sm"
+                disabled={bulkPending || otherFolders.length === 0}
+                title={otherFolders.length === 0 ? "No other folders to move to" : undefined}
+                onClick={() => setMoveOpen((v) => !v)}
+              >
+                <Shuffle size={13} /> Move to…
+              </button>
+              {moveOpen && otherFolders.length > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 4px)",
+                    right: 0,
+                    zIndex: 20,
+                    minWidth: 200,
+                    maxHeight: 280,
+                    overflowY: "auto",
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 10,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                    padding: 4,
+                  }}
+                >
+                  {otherFolders.map((f) => (
+                    <button
+                      key={f.id}
+                      className="btn btn--ghost btn--sm"
+                      style={{ width: "100%", justifyContent: "flex-start" }}
+                      onClick={() => moveMut.mutate({ ids: selectedIds, folderId: f.id })}
+                    >
+                      <FolderIcon size={13} /> {f.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              className="btn btn--ghost btn--sm"
+              style={{ color: "var(--danger)" }}
+              disabled={bulkPending}
+              onClick={() => {
+                if (
+                  confirm(
+                    `Delete ${selected.size} contact${selected.size === 1 ? "" : "s"}? This cannot be undone.`,
+                  )
+                ) {
+                  deleteContactsMut.mutate(selectedIds);
+                }
+              }}
+            >
+              <Trash2 size={13} /> Delete
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={bulkPending}
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         {contactsQ.isLoading && (
           <div className="muted" style={{ padding: 24 }}>
             Loading contacts…
@@ -592,7 +747,12 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
             <thead>
               <tr>
                 <th style={{ width: 32 }}>
-                  <input type="checkbox" disabled />
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible contacts"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                  />
                 </th>
                 <th>Contact</th>
                 <th>Company · Role</th>
@@ -609,9 +769,14 @@ function FolderDetail({ folder, onImport }: { folder: Folder | null; onImport: (
                 const role =
                   typeof c.custom?.role === "string" ? (c.custom.role as string) : "";
                 return (
-                  <tr key={c.id}>
+                  <tr key={c.id} className={selected.has(c.id) ? "is-selected" : undefined}>
                     <td>
-                      <input type="checkbox" />
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${c.full_name || c.phone || c.username || "contact"}`}
+                        checked={selected.has(c.id)}
+                        onChange={() => toggleOne(c.id)}
+                      />
                     </td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
