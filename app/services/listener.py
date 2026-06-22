@@ -894,6 +894,16 @@ class TelegramListener:
         sender_id = sender_info["id"]
         sender_slug = sender_info["slug"]
 
+        # Solicited SpamBot reply: we pinged @SpamBot ourselves (reconcile sweep or
+        # manual check) — this is not a real antispam warning, so do NOT cancel the
+        # queue or disable AI. Covers both detect branches (id + keyword) since both
+        # funnel here. Unsolicited warnings outside the window behave as before.
+        if telegram_service.is_spambot_selfcheck(sender_slug):
+            logger.info(
+                f"🔕 [{sender_slug}] solicited SpamBot reply during self-check — skip auto-cancel"
+            )
+            return
+
         try:
             async with AsyncSessionLocal() as session:
                 # 1. Отключаем AI для всех активных диалогов этого аккаунта
