@@ -170,6 +170,22 @@ function isNotInTelegram(status: string | null | undefined): boolean {
   );
 }
 
+async function fetchAllFolderContacts(folderId: string, total: number): Promise<Contact[]> {
+  const pageSize = 1000;
+  const expected = Math.max(total, pageSize);
+  const all: Contact[] = [];
+
+  for (let offset = 0; offset < expected; offset += pageSize) {
+    const page = await api<Contact[]>("/api/v1/contacts", {
+      query: { folder_id: folderId, limit: pageSize, offset },
+    });
+    all.push(...page);
+    if (page.length < pageSize || all.length >= total) break;
+  }
+
+  return all;
+}
+
 /* ---------------- Folder sidebar ---------------- */
 function FolderSidebar({
   folders,
@@ -395,6 +411,12 @@ function FolderDetail({
     enabled: !!folder,
   });
 
+  const contactsStatsQ = useQuery({
+    queryKey: ["contacts-stats", folder?.id, folder?.contact_count],
+    queryFn: () => fetchAllFolderContacts(folder!.id, folder!.contact_count),
+    enabled: !!folder,
+  });
+
   const renameMut = useMutation({
     mutationFn: (name: string) =>
       api<Folder>(`/api/v1/folders/${folder!.id}`, { method: "PATCH", body: { name } }),
@@ -420,6 +442,7 @@ function FolderDetail({
     onSuccess: () => {
       toast.success("Recheck queued");
       void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+      void qc.invalidateQueries({ queryKey: ["contacts-stats", folder?.id] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Recheck failed"),
   });
@@ -428,6 +451,7 @@ function FolderDetail({
     setSelected(new Set());
     setMoveOpen(false);
     void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+    void qc.invalidateQueries({ queryKey: ["contacts-stats", folder?.id] });
     void qc.invalidateQueries({ queryKey: ["folders"] });
   };
 
@@ -458,6 +482,7 @@ function FolderDetail({
   });
 
   const contacts = contactsQ.data ?? [];
+  const contactsForStats = contactsStatsQ.data ?? contacts;
   const filtered = useMemo(() => {
     if (!search.trim()) return contacts;
     const q = search.toLowerCase();
@@ -470,11 +495,11 @@ function FolderDetail({
   }, [contacts, search]);
 
   const stats = useMemo(() => {
-    const inTg = contacts.filter((c) => isInTelegram(c.tg_status)).length;
-    const checking = contacts.filter((c) => isCheckingTelegram(c.tg_status)).length;
-    const notFound = contacts.filter((c) => isNotInTelegram(c.tg_status)).length;
+    const inTg = contactsForStats.filter((c) => isInTelegram(c.tg_status)).length;
+    const checking = contactsForStats.filter((c) => isCheckingTelegram(c.tg_status)).length;
+    const notFound = contactsForStats.filter((c) => isNotInTelegram(c.tg_status)).length;
     return { inTg, checking, notFound };
-  }, [contacts]);
+  }, [contactsForStats]);
 
   // ── Selection ──────────────────────────────────────────────────────────────
   const toggleOne = (id: string) =>
