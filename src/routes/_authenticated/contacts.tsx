@@ -152,6 +152,40 @@ function ContactAvatar({ name, phone }: { name: string | null; phone: string | n
   );
 }
 
+function normalizeTgStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+function isInTelegram(status: string | null | undefined): boolean {
+  return ["ok", "registered", "found", "in_telegram"].includes(normalizeTgStatus(status));
+}
+
+function isCheckingTelegram(status: string | null | undefined): boolean {
+  return ["pending", "checking", "unknown", ""].includes(normalizeTgStatus(status));
+}
+
+function isNotInTelegram(status: string | null | undefined): boolean {
+  return ["not_registered", "not_found", "privacy", "missing", "error"].includes(
+    normalizeTgStatus(status),
+  );
+}
+
+async function fetchAllFolderContacts(folderId: string, total: number): Promise<Contact[]> {
+  const pageSize = 200;
+  const expected = Math.max(total, pageSize);
+  const all: Contact[] = [];
+
+  for (let offset = 0; offset < expected; offset += pageSize) {
+    const page = await api<Contact[]>("/api/v1/contacts", {
+      query: { folder_id: folderId, limit: pageSize, offset },
+    });
+    all.push(...page);
+    if (page.length < pageSize || all.length >= total) break;
+  }
+
+  return all;
+}
+
 /* ---------------- Folder sidebar ---------------- */
 function FolderSidebar({
   folders,
@@ -377,6 +411,12 @@ function FolderDetail({
     enabled: !!folder,
   });
 
+  const contactsStatsQ = useQuery({
+    queryKey: ["contacts-stats", folder?.id, folder?.contact_count],
+    queryFn: () => fetchAllFolderContacts(folder!.id, folder!.contact_count),
+    enabled: !!folder,
+  });
+
   const renameMut = useMutation({
     mutationFn: (name: string) =>
       api<Folder>(`/api/v1/folders/${folder!.id}`, { method: "PATCH", body: { name } }),
@@ -402,6 +442,7 @@ function FolderDetail({
     onSuccess: () => {
       toast.success("Recheck queued");
       void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+      void qc.invalidateQueries({ queryKey: ["contacts-stats", folder?.id] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Recheck failed"),
   });
@@ -410,6 +451,7 @@ function FolderDetail({
     setSelected(new Set());
     setMoveOpen(false);
     void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+    void qc.invalidateQueries({ queryKey: ["contacts-stats", folder?.id] });
     void qc.invalidateQueries({ queryKey: ["folders"] });
   };
 
@@ -440,6 +482,7 @@ function FolderDetail({
   });
 
   const contacts = contactsQ.data ?? [];
+  const contactsForStats = contactsStatsQ.data ?? contacts;
   const filtered = useMemo(() => {
     if (!search.trim()) return contacts;
     const q = search.toLowerCase();
@@ -452,22 +495,11 @@ function FolderDetail({
   }, [contacts, search]);
 
   const stats = useMemo(() => {
-    const inTg = contacts.filter((c) => c.tg_status === "ok").length;
-    const checking = contacts.filter(
-      (c) =>
-        c.tg_status === "pending" ||
-        c.tg_status === "checking" ||
-        c.tg_status === "unknown" ||
-        c.tg_status === "",
-    ).length;
-    const notFound = contacts.filter(
-      (c) =>
-        c.tg_status === "not_found" ||
-        c.tg_status === "privacy" ||
-        c.tg_status === "error",
-    ).length;
+    const inTg = contactsForStats.filter((c) => isInTelegram(c.tg_status)).length;
+    const checking = contactsForStats.filter((c) => isCheckingTelegram(c.tg_status)).length;
+    const notFound = contactsForStats.filter((c) => isNotInTelegram(c.tg_status)).length;
     return { inTg, checking, notFound };
-  }, [contacts]);
+  }, [contactsForStats]);
 
   // ── Selection ──────────────────────────────────────────────────────────────
   const toggleOne = (id: string) =>
@@ -843,6 +875,7 @@ function FolderDetail({
           onClose={() => setAddOpen(false)}
           onDone={() => {
             void qc.invalidateQueries({ queryKey: ["contacts", folder.id] });
+            void qc.invalidateQueries({ queryKey: ["contacts-stats", folder.id] });
             void qc.invalidateQueries({ queryKey: ["folders"] });
           }}
         />
@@ -882,7 +915,7 @@ function MiniMetric({
 }
 
 function TgInline({ status }: { status: string }) {
-  if (status === "ok") {
+  if (isInTelegram(status)) {
     return (
       <span
         style={{
@@ -897,7 +930,7 @@ function TgInline({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "checking" || status === "unknown" || status === "pending" || status === "") {
+  if (isCheckingTelegram(status)) {
     return (
       <span
         style={{
@@ -912,14 +945,14 @@ function TgInline({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "not_found") {
+  if (normalizeTgStatus(status) === "not_registered" || normalizeTgStatus(status) === "not_found") {
     return (
       <span className="pill pill--red">
         <span className="pill__dot" /> Not found
       </span>
     );
   }
-  if (status === "privacy") {
+  if (normalizeTgStatus(status) === "privacy") {
     return (
       <span className="pill pill--orange">
         <span className="pill__dot" /> Privacy
