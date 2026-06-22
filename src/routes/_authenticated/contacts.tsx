@@ -875,6 +875,7 @@ function FolderDetail({
           onClose={() => setAddOpen(false)}
           onDone={() => {
             void qc.invalidateQueries({ queryKey: ["contacts", folder.id] });
+            void qc.invalidateQueries({ queryKey: ["contacts-stats", folder.id] });
             void qc.invalidateQueries({ queryKey: ["folders"] });
           }}
         />
