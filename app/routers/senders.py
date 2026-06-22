@@ -612,7 +612,12 @@ async def check_spambot(
         client = await telegram_service.get_client(
             sender.slug, sender.session_string, proxy=sender.proxy
         )
-        spambot_result = await telegram_service.check_spambot(client)
+        # selfcheck_key passed for intent/forward-compat. NOTE: this endpoint runs
+        # in the api process; the SpamBot reply is handled by the listener's
+        # persistent client in the listener process, where this in-memory marker is
+        # NOT visible — so the antispam auto-cancel is not suppressed here (known
+        # cross-process limitation, decided 2026-06-22).
+        spambot_result = await telegram_service.check_spambot(client, selfcheck_key=sender.slug)
 
         # Migration 028: map SpamBot verdict onto the right column.
         #   free      → clear restriction (restriction_status='none')

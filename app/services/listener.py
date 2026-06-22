@@ -1374,7 +1374,9 @@ class TelegramListener:
                 skipped += 1
                 continue
 
-            result = await telegram_service.check_spambot(client)
+            # selfcheck_key=slug → solicited window so the antispam handler (same
+            # process) skips auto-cancelling this sender's own queue on the reply.
+            result = await telegram_service.check_spambot(client, selfcheck_key=slug)
             verdict = result.get("status", "unknown")
             checked += 1
             next_recheck = datetime.now(timezone.utc) + timedelta(seconds=recheck)
