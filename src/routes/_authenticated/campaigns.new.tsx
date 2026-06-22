@@ -919,7 +919,7 @@ function AgentStep({
           <label className="field__label">Success criteria</label>
           <textarea
             className="textarea"
-            rows={2}
+            rows={4}
             placeholder="Demo booked / phone shared / link clicked"
             value={successCriteria}
             onChange={(e) => setSuccessCriteria(e.target.value)}
