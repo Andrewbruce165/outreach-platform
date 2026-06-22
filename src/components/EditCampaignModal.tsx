@@ -535,10 +535,12 @@ export function EditCampaignModal({
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>Success criteria</label>
-              <input
-                style={inputStyle}
+              <textarea
+                style={taStyle}
+                rows={3}
                 value={successCriteria}
                 onChange={(e) => setSuccessCriteria(e.target.value)}
+                placeholder="Demo booked / phone shared / link clicked"
               />
             </div>
           </div>
