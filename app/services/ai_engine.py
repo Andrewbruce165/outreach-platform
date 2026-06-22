@@ -192,6 +192,7 @@ async def get_context_for_conversation(
                     COALESCE(a.company_knowledge, a.company_info) AS company_info,
                     COALESCE(a.knowledge_base, a.product_info) AS product_info,
                     a.mirror_language, a.allow_emoji, a.banlist,
+                    a.max_message_length,
                     c.id AS campaign_id_full, c.name AS campaign_name,
                     c.workspace_id AS campaign_wid,
                     c.tools AS campaign_tools, c.message_template,
@@ -237,7 +238,10 @@ async def get_context_for_conversation(
         "mirror_language": True if row.mirror_language is None else bool(row.mirror_language),
         "allow_emoji": True if row.allow_emoji is None else bool(row.allow_emoji),
         "banlist": list(row.banlist) if row.banlist else [],
-        "max_message_length": 500,
+        # Phase 05.1: per-agent character budget (UI setting, migration 018,
+        # default 280). Read by build_system_prompt → <message_style>. Falls
+        # back to 280 when no agent is linked (row.max_message_length is None).
+        "max_message_length": row.max_message_length or 280,
     }
 
     if row.campaign_id_full is not None:
@@ -485,7 +489,8 @@ class AIEngine:
                         COALESCE(who_is_agent, system_prompt) AS system_prompt,
                         tone_of_voice,
                         rules,
-                        COALESCE(company_knowledge, company_info) AS company_info
+                        COALESCE(company_knowledge, company_info) AS company_info,
+                        max_message_length
                     FROM ai_contexts
                     WHERE id = :id
                 """),
@@ -499,10 +504,10 @@ class AIEngine:
                     "tone_of_voice": row[1] or "",
                     "rules": row[2] or "",
                     "company_info": row[3] or "",
-                    # Phase 3 D-01: max_message_length / is_active колонки дропнуты в БД —
-                    # default 500 оставлен для callers, которые ещё читают поле.
+                    # max_message_length вернулась в схему миграцией 018 (Phase 05.1,
+                    # default 280). Читается build_system_prompt → <message_style>.
                     # webhook_functions покойся с миром (миграция 015) — больше не возвращаем.
-                    "max_message_length": 500,
+                    "max_message_length": row[4] or 280,
                 }
                 self._context_cache[context_id] = (ctx, time.time())
                 return ctx
@@ -577,6 +582,13 @@ class AIEngine:
         mirror_language = bool(context.get("mirror_language", True))
         allow_emoji = bool(context.get("allow_emoji", True))
         banlist = [str(w).strip() for w in (context.get("banlist") or []) if str(w).strip()]
+        # Phase 05.1: per-agent character budget. Injected into <message_style>
+        # as a soft instruction (no post-hoc truncation). Guard against non-int /
+        # non-positive values so a misconfigured agent can't emit a nonsense limit.
+        try:
+            max_message_length = int(context.get("max_message_length") or 0)
+        except (TypeError, ValueError):
+            max_message_length = 0
 
         lead_hint = (campaign.get("lead_trigger_hint") or "").strip()
         handoff_hint = (campaign.get("handoff_trigger_hint") or "").strip()
@@ -639,6 +651,12 @@ class AIEngine:
         )
 
         style_body = _PROMPT_MESSAGE_STYLE
+        if max_message_length > 0:
+            style_body = (
+                f"{style_body}\n— Keep each message under "
+                f"{max_message_length} characters. If you need more room, "
+                f"split it into a couple of short messages instead."
+            )
         if not allow_emoji:
             style_body = f"{style_body}\n— {_PROMPT_NO_EMOJI}"
         blocks.append(

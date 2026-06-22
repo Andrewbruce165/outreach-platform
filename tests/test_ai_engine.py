@@ -34,8 +34,9 @@ async def test_get_context_phase3_schema(async_db_session, test_agent_factory):
     assert ctx["tone_of_voice"] == "friendly"
     assert ctx["rules"] == "rule 1"
     assert ctx["company_info"] == "Test Co."
-    # Phase 3: default остался, потому что колонка дропнута
-    assert ctx["max_message_length"] == 500
+    # Phase 05.1: колонка вернулась миграцией 018 (default 280) — get_context
+    # теперь читает её из БД и прокидывает в build_system_prompt → <message_style>.
+    assert ctx["max_message_length"] == 280
     # webhook_functions выпилен из возвращаемого dict-а
     assert "webhook_functions" not in ctx
 
