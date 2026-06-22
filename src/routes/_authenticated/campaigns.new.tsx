@@ -968,7 +968,7 @@ function AgentStep({
           {/* handoff_trigger_hint: fires the `handoff` signal — AI stops, human takes over. */}
           <textarea
             className="input"
-            rows={2}
+            rows={4}
             value={handoffHint}
             onChange={(e) => setHandoffHint(e.target.value)}
             placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
