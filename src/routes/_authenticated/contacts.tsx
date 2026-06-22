@@ -171,7 +171,7 @@ function isNotInTelegram(status: string | null | undefined): boolean {
 }
 
 async function fetchAllFolderContacts(folderId: string, total: number): Promise<Contact[]> {
-  const pageSize = 1000;
+  const pageSize = 200;
   const expected = Math.max(total, pageSize);
   const all: Contact[] = [];
 
