@@ -535,10 +535,12 @@ export function EditCampaignModal({
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>Success criteria</label>
-              <input
-                style={inputStyle}
+              <textarea
+                style={taStyle}
+                rows={3}
                 value={successCriteria}
                 onChange={(e) => setSuccessCriteria(e.target.value)}
+                placeholder="Demo booked / phone shared / link clicked"
               />
             </div>
           </div>
@@ -553,29 +555,35 @@ export function EditCampaignModal({
             />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
             <div style={fieldStyle}>
               <label style={labelStyle}>Lead trigger hint</label>
-              <input
-                style={inputStyle}
+              <textarea
+                style={taStyle}
+                rows={4}
                 value={leadHint}
                 onChange={(e) => setLeadHint(e.target.value)}
+                placeholder="e.g. The contact agrees to a demo or asks for pricing details."
               />
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>Handoff trigger hint</label>
-              <input
-                style={inputStyle}
+              <textarea
+                style={taStyle}
+                rows={4}
                 value={handoffHint}
                 onChange={(e) => setHandoffHint(e.target.value)}
+                placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
               />
             </div>
             <div style={fieldStyle}>
               <label style={labelStyle}>Finish trigger hint</label>
-              <input
-                style={inputStyle}
+              <textarea
+                style={taStyle}
+                rows={4}
                 value={finishHint}
                 onChange={(e) => setFinishHint(e.target.value)}
+                placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."
               />
             </div>
           </div>
