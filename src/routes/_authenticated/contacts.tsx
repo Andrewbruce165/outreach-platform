@@ -152,6 +152,24 @@ function ContactAvatar({ name, phone }: { name: string | null; phone: string | n
   );
 }
 
+function normalizeTgStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+function isInTelegram(status: string | null | undefined): boolean {
+  return ["ok", "registered", "found", "in_telegram"].includes(normalizeTgStatus(status));
+}
+
+function isCheckingTelegram(status: string | null | undefined): boolean {
+  return ["pending", "checking", "unknown", ""].includes(normalizeTgStatus(status));
+}
+
+function isNotInTelegram(status: string | null | undefined): boolean {
+  return ["not_registered", "not_found", "privacy", "missing", "error"].includes(
+    normalizeTgStatus(status),
+  );
+}
+
 /* ---------------- Folder sidebar ---------------- */
 function FolderSidebar({
   folders,
@@ -452,20 +470,9 @@ function FolderDetail({
   }, [contacts, search]);
 
   const stats = useMemo(() => {
-    const inTg = contacts.filter((c) => c.tg_status === "ok").length;
-    const checking = contacts.filter(
-      (c) =>
-        c.tg_status === "pending" ||
-        c.tg_status === "checking" ||
-        c.tg_status === "unknown" ||
-        c.tg_status === "",
-    ).length;
-    const notFound = contacts.filter(
-      (c) =>
-        c.tg_status === "not_found" ||
-        c.tg_status === "privacy" ||
-        c.tg_status === "error",
-    ).length;
+    const inTg = contacts.filter((c) => isInTelegram(c.tg_status)).length;
+    const checking = contacts.filter((c) => isCheckingTelegram(c.tg_status)).length;
+    const notFound = contacts.filter((c) => isNotInTelegram(c.tg_status)).length;
     return { inTg, checking, notFound };
   }, [contacts]);
 
@@ -882,7 +889,7 @@ function MiniMetric({
 }
 
 function TgInline({ status }: { status: string }) {
-  if (status === "ok") {
+  if (isInTelegram(status)) {
     return (
       <span
         style={{
@@ -897,7 +904,7 @@ function TgInline({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "checking" || status === "unknown" || status === "pending" || status === "") {
+  if (isCheckingTelegram(status)) {
     return (
       <span
         style={{
@@ -912,14 +919,14 @@ function TgInline({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "not_found") {
+  if (normalizeTgStatus(status) === "not_registered" || normalizeTgStatus(status) === "not_found") {
     return (
       <span className="pill pill--red">
         <span className="pill__dot" /> Not found
       </span>
     );
   }
-  if (status === "privacy") {
+  if (normalizeTgStatus(status) === "privacy") {
     return (
       <span className="pill pill--orange">
         <span className="pill__dot" /> Privacy
