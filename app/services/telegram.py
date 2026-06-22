@@ -3,6 +3,7 @@ import asyncio
 import re
 import tempfile
 import os
+import time
 import socks
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -225,6 +226,26 @@ class TelegramService:
 
     def __init__(self):
         self._locks: dict[str, asyncio.Lock] = {}
+        # Self-check registry: slug -> monotonic expiry. While a slug is marked,
+        # the listener's antispam handler treats an incoming SpamBot reply as
+        # *solicited* (we pinged @SpamBot ourselves) and skips the auto-cancel.
+        # In-memory and per-process: effective only within the process that set
+        # it. The reconcile sweep runs in the listener process (same process as
+        # the antispam handler) → fully covered. The manual /spambot-check
+        # endpoint runs in the api process → NOT covered (documented limitation).
+        self._spambot_selfcheck: dict[str, float] = {}
+
+    def mark_spambot_selfcheck(self, slug: str, ttl: float = 30.0) -> None:
+        """Mark `slug` as performing a solicited SpamBot check for the next `ttl` seconds."""
+        self._spambot_selfcheck[slug] = time.monotonic() + ttl
+
+    def is_spambot_selfcheck(self, slug: str) -> bool:
+        """True if `slug` has an unexpired solicited-SpamBot-check marker. Prunes expired entries."""
+        now = time.monotonic()
+        # Prune expired markers so the dict can't grow unbounded.
+        for s in [s for s, exp in self._spambot_selfcheck.items() if exp <= now]:
+            self._spambot_selfcheck.pop(s, None)
+        return self._spambot_selfcheck.get(slug, 0.0) > now
 
     async def get_client(
         self,
@@ -284,14 +305,25 @@ class TelegramService:
         except Exception as e:
             logger.warning(f"Error disconnecting client: {e}")
 
-    async def check_spambot(self, client: TelegramClient) -> dict:
+    async def check_spambot(self, client: TelegramClient, selfcheck_key: str | None = None) -> dict:
         """Send /start to @SpamBot and parse the response.
+
+        Args:
+            selfcheck_key: if given (the sender slug), mark a solicited-self-check
+                window before sending /start so the listener's antispam handler
+                skips the auto-cancel when SpamBot's reply arrives. Only effective
+                within this process (see TelegramService.is_spambot_selfcheck).
 
         Returns dict with:
             status: 'free' | 'limited' | 'suspended' | 'unknown'
             raw_text: full SpamBot response
             limit_until: optional date string if limited
         """
+        # Mark BEFORE sending so the marker is live by the time the reply hits the
+        # listener's update stream. Intentionally not cleared in finally — letting
+        # it lapse via TTL avoids a race with the asynchronously-delivered reply.
+        if selfcheck_key:
+            self.mark_spambot_selfcheck(selfcheck_key)
         try:
             await client.send_message("SpamBot", "/start")
             await asyncio.sleep(2)
