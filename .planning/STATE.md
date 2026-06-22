@@ -100,6 +100,7 @@ See full log: PROJECT.md → Key Decisions
 ### Roadmap Evolution
 
 - Phase 05.1 inserted after Phase 5: Lovable UI v1 — auth + onboarding + TG accounts + contacts + agents + campaigns + inbox + analytics + settings (URGENT — closes Core Value + 7 HUMAN-UAT items from Phase 5)
+- Phases 7–10 added (2026-06-22): post-v1 block "Sender Pool Resilience & Failover" — design in `.planning/proposals/sender-pool-resilience.md`. P7 Unified Freeze Policy, P8 Pool Management & Even Distribution, P9 Cold-Contact Failover, P10 Pool Visibility (optional). Triggered by campaign b7cc7d06 antispam-stall incident (quick 260622-j52).
 
 ### Pending Todos
 

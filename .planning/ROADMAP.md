@@ -16,6 +16,12 @@
 - [ ] **Phase 5: Inbox & Analytics** — inbox с фильтром по кампании + ручник + метрики + лог LLM-запросов
 - [~] **Phase 6: Admin Master Bot** — TG-бот workspace для уведомлений (ручник, ошибки аккаунтов) — **DEFERRED TO v2** (see `.planning/seeds/admin-master-bot.md`, PROJECT.md → ADMN-01..03)
 
+_Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/proposals/sender-pool-resilience.md`_
+- [ ] **Phase 7: Unified Freeze Policy** — antispam-путь как PEER_FLOOD (пауза+флаг вместо `failed`, реконсайл авто-resume; ответы в диалогах не глушим) + ротация не садит новые контакты на ограниченный аккаунт
+- [ ] **Phase 8: Pool Management & Even Distribution** — attach/detach аккаунтов к кампании + фронт-мультиселект + равномерная раздача по пулу
+- [ ] **Phase 9: Cold-Contact Failover** — не-контактированные задачи замёрзшего аккаунта уходят на здоровые; активные диалоги ждут свой аккаунт
+- [ ] **Phase 10: Pool Visibility** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж
+
 ## Phase Details
 
 ### Phase 1: Workspace Foundation
@@ -194,6 +200,50 @@ Plans:
 - [ ] 06-01: Admin bot registration — botfather token storage per workspace, chat registration flow, /start handler
 - [ ] 06-02: Event notifications — listener hooks для manager-takeover и sender-error events, отправка в admin chat
 
+> **Block: Sender Pool Resilience & Failover** (post-v1, поверх Phase 4). Полный дизайн и обоснование: [`.planning/proposals/sender-pool-resilience.md`](proposals/sender-pool-resilience.md). Триггер — инцидент кампании b7cc7d06 (37 контактов терминально `failed` antispam-сигналом, без авто-возобновления; см. quick-задачу 260622-j52).
+
+### Phase 7: Unified Freeze Policy
+
+**Goal:** Единая политика мягкого спам-ограничения для всех путей. Переписать `listener._handle_antispam_signal` по образцу PEER_FLOOD: вместо терминального `failed` — пауза pending этого sender'а + `restriction_status='spam_limited'`/`restricted_until`, чтобы существующий restriction-reconcile авто-возобновлял; **перестать выключать `ai_enabled` во всех диалогах** — ответы в идущих диалогах продолжаются (Telegram их не блокирует). Добавить `AND s.restriction_status='none'` в фильтр кандидатов `rotation.py:112-125` — новые холодные контакты не садятся на ограниченный аккаунт. Регресс-тест: воркер скипает restricted sender'а.
+**Requirements**: TBD (derive on plan)
+**Depends on:** Phase 4 (Campaigns), Phase 5 (Inbox / AI-reply path). Миграций нет (028 уже есть).
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 7 to break down)
+
+### Phase 8: Pool Management and Even Distribution
+
+**Goal:** Дать кампании реальный пул из ≥2 аккаунтов. Эндпоинты `POST /campaigns/{id}/senders` и `DELETE /campaigns/{id}/senders/{sid}` (валидация workspace `_validate_workspace_owns_senders` уже есть; решить, разрешать ли на `running`); мультиселект аккаунтов во фронте (репо `aimly-tg-outreach`); подтвердить равномерную раздачу least-loaded по пулу (worker уже round-robin'ит всех eligible sender'ов). Сейчас у всех кампаний привязан 1 аккаунт.
+**Requirements**: TBD (derive on plan)
+**Depends on:** Phase 7
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 8 to break down)
+
+### Phase 9: Cold-Contact Failover
+
+**Goal:** При фризе sender'а перекинуть его **не-контактированные** pending-задачи (никогда не отправлялись, диалог не начат) на здоровые аккаунты пула через `get_or_assign_sender`; идущие диалоги остаются на своём аккаунте и продолжают отвечать (континуити). Safety: не заваливать один здоровый аккаунт — учитывать rate-headroom, cap батча, логировать перенос. Точный предикат «безопасно-передать» определить на этапе плана.
+**Requirements**: TBD (derive on plan)
+**Depends on:** Phase 8
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 9 to break down)
+
+### Phase 10: Pool Visibility (optional)
+
+**Goal:** В ответе кампании показывать здоровье пула (N активно / K на паузе до T) + бейдж во фронте, чтобы было видно частичную паузу кампании.
+**Requirements**: TBD (derive on plan)
+**Depends on:** Phase 8
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 10 to break down)
+
+> **Non-goals (v1 этого блока):** failover **активных** диалогов на другой аккаунт (ломает континуити — ждут свой аккаунт); режим «затихать и на ответах» при мягком лимите (дефолт — продолжаем отвечать); cross-campaign load awareness.
+
 ---
 
 ## Progress
@@ -207,5 +257,10 @@ Plans:
 | 4. Campaigns | 0/5 | Planned (5 plans, waves 1→4) | - |
 | 5. Inbox & Analytics | 0/3 | Planned (3 plans, waves 1→2) | - |
 | 6. Admin Master Bot | 0/2 | Deferred to v2 | - |
+| 7. Unified Freeze Policy | 0/? | Not planned | - |
+| 8. Pool Management & Even Distribution | 0/? | Not planned | - |
+| 9. Cold-Contact Failover | 0/? | Not planned | - |
+| 10. Pool Visibility (optional) | 0/? | Not planned | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
+**Post-v1 block (Sender Pool Resilience): +4 phases (7–10), not yet planned.**
