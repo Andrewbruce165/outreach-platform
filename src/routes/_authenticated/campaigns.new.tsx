@@ -983,7 +983,7 @@ function AgentStep({
           {/* finish_trigger_hint: fires the `finished` signal — conversation is closed. */}
           <textarea
             className="input"
-            rows={2}
+            rows={4}
             value={finishHint}
             onChange={(e) => setFinishHint(e.target.value)}
             placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."
