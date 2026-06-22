@@ -454,10 +454,17 @@ function FolderDetail({
   const stats = useMemo(() => {
     const inTg = contacts.filter((c) => c.tg_status === "ok").length;
     const checking = contacts.filter(
-      (c) => c.tg_status === "checking" || c.tg_status === "unknown",
+      (c) =>
+        c.tg_status === "pending" ||
+        c.tg_status === "checking" ||
+        c.tg_status === "unknown" ||
+        c.tg_status === "",
     ).length;
     const notFound = contacts.filter(
-      (c) => c.tg_status === "not_found" || c.tg_status === "privacy",
+      (c) =>
+        c.tg_status === "not_found" ||
+        c.tg_status === "privacy" ||
+        c.tg_status === "error",
     ).length;
     return { inTg, checking, notFound };
   }, [contacts]);
