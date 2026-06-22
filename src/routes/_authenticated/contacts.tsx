@@ -897,7 +897,7 @@ function TgInline({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "checking" || status === "unknown") {
+  if (status === "checking" || status === "unknown" || status === "pending" || status === "") {
     return (
       <span
         style={{
