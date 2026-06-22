@@ -953,7 +953,7 @@ function AgentStep({
           {/* lead_trigger_hint: fires the `lead` webhook signal when matched. */}
           <textarea
             className="input"
-            rows={2}
+            rows={4}
             value={leadHint}
             onChange={(e) => setLeadHint(e.target.value)}
             placeholder="e.g. The contact agrees to a demo or asks for pricing details."
