@@ -113,11 +113,16 @@ class CampaignEnqueueWorker:
         AUDIT Q5: INSERT cca + INSERT message_queue inside one savepoint —
         rollback if any fails; next tick re-selects the same contact.
         """
-        # Cross-campaign dedup (migration 026): by default never re-touch a
-        # contact who already has ANY conversation in this workspace. When the
-        # campaign opts in via allow_recontact, only a PROTECTED (live & fresh)
-        # dialog blocks — closed/stale ones become eligible again. The protected
-        # predicate is shared with queue._upsert_conversation via recontact.py.
+        # Re-contact dedup. A prior conversation blocks this campaign's cold
+        # opener only when it belongs to the SAME campaign OR is handled by a
+        # sender that is also in THIS campaign's pool (i.e. the same agent could
+        # be routed to). A different campaign run by a different agent (no sender
+        # overlap) is free to re-contact — see `conv_identity_scope` below.
+        # On top of that identity scope: by default ANY such conversation blocks;
+        # when the campaign opts in via allow_recontact, only a PROTECTED (live &
+        # fresh) dialog blocks — closed/stale ones become eligible again. The
+        # protected predicate is shared with queue._upsert_conversation via
+        # recontact.py.
         params = {
             "fid": str(c.folder_id),
             "wid": str(c.workspace_id),
@@ -147,13 +152,21 @@ class CampaignEnqueueWorker:
                       SELECT contact_phone FROM campaign_contact_assignments
                       WHERE campaign_id = :cid
                   )
-                  -- Cross-campaign dedup: survives campaign deletion
-                  -- (conversations.campaign_id is SET NULL, not CASCADE), so a
-                  -- re-run / copied campaign over the same folder won't
-                  -- re-introduce itself to someone we're already talking to.
+                  -- Re-contact dedup, scoped to identity (same campaign OR a
+                  -- sender shared with this campaign's pool). A different
+                  -- campaign run by a different agent re-contacts freely.
+                  -- conversations.campaign_id is SET NULL on campaign deletion,
+                  -- so a deleted campaign only keeps blocking via sender overlap.
                   AND COALESCE(phone, '@' || username) NOT IN (
                       SELECT contact_phone FROM conversations
                       WHERE workspace_id = :wid AND contact_phone IS NOT NULL
+                        AND (
+                            campaign_id = :cid
+                            OR sender_id IN (
+                                SELECT sender_id FROM campaign_senders
+                                WHERE campaign_id = :cid
+                            )
+                        )
                       {conv_dedup_filter}
                   )
                 LIMIT :lim

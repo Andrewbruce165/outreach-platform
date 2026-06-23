@@ -153,16 +153,19 @@ async def test_worker_skips_contact_with_existing_conversation(
     test_contacts_factory,
     test_conversation_factory,
 ):
-    """Cross-campaign dedup: contact already has a conversation in the workspace
-    → worker does NOT enqueue a first-touch (regression for the duplicate-intro
-    incident, where a copied campaign re-introduced itself to an active lead)."""
-    camp, _ = await test_running_campaign_factory(sender_count=1)
+    """Identity-scoped dedup: contact already has an in-scope conversation (a
+    sender from this campaign's pool) → worker does NOT enqueue a first-touch
+    (regression for the duplicate-intro incident, where a copied campaign
+    re-introduced itself to an active lead via the same agent)."""
+    camp, senders = await test_running_campaign_factory(sender_count=1)
     contact = await test_contacts_factory(count=1, tg_status="registered")
     await async_db_session.execute(text("""
         UPDATE contacts SET folder_id = :fid WHERE id = :cid
     """), {"fid": str(camp["folder_id"]), "cid": str(contact.id)})
-    # Existing conversation for this phone in the same workspace.
-    await test_conversation_factory(contact_phone=contact.phone, status="lead")
+    # Existing conversation for this phone, handled by a sender in the pool.
+    await test_conversation_factory(
+        contact_phone=contact.phone, status="lead", sender=senders[0]
+    )
     await async_db_session.commit()
 
     worker = await _make_worker()
