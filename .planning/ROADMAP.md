@@ -210,7 +210,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 07-01-PLAN.md — Rewrite `_handle_antispam_signal` to PEER_FLOOD pause+flag mirror (delete ai_enabled block, preserve self-check guard, frozen-precedence guard) + rotation candidate filter `AND s.restriction_status='none'` + flip cancel-path test to new contract + new rotation restricted-sender regression + assert FRZ-05 worker-skip — FRZ-01..05 [Wave 1, no deps]
+- [x] 07-01-PLAN.md — Rewrite `_handle_antispam_signal` to PEER_FLOOD pause+flag mirror (delete ai_enabled block, preserve self-check guard, frozen-precedence guard) + rotation candidate filter `AND s.restriction_status='none'` + flip cancel-path test to new contract + new rotation restricted-sender regression + assert FRZ-05 worker-skip — FRZ-01..05 [Wave 1, no deps]
 
 ### Phase 8: Pool Management and Even Distribution
 

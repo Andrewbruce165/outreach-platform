@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 05.1 UI-SPEC approved
-last_updated: "2026-06-23T08:47:13.421Z"
-last_activity: 2026-06-23 -- Phase 07 planning complete
+status: verifying
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-06-23T09:07:57.506Z"
+last_activity: 2026-06-23
 progress:
   total_phases: 12
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 28
-  completed_plans: 27
-  percent: 58
+  completed_plans: 28
+  percent: 17
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 05.1 — lovable-ui-v1
+**Current focus:** Phase 07 — unified-freeze-policy
 
 ## Current Position
 
-Phase: 6
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-23 -- Phase 07 planning complete
+Phase: 07 (unified-freeze-policy) — EXECUTING
+Plan: 1 of 1
+Status: Phase complete — ready for verification
+Last activity: 2026-06-23
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
@@ -63,6 +63,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 05 P01 | 13min | 3 tasks | 12 files |
 | Phase 05 P02 | 5min | 2 tasks | 5 files |
 | Phase 05 P03 | 6min | 3 tasks | 7 files |
+| Phase 07-unified-freeze-policy P01 | 14min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 05]: Plan 05-01: migration 017 defensive messages CREATE TABLE (DDL lost in brownfield fork — IF NOT EXISTS no-op on prod); ANTISPAM_BOT_IDS at module level for D-08 delegation from new bot filter; D-03 fix — enable-ai NEVER touches status; pre-send guard in queue.py one extra SELECT (CLAUDE.md empirical intervals untouched)
 - [Phase 05]: [Phase 05]: Plan 05-02: analytics endpoints — sent source = messages JOIN conversations (C-01 covers manager-send D-04 unlike messages_log/message_queue); replied = one SELECT with COUNT(DISTINCT) + COUNT(*) per D-15; _ALLOWED_SCOPE_COLUMNS whitelist + :scope_val bind for safe scope composition; Pitfall 8 — bot_ignored excluded from every COUNT; Pitfall 9 — leads strict EQ; D-13 — no background workers added (lifespan still 5)
 - [Phase 05]: Plan 05-03: inline await log_llm_call (Open Question #3) — deterministic + testable; +1-3ms latency acceptable for v1; D-12 preserved (warmup.py has 0 references); T-05-03-PROMPT-LEAK guard verified via grep (0 matches for logger.*prompt in llm_logger.py + ai_engine.py); defence-in-depth on GET /llm-calls endpoint (prequery + WHERE workspace_id); Phase 5 complete (3 plans, ANLX-05 closed alongside INBX-01..05 + AIRC-04 + ANLX-01..04)
+- [Phase 07-unified-freeze-policy]: Phase 07 Plan 01: antispam path converged onto PEER_FLOOD soft-restriction (pause pending +24h, flag spam_limited) instead of terminal-fail; ai_enabled block deleted (replies keep flowing); rotation excludes restriction_status != 'none'. Decisions: pause scoped to status='pending' only (avoids in-flight race), AND restriction_status <> 'frozen' guard (frozen-precedence). NO migration (028 pre-existing). 21/21 targeted tests green.
 
 ### Roadmap Evolution
 
@@ -150,6 +152,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-05-22T18:40:08.798Z
-Stopped at: Phase 05.1 UI-SPEC approved
-Resume file: .planning/phases/05.1-lovable-ui-v1/05.1-UI-SPEC.md
+Last session: 2026-06-23T09:07:49.880Z
+Stopped at: Completed 07-01-PLAN.md
+Resume file: None
