@@ -554,20 +554,28 @@ function SendersPanel({
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {eligible.map((s) => {
               const active = s.status === "active";
+              // POOL-09: a sender held by another running campaign cannot be
+              // attached (backend returns 409 SENDER_LOCK_CONFLICT). Surface the
+              // lock here so the account isn't offered as if it were free.
+              const locked = !!s.locked_by_campaign_name;
               return (
                 <button
                   key={s.id}
                   type="button"
                   className="pill"
-                  disabled={busy}
+                  disabled={busy || locked}
                   onClick={() => onAttach(s.id)}
-                  title={`Add ${s.name || s.slug} to the pool`}
+                  title={
+                    locked
+                      ? `Locked by running campaign: ${s.locked_by_campaign_name}. Pause it first.`
+                      : `Add ${s.name || s.slug} to the pool`
+                  }
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 6,
-                    cursor: busy ? "default" : "pointer",
-                    opacity: busy ? 0.6 : 1,
+                    cursor: busy || locked ? "default" : "pointer",
+                    opacity: busy || locked ? 0.6 : 1,
                   }}
                 >
                   <div
@@ -583,13 +591,29 @@ function SendersPanel({
                     {(s.name || s.slug).slice(0, 1).toUpperCase()}
                   </div>
                   <span>{s.name || s.slug}</span>
-                  <span
-                    className={`pill ${active ? "pill--green" : "pill--red"}`}
-                    style={{ height: 16, fontSize: 10, padding: "0 6px" }}
-                  >
-                    {s.status}
-                  </span>
-                  <Plus size={12} />
+                  {locked ? (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        color: "var(--danger)",
+                        fontSize: 10,
+                      }}
+                    >
+                      <Lock size={11} /> {s.locked_by_campaign_name}
+                    </span>
+                  ) : (
+                    <>
+                      <span
+                        className={`pill ${active ? "pill--green" : "pill--red"}`}
+                        style={{ height: 16, fontSize: 10, padding: "0 6px" }}
+                      >
+                        {s.status}
+                      </span>
+                      <Plus size={12} />
+                    </>
+                  )}
                 </button>
               );
             })}

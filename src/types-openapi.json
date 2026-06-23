@@ -2223,6 +2223,84 @@
         }
       }
     },
+    "/api/v1/contacts/delete": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Delete Contacts Batch",
+        "description": "Batch hard-delete. Возвращает {deleted: N}.\n\nЗеркало move_contacts_batch: workspace-scoped fetch+delete, cross-tenant ids\nмолча пропускаются (не светим существование чужих контактов через 404).",
+        "operationId": "delete_contacts_batch_api_v1_contacts_delete_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteContactBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Contacts Batch Api V1 Contacts Delete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/contacts/{contact_id}": {
       "delete": {
         "tags": [
@@ -4366,6 +4444,178 @@
         ],
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/senders": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Attach Sender",
+        "description": "POOL-01/02/03: attach a sender to a draft/paused/running campaign pool.\n\nD-01: allowed on draft/paused/running — no status-transition guard, only the\n_load_campaign 404 scopes the campaign to the workspace.\nD-02: reuses _validate_workspace_owns_senders (404 SENDER_NOT_FOUND) and\n_check_sender_lock (409 SENDER_LOCK_CONFLICT — byte-identical to /start).\nD-08: triggers rebalance_on_attach only when the campaign is running.",
+        "operationId": "attach_sender_api_v1_campaigns__campaign_id__senders_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignSenderAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/senders/{sender_id}": {
+      "delete": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Detach Sender",
+        "description": "POOL-04/05/06/06b: detach a sender from a campaign pool.\n\nD-03 (min-pool): cannot remove the last sender of a running campaign → 409.\nD-04 (cold-pending): un-sent cold pending rows would be silently orphaned → 409.\nD-05 (engaged): dialogs with an open conversation never block detach.\nD-06: no auto-reassign of the cold backlog here — deferred to Phase 9.",
+        "operationId": "detach_sender_api_v1_campaigns__campaign_id__senders__sender_id__delete",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -6921,13 +7171,27 @@
             "title": "Description"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
           },
           "folder_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Folder Id"
           },
           "sender_ids": {
@@ -6939,8 +7203,15 @@
             "title": "Sender Ids"
           },
           "message_template": {
-            "type": "string",
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Message Template"
           },
           "timezone": {
@@ -7127,14 +7398,23 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "type": "boolean",
+            "title": "Allow Recontact",
+            "default": false
+          },
+          "recontact_min_age_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Recontact Min Age Days",
+            "default": 30
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "agent_id",
-          "folder_id",
-          "message_template"
+          "name"
         ],
         "title": "CampaignCreate",
         "description": "POST /api/v1/campaigns body."
@@ -7188,13 +7468,27 @@
             "title": "Description"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
           },
           "folder_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Folder Id"
           },
           "status": {
@@ -7363,6 +7657,16 @@
             ],
             "title": "Webhook Url"
           },
+          "allow_recontact": {
+            "type": "boolean",
+            "title": "Allow Recontact",
+            "default": false
+          },
+          "recontact_min_age_days": {
+            "type": "integer",
+            "title": "Recontact Min Age Days",
+            "default": 30
+          },
           "attached_senders": {
             "items": {
               "$ref": "#/components/schemas/CampaignSenderAttach"
@@ -7391,8 +7695,6 @@
           "id",
           "workspace_id",
           "name",
-          "agent_id",
-          "folder_id",
           "status",
           "timezone",
           "work_hour_start",
@@ -7434,14 +7736,36 @@
               }
             ],
             "title": "Locked By Campaign Name"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "sender_id",
+          "id"
+        ],
+        "title": "CampaignSenderAttach",
+        "description": "Read-only sender entry inside CampaignResponse.attached_senders[].\n\nlocked_by_campaign_id / locked_by_campaign_name populated when the sender\nis currently attached to a DIFFERENT running campaign in the same workspace.\n\n`id` mirrors `sender_id` so the entry is keyed identically to the Sender it\nreferences (UI/tests read `attached_senders[].id`); `sender_id` is retained\nfor back-compat with Phase 4 consumers."
+      },
+      "CampaignSenderAttachRequest": {
+        "properties": {
+          "sender_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sender Id"
           }
         },
         "type": "object",
         "required": [
           "sender_id"
         ],
-        "title": "CampaignSenderAttach",
-        "description": "Read-only sender entry inside CampaignResponse.attached_senders[].\n\nlocked_by_campaign_id / locked_by_campaign_name populated when the sender\nis currently attached to a DIFFERENT running campaign in the same workspace."
+        "title": "CampaignSenderAttachRequest",
+        "description": "POST /api/v1/campaigns/{id}/senders body — attach a single sender to a pool.\n\nThin request body (Plan 08-03 / D-02): pool mutation is one sender at a time\nvia POST/DELETE /campaigns/{id}/senders. Distinct from CampaignSenderAttach,\nwhich is the read-only response sub-object inside attached_senders[]."
       },
       "CampaignUpdate": {
         "properties": {
@@ -7720,11 +8044,35 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Recontact"
+          },
+          "recontact_min_age_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recontact Min Age Days"
           }
         },
         "type": "object",
         "title": "CampaignUpdate",
-        "description": "PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).\n\nNote: sender_ids НЕ обновляется через PATCH в Phase 4 — для добавления/удаления\nsenders v1 простоту делаем «удали → создай новую» либо ждём v2 dedicated endpoint."
+        "description": "PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).\n\nNote: sender_ids НЕ обновляется через PATCH (D-12, намеренно). Пул sender'ов\nуправляется отдельными эндпоинтами POST/DELETE /campaigns/{id}/senders\n(Plan 08-03) с изоляцией workspace, sender-lock и min-pool/cold-pending\nгардами. PATCH игнорирует sender_ids."
       },
       "ContactImportPreviewResponse": {
         "properties": {
@@ -8270,6 +8618,24 @@
         "type": "object",
         "title": "CoreValueResponse",
         "description": "GET /api/v1/telemetry/core-value response (UI-SPEC §9 KPI #9).\n\nAll three fields may be None for workspaces that have not yet signed up or\nlaunched a campaign; UI renders them as \"—\" in that case."
+      },
+      "DeleteContactBatchRequest": {
+        "properties": {
+          "contact_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Contact Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "contact_ids"
+        ],
+        "title": "DeleteContactBatchRequest"
       },
       "EnqueueResponse": {
         "properties": {
@@ -9122,7 +9488,7 @@
           "message"
         ],
         "title": "SendMessageFromUIRequest",
-        "description": "POST /api/v1/conversations/{id}/send body (D-04 auto-takeover)."
+        "description": "POST /api/v1/conversations/{id}/send body (D-04 auto-takeover).\n\n2026-05-26: Accepts both ``message`` (canonical, per openapi spec) and\n``message_text`` (what Lovable's generated client sends). Pydantic's\n``AliasChoices`` lets us read either name without forcing the frontend\nto ship a hotfix. Outgoing serialization still uses canonical ``message``."
       },
       "SendMessageFromUIResponse": {
         "properties": {
@@ -9416,7 +9782,9 @@
               "active",
               "warmup",
               "paused",
-              "error"
+              "error",
+              "limited",
+              "frozen"
             ],
             "title": "Status"
           },
@@ -9432,6 +9800,28 @@
               "paused"
             ],
             "title": "Lifecycle Status"
+          },
+          "restriction_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "spam_limited",
+              "frozen"
+            ],
+            "title": "Restriction Status",
+            "default": "none"
+          },
+          "restricted_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restricted Until"
           },
           "rate_limits": {
             "$ref": "#/components/schemas/RateLimits"
@@ -9479,6 +9869,29 @@
             "type": "integer",
             "title": "Sent Today",
             "default": 0
+          },
+          "locked_by_campaign_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked By Campaign Id"
+          },
+          "locked_by_campaign_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked By Campaign Name"
           }
         },
         "type": "object",
