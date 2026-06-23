@@ -60,3 +60,10 @@ is restricted (reassign cold/un-started ones; keep established dialogues per FRZ
 - WR-02: `len(paused.fetchall())` vs `rowcount` — cosmetic.
 - WR-04: tests rely on commit-visible fixture semantics (SUT opens own AsyncSessionLocal) — correct today.
 - INFO: stale "auto-cancel"/"cancellation" wording in comments/logs/test docstring left from the retired terminal-fail design.
+
+## Pre-existing brittle test (regression-gate, 2026-06-23)
+`tests/test_listener_reconcile.py::test_get_active_senders_query_shape` fails by
+matching the literal `is_active` inside a Phase-2 comment ("is_active dropped — filter
+by lifecycle_status + auth_status", listener.py:382/554). Confirmed pre-existing:
+Phase 07 added zero `is_active` references and the comment exists at base commit
+1f4ce9e6. Not a Phase 07 regression — brittle source-scan assertion to fix separately.
