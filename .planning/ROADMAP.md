@@ -233,7 +233,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 08-03-attach-detach-endpoints-PLAN.md — `POST /campaigns/{id}/senders` + `DELETE /campaigns/{id}/senders/{sid}` reusing _validate_workspace_owns_senders/_check_sender_lock/_campaign_to_response + MIN_POOL/DETACH guards + rebalance hook — POOL-01..06b [Wave 2, depends_on: 01, 02]
+- [x] 08-03-attach-detach-endpoints-PLAN.md — `POST /campaigns/{id}/senders` + `DELETE /campaigns/{id}/senders/{sid}` reusing _validate_workspace_owns_senders/_check_sender_lock/_campaign_to_response + MIN_POOL/DETACH guards + rebalance hook — POOL-01..06b [Wave 2, depends_on: 01, 02]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-06-23T11:40:42.787Z"
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-06-23T12:06:44.347Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 12
   completed_phases: 8
   total_plans: 32
-  completed_plans: 30
+  completed_plans: 31
   percent: 17
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 08 (pool-management-and-even-distribution) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-23
 
@@ -67,6 +67,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 07-unified-freeze-policy P01 | 14min | 3 tasks | 4 files |
 | Phase 08 P01 | 9min | 3 tasks | 3 files |
 | Phase 08 P02 | 8min | 1 tasks | 1 files |
+| Phase 08-pool-management-and-even-distribution P03 | 16min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 07-unified-freeze-policy]: Phase 07 Plan 01: antispam path converged onto PEER_FLOOD soft-restriction (pause pending +24h, flag spam_limited) instead of terminal-fail; ai_enabled block deleted (replies keep flowing); rotation excludes restriction_status != 'none'. Decisions: pause scoped to status='pending' only (avoids in-flight race), AND restriction_status <> 'frozen' guard (frozen-precedence). NO migration (028 pre-existing). 21/21 targeted tests green.
 - [Phase 08]: Plan 08-01: Wave-0 test scaffold — test_queue_item_factory (message_queue + sticky CCA + optional conversation) + 10 fully-asserting RED tests (test_pool_endpoints POOL-01..06b + test_rebalance POOL-07/08/08b); rebalance import inside test body keeps --collect-only clean. 683 collected / 0 errors.
 - [Phase 08]: Plan 08-02: rebalance_on_attach campaign-scoped even-split (rebalance.py) — eligible-pool filter copied from rotation.py:113-123, floor-target back-fill of new sender only (BATCH_CAP=500), donor rows FOR UPDATE OF mq SKIP LOCKED + status='pending' (no worker race), queue.sender_id + CCA.sender_id in one TX (lock-step); _pick_least_loaded NOT reused (global scope); no migration. POOL-07/08/08b GREEN.
+- [Phase 08-pool-management-and-even-distribution]: Plan 08-03: attach/detach pool endpoints on the existing campaigns router — attach reuses _validate_workspace_owns_senders + _check_sender_lock with the /start 409 SENDER_LOCK_CONFLICT contract (insert→flush→check→rollback), allowed on draft/paused/running (D-01), rebalance_on_attach gated to running (D-08); detach guards MIN_POOL_GUARD (running+last) + DETACH_BLOCKED_PENDING (cold-pending, engaged dialogs excluded via NOT EXISTS conversations, D-05), no auto-reassign (D-06). CampaignSenderAttach gained computed id; pool tests given per-test JWT subs to dodge user_workspaces UNIQUE binding. POOL-01..06b GREEN.
 
 ### Roadmap Evolution
 
@@ -158,6 +160,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-23T11:40:36.190Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-06-23T12:06:36.512Z
+Stopped at: Completed 08-03-PLAN.md
 Resume file: None
