@@ -597,6 +597,86 @@ async def attach_sender_to_campaign(async_db_session: AsyncSession, test_workspa
 
 
 @pytest_asyncio.fixture
+async def test_queue_item_factory(async_db_session: AsyncSession, test_workspace: Workspace):
+    """Seed a message_queue row (+ optional sticky CCA + conversation) for Phase 8.
+
+    Mirrors `attach_sender_to_campaign` (conftest:583) raw-SQL + commit shape.
+    Used by the pool-management / rebalance tests to build a campaign backlog.
+
+    Usage:
+        await test_queue_item_factory(camp_id, sender.id, "+79990001111")
+        await test_queue_item_factory(camp_id, sender.id, "+79990001111",
+                                      status="sent", with_cca=False)
+        await test_queue_item_factory(camp_id, sender.id, "+79990001111",
+                                      with_conversation=True)  # engaged recipient
+
+    Behaviour:
+    - Always INSERTs one `message_queue` row keyed on `recipient_phone` with
+      `scheduled_at = NOW()` and `workspace_id = test_workspace.id`.
+    - When `with_cca=True` (default) upserts a matching
+      `campaign_contact_assignments(campaign_id, contact_phone)` row pointing at the
+      same sender — this keeps the sticky assignment in sync with the queue row, which
+      is exactly the invariant the rebalance tests assert (D-08).
+    - When `with_conversation=True` also INSERTs a `conversations` row for
+      `(workspace_id, sender_id, contact_phone=recipient_phone)` so a recipient can be
+      marked "engaged" (POOL-06b / POOL-08b — engaged dialogs must NOT be moved/blocked).
+    """
+    from sqlalchemy import text as _t
+
+    async def _make(
+        campaign_id,
+        sender_id,
+        recipient_phone,
+        status: str = "pending",
+        *,
+        with_cca: bool = True,
+        with_conversation: bool = False,
+        **overrides,
+    ):
+        wid = str(test_workspace.id)
+        cid = str(campaign_id)
+        sid = str(sender_id)
+
+        await async_db_session.execute(_t("""
+            INSERT INTO message_queue (
+                workspace_id, campaign_id, sender_id,
+                recipient_phone, item_type, status, scheduled_at
+            ) VALUES (
+                :wid, :cid, :sid, :phone, 'message', :status, NOW()
+            )
+        """), {
+            "wid": wid, "cid": cid, "sid": sid,
+            "phone": recipient_phone, "status": status, **overrides,
+        })
+
+        if with_cca:
+            # Sticky upsert mirrors rotation.py:150-163 so CCA.sender_id tracks the
+            # queue row's sender — rebalance keeps the two in lock-step.
+            await async_db_session.execute(_t("""
+                INSERT INTO campaign_contact_assignments
+                    (workspace_id, campaign_id, contact_phone, sender_id)
+                VALUES (:wid, :cid, :phone, :sid)
+                ON CONFLICT (campaign_id, contact_phone)
+                    DO UPDATE SET sender_id = EXCLUDED.sender_id
+            """), {"wid": wid, "cid": cid, "phone": recipient_phone, "sid": sid})
+
+        if with_conversation:
+            # An engaged dialog for this recipient. contact_phone is the same identity
+            # key the cold-pending guard joins on (NOT EXISTS conversations).
+            await async_db_session.execute(_t("""
+                INSERT INTO conversations (
+                    workspace_id, sender_id, contact_phone, campaign_id, status
+                ) VALUES (
+                    :wid, :sid, :phone, :cid, 'active'
+                )
+            """), {"wid": wid, "sid": sid, "phone": recipient_phone, "cid": cid})
+
+        await async_db_session.commit()
+
+    return _make
+
+
+@pytest_asyncio.fixture
 async def test_running_campaign_factory(test_campaign_factory, test_sender_factory, attach_sender_to_campaign):
     """Factory creates a running campaign with N senders attached."""
 
