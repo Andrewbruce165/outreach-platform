@@ -229,7 +229,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 08-02-rebalance-service-PLAN.md — NEW `app/services/rebalance.py::rebalance_on_attach` campaign-scoped even-split (FOR UPDATE SKIP LOCKED, CCA-synced, idempotent) — POOL-07/08/08b [Wave 1, depends_on: 01]
+- [x] 08-02-rebalance-service-PLAN.md — NEW `app/services/rebalance.py::rebalance_on_attach` campaign-scoped even-split (FOR UPDATE SKIP LOCKED, CCA-synced, idempotent) — POOL-07/08/08b [Wave 1, depends_on: 01]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
