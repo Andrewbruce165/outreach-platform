@@ -82,9 +82,11 @@ class WarmupWorker:
     """
     Воркер прогрева аккаунтов.
 
-    Организует AI-диалоги между аккаунтами из warmup_pool.
+    Организует AI-диалоги между аккаунтами из warmup_pool по схеме full mesh:
+    каждый аккаунт ведёт параллельные диалоги со всеми остальными аккаунтами
+    своего workspace одновременно.
     Каждый тик: обрабатывает сессии с наступившим next_message_at,
-    затем создаёт новые сессии для свободных пар.
+    затем создаёт новые сессии для всех пар без активного диалога.
     """
 
     TICK_INTERVAL = 30        # секунд между тиками
@@ -212,6 +214,20 @@ class WarmupWorker:
         )
         return result.scalar() or 0
 
+    async def _last_sent_at(self, db: AsyncSession, sender_id: str) -> Optional[datetime]:
+        """Время последнего warmup-сообщения этого аккаунта (по всем сессиям).
+
+        Full mesh: аккаунт участвует в N-1 диалогах одновременно, поэтому
+        per-session MIN_DELAY больше не гарантирует паузу между сообщениями
+        самого аккаунта. Этот метод используется как cross-session pacing-гард,
+        чтобы между warmup-сообщениями одного аккаунта оставалось ≥ MIN_DELAY.
+        """
+        result = await db.execute(
+            text("SELECT MAX(sent_at) FROM warmup_messages WHERE from_sender_id = :sid"),
+            {"sid": sender_id}
+        )
+        return result.scalar()
+
     # ─── Session processing ───────────────────────────────────────────────────
 
     async def _process_due_sessions(self, db: AsyncSession):
@@ -290,6 +306,26 @@ class WarmupWorker:
                 f"to lifecycle={to_sender['lifecycle_status']} auth={to_sender['auth_status']})"
             )
             return
+
+        # Cross-session pacing-гард (full mesh): аккаунт может быть due сразу в
+        # нескольких сессиях. Не даём ему слать чаще, чем раз в MIN_DELAY —
+        # иначе получаем burst из нескольких сообщений за секунды.
+        last_sent = await self._last_sent_at(db, from_id)
+        if last_sent is not None:
+            if last_sent.tzinfo is None:
+                last_sent = last_sent.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(timezone.utc) - last_sent).total_seconds()
+            if elapsed < self.MIN_DELAY:
+                # Откладываем эту сессию до момента last_sent + MIN_DELAY + джиттер
+                next_at = last_sent + timedelta(
+                    seconds=self.MIN_DELAY + random.randint(0, 120)
+                )
+                await db.execute(
+                    text("UPDATE warmup_sessions SET next_message_at = :t, updated_at = NOW() WHERE id = :sid"),
+                    {"t": next_at, "sid": session["id"]}
+                )
+                await db.commit()
+                return
 
         # Проверяем дневной лимит отправителя
         enrolled_result = await db.execute(
@@ -407,42 +443,54 @@ class WarmupWorker:
     # ─── Session creation ─────────────────────────────────────────────────────
 
     async def _create_new_sessions(self, db: AsyncSession):
-        """Создать новые сессии для свободных пар в пуле.
+        """Создать новые сессии — полный меш внутри каждого workspace.
+
+        Каждый аккаунт ведёт параллельные диалоги со всеми остальными
+        аккаунтами своего workspace одновременно: для любой пары, у которой
+        ещё нет активной сессии, создаём новую. После завершения сессии пара
+        снова станет «свободной» и получит свежий диалог на следующем тике —
+        прогрев идёт непрерывно.
+
+        Объём сообщений per-sender по-прежнему ограничен дневным лимитом, а
+        темп — cross-session гардом в _process_session (≥ MIN_DELAY между
+        сообщениями одного аккаунта).
 
         Phase 02.1 (CR-04 issue 3): пары формируются ВНУТРИ workspace_id —
         sender'ы из разных tenant'ов не должны общаться через warmup
         (cross-tenant Telegram leak).
         """
-        from itertools import groupby
+        from itertools import groupby, combinations
 
         pool = await self._get_active_pool(db)
         if len(pool) < 2:
             return
 
-        # Кто уже в активных сессиях (busy_ids global — sender уже занят в своём workspace)
-        busy_result = await db.execute(
+        # Пары, у которых уже есть активная сессия — не дублируем живой диалог
+        # между теми же двумя аккаунтами (unordered pair).
+        active_result = await db.execute(
             text("SELECT sender_a_id, sender_b_id FROM warmup_sessions WHERE status = 'active'")
         )
-        busy_ids: set[str] = set()
-        for row in busy_result.fetchall():
-            busy_ids.add(str(row[0]))
-            busy_ids.add(str(row[1]))
+        active_pairs: set[frozenset] = {
+            frozenset({str(row[0]), str(row[1])})
+            for row in active_result.fetchall()
+        }
 
-        available = [s for s in pool if s["sender_id"] not in busy_ids]
-        if len(available) < 2:
-            return
-
-        # ── CR-04 issue 3 FIX: партиционируем по workspace_id ─────────────────
+        # ── Полный меш, партиционированный по workspace_id ────────────────────
         # groupby требует отсортированного входа.
-        available_sorted = sorted(available, key=lambda s: s["workspace_id"])
+        pool_sorted = sorted(pool, key=lambda s: s["workspace_id"])
         pairs: list[tuple[dict, dict]] = []
-        for _wsid, group_iter in groupby(available_sorted, key=lambda s: s["workspace_id"]):
+        for _wsid, group_iter in groupby(pool_sorted, key=lambda s: s["workspace_id"]):
             ws_group = list(group_iter)
             if len(ws_group) < 2:
                 continue
-            random.shuffle(ws_group)
-            for i in range(0, len(ws_group) - 1, 2):
-                pairs.append((ws_group[i], ws_group[i + 1]))
+            for sender_a, sender_b in combinations(ws_group, 2):
+                pair = frozenset({sender_a["sender_id"], sender_b["sender_id"]})
+                if pair in active_pairs:
+                    continue
+                pairs.append((sender_a, sender_b))
+
+        if not pairs:
+            return
 
         for sender_a, sender_b in pairs:
             # Защита-в-глубину: после partitioning оба sender'а из одного workspace.
