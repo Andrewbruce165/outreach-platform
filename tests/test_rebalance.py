@@ -157,3 +157,47 @@ async def test_rebalance_skips_non_cold(
     # CCA for those must also be untouched.
     assert await _cca_sender_for(async_db_session, camp["id"], sent_phone) == str(a.id)
     assert await _cca_sender_for(async_db_session, camp["id"], engaged_phone) == str(a.id)
+
+
+# ─── POOL-07 (CR-02 small-backlog regression) ────────────────────────────────
+
+async def test_rebalance_p3_small_backlog_not_starved(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """CR-02: P=3, total=2 — the case the FLOOR-only fair share silently failed.
+
+    With ``target = total // P`` (floor), P=3 and total=2 give target=0 → need=0,
+    so the newly-attached sender B would be starved while donor A hoards the whole
+    backlog — the exact failure this module exists to prevent. The ceil-for-
+    recipient / floor-for-donor fix makes B pull ceil(2/3)=1 row, leaving A with 1
+    and C with 0.
+    """
+    from app.services.rebalance import rebalance_on_attach
+
+    camp, senders = await test_running_campaign_factory(sender_count=3)
+    a, b, c = senders[0], senders[1], senders[2]
+
+    # Donor A holds 2 cold-pending rows; B and C hold none. total=2 < P=3.
+    phones = [f"+7990030{i:04d}" for i in range(2)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], a.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+
+    before = await _pending_counts(async_db_session, camp["id"])
+    assert before.get(str(a.id), 0) == 2
+
+    moved = await rebalance_on_attach(camp["id"], b.id, async_db_session)
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert sum(after.values()) == 2, "rebalance must not create or drop rows"
+    assert moved == 1, "ceil(2/3)=1 row must move to B (B must not be starved)"
+    assert after.get(str(b.id), 0) == 1, "B holds exactly 1 cold-pending row"
+    assert after.get(str(a.id), 0) == 1, "A keeps exactly 1 (floor target)"
+    assert after.get(str(c.id), 0) == 0, "C, not the attached sender, stays empty"
+
+    # CCA stays in sync for the moved recipient.
+    moved_to_b = [
+        ph for ph in phones
+        if await _cca_sender_for(async_db_session, camp["id"], ph) == str(b.id)
+    ]
+    assert len(moved_to_b) == 1, "exactly one recipient's CCA points at B"

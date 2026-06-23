@@ -135,16 +135,26 @@ async def rebalance_on_attach(
     if total == 0:
         return 0
 
-    # Step 3: fair-share target for the new sender (floor) and how many to pull.
-    target = total // P
-    need = target - load.get(new_sid, 0)
+    # Step 3: fair share for the new sender (ceil) and donor threshold (floor).
+    # CR-02: use CEIL for the recipient's goal and FLOOR for the donor threshold.
+    # If both used floor (total // P) and total < P (e.g. P=3, total=2), the new
+    # sender's target would be 0 → need=0 → it gets starved while a donor hoards
+    # the whole backlog — the exact failure this module exists to prevent. Ceil
+    # for the recipient guarantees it pulls at least 1 row when a surplus exists;
+    # floor for the donor threshold keeps us from over-draining donors below their
+    # fair floor. (P=3, total=2 → fair_share=ceil(2/3)=1, floor_target=0 → B=1,
+    # A=1, C=0.)
+    fair_share = (total + P - 1) // P  # == ceil(total / P), integer-only
+    need = fair_share - load.get(new_sid, 0)
     if need <= 0:
         # Already balanced — idempotent no-op.
         return 0
     need = min(need, BATCH_CAP)
 
-    # Donor senders are those above the target (their surplus is movable).
-    donors = [sid for sid, cnt in load.items() if cnt > target and sid != new_sid]
+    # Donor senders are those above the floor target (their surplus is movable).
+    floor_target = total // P
+    donors = [sid for sid, cnt in load.items()
+              if cnt > floor_target and sid != new_sid]
     if not donors:
         return 0
 
