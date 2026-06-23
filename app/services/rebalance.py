@@ -73,10 +73,16 @@ async def rebalance_on_attach(
     within ±1 of total/P cold-pending rows (one-directional back-fill). Idempotent
     (re-running on an already-even pool moves 0 rows) and worker-safe.
 
+    TRANSACTION-NEUTRAL (CR-01): this function does NOT commit. The CALLER owns the
+    transaction and commits exactly once after this call returns, so the rebalance
+    row moves land in the same atomic commit as the attach itself (campaigns.py:
+    attach_sender). Tests that call this directly must commit themselves or assert
+    through the same session.
+
     Args:
         campaign_id: the campaign whose pool is being rebalanced.
         new_sender_id: the just-attached sender to back-fill.
-        db: async session; this function owns the transaction (single commit).
+        db: async session; the CALLER owns the transaction (no commit here).
 
     Returns:
         The number of cold-pending rows moved onto ``new_sender_id`` (0 if the
@@ -188,8 +194,7 @@ async def rebalance_on_attach(
             {"new": new_sid, "cid": cid, "phone": row.phone},
         )
 
-    await db.commit()
-
+    # CR-01: no commit here — the caller owns the transaction (single commit).
     n = len(moved_rows)
     # Log COUNT ONLY — never recipient phones / payloads (CLAUDE.md, threat T4).
     logger.info(
