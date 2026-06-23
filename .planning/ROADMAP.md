@@ -205,12 +205,12 @@ Plans:
 ### Phase 7: Unified Freeze Policy
 
 **Goal:** Единая политика мягкого спам-ограничения для всех путей. Переписать `listener._handle_antispam_signal` по образцу PEER_FLOOD: вместо терминального `failed` — пауза pending этого sender'а + `restriction_status='spam_limited'`/`restricted_until`, чтобы существующий restriction-reconcile авто-возобновлял; **перестать выключать `ai_enabled` во всех диалогах** — ответы в идущих диалогах продолжаются (Telegram их не блокирует). Добавить `AND s.restriction_status='none'` в фильтр кандидатов `rotation.py:112-125` — новые холодные контакты не садятся на ограниченный аккаунт. Регресс-тест: воркер скипает restricted sender'а.
-**Requirements**: TBD (derive on plan)
+**Requirements**: FRZ-01, FRZ-02, FRZ-03, FRZ-04, FRZ-05 (derived this phase — see 07-RESEARCH.md §Phase Requirements)
 **Depends on:** Phase 4 (Campaigns), Phase 5 (Inbox / AI-reply path). Миграций нет (028 уже есть).
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 7 to break down)
+- [ ] 07-01-PLAN.md — Rewrite `_handle_antispam_signal` to PEER_FLOOD pause+flag mirror (delete ai_enabled block, preserve self-check guard, frozen-precedence guard) + rotation candidate filter `AND s.restriction_status='none'` + flip cancel-path test to new contract + new rotation restricted-sender regression + assert FRZ-05 worker-skip — FRZ-01..05 [Wave 1, no deps]
 
 ### Phase 8: Pool Management and Even Distribution
 
@@ -257,10 +257,10 @@ Plans:
 | 4. Campaigns | 0/5 | Planned (5 plans, waves 1→4) | - |
 | 5. Inbox & Analytics | 0/3 | Planned (3 plans, waves 1→2) | - |
 | 6. Admin Master Bot | 0/2 | Deferred to v2 | - |
-| 7. Unified Freeze Policy | 0/? | Not planned | - |
+| 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
 | 8. Pool Management & Even Distribution | 0/? | Not planned | - |
 | 9. Cold-Contact Failover | 0/? | Not planned | - |
 | 10. Pool Visibility (optional) | 0/? | Not planned | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
-**Post-v1 block (Sender Pool Resilience): +4 phases (7–10), not yet planned.**
+**Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
