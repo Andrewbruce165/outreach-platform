@@ -259,3 +259,39 @@ async def test_detach_engaged_only_ok(
     )
     assert r.status_code == 200, r.text
     assert await _count_campaign_senders(async_db_session, camp["id"], victim.id) == 0
+
+
+# ─── POOL-09 (08-04 UAT fix) ─────────────────────────────────────────────────
+
+async def test_list_senders_exposes_lock_state(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory, attach_sender_to_campaign,
+):
+    """POOL-09: GET /senders reports locked_by_campaign_name for a sender held by
+    a running campaign, and None for a free sender — so the pool add-picker can
+    disable locked entries instead of returning a confusing 409 on attach.
+
+    Lock semantics (D-02) are unchanged; this only EXPOSES the existing lock.
+    """
+    await _bind(async_db_session, test_workspace.id, "pool-lockview")
+
+    locked = await test_sender_factory()
+    free = await test_sender_factory()
+
+    running = await test_campaign_factory(status="running", name="HoldsLocked")
+    await attach_sender_to_campaign(running["id"], locked.id)
+
+    r = await async_client.get(
+        "/api/v1/senders",
+        headers=_auth_headers(valid_supabase_jwt, "pool-lockview"),
+    )
+    assert r.status_code == 200, r.text
+    by_id = {s["id"]: s for s in r.json()["senders"]}
+
+    locked_resp = by_id[str(locked.id)]
+    assert locked_resp["locked_by_campaign_name"] == "HoldsLocked"
+    assert str(locked_resp["locked_by_campaign_id"]) == str(running["id"])
+
+    free_resp = by_id[str(free.id)]
+    assert free_resp["locked_by_campaign_name"] is None
+    assert free_resp["locked_by_campaign_id"] is None

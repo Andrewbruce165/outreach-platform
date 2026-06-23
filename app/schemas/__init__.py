@@ -145,6 +145,14 @@ class SenderResponse(BaseModel):
     # COUNT(message_queue WHERE status='sent' AND finished_at >= now()-24h).
     # Only computed on the list endpoint; single-sender paths default to 0.
     sent_today: int = 0
+    # POOL-09 (08-04 UAT fix): per-sender lock state for the campaign pool
+    # add-picker. Populated ONLY on the list endpoint (GET /senders) = the first
+    # running campaign in the same workspace that holds this sender (deterministic
+    # ORDER BY c.name, mirroring _check_sender_not_in_running_campaign). None on
+    # every other path (single-sender endpoints report no lock — same convention
+    # as sent_today=0). None = sender is free to attach.
+    locked_by_campaign_id: Optional[UUID] = None
+    locked_by_campaign_name: Optional[str] = None
 
 
 class SenderCreateResponse(BaseModel):

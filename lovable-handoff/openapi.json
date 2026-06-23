@@ -9869,6 +9869,29 @@
             "type": "integer",
             "title": "Sent Today",
             "default": 0
+          },
+          "locked_by_campaign_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked By Campaign Id"
+          },
+          "locked_by_campaign_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked By Campaign Name"
           }
         },
         "type": "object",

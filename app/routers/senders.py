@@ -86,7 +86,12 @@ def _derive_status(sender: Sender) -> str:
     return sender.lifecycle_status
 
 
-def _sender_to_response(sender: Sender, sent_today: int = 0) -> SenderResponse:
+def _sender_to_response(
+    sender: Sender,
+    sent_today: int = 0,
+    locked_by_campaign_id: Optional[UUID] = None,
+    locked_by_campaign_name: Optional[str] = None,
+) -> SenderResponse:
     """Build SenderResponse с derived status + nested RateLimits.
 
     Phase 3 C-05: ai_context_id / ai_context_name fields removed — sender
@@ -94,6 +99,12 @@ def _sender_to_response(sender: Sender, sent_today: int = 0) -> SenderResponse:
 
     `sent_today` — trailing-24h sent count (TODAY column numerator). Computed
     only on the list endpoint; other paths use the default 0.
+
+    `locked_by_campaign_id` / `locked_by_campaign_name` (POOL-09, 08-04 UAT) —
+    the first running campaign in the workspace holding this sender, so the pool
+    add-picker can disable locked entries instead of returning a confusing 409.
+    Populated only on the list endpoint; single-sender paths report no lock
+    (same convention as sent_today=0).
     """
     return SenderResponse(
         id=sender.id,
@@ -115,6 +126,8 @@ def _sender_to_response(sender: Sender, sent_today: int = 0) -> SenderResponse:
         last_used_at=sender.last_used_at,
         created_at=sender.created_at,
         sent_today=sent_today,
+        locked_by_campaign_id=locked_by_campaign_id,
+        locked_by_campaign_name=locked_by_campaign_name,
     )
 
 
@@ -259,9 +272,37 @@ async def list_senders(
         )).fetchall()
         sent_today_map = {row[0]: row[1] for row in rows}
 
+    # POOL-09 (08-04 UAT fix): per-sender lock state for the pool add-picker.
+    # One grouped query (no N+1, like sent_today_map above), workspace-scoped,
+    # with semantics IDENTICAL to _check_sender_not_in_running_campaign (sender
+    # attached to a campaign with status='running' in this workspace). DISTINCT ON
+    # picks the first running campaign per sender deterministically (ORDER BY
+    # c.name, mirroring the existing helper) so the disabled-pill tooltip is
+    # stable. None here = the sender is free to attach.
+    lock_map: dict = {}
+    if sender_ids:
+        lock_rows = (await db.execute(
+            text("""
+                SELECT DISTINCT ON (cs.sender_id) cs.sender_id, c.id, c.name
+                  FROM campaign_senders cs
+                  JOIN campaigns c ON c.id = cs.campaign_id
+                 WHERE cs.sender_id = ANY(:sender_ids)
+                   AND c.workspace_id = :wid
+                   AND c.status = 'running'
+                 ORDER BY cs.sender_id, c.name
+            """),
+            {"sender_ids": sender_ids, "wid": str(ctx.workspace_id)},
+        )).fetchall()
+        lock_map = {row[0]: (row[1], row[2]) for row in lock_rows}
+
     return SenderListResponse(
         senders=[
-            _sender_to_response(s, sent_today=sent_today_map.get(s.id, 0))
+            _sender_to_response(
+                s,
+                sent_today=sent_today_map.get(s.id, 0),
+                locked_by_campaign_id=lock_map.get(s.id, (None, None))[0],
+                locked_by_campaign_name=lock_map.get(s.id, (None, None))[1],
+            )
             for s in senders
         ]
     )

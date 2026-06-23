@@ -2800,6 +2800,10 @@ export interface components {
              * @default 0
              */
             sent_today: number;
+            /** Locked By Campaign Id */
+            locked_by_campaign_id?: string | null;
+            /** Locked By Campaign Name */
+            locked_by_campaign_name?: string | null;
         };
         /**
          * SenderUpdate
