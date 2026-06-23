@@ -113,7 +113,7 @@
 - [x] **POOL-07**: Light rebalance moves un-sent cold pending from overloaded senders onto a newly-attached sender on a running campaign, toward an even split (D-08/D-09)
 - [x] **POOL-08**: Rebalance is idempotent (second call moves 0) and concurrency-safe under worker ticks (FOR UPDATE SKIP LOCKED + status='pending') (D-09)
 - [x] **POOL-08b**: Rebalance never moves sent / processing / engaged-dialog rows; keeps campaign_contact_assignments in sync (D-08)
-- [ ] **POOL-09**: Frontend "Senders / Пул" panel — add/remove, locked-sender display, human-readable 409s (D-10/D-11/D-12)
+- [x] **POOL-09**: Frontend "Senders / Пул" panel — add/remove, locked-sender display, human-readable 409s (D-10/D-11/D-12)
 
 ## v2 Requirements
 
@@ -216,7 +216,7 @@
 | POOL-07 | Phase 8 | Complete |
 | POOL-08 | Phase 8 | Complete |
 | POOL-08b | Phase 8 | Complete |
-| POOL-09 | Phase 8 | Pending |
+| POOL-09 | Phase 8 | Complete |
 
 **Coverage:**
 

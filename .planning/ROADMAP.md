@@ -19,7 +19,7 @@
 _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/proposals/sender-pool-resilience.md`_
 
 - [ ] **Phase 7: Unified Freeze Policy** — antispam-путь как PEER_FLOOD (пауза+флаг вместо `failed`, реконсайл авто-resume; ответы в диалогах не глушим) + ротация не садит новые контакты на ограниченный аккаунт
-- [ ] **Phase 8: Pool Management & Even Distribution** — attach/detach аккаунтов к кампании + фронт-мультиселект + равномерная раздача по пулу
+- [x] **Phase 8: Pool Management & Even Distribution** — attach/detach аккаунтов к кампании + фронт-мультиселект + равномерная раздача по пулу (completed 2026-06-23)
 - [ ] **Phase 9: Cold-Contact Failover** — не-контактированные задачи замёрзшего аккаунта уходят на здоровые; активные диалоги ждут свой аккаунт
 - [ ] **Phase 10: Pool Visibility** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж
 
@@ -220,7 +220,7 @@ Plans:
 **Goal:** Дать кампании реальный пул из ≥2 аккаунтов. Эндпоинты `POST /campaigns/{id}/senders` и `DELETE /campaigns/{id}/senders/{sid}` (валидация workspace `_validate_workspace_owns_senders` уже есть; решить, разрешать ли на `running`); мультиселект аккаунтов во фронте (репо `aimly-tg-outreach`); подтвердить равномерную раздачу least-loaded по пулу (worker уже round-robin'ит всех eligible sender'ов). Сейчас у всех кампаний привязан 1 аккаунт.
 **Requirements**: POOL-01, POOL-02, POOL-03, POOL-04, POOL-05, POOL-06, POOL-06b, POOL-07, POOL-08, POOL-08b, POOL-09 (derived this phase — see 08-RESEARCH.md §Phase Requirements)
 **Depends on:** Phase 7
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 
 Plans:
 **Wave 1**
@@ -237,7 +237,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 08-04-frontend-pool-panel-PLAN.md — interactive Senders/Пул panel (sibling repo aimly-tg-outreach) + error-codes.ts fix + OpenAPI regen + human UAT — POOL-09 [Wave 3, depends_on: 03]
+- [x] 08-04-frontend-pool-panel-PLAN.md — interactive Senders/Пул panel (sibling repo aimly-tg-outreach) + error-codes.ts fix + OpenAPI regen + human UAT — POOL-09 [Wave 3, depends_on: 03]
 
 ### Phase 9: Cold-Contact Failover
 
@@ -277,7 +277,7 @@ Plans:
 | 5. Inbox & Analytics | 0/3 | Planned (3 plans, waves 1→2) | - |
 | 6. Admin Master Bot | 0/2 | Deferred to v2 | - |
 | 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
-| 8. Pool Management & Even Distribution | 0/4 | Planned (4 plans, waves 1→3) | - |
+| 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 0/? | Not planned | - |
 | 10. Pool Visibility (optional) | 0/? | Not planned | - |
 

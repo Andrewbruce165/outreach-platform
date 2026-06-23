@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-06-23T12:06:44.347Z"
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-06-23T15:48:00Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 12
   completed_phases: 8
   total_plans: 32
-  completed_plans: 31
+  completed_plans: 32
   percent: 17
 ---
 
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 08 (pool-management-and-even-distribution) — EXECUTING
-Plan: 4 of 4
-Status: Ready to execute
+Phase: 08 (pool-management-and-even-distribution) — COMPLETE (4/4 plans)
+Plan: 4 of 4 — done
+Status: Phase 08 complete; ready for Phase 09 (Cold-Contact Failover)
 Last activity: 2026-06-23
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -68,6 +68,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 08 P01 | 9min | 3 tasks | 3 files |
 | Phase 08 P02 | 8min | 1 tasks | 1 files |
 | Phase 08-pool-management-and-even-distribution P03 | 16min | 3 tasks | 3 files |
+| Phase 08-pool-management-and-even-distribution P04 | ~3h | 4 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 08]: Plan 08-01: Wave-0 test scaffold — test_queue_item_factory (message_queue + sticky CCA + optional conversation) + 10 fully-asserting RED tests (test_pool_endpoints POOL-01..06b + test_rebalance POOL-07/08/08b); rebalance import inside test body keeps --collect-only clean. 683 collected / 0 errors.
 - [Phase 08]: Plan 08-02: rebalance_on_attach campaign-scoped even-split (rebalance.py) — eligible-pool filter copied from rotation.py:113-123, floor-target back-fill of new sender only (BATCH_CAP=500), donor rows FOR UPDATE OF mq SKIP LOCKED + status='pending' (no worker race), queue.sender_id + CCA.sender_id in one TX (lock-step); _pick_least_loaded NOT reused (global scope); no migration. POOL-07/08/08b GREEN.
 - [Phase 08-pool-management-and-even-distribution]: Plan 08-03: attach/detach pool endpoints on the existing campaigns router — attach reuses _validate_workspace_owns_senders + _check_sender_lock with the /start 409 SENDER_LOCK_CONFLICT contract (insert→flush→check→rollback), allowed on draft/paused/running (D-01), rebalance_on_attach gated to running (D-08); detach guards MIN_POOL_GUARD (running+last) + DETACH_BLOCKED_PENDING (cold-pending, engaged dialogs excluded via NOT EXISTS conversations, D-05), no auto-reassign (D-06). CampaignSenderAttach gained computed id; pool tests given per-test JWT subs to dodge user_workspaces UNIQUE binding. POOL-01..06b GREEN.
+- [Phase 08-pool-management-and-even-distribution]: Plan 08-04 (POOL-09, cross-repo, human-verify): interactive Senders/Пул panel in sibling aimly-tg-outreach (attachMut/detachMut mirror lifecycleMut + invalidateQueries(['campaign', id]), multiselect/chips add, per-row remove, locked display, human-readable 409s via existing actionError banner; D-10/D-11/D-12). error-codes.ts: SENDER_LOCK_CONFLICT rewritten to array-based detail.conflicts[].campaign_name + new MIN_POOL_GUARD/DETACH_BLOCKED_PENDING. openapi.json + types regenerated via export-handoff (no hand-edit). UAT-driven addition: **GET /api/v1/senders now exposes locked_by_campaign_id/name** so the add-picker disables locked-by-running-campaign senders instead of offering them then 409-ing — **D-02 lock semantics UNCHANGED, only the existing lock is surfaced**. Cross-repo reconcile: panel rebased onto origin/main over 16 concurrent Lovable commits (sibling cfefc62), no Lovable commit dropped. Backend pool tests 8/8 GREEN via test-overlay; sibling tsc clean. Phase 08 complete (4/4).
 
 ### Roadmap Evolution
 
@@ -160,6 +162,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-23T12:06:36.512Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-06-23T15:48:00Z
+Stopped at: Completed 08-04-PLAN.md (Phase 08 complete, 4/4 plans)
 Resume file: None
