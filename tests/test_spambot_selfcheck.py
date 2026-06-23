@@ -127,12 +127,18 @@ async def test_antispam_guard_skips_when_selfcheck_active(
     assert ai_enabled is True         # AI not disabled
 
 
-# ── 3: no marker → cancellation as before ────────────────────────────────────
+# ── 3: no marker → pause + flag (unified freeze policy, Phase 07) ─────────────
 
 
-async def test_antispam_guard_cancels_when_no_selfcheck(
+async def test_antispam_guard_pauses_and_flags_when_no_selfcheck(
     async_db_session, test_sender_factory, test_workspace,
 ):
+    """Unsolicited antispam warning → pause pending (status stays 'pending',
+    scheduled_at +24h), flag sender spam_limited, leave ai_enabled untouched.
+
+    Mirrors the PEER_FLOOD soft-restriction contract so the reconcile sweep
+    (status='pending' AND scheduled_at > NOW()) can auto-resume the queue.
+    """
     from app.services.listener import TelegramListener
     from app.services.telegram import telegram_service
 
@@ -147,12 +153,19 @@ async def test_antispam_guard_cancels_when_no_selfcheck(
         _sender_info(sender), "SpamBot", 178220800, "Your account is limited"
     )
 
-    q_status = (await async_db_session.execute(
-        text("SELECT status FROM message_queue WHERE id = :id"), {"id": str(qid)}
-    )).scalar()
+    q_status, scheduled_future = (await async_db_session.execute(
+        text("SELECT status, scheduled_at > NOW() FROM message_queue WHERE id = :id"),
+        {"id": str(qid)},
+    )).one()
     ai_enabled = (await async_db_session.execute(
         text("SELECT ai_enabled FROM conversations WHERE id = :id"), {"id": str(cid)}
     )).scalar()
+    restriction = (await async_db_session.execute(
+        text("SELECT restriction_status FROM senders WHERE id = :id"),
+        {"id": str(sender.id)},
+    )).scalar()
 
-    assert q_status == "failed"       # unsolicited warning → queue cancelled
-    assert ai_enabled is False        # AI disabled
+    assert q_status == "pending"          # paused, not failed → reconcile can resume
+    assert scheduled_future is True       # scheduled_at pushed into the future (+24h)
+    assert ai_enabled is True             # AI left on — replies keep flowing (FRZ-03)
+    assert restriction == "spam_limited"  # sender flagged (FRZ-01)

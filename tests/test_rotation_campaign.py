@@ -97,6 +97,26 @@ async def test_rotation_skips_inactive_senders(
     assert sender.id == s_active.id
 
 
+async def test_rotation_skips_restricted_senders(
+    async_db_session,
+    test_campaign_factory,
+    test_sender_factory,
+    attach_sender_to_campaign,
+):
+    """spam_limited sender (still active/ok) must NOT be assigned a cold contact (FRZ-04)."""
+    s_limited = await test_sender_factory(
+        slug="limited", restriction_status="spam_limited"
+    )
+    s_active = await test_sender_factory(slug="alive")
+    camp = await test_campaign_factory(status="running")
+    await attach_sender_to_campaign(camp["id"], s_limited.id)
+    await attach_sender_to_campaign(camp["id"], s_active.id)
+
+    sender = await get_or_assign_sender(camp["id"], "+79991112299", async_db_session)
+    assert sender is not None
+    assert sender.id == s_active.id
+
+
 async def test_rotation_returns_none_when_no_active_senders(
     async_db_session,
     test_campaign_factory,
