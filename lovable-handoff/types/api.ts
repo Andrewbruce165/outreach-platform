@@ -1942,6 +1942,10 @@ export interface components {
              * @default 30
              */
             recontact_min_age_days: number;
+            /** Pause Reason */
+            pause_reason?: string | null;
+            /** Paused At */
+            paused_at?: string | null;
             /** Attached Senders */
             attached_senders?: components["schemas"]["CampaignSenderAttach"][];
             /**

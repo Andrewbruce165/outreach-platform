@@ -7667,6 +7667,29 @@
             "title": "Recontact Min Age Days",
             "default": 30
           },
+          "pause_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pause Reason"
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
+          },
           "attached_senders": {
             "items": {
               "$ref": "#/components/schemas/CampaignSenderAttach"
