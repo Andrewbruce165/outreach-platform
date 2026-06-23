@@ -31,3 +31,32 @@ These were present before this plan (the same schema-drift/asyncpg failure class
 is environmental). They are logged here and intentionally NOT fixed under this
 plan's scope. They should be triaged separately (likely a test-DB schema-build /
 conftest migration-apply issue), not as part of the unified-freeze-policy phase.
+
+## CR-01 — Existing-assignment routing to restricted sender → Phase 9 (2026-06-23)
+
+Code review (07-REVIEW.md) flagged CR-01 as critical: `rotation.get_or_assign_sender`
+Step 1 (`app/services/rotation.py:71-97`) computes `is_eligible` from only
+`lifecycle_status` + `auth_status`, so a contact already pinned to a sender that
+later becomes `spam_limited`/`frozen` keeps routing to that sender on the happy-path
+early-return, never reaching the new Step 3 `restriction_status = 'none'` filter.
+
+**Decision (user, 2026-06-23): defer to Phase 9 — Cold-Contact Failover.** Rationale:
+- FRZ-04 as scoped covers **new cold contacts** — already closed by the Step 3 filter.
+- Outbound queue sends to a restricted sender are already paused at `queue.py:401`.
+- Reassigning *existing* (warm) assignments away from their sender on a soft 6h
+  spam-limit would conflict with **FRZ-03** (established dialogues must keep flowing
+  on the same sender). Failover of stuck pinned contacts to a healthy sender is the
+  explicit remit of Phase 9 (Cold-Contact Failover), not this phase.
+
+Carry into Phase 9: decide failover policy for already-assigned contacts whose sender
+is restricted (reassign cold/un-started ones; keep established dialogues per FRZ-03).
+
+### Minor review items (07-REVIEW.md) — not fixed this phase
+- WR-01: `ai_enabled` left on rests on the documented FRZ-03 assumption (Telegram does
+  not block replies in established dialogues under soft spam-limit). Accepted design.
+- WR-03: `restricted_until` reset to now+6h on every inbound antispam message with no
+  GREATEST guard — repeated unsolicited warnings could defer the reconcile clear.
+  Minor robustness; mirrors PEER_FLOOD. Revisit if observed in prod.
+- WR-02: `len(paused.fetchall())` vs `rowcount` — cosmetic.
+- WR-04: tests rely on commit-visible fixture semantics (SUT opens own AsyncSessionLocal) — correct today.
+- INFO: stale "auto-cancel"/"cancellation" wording in comments/logs/test docstring left from the retired terminal-fail design.
