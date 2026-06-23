@@ -574,6 +574,16 @@ class CampaignSenderAttach(BaseModel):
     locked_by_campaign_name: Optional[str] = None
 
 
+class CampaignSenderAttachRequest(BaseModel):
+    """POST /api/v1/campaigns/{id}/senders body — attach a single sender to a pool.
+
+    Thin request body (Plan 08-03 / D-02): pool mutation is one sender at a time
+    via POST/DELETE /campaigns/{id}/senders. Distinct from CampaignSenderAttach,
+    which is the read-only response sub-object inside attached_senders[].
+    """
+    sender_id: UUID
+
+
 class CampaignCreate(BaseModel):
     """POST /api/v1/campaigns body."""
     model_config = ConfigDict(from_attributes=True)
@@ -622,8 +632,10 @@ class CampaignCreate(BaseModel):
 class CampaignUpdate(BaseModel):
     """PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).
 
-    Note: sender_ids НЕ обновляется через PATCH в Phase 4 — для добавления/удаления
-    senders v1 простоту делаем «удали → создай новую» либо ждём v2 dedicated endpoint.
+    Note: sender_ids НЕ обновляется через PATCH (D-12, намеренно). Пул sender'ов
+    управляется отдельными эндпоинтами POST/DELETE /campaigns/{id}/senders
+    (Plan 08-03) с изоляцией workspace, sender-lock и min-pool/cold-pending
+    гардами. PATCH игнорирует sender_ids.
     """
     name: Optional[constr(min_length=1, max_length=150)] = None
     description: Optional[str] = None
