@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 Phase: 08
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-06-23
+Last activity: 2026-06-23 - Completed quick task 260623-ff1: document checker is_registered false-negative semantics
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
@@ -125,6 +125,7 @@ None yet.
 | 260619-frz | Sender write-restriction (spam-limit / freeze): новые колонки `restriction_status`/`restricted_until` (mig 028); `_derive_status` отдаёт `limited`/`frozen`; детект `FROZEN_*`→`ACCOUNT_FROZEN` в telegram.py; PEER_FLOOD/FROZEN флагают sender в queue + pre-send skip; фоновый SpamBot-reconcile sweep в listener (free=снять+un-pause, limited=продлить, suspended=ban); фикс бага spambot-check (писал несуществующий auth_status='limited'). 8 новых тестов | 2026-06-19 | 0f84870..5f4f944 | [260619-frz-sender-restriction-status](./quick/260619-frz-sender-restriction-status/) |
 | 260622-gxt | SpamBot self-check antispam guard: наш собственный пинг @SpamBot (reconcile sweep / ручной spambot-check) больше не убивает очередь sender'а. In-memory реестр `TelegramService._spambot_selfcheck` (mark/is + TTL-prune); `check_spambot(client, selfcheck_key)` помечает окно перед `/start`; guard в начале `_handle_antispam_signal` пропускает solicited-ответ (обе ветки детекта). Только in-memory → sweep (тот же процесс listener) покрыт полностью; ручной endpoint в api-процессе НЕ покрыт (задокументировано). 4 новых теста | 2026-06-22 | 7da5f6e..f796893 | [260622-gxt-spambot-selfcheck-antispam-guard](./quick/260622-gxt-spambot-selfcheck-antispam-guard/) |
 | 260622-j52 | Requeue 37 antispam-auto-cancelled контактов в кампании b7cc7d06 (ops, без кода): все 37 отменены одним antispam-событием 2026-06-19 13:07:55 (attempts=NULL). Бэкап → транзакция с count-guard (target_rows=37) → `UPDATE 37` обратно в pending. Аккаунт здоров (restriction_status=none). Итог: pending=37/sent=9/failed=2 (PEER_FLOOD+PRIVACY не тронуты). Воркер подхватил очередь за ~15с, темп ≤4/мин | 2026-06-22 | _ops_ | [260622-j52-requeue-37-antispam-auto-cancelled-conta](./quick/260622-j52-requeue-37-antispam-auto-cancelled-conta/) |
+| 260623-ff1 | Документация семантики checker'а: `is_registered=false` = «не резолвится по телефону сторонним аккаунтом», НЕ «нет Telegram-аккаунта» (приватность find-by-phone даёт ложноотрицания). Проверено 2026-06-23 (checker `sender-8428118140` здоров: бросил PhoneNotOccupied на наши собственные приватные senders, при этом 83 номера is_registered=true). Caveat в docstring/inline-комментах `checker.py` + рус. подсекция в `CLAUDE.md`. Только docs — AST без изменений, без rename/миграции | 2026-06-23 | 2050f59..732d8da | [260623-ff1-document-checker-semantics-phonenotoccup](./quick/260623-ff1-document-checker-semantics-phonenotoccup/) |
 
 ### Hotfix Log — 2026-05-26 (ui-data-missing incident)
 
