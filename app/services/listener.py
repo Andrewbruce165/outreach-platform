@@ -886,18 +886,22 @@ class TelegramListener:
         message_text: str
     ):
         """
-        Реакция на сообщение от antispam-бота:
-        1. Отключить AI во всех диалогах этого sender'а
-        2. Отменить все pending задачи в очереди для этого sender'а
-        3. Залогировать
+        Реакция на сообщение от antispam-бота (unified freeze policy, Phase 07):
+        1. Поставить pending-задачи очереди на паузу (scheduled_at +24h, status
+           остаётся 'pending') — reconcile sweep сам их вернёт, когда лимит снят.
+        2. Пометить sender restriction_status='spam_limited' + restricted_until
+           (мягкое ограничение, зеркалит PEER_FLOOD-ветку в queue.py).
+        3. AI НЕ трогаем — Telegram не блокирует ответы в установленных диалогах
+           при soft spam-limit, поэтому реплаи продолжают идти (FRZ-03).
         """
         sender_id = sender_info["id"]
         sender_slug = sender_info["slug"]
 
         # Solicited SpamBot reply: we pinged @SpamBot ourselves (reconcile sweep or
-        # manual check) — this is not a real antispam warning, so do NOT cancel the
-        # queue or disable AI. Covers both detect branches (id + keyword) since both
-        # funnel here. Unsolicited warnings outside the window behave as before.
+        # manual check) — this is not a real antispam warning, so do NOT pause the
+        # queue or flag the sender. Covers both detect branches (id + keyword) since
+        # both funnel here. MUST stay the FIRST statement — otherwise the reconcile
+        # sweep's own ping would re-flag the sender we are trying to clear (loop).
         if telegram_service.is_spambot_selfcheck(sender_slug):
             logger.info(
                 f"🔕 [{sender_slug}] solicited SpamBot reply during self-check — skip auto-cancel"
@@ -905,52 +909,47 @@ class TelegramListener:
             return
 
         try:
+            # Mirror of the PEER_FLOOD soft-restriction write (queue.py:739-754).
+            # pause_until: empirical 24h queue pause — DO NOT change (CLAUDE.md hard rule).
+            # recheck_at: when the reconcile sweep re-checks via SpamBot (default 6h).
+            pause_until = datetime.now(timezone.utc) + timedelta(hours=24)
+            recheck_at = datetime.now(timezone.utc) + timedelta(
+                seconds=get_settings().restriction_recheck_interval_seconds
+            )
             async with AsyncSessionLocal() as session:
-                # 1. Отключаем AI для всех активных диалогов этого аккаунта
-                result = await session.execute(
+                # 1. Pause pending items (NOT fail) so the reconcile resume query
+                #    (status='pending' AND scheduled_at > NOW()) can auto-resume them.
+                #    Scope to 'pending' ONLY (drop 'processing') — matches PEER_FLOOD
+                #    and avoids the in-flight lost-update race.
+                paused = await session.execute(
                     text("""
-                        UPDATE conversations
-                        SET ai_enabled = false,
-                            paused_at = NOW(),
-                            paused_reason = :reason,
-                            updated_at = NOW()
-                        WHERE sender_id = :sender_id
-                          AND ai_enabled = true
+                        UPDATE message_queue SET scheduled_at = :pause_until
+                        WHERE sender_id = :sid AND status = 'pending'
                         RETURNING id
                     """),
-                    {
-                        "sender_id": sender_id,
-                        "reason": f"Auto-disabled: antispam signal from {bot_name} (id={bot_id}). Message: {message_text[:200]}"
-                    }
+                    {"pause_until": pause_until, "sid": str(sender_id)},
                 )
-                disabled_rows = result.fetchall()
-                disabled_count = len(disabled_rows)
+                paused_count = len(paused.fetchall())
 
-                # 2. Отменяем все pending задачи в очереди для этого sender'а
-                result2 = await session.execute(
+                # 2. Flag the sender spam_limited. The '<> frozen' guard preserves
+                #    frozen-precedence: a soft signal must not downgrade a hard freeze.
+                await session.execute(
                     text("""
-                        UPDATE message_queue
-                        SET status = 'failed',
-                            error_message = :reason,
-                            finished_at = NOW()
-                        WHERE sender_id = :sender_id
-                          AND status IN ('pending', 'processing')
-                        RETURNING id
+                        UPDATE senders
+                        SET restriction_status = 'spam_limited',
+                            restricted_until = :recheck_at
+                        WHERE id = :sid AND restriction_status <> 'frozen'
                     """),
-                    {
-                        "sender_id": sender_id,
-                        "reason": f"Auto-cancelled: antispam signal received from {bot_name}"
-                    }
+                    {"recheck_at": recheck_at, "sid": str(sender_id)},
                 )
-                cancelled_rows = result2.fetchall()
-                cancelled_count = len(cancelled_rows)
 
                 await session.commit()
 
             logger.warning(
-                f"🚨 ANTISPAM [{sender_slug}]: "
-                f"отключён AI в {disabled_count} диалогах, "
-                f"отменено {cancelled_count} задач в очереди."
+                f"🚨 ANTISPAM [{sender_slug}] ({bot_name} id={bot_id}): "
+                f"поставлено на паузу {paused_count} задач очереди (+24h), "
+                f"sender помечен spam_limited (recheck "
+                f"{recheck_at.strftime('%Y-%m-%d %H:%M UTC')}). AI оставлен включённым."
             )
 
         except Exception as e:
