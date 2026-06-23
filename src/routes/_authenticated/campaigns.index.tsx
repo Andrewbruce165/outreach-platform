@@ -373,8 +373,8 @@ function CampaignsPage() {
                   <CampaignRow
                     key={c.id}
                     campaign={c}
-                    agentLabel={agentName.get(c.agent_id) ?? "—"}
-                    folderLabel={folderName.get(c.folder_id) ?? "—"}
+                    agentLabel={(c.agent_id && agentName.get(c.agent_id)) || "—"}
+                    folderLabel={(c.folder_id && folderName.get(c.folder_id)) || "—"}
                     busy={busy}
                     selected={selected.has(c.id)}
                     onToggleSelect={() => toggleOne(c.id)}

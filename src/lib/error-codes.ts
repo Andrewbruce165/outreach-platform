@@ -13,10 +13,20 @@ const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   CONVERSATION_NOT_FOUND: () => "Conversation not found",
   INVALID_TRANSITION: (d) =>
     `Can't change from ${String(d.from ?? "?")} to ${String(d.to ?? "?")}`,
-  SENDER_LOCK_CONFLICT: (d) =>
-    `Sender ${String(d.name ?? "")} is locked by campaign ${String(
-      d.other ?? "another campaign",
-    )}. Stop that campaign to free the sender.`,
+  SENDER_LOCK_CONFLICT: (d) => {
+    const conflicts = (d.conflicts as Array<{ campaign_name?: string }>) ?? [];
+    const names = conflicts
+      .map((c) => c.campaign_name)
+      .filter(Boolean)
+      .join(", ");
+    return names
+      ? `Account is already in running campaign(s): ${names}. Stop them to free the account.`
+      : "Account is locked by another running campaign.";
+  },
+  MIN_POOL_GUARD: () =>
+    "Can't remove the last account from a running campaign. Pause it first.",
+  DETACH_BLOCKED_PENDING: () =>
+    "This account still has un-sent contacts. Pause the campaign or wait for the queue to drain.",
   NO_SENDERS_ATTACHED: () => "Attach at least one account before launching",
   UNKNOWN_EVENT: () => "Internal: unknown telemetry event",
   ID_REQUIRED: () => "Missing id parameter",

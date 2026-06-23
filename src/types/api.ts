@@ -490,6 +490,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/contacts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Contacts Batch
+         * @description Batch hard-delete. Возвращает {deleted: N}.
+         *
+         *     Зеркало move_contacts_batch: workspace-scoped fetch+delete, cross-tenant ids
+         *     молча пропускаются (не светим существование чужих контактов через 404).
+         */
+        post: operations["delete_contacts_batch_api_v1_contacts_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/contacts/{contact_id}": {
         parameters: {
             query?: never;
@@ -1004,6 +1027,57 @@ export interface paths {
          */
         post: operations["duplicate_campaign_api_v1_campaigns__campaign_id__duplicate_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{campaign_id}/senders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach Sender
+         * @description POOL-01/02/03: attach a sender to a draft/paused/running campaign pool.
+         *
+         *     D-01: allowed on draft/paused/running — no status-transition guard, only the
+         *     _load_campaign 404 scopes the campaign to the workspace.
+         *     D-02: reuses _validate_workspace_owns_senders (404 SENDER_NOT_FOUND) and
+         *     _check_sender_lock (409 SENDER_LOCK_CONFLICT — byte-identical to /start).
+         *     D-08: triggers rebalance_on_attach only when the campaign is running.
+         */
+        post: operations["attach_sender_api_v1_campaigns__campaign_id__senders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{campaign_id}/senders/{sender_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach Sender
+         * @description POOL-04/05/06/06b: detach a sender from a campaign pool.
+         *
+         *     D-03 (min-pool): cannot remove the last sender of a running campaign → 409.
+         *     D-04 (cold-pending): un-sent cold pending rows would be silently orphaned → 409.
+         *     D-05 (engaged): dialogs with an open conversation never block detach.
+         *     D-06: no auto-reassign of the cold backlog here — deferred to Phase 9.
+         */
+        delete: operations["detach_sender_api_v1_campaigns__campaign_id__senders__sender_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1723,20 +1797,14 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /**
-             * Folder Id
-             * Format: uuid
-             */
-            folder_id: string;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /** Sender Ids */
             sender_ids?: string[];
             /** Message Template */
-            message_template: string;
+            message_template?: string | null;
             /**
              * Timezone
              * @default Europe/Moscow
@@ -1820,16 +1888,10 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /**
-             * Folder Id
-             * Format: uuid
-             */
-            folder_id: string;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /** Status */
             status: string;
             /** Timezone */
@@ -1904,6 +1966,10 @@ export interface components {
          *
          *     locked_by_campaign_id / locked_by_campaign_name populated when the sender
          *     is currently attached to a DIFFERENT running campaign in the same workspace.
+         *
+         *     `id` mirrors `sender_id` so the entry is keyed identically to the Sender it
+         *     references (UI/tests read `attached_senders[].id`); `sender_id` is retained
+         *     for back-compat with Phase 4 consumers.
          */
         CampaignSenderAttach: {
             /**
@@ -1915,13 +1981,35 @@ export interface components {
             locked_by_campaign_id?: string | null;
             /** Locked By Campaign Name */
             locked_by_campaign_name?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            readonly id: string;
+        };
+        /**
+         * CampaignSenderAttachRequest
+         * @description POST /api/v1/campaigns/{id}/senders body — attach a single sender to a pool.
+         *
+         *     Thin request body (Plan 08-03 / D-02): pool mutation is one sender at a time
+         *     via POST/DELETE /campaigns/{id}/senders. Distinct from CampaignSenderAttach,
+         *     which is the read-only response sub-object inside attached_senders[].
+         */
+        CampaignSenderAttachRequest: {
+            /**
+             * Sender Id
+             * Format: uuid
+             */
+            sender_id: string;
         };
         /**
          * CampaignUpdate
          * @description PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).
          *
-         *     Note: sender_ids НЕ обновляется через PATCH в Phase 4 — для добавления/удаления
-         *     senders v1 простоту делаем «удали → создай новую» либо ждём v2 dedicated endpoint.
+         *     Note: sender_ids НЕ обновляется через PATCH (D-12, намеренно). Пул sender'ов
+         *     управляется отдельными эндпоинтами POST/DELETE /campaigns/{id}/senders
+         *     (Plan 08-03) с изоляцией workspace, sender-lock и min-pool/cold-pending
+         *     гардами. PATCH игнорирует sender_ids.
          */
         CampaignUpdate: {
             /** Name */
@@ -2175,6 +2263,11 @@ export interface components {
             signup_at?: string | null;
             /** First Launch At */
             first_launch_at?: string | null;
+        };
+        /** DeleteContactBatchRequest */
+        DeleteContactBatchRequest: {
+            /** Contact Ids */
+            contact_ids: string[];
         };
         /** EnqueueResponse */
         EnqueueResponse: {
@@ -2535,6 +2628,11 @@ export interface components {
         /**
          * SendMessageFromUIRequest
          * @description POST /api/v1/conversations/{id}/send body (D-04 auto-takeover).
+         *
+         *     2026-05-26: Accepts both ``message`` (canonical, per openapi spec) and
+         *     ``message_text`` (what Lovable's generated client sends). Pydantic's
+         *     ``AliasChoices`` lets us read either name without forcing the frontend
+         *     to ship a hotfix. Outgoing serialization still uses canonical ``message``.
          */
         SendMessageFromUIRequest: {
             /** Message */
@@ -2680,15 +2778,11 @@ export interface components {
             lifecycle_status: "active" | "warmup" | "paused";
             /**
              * Restriction Status
-             * @description Telegram write-restriction, orthogonal to auth_status (migration 028).
              * @default none
              * @enum {string}
              */
-            restriction_status?: "none" | "spam_limited" | "frozen";
-            /**
-             * Restricted Until
-             * @description When the background sweep re-checks via SpamBot (null if not restricted).
-             */
+            restriction_status: "none" | "spam_limited" | "frozen";
+            /** Restricted Until */
             restricted_until?: string | null;
             rate_limits: components["schemas"]["RateLimits"];
             /**
@@ -2703,10 +2797,9 @@ export interface components {
             created_at?: string | null;
             /**
              * Sent Today
-             * @description Messages sent in the trailing 24h window (TODAY column numerator).
              * @default 0
              */
-            sent_today?: number;
+            sent_today: number;
         };
         /**
          * SenderUpdate
@@ -4006,6 +4099,44 @@ export interface operations {
             };
         };
     };
+    delete_contacts_batch_api_v1_contacts_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteContactBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_contact_api_v1_contacts__contact_id__delete: {
         parameters: {
             query?: never;
@@ -4990,6 +5121,79 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_sender_api_v1_campaigns__campaign_id__senders_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignSenderAttachRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_sender_api_v1_campaigns__campaign_id__senders__sender_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+                sender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowLeft, Edit3, Pause, Play, StopCircle } from "lucide-react";
+import { ArrowLeft, Edit3, Lock, Pause, Play, Plus, StopCircle, X } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 
 import { EditCampaignModal } from "@/components/EditCampaignModal";
@@ -12,6 +12,7 @@ import type { components } from "@/types/api";
 type Campaign = components["schemas"]["CampaignResponse"];
 type Agent = components["schemas"]["AgentResponse"];
 type Folder = components["schemas"]["FolderResponse"];
+type Sender = components["schemas"]["SenderResponse"];
 
 export const Route = createFileRoute("/_authenticated/campaigns/$id")({
   component: CampaignDetailPage,
@@ -99,6 +100,40 @@ function CampaignDetailPage() {
       if (e) track(e, { campaign_id: id });
       void qc.invalidateQueries({ queryKey: ["campaign", id] });
       void qc.invalidateQueries({ queryKey: ["campaigns"] });
+    },
+    onError: (e) => setActionError(errMsg(e)),
+  });
+
+  // Workspace senders — source for the "add to pool" multiselect (mirrors the wizard).
+  const sendersQ = useQuery({
+    queryKey: ["senders"],
+    queryFn: () => api<{ senders: Sender[] }>("/api/v1/senders"),
+    staleTime: 60_000,
+  });
+
+  // Attach a sender to this campaign's pool. Server enforces lock/isolation; the
+  // UI just renders the 409/404 envelope through the existing actionError banner.
+  const attachMut = useMutation({
+    mutationFn: (sender_id: string) =>
+      api<Campaign>(`/api/v1/campaigns/${id}/senders`, {
+        method: "POST",
+        body: { sender_id },
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["campaign", id] });
+    },
+    onError: (e) => setActionError(errMsg(e)),
+  });
+
+  // Detach a sender from this campaign's pool. Server enforces MIN_POOL_GUARD /
+  // DETACH_BLOCKED_PENDING — surfaced via the same banner.
+  const detachMut = useMutation({
+    mutationFn: (sender_id: string) =>
+      api<Campaign>(`/api/v1/campaigns/${id}/senders/${sender_id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["campaign", id] });
     },
     onError: (e) => setActionError(errMsg(e)),
   });
@@ -358,51 +393,27 @@ function CampaignDetailPage() {
                 />
               </section>
 
-              <section className="card" style={{ padding: 20 }}>
-                <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
-                  Senders ({c.attached_senders?.length ?? 0})
-                </h3>
-                {(c.attached_senders?.length ?? 0) === 0 ? (
-                  <div className="muted" style={{ fontSize: 13 }}>
-                    No senders attached
-                  </div>
-                ) : (
-                  <ul
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 6,
-                      fontSize: 13,
-                      margin: 0,
-                      padding: 0,
-                      listStyle: "none",
-                    }}
-                  >
-                    {c.attached_senders!.map((s) => (
-                      <li
-                        key={s.sender_id}
-                        style={{
-                          padding: "8px 10px",
-                          background: "var(--bg-soft)",
-                          borderRadius: 8,
-                        }}
-                      >
-                        <div style={{ fontFamily: "monospace", fontSize: 12 }}>
-                          {s.sender_id.slice(0, 8)}…
-                        </div>
-                        {s.locked_by_campaign_name && (
-                          <div
-                            className="muted text-xs"
-                            style={{ color: "var(--danger)" }}
-                          >
-                            Locked by {s.locked_by_campaign_name}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+              <SendersPanel
+                campaign={c}
+                senders={sendersQ.data?.senders ?? []}
+                attaching={attachMut.isPending}
+                detaching={detachMut.isPending}
+                onAttach={(sid) => {
+                  setActionError(null);
+                  attachMut.mutate(sid);
+                }}
+                onDetach={(sid) => {
+                  setActionError(null);
+                  detachMut.mutate(sid);
+                }}
+              />
+              <p
+                className="muted text-xs"
+                style={{ margin: "-6px 4px 0", lineHeight: 1.5 }}
+              >
+                Sender selection in the campaign wizard only seeds the initial
+                pool — manage the live pool here.
+              </p>
             </div>
           </div>
         )}
@@ -412,6 +423,180 @@ function CampaignDetailPage() {
         <EditCampaignModal campaign={c} onClose={() => setEditing(false)} />
       )}
     </>
+  );
+}
+
+/* ---------------- Senders / Пул panel (D-10/D-11) ---------------- */
+function SendersPanel({
+  campaign,
+  senders,
+  attaching,
+  detaching,
+  onAttach,
+  onDetach,
+}: {
+  campaign: Campaign;
+  senders: Sender[];
+  attaching: boolean;
+  detaching: boolean;
+  onAttach: (senderId: string) => void;
+  onDetach: (senderId: string) => void;
+}) {
+  const attached = campaign.attached_senders ?? [];
+  const attachedIds = new Set(attached.map((s) => s.sender_id));
+  const byId = new Map(senders.map((s) => [s.id, s]));
+  const busy = attaching || detaching;
+
+  // Eligible to add: workspace senders not already attached and not in error.
+  // Locked senders are still listed but their add control is disabled.
+  const eligible = senders.filter(
+    (s) => !attachedIds.has(s.id) && s.status !== "error",
+  );
+
+  return (
+    <section className="card" style={{ padding: 20 }}>
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
+        Senders ({attached.length})
+      </h3>
+
+      {/* Attached pool */}
+      {attached.length === 0 ? (
+        <div className="muted" style={{ fontSize: 13 }}>
+          No senders attached
+        </div>
+      ) : (
+        <ul
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            fontSize: 13,
+            margin: 0,
+            padding: 0,
+            listStyle: "none",
+          }}
+        >
+          {attached.map((s) => {
+            const sender = byId.get(s.sender_id);
+            const locked = !!s.locked_by_campaign_name;
+            const label = sender ? sender.name || sender.slug : `${s.sender_id.slice(0, 8)}…`;
+            return (
+              <li
+                key={s.sender_id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 10px",
+                  background: "var(--bg-soft)",
+                  borderRadius: 8,
+                }}
+              >
+                <div
+                  className="avatar avatar--sm"
+                  style={{ background: "var(--tg-blue)", color: "white", flexShrink: 0 }}
+                >
+                  {label.slice(0, 1).toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 500 }}>{label}</div>
+                  {sender?.phone && (
+                    <div className="muted text-xs">{sender.phone}</div>
+                  )}
+                  {locked && (
+                    <div
+                      className="muted text-xs"
+                      style={{
+                        color: "var(--danger)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                      }}
+                    >
+                      <Lock size={11} /> Locked by {s.locked_by_campaign_name}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  aria-label={`Remove ${label}`}
+                  title={
+                    locked
+                      ? "Locked by another running campaign"
+                      : "Remove from pool"
+                  }
+                  disabled={locked || busy}
+                  onClick={() => onDetach(s.sender_id)}
+                  style={{ color: "var(--danger)", flexShrink: 0 }}
+                >
+                  <X size={14} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {/* Add to pool */}
+      <div style={{ marginTop: 14 }}>
+        <div
+          className="muted text-xs"
+          style={{ marginBottom: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}
+        >
+          Add account
+        </div>
+        {eligible.length === 0 ? (
+          <div className="muted text-xs">
+            No more accounts available to add.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {eligible.map((s) => {
+              const active = s.status === "active";
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="pill"
+                  disabled={busy}
+                  onClick={() => onAttach(s.id)}
+                  title={`Add ${s.name || s.slug} to the pool`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    cursor: busy ? "default" : "pointer",
+                    opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  <div
+                    className="avatar avatar--sm"
+                    style={{
+                      background: "var(--tg-blue)",
+                      color: "white",
+                      width: 18,
+                      height: 18,
+                      fontSize: 10,
+                    }}
+                  >
+                    {(s.name || s.slug).slice(0, 1).toUpperCase()}
+                  </div>
+                  <span>{s.name || s.slug}</span>
+                  <span
+                    className={`pill ${active ? "pill--green" : "pill--red"}`}
+                    style={{ height: 16, fontSize: 10, padding: "0 6px" }}
+                  >
+                    {s.status}
+                  </span>
+                  <Plus size={12} />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

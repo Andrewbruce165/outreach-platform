@@ -333,7 +333,7 @@ export function EditCampaignModal({
               <label style={labelStyle}>Agent</label>
               <select
                 style={inputStyle}
-                value={agentId}
+                value={agentId ?? ""}
                 onChange={(e) => setAgentId(e.target.value)}
               >
                 {agents.map((a) => (
@@ -347,7 +347,7 @@ export function EditCampaignModal({
               <label style={labelStyle}>Folder</label>
               <select
                 style={inputStyle}
-                value={folderId}
+                value={folderId ?? ""}
                 onChange={(e) => setFolderId(e.target.value)}
               >
                 {folders.map((f) => (
