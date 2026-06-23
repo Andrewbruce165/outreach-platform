@@ -225,7 +225,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 08-01-test-scaffold-PLAN.md — Wave 0 test scaffolding: conftest `test_queue_item_factory` + `tests/test_pool_endpoints.py` + `tests/test_rebalance.py` (POOL-01..08b RED stubs) [Wave 1, no deps]
+- [x] 08-01-test-scaffold-PLAN.md — Wave 0 test scaffolding: conftest `test_queue_item_factory` + `tests/test_pool_endpoints.py` + `tests/test_rebalance.py` (POOL-01..08b RED stubs) [Wave 1, no deps]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

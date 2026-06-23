@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-06-23T11:17:48.726Z"
-last_activity: 2026-06-23 -- Phase 08 planning complete
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-06-23T11:28:46.565Z"
+last_activity: 2026-06-23
 progress:
   total_phases: 12
   completed_phases: 8
   total_plans: 32
-  completed_plans: 28
-  percent: 67
+  completed_plans: 29
+  percent: 17
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 08 — pool management and even distribution
+**Current focus:** Phase 08 — pool-management-and-even-distribution
 
 ## Current Position
 
-Phase: 08
-Plan: Not started
+Phase: 08 (pool-management-and-even-distribution) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-06-23 -- Phase 08 planning complete
+Last activity: 2026-06-23
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
@@ -65,6 +65,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 05 P02 | 5min | 2 tasks | 5 files |
 | Phase 05 P03 | 6min | 3 tasks | 7 files |
 | Phase 07-unified-freeze-policy P01 | 14min | 3 tasks | 4 files |
+| Phase 08 P01 | 9min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 05]: [Phase 05]: Plan 05-02: analytics endpoints — sent source = messages JOIN conversations (C-01 covers manager-send D-04 unlike messages_log/message_queue); replied = one SELECT with COUNT(DISTINCT) + COUNT(*) per D-15; _ALLOWED_SCOPE_COLUMNS whitelist + :scope_val bind for safe scope composition; Pitfall 8 — bot_ignored excluded from every COUNT; Pitfall 9 — leads strict EQ; D-13 — no background workers added (lifespan still 5)
 - [Phase 05]: Plan 05-03: inline await log_llm_call (Open Question #3) — deterministic + testable; +1-3ms latency acceptable for v1; D-12 preserved (warmup.py has 0 references); T-05-03-PROMPT-LEAK guard verified via grep (0 matches for logger.*prompt in llm_logger.py + ai_engine.py); defence-in-depth on GET /llm-calls endpoint (prequery + WHERE workspace_id); Phase 5 complete (3 plans, ANLX-05 closed alongside INBX-01..05 + AIRC-04 + ANLX-01..04)
 - [Phase 07-unified-freeze-policy]: Phase 07 Plan 01: antispam path converged onto PEER_FLOOD soft-restriction (pause pending +24h, flag spam_limited) instead of terminal-fail; ai_enabled block deleted (replies keep flowing); rotation excludes restriction_status != 'none'. Decisions: pause scoped to status='pending' only (avoids in-flight race), AND restriction_status <> 'frozen' guard (frozen-precedence). NO migration (028 pre-existing). 21/21 targeted tests green.
+- [Phase 08]: Plan 08-01: Wave-0 test scaffold — test_queue_item_factory (message_queue + sticky CCA + optional conversation) + 10 fully-asserting RED tests (test_pool_endpoints POOL-01..06b + test_rebalance POOL-07/08/08b); rebalance import inside test body keeps --collect-only clean. 683 collected / 0 errors.
 
 ### Roadmap Evolution
 
@@ -154,6 +156,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-23T10:38:20.880Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-pool-management-and-even-distribution/08-CONTEXT.md
+Last session: 2026-06-23T11:28:40.356Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None
