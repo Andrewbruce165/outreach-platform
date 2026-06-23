@@ -2,7 +2,7 @@
 phase: 08-pool-management-and-even-distribution
 plan: 04
 type: execute
-wave: 3
+wave: 4
 depends_on: [03]
 autonomous: false
 cross_repo: true
@@ -21,6 +21,7 @@ must_haves:
     - "Locked senders show their locking campaign and cannot be added/removed blindly"
     - "409 errors (SENDER_LOCK_CONFLICT / MIN_POOL_GUARD / DETACH_BLOCKED_PENDING) render as human-readable messages in the existing actionError banner"
     - "openapi.json and src/types/api.ts include the two new /senders endpoints"
+    - "Honors decisions D-10 (a dedicated Senders/Пул panel on the campaign page, works for draft and running), D-11 (multiselect/chips add+remove, locked-account display from attached_senders[].locked_by_campaign_name, human-readable 409s), D-12 (wizard sender-selection in campaigns.new.tsx stays; PATCH still ignores sender_ids)"
   artifacts:
     - path: /root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/campaigns.$id.tsx
       provides: "interactive Senders/Пул panel (attach/detach)"

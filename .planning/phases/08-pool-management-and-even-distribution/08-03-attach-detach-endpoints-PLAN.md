@@ -2,7 +2,7 @@
 phase: 08-pool-management-and-even-distribution
 plan: 03
 type: execute
-wave: 2
+wave: 3
 depends_on: [01, 02]
 files_modified:
   - app/routers/campaigns.py
@@ -18,6 +18,7 @@ must_haves:
     - "Detaching a sender that still has un-sent cold pending returns 409 DETACH_BLOCKED_PENDING"
     - "Detaching a sender whose only remaining work is engaged dialogs succeeds (engaged dialogs do not block detach)"
     - "Attach to a running campaign triggers rebalance_on_attach; draft/paused does not"
+    - "Honors decisions D-01 (attach/detach allowed on draft/paused/running), D-02 (attach reuses _validate_workspace_owns_senders + _check_sender_lock with the /start 409 contract), D-03 (min-pool guard), D-04 (detach blocked on un-sent cold pending), D-05 (engaged dialogs are not pool-gated and never block detach), D-06 (no auto-reassign of cold backlog — deferred to Phase 9)"
   artifacts:
     - path: app/routers/campaigns.py
       provides: "POST /campaigns/{id}/senders and DELETE /campaigns/{id}/senders/{sid}"
@@ -123,7 +124,7 @@ Cold-pending guard SQL (detach, scoped to detached sender) — RESEARCH §"Detac
     2. `await _validate_workspace_owns_senders(db, ctx, [payload.sender_id])` (404 SENDER_NOT_FOUND).
     3. Idempotency: pre-check `select(CampaignSender).where(campaign_id==c.id, sender_id==payload.sender_id)`; if already attached → skip insert (no-op) and return current `_campaign_to_response` (avoids PK violation on (campaign_id, sender_id)).
     4. Else `db.add(CampaignSender(campaign_id=c.id, sender_id=payload.sender_id, workspace_id=ctx.workspace_id))` then `await db.flush()`.
-    5. `conflicts = await _check_sender_lock(db, ctx, c.id)`; if non-empty → `await db.rollback()` and `raise HTTPException(409, detail={"code":"SENDER_LOCK_CONFLICT","conflicts":conflicts})` — byte-identical to start_campaign:621-627. (insert-then-check-then-rollback so the incoming sender is in scope — Pitfall 8.)
+    5. (D-02) `conflicts = await _check_sender_lock(db, ctx, c.id)`; if non-empty → `await db.rollback()` and `raise HTTPException(409, detail={"code":"SENDER_LOCK_CONFLICT","conflicts":conflicts})` — byte-identical to start_campaign:621-627. (insert-then-check-then-rollback so the incoming sender is in scope — Pitfall 8.)
     6. If `c.status == "running"`: `await rebalance_on_attach(c.id, payload.sender_id, db)` (import from app.services.rebalance). Skip for draft/paused (D-07).
     7. `await db.commit(); await db.refresh(c); return await _campaign_to_response(db, ctx, c)`.
     NO status-transition block — attach is allowed on draft/paused/running (D-01); only _load_campaign 404 gates it. Add `from app.services.rebalance import rebalance_on_attach` at module top.

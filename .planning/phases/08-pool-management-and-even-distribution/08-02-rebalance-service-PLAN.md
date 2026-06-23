@@ -2,7 +2,7 @@
 phase: 08-pool-management-and-even-distribution
 plan: 02
 type: tdd
-wave: 1
+wave: 2
 depends_on: [01]
 files_modified:
   - app/services/rebalance.py
@@ -10,11 +10,12 @@ autonomous: true
 requirements: [POOL-07, POOL-08, POOL-08b]
 must_haves:
   truths:
-    - "Attaching a sender to a running campaign with a skewed cold-pending backlog moves rows toward an even split (each pool sender within ±1 of total/P)"
+    - "Attaching a sender to a running campaign with a skewed cold-pending backlog back-fills the NEWLY-ATTACHED sender to within ±1 of total/P (single-pass even-split guaranteed for the new sender only; multi-donor full evenness and the >BATCH_CAP case are out of v1 scope)"
     - "Calling rebalance again on an already-even pool moves 0 rows (idempotent)"
     - "Rebalance never moves a sent, processing, or engaged-dialog row"
     - "campaign_contact_assignments stays in sync with message_queue.sender_id for every moved row"
     - "Rebalance never races the queue worker (uses status='pending' + FOR UPDATE OF mq SKIP LOCKED)"
+    - "Honors decisions D-07 (sticky enqueue is why a back-fill is needed), D-08 (light rebalance of un-sent cold pending only, active dialogs untouched), D-09 (campaign-scoped even-split pass; _pick_least_loaded NOT reused; BATCH_CAP; idempotent and safe under load)"
   artifacts:
     - path: app/services/rebalance.py
       provides: "rebalance_on_attach(campaign_id, new_sender_id, db) campaign-scoped even-split"
@@ -74,7 +75,7 @@ Signature (consumed by Plan 03 attach endpoint): async def rebalance_on_attach(c
   <name>Task 1: Implement rebalance_on_attach campaign-scoped even-split</name>
   <files>app/services/rebalance.py</files>
   <behavior>
-    - POOL-07: running campaign, sender A has N cold-pending rows, sender B attached → after call, each pool sender within ±1 of total/P.
+    - POOL-07: running campaign, sender A has N cold-pending rows, sender B attached → after call, the NEWLY-ATTACHED sender B holds within ±1 of total/P (one-directional back-fill of B; pre-existing donors are not re-evened against each other, and a single pass caps at BATCH_CAP).
     - POOL-08: second call on an even pool returns 0 (moves nothing).
     - POOL-08b: rows that are sent / processing / belong to an engaged conversation are never moved.
     - CCA invariant: every moved recipient's campaign_contact_assignments.sender_id == new_sender_id.
@@ -92,7 +93,7 @@ Signature (consumed by Plan 03 attach endpoint): async def rebalance_on_attach(c
     Create `app/services/rebalance.py` with `async def rebalance_on_attach(campaign_id, new_sender_id, db: AsyncSession) -> int`. All queries raw `text()` (codebase convention). Algorithm per RESEARCH §"Rebalance Algorithm":
     1. Resolve the eligible pool: SELECT senders in `campaign_senders` for `campaign_id` applying the rotation.py:113-123 candidate filter (lifecycle_status='active', auth_status='ok', role='sender', restriction_status='none', workspace_id). If `new_sender_id` is not in the eligible pool → return 0. If pool size P < 2 → return 0.
     2. Count current movable cold-pending load per sender (campaign-scoped) using the cold-pending predicate from the interfaces block (status='pending', NOT EXISTS sent, NOT EXISTS conversations). total = sum; if total == 0 → return 0.
-    3. target = total // P; need = target - load[new_sender_id]; if need <= 0 → return 0 (idempotent). need = min(need, BATCH_CAP) with module-level `BATCH_CAP = 500` (Claude's discretion per D-09 — single pass is fine at v1 scale; leave a comment).
+    3. target = total // P; need = target - load[new_sender_id]; if need <= 0 → return 0 (idempotent). need = min(need, BATCH_CAP) with module-level `BATCH_CAP = 500` (Claude's discretion per D-09 — single pass is fine at v1 scale; leave a comment). NOTE: this single-pass back-fill guarantees the ±1-of-total/P even-split for the NEWLY-ATTACHED sender only — it does NOT re-balance pre-existing donors against each other, and `total/P > BATCH_CAP` would need a follow-up pass; both are intentionally out of v1 scope (matches the narrowed POOL-07 assertion in Plan 01).
     4. Select donor rows: movable cold-pending rows whose sender_id is a donor with load > target, `ORDER BY donor-load DESC, mq.scheduled_at DESC`, `LIMIT :need`, with `FOR UPDATE OF mq SKIP LOCKED` and `status='pending'` guard (this is what prevents racing the worker). If none → return 0.
     5. In the SAME transaction, for each moved row: `UPDATE message_queue SET sender_id=:new WHERE id=:row_id` AND `UPDATE campaign_contact_assignments SET sender_id=:new WHERE campaign_id=:cid AND contact_phone=:recipient_phone` (Pitfall 3 — keep CCA in sync). Single `await db.commit()`.
     6. `logger.info("rebalance: moved %d cold-pending rows to sender %s in campaign %s", n, new_sender_id, campaign_id)` — COUNT ONLY, never payloads (CLAUDE.md). Return n.

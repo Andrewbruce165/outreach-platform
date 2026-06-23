@@ -17,6 +17,7 @@
 - [~] **Phase 6: Admin Master Bot** — TG-бот workspace для уведомлений (ручник, ошибки аккаунтов) — **DEFERRED TO v2** (see `.planning/seeds/admin-master-bot.md`, PROJECT.md → ADMN-01..03)
 
 _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/proposals/sender-pool-resilience.md`_
+
 - [ ] **Phase 7: Unified Freeze Policy** — antispam-путь как PEER_FLOOD (пауза+флаг вместо `failed`, реконсайл авто-resume; ответы в диалогах не глушим) + ротация не садит новые контакты на ограниченный аккаунт
 - [ ] **Phase 8: Pool Management & Even Distribution** — attach/detach аккаунтов к кампании + фронт-мультиселект + равномерная раздача по пулу
 - [ ] **Phase 9: Cold-Contact Failover** — не-контактированные задачи замёрзшего аккаунта уходят на здоровые; активные диалоги ждут свой аккаунт
@@ -173,6 +174,7 @@ Plans:
 **Plans:** 6/6 plans complete
 
 Plans:
+
 - [x] 05.1-01-PLAN.md — Migration 018 + ORM/Pydantic widening (telemetry_events + 11 agent cols + 4 campaign cols + ToolSpec.webhook_url Optional) [Wave 1, no deps]
 - [x] 05.1-02-PLAN.md — CORS regex для *.lovableproject.com + Pitfall 3 (HS256 pin) комментарий в auth.py [Wave 1, no deps]
 - [x] 05.1-03-PLAN.md — Campaign /stop alias + /auto-fill stub + Senders /pause /resume + Agent v2 passthrough + ai_engine COALESCE(new, legacy) [Wave 2, depends_on: 05.1-01]
@@ -210,6 +212,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
+
 - [x] 07-01-PLAN.md — Rewrite `_handle_antispam_signal` to PEER_FLOOD pause+flag mirror (delete ai_enabled block, preserve self-check guard, frozen-precedence guard) + rotation candidate filter `AND s.restriction_status='none'` + flip cancel-path test to new contract + new rotation restricted-sender regression + assert FRZ-05 worker-skip — FRZ-01..05 [Wave 1, no deps]
 
 ### Phase 8: Pool Management and Even Distribution
@@ -220,9 +223,20 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 08-01-test-scaffold-PLAN.md — Wave 0 test scaffolding: conftest `test_queue_item_factory` + `tests/test_pool_endpoints.py` + `tests/test_rebalance.py` (POOL-01..08b RED stubs) [Wave 1, no deps]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 08-02-rebalance-service-PLAN.md — NEW `app/services/rebalance.py::rebalance_on_attach` campaign-scoped even-split (FOR UPDATE SKIP LOCKED, CCA-synced, idempotent) — POOL-07/08/08b [Wave 1, depends_on: 01]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 08-03-attach-detach-endpoints-PLAN.md — `POST /campaigns/{id}/senders` + `DELETE /campaigns/{id}/senders/{sid}` reusing _validate_workspace_owns_senders/_check_sender_lock/_campaign_to_response + MIN_POOL/DETACH guards + rebalance hook — POOL-01..06b [Wave 2, depends_on: 01, 02]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 08-04-frontend-pool-panel-PLAN.md — interactive Senders/Пул panel (sibling repo aimly-tg-outreach) + error-codes.ts fix + OpenAPI regen + human UAT — POOL-09 [Wave 3, depends_on: 03]
 
 ### Phase 9: Cold-Contact Failover
@@ -233,6 +247,7 @@ Plans:
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd-plan-phase 9 to break down)
 
 ### Phase 10: Pool Visibility (optional)
@@ -243,6 +258,7 @@ Plans:
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd-plan-phase 10 to break down)
 
 > **Non-goals (v1 этого блока):** failover **активных** диалогов на другой аккаунт (ломает континуити — ждут свой аккаунт); режим «затихать и на ответах» при мягком лимите (дефолт — продолжаем отвечать); cross-campaign load awareness.
