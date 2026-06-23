@@ -866,3 +866,69 @@ async def attach_sender(
         f"campaign={campaign_id} status={c.status}"
     )
     return await _campaign_to_response(db, ctx, c)
+
+
+@router.delete("/{campaign_id}/senders/{sender_id}", response_model=CampaignResponse)
+async def detach_sender(
+    campaign_id: UUID,
+    sender_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """POOL-04/05/06/06b: detach a sender from a campaign pool.
+
+    D-03 (min-pool): cannot remove the last sender of a running campaign → 409.
+    D-04 (cold-pending): un-sent cold pending rows would be silently orphaned → 409.
+    D-05 (engaged): dialogs with an open conversation never block detach.
+    D-06: no auto-reassign of the cold backlog here — deferred to Phase 9.
+    """
+    c = await _load_campaign(db, ctx, campaign_id)
+
+    # D-03 min-pool guard — only running campaigns must keep ≥1 sender.
+    cnt = (await db.execute(
+        select(sql_func.count()).select_from(CampaignSender)
+        .where(CampaignSender.campaign_id == c.id)
+    )).scalar()
+    if c.status == "running" and cnt <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "MIN_POOL_GUARD",
+                    "message": "Cannot detach the last sender of a running "
+                               "campaign. Pause it first."},
+        )
+
+    # D-04/D-05 cold-pending guard, scoped to the detached sender. The
+    # NOT EXISTS conversations clause excludes engaged dialogs so they never
+    # block detach (D-05/POOL-06b).
+    has_cold = (await db.execute(text("""
+        SELECT EXISTS (
+          SELECT 1 FROM message_queue mq
+          WHERE mq.campaign_id = :cid AND mq.sender_id = :sid AND mq.status = 'pending'
+            AND NOT EXISTS (SELECT 1 FROM message_queue s
+                            WHERE s.campaign_id = mq.campaign_id
+                              AND s.recipient_phone = mq.recipient_phone
+                              AND s.status = 'sent')
+            AND NOT EXISTS (SELECT 1 FROM conversations cv
+                            WHERE cv.workspace_id = mq.workspace_id
+                              AND cv.contact_phone = mq.recipient_phone)
+        )
+    """), {"cid": str(c.id), "sid": str(sender_id)})).scalar()
+    if has_cold:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "DETACH_BLOCKED_PENDING",
+                    "message": "This sender still has un-sent contacts in the "
+                               "campaign. Pause the campaign or wait for the "
+                               "queue to drain, then detach."},
+        )
+
+    await db.execute(delete(CampaignSender).where(
+        CampaignSender.campaign_id == c.id,
+        CampaignSender.sender_id == sender_id,
+    ))
+    await db.commit()
+    await db.refresh(c)
+    logger.info(
+        f"[campaigns] detached sender={sender_id} campaign={campaign_id}"
+    )
+    return await _campaign_to_response(db, ctx, c)
