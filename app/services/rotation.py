@@ -118,6 +118,7 @@ async def get_or_assign_sender(
               AND s.lifecycle_status = 'active'
               AND s.auth_status = 'ok'
               AND s.role = 'sender'
+              AND s.restriction_status = 'none'
               AND s.workspace_id = :wid
         """),
         {"cid": cid_str, "wid": workspace_id_str},
