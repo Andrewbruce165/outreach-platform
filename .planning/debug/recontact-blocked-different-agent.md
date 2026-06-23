@@ -1,6 +1,6 @@
 ---
 slug: recontact-blocked-different-agent
-status: fix_applied
+status: resolved
 trigger: |
   DATA_START
   Запустил новую кампанию "Паша аналитика", получателям не пришло сообщение.
@@ -94,5 +94,7 @@ Block ⟺ ?  (allow recontact в остальных случаях)
   * tests/test_campaign_enqueue_worker.py
 - **note:** 4 падения в tests/test_send_campaign.py — пред-существующие
   (user_workspaces.user_id / ImportError), к фиксу не относятся.
-- **pending:** деплой на прод (`docker compose up -d --build api`) — НЕ выполнен,
-  ждёт подтверждения пользователя.
+- **deployed:** 2026-06-23 — `docker compose up -d --build api`, api стартовал
+  чисто. На первом тике воркер enqueued 2 items для кампании b509e93a; оба
+  контакта в message_queue (pending), senders из пула Паши (09378d41,
+  2fe00ee0), не старый агент 6b0e6958. Пушнуто в main (fbd997c, 241d9e4).
