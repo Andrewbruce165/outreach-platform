@@ -11,6 +11,34 @@ IMPORTANT: access_hash is account-specific in Telegram.  Checker accounts
 cache only is_registered + telegram_id.  Main senders still need their own
 ResolvePhoneRequest to obtain their own access_hash (but only for confirmed-
 registered numbers, which is the whole point).
+
+CAVEAT — what is_registered=False actually means (privacy false-negatives):
+    is_registered=False from ResolvePhoneRequest means "this number is NOT
+    resolvable by phone by THIS (stranger) checker account" — it does NOT mean
+    "no Telegram account exists for this number".  PhoneNotOccupiedError (and an
+    empty ImportContacts result) also fires when the number's owner has set
+    "Who can find me by my phone number" to Contacts / Nobody (a privacy
+    setting).  In that case the account is registered but simply not discoverable
+    by phone from an account that isn't in the owner's contacts — i.e. a false
+    negative for a registered-but-private number.
+
+    Proof this is privacy and not a broken checker (verified 2026-06-23):
+    checker `sender-8428118140` threw PhoneNotOccupiedError on our OWN
+    authorized senders' phone numbers (those accounts have restrictive
+    find-by-phone privacy) while *simultaneously* having 83 numbers cached
+    is_registered=True (most recent the prior day) — i.e. the checker was
+    healthy, not broken.
+
+    Consequence: the not_registered bucket contains an unknown share of false
+    negatives (registered-but-private numbers).  This is operationally
+    acceptable for cold phone-import outreach — you cannot DM a privacy-hidden
+    number by phone anyway — but the field NAME `is_registered` is misleading
+    and should not be read as "definitely no Telegram account".  Do not build
+    analytics, dedup, or "dead number" logic on the false=="no account"
+    assumption.
+
+    The only API way to confirm a privacy-hidden account exists is via its
+    @username (ResolveUsernameRequest) — see check_usernames in this file.
 """
 import asyncio
 import logging
@@ -194,11 +222,19 @@ class CheckerService:
                     is_registered = False
                     telegram_id = None
                 except PhoneNotOccupiedError:
+                    # NOTE: is_registered=False here means "not resolvable by phone by this
+                    # stranger checker account", NOT "no Telegram account". Also fires on
+                    # privacy-hidden (find-by-phone = Contacts/Nobody) registered numbers — a
+                    # false negative. See module docstring caveat.
                     is_registered = False
                     telegram_id = None
                 except Exception as exc:
                     err = str(exc)
                     if "PHONE_NOT_OCCUPIED" in err or "phone_not_occupied" in err.lower():
+                        # NOTE: same false-negative semantics as the PhoneNotOccupiedError branch
+                        # above — "not resolvable by phone by this stranger account", NOT "no
+                        # Telegram account" (privacy-hidden numbers land here too). See module
+                        # docstring caveat.
                         is_registered = False
                         telegram_id = None
                     else:
