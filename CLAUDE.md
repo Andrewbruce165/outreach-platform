@@ -188,6 +188,14 @@ SELECT c.relname,
 
 Фикс в `TelegramService.send_message_by_telegram_id`: при `ValueError` от `get_input_entity` подгружаем `get_dialogs(limit=200)` — Telethon заполняет access_hash для всех recent dialogs. Дальше повторный `get_input_entity` находит peer. Стоит ~500ms первый раз, далее кеш горячий.
 
+### Семантика checker'а (is_registered)
+
+- `contacts_cache.is_registered=false` = «номер НЕ резолвится по телефону сторонним (checker) аккаунтом», **НЕ** «нет Telegram-аккаунта».
+- `PhoneNotOccupiedError` / пустой `ImportContacts` срабатывает и когда у владельца стоит «Кто может найти меня по номеру» = Контакты/Никто (приватность) → ложноотрицательный результат для зарегистрированных-но-приватных номеров.
+- Проверено 2026-06-23: checker `sender-8428118140` кинул `PhoneNotOccupiedError` на номера наших **СОБСТВЕННЫХ** авторизованных sender-аккаунтов (у них строгая приватность), при этом 83 других номера в кэше `is_registered=true` → checker здоров.
+- Бакет `not_registered` содержит неизвестную долю false negatives. Для холодного phone-import аутрича приемлемо (по телефону им всё равно не написать), но имя поля вводит в заблуждение — не строить на нём аналитику/дедуп/«мёртвый номер».
+- Единственный способ подтвердить приватный аккаунт — по `@username` (`ResolveUsernameRequest`, см. `check_usernames` в `app/services/checker.py`).
+
 ---
 
 ## Что делать в новой сессии
