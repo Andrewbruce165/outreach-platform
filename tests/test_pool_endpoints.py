@@ -26,6 +26,15 @@ def _auth_headers(jwt_factory, sub: str = "pool-user") -> dict:
     return {"Authorization": f"Bearer {jwt_factory(sub=sub)}"}
 
 
+# NOTE on isolation: user_workspaces has a DB-level UNIQUE(supabase_user_id)
+# (migration 023) and the test schema is created once per session, so a JWT
+# `sub` stays bound to whichever workspace it was first _bind()'d to. Each test
+# therefore uses a DISTINCT sub bound to its own per-test `test_workspace`
+# (mirrors the convention in test_campaign_router.py — u-list / u-lock / ...),
+# otherwise tests running after the first would resolve a stale workspace and
+# 404 on their freshly-created campaign.
+
+
 async def _bind(db, ws_id, uid):
     """Bind a Supabase user (JWT sub) to a workspace as owner."""
     await db.execute(text("""
@@ -50,14 +59,14 @@ async def test_attach_adds_sender(
     test_campaign_factory, test_sender_factory,
 ):
     """POOL-01: attach a workspace-owned sender → 200 + campaign_senders row."""
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-add")
     camp = await test_campaign_factory(status="draft")
     sender = await test_sender_factory()
 
     r = await async_client.post(
         f"/api/v1/campaigns/{camp['id']}/senders",
         json={"sender_id": str(sender.id)},
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-add"),
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -76,7 +85,7 @@ async def test_attach_locked_sender_409(
 
     detail.conflicts is a non-empty list of {sender_id, campaign_id, campaign_name}.
     """
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-lock")
     sender = await test_sender_factory()
 
     # Sender is locked by a running campaign in the SAME workspace.
@@ -87,7 +96,7 @@ async def test_attach_locked_sender_409(
     r = await async_client.post(
         f"/api/v1/campaigns/{target['id']}/senders",
         json={"sender_id": str(sender.id)},
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-lock"),
     )
     assert r.status_code == 409, r.text
     detail = r.json()["detail"]
@@ -116,7 +125,7 @@ async def test_attach_foreign_sender_404(
     """
     from app.models import Workspace, Sender
 
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-foreign")
     camp = await test_campaign_factory(status="draft")
 
     # A sender living in a DIFFERENT workspace.
@@ -137,7 +146,7 @@ async def test_attach_foreign_sender_404(
     r = await async_client.post(
         f"/api/v1/campaigns/{camp['id']}/senders",
         json={"sender_id": str(foreign.id)},
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-foreign"),
     )
     assert r.status_code == 404, r.text
     detail = r.json()["detail"]
@@ -156,13 +165,13 @@ async def test_detach_removes_sender(
     test_running_campaign_factory,
 ):
     """POOL-04: DELETE a sender from a 2-sender campaign → 200 + row gone."""
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-detach")
     camp, senders = await test_running_campaign_factory(sender_count=2)
     victim = senders[0]
 
     r = await async_client.delete(
         f"/api/v1/campaigns/{camp['id']}/senders/{victim.id}",
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-detach"),
     )
     assert r.status_code == 200, r.text
     assert await _count_campaign_senders(async_db_session, camp["id"], victim.id) == 0
@@ -177,13 +186,13 @@ async def test_detach_last_running_409(
     test_running_campaign_factory,
 ):
     """POOL-05: detach the ONLY sender of a RUNNING campaign → 409 MIN_POOL_GUARD."""
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-min")
     camp, senders = await test_running_campaign_factory(sender_count=1)
     only = senders[0]
 
     r = await async_client.delete(
         f"/api/v1/campaigns/{camp['id']}/senders/{only.id}",
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-min"),
     )
     assert r.status_code == 409, r.text
     detail = r.json()["detail"]
@@ -204,7 +213,7 @@ async def test_detach_cold_pending_409(
     Cold = pending queue row with NO conversation (not engaged). Such a row would be
     silently dropped on detach, so the endpoint must block with DETACH_BLOCKED_PENDING.
     """
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-cold")
     camp, senders = await test_running_campaign_factory(sender_count=2)
     victim = senders[0]
 
@@ -216,7 +225,7 @@ async def test_detach_cold_pending_409(
 
     r = await async_client.delete(
         f"/api/v1/campaigns/{camp['id']}/senders/{victim.id}",
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-cold"),
     )
     assert r.status_code == 409, r.text
     detail = r.json()["detail"]
@@ -234,7 +243,7 @@ async def test_detach_engaged_only_ok(
     """POOL-06b: when the sender's only pending recipient is ENGAGED (has a
     conversation row) detach is ALLOWED → 200. Engaged dialogs do NOT block
     detach (D-05) — they belong to the dialog owner, not the cold queue."""
-    await _bind(async_db_session, test_workspace.id, "pool-user")
+    await _bind(async_db_session, test_workspace.id, "pool-engaged")
     camp, senders = await test_running_campaign_factory(sender_count=2)
     victim = senders[0]
 
@@ -246,7 +255,7 @@ async def test_detach_engaged_only_ok(
 
     r = await async_client.delete(
         f"/api/v1/campaigns/{camp['id']}/senders/{victim.id}",
-        headers=_auth_headers(valid_supabase_jwt),
+        headers=_auth_headers(valid_supabase_jwt, "pool-engaged"),
     )
     assert r.status_code == 200, r.text
     assert await _count_campaign_senders(async_db_session, camp["id"], victim.id) == 0

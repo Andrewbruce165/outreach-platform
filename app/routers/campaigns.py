@@ -24,7 +24,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func as sql_func, select, text
+from sqlalchemy import delete, func as sql_func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,8 +41,10 @@ from app.schemas import (
     CampaignListResponse,
     CampaignResponse,
     CampaignSenderAttach,
+    CampaignSenderAttachRequest,
     CampaignUpdate,
 )
+from app.services.rebalance import rebalance_on_attach
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -803,3 +805,64 @@ async def duplicate_campaign(
         f"src={campaign_id} dst={new_c.id} name='{candidate}'"
     )
     return await _campaign_to_response(db, ctx, new_c)
+
+
+# ── Endpoints: Pool management (Phase 8 — POOL-01..06b) ──────────────────────
+
+
+@router.post("/{campaign_id}/senders", response_model=CampaignResponse)
+async def attach_sender(
+    campaign_id: UUID,
+    payload: CampaignSenderAttachRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """POOL-01/02/03: attach a sender to a draft/paused/running campaign pool.
+
+    D-01: allowed on draft/paused/running — no status-transition guard, only the
+    _load_campaign 404 scopes the campaign to the workspace.
+    D-02: reuses _validate_workspace_owns_senders (404 SENDER_NOT_FOUND) and
+    _check_sender_lock (409 SENDER_LOCK_CONFLICT — byte-identical to /start).
+    D-08: triggers rebalance_on_attach only when the campaign is running.
+    """
+    c = await _load_campaign(db, ctx, campaign_id)
+    await _validate_workspace_owns_senders(db, ctx, [payload.sender_id])
+
+    # Idempotency: PK is (campaign_id, sender_id) — no-op if already attached.
+    existing = (await db.execute(
+        select(CampaignSender).where(
+            CampaignSender.campaign_id == c.id,
+            CampaignSender.sender_id == payload.sender_id,
+        )
+    )).scalars().first()
+    if existing is not None:
+        return await _campaign_to_response(db, ctx, c)
+
+    db.add(CampaignSender(
+        campaign_id=c.id,
+        sender_id=payload.sender_id,
+        workspace_id=ctx.workspace_id,
+    ))
+    await db.flush()
+
+    # D-02: insert-then-check-then-rollback so the incoming sender is in scope.
+    conflicts = await _check_sender_lock(db, ctx, c.id)
+    if conflicts:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SENDER_LOCK_CONFLICT",
+                    "conflicts": conflicts},
+        )
+
+    # D-08: back-fill the new sender from overloaded ones only on a running pool.
+    if c.status == "running":
+        await rebalance_on_attach(c.id, payload.sender_id, db)
+
+    await db.commit()
+    await db.refresh(c)
+    logger.info(
+        f"[campaigns] attached sender={payload.sender_id} "
+        f"campaign={campaign_id} status={c.status}"
+    )
+    return await _campaign_to_response(db, ctx, c)

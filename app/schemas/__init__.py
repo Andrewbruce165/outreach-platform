@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, constr, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, computed_field, constr, model_validator
 from typing import Any, Literal, Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -568,10 +568,19 @@ class CampaignSenderAttach(BaseModel):
 
     locked_by_campaign_id / locked_by_campaign_name populated when the sender
     is currently attached to a DIFFERENT running campaign in the same workspace.
+
+    `id` mirrors `sender_id` so the entry is keyed identically to the Sender it
+    references (UI/tests read `attached_senders[].id`); `sender_id` is retained
+    for back-compat with Phase 4 consumers.
     """
     sender_id: UUID
     locked_by_campaign_id: Optional[UUID] = None
     locked_by_campaign_name: Optional[str] = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id(self) -> UUID:
+        return self.sender_id
 
 
 class CampaignSenderAttachRequest(BaseModel):
