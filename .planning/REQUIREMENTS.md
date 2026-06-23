@@ -101,6 +101,20 @@
 - [ ] **ADMN-02**: Бот шлёт уведомление при срабатывании сигнала «передать на менеджера» в любой активной кампании
 - [ ] **ADMN-03**: Бот шлёт уведомление при ошибке TG-аккаунта (logout / FloodWait > threshold / etc.)
 
+### Sender Pool Management (Phase 8)
+
+- [ ] **POOL-01**: `POST /campaigns/{id}/senders` attaches a sender to a draft/paused/running campaign (D-01)
+- [ ] **POOL-02**: Attach rejects a sender locked by another running campaign — 409 SENDER_LOCK_CONFLICT, same `conflicts[]` contract as `/start` (D-02)
+- [ ] **POOL-03**: Attach rejects a sender not owned by the workspace — 404 SENDER_NOT_FOUND (D-02)
+- [ ] **POOL-04**: `DELETE /campaigns/{id}/senders/{sid}` detaches a sender (D-01)
+- [ ] **POOL-05**: Detach of the last sender of a running campaign → 409 MIN_POOL_GUARD (D-03)
+- [ ] **POOL-06**: Detach blocked (409 DETACH_BLOCKED_PENDING) when the sender has un-sent cold pending in this campaign (D-04)
+- [ ] **POOL-06b**: Detach allowed when the sender's only remaining work is engaged dialogs — engaged dialogs do not block detach (D-05)
+- [ ] **POOL-07**: Light rebalance moves un-sent cold pending from overloaded senders onto a newly-attached sender on a running campaign, toward an even split (D-08/D-09)
+- [ ] **POOL-08**: Rebalance is idempotent (second call moves 0) and concurrency-safe under worker ticks (FOR UPDATE SKIP LOCKED + status='pending') (D-09)
+- [ ] **POOL-08b**: Rebalance never moves sent / processing / engaged-dialog rows; keeps campaign_contact_assignments in sync (D-08)
+- [ ] **POOL-09**: Frontend "Senders / Пул" panel — add/remove, locked-sender display, human-readable 409s (D-10/D-11/D-12)
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -192,11 +206,22 @@
 | ADMN-01 | Phase 6 | Pending |
 | ADMN-02 | Phase 6 | Pending |
 | ADMN-03 | Phase 6 | Pending |
+| POOL-01 | Phase 8 | Pending |
+| POOL-02 | Phase 8 | Pending |
+| POOL-03 | Phase 8 | Pending |
+| POOL-04 | Phase 8 | Pending |
+| POOL-05 | Phase 8 | Pending |
+| POOL-06 | Phase 8 | Pending |
+| POOL-06b | Phase 8 | Pending |
+| POOL-07 | Phase 8 | Pending |
+| POOL-08 | Phase 8 | Pending |
+| POOL-08b | Phase 8 | Pending |
+| POOL-09 | Phase 8 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 59 total
-- Mapped to phases: 59
+- v1 requirements: 70 total
+- Mapped to phases: 70
 - Unmapped: 0 ✓
 
 **Deprecated from previous v1 scope** (replaced by new model):

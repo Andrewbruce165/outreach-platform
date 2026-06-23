@@ -215,12 +215,15 @@ Plans:
 ### Phase 8: Pool Management and Even Distribution
 
 **Goal:** Дать кампании реальный пул из ≥2 аккаунтов. Эндпоинты `POST /campaigns/{id}/senders` и `DELETE /campaigns/{id}/senders/{sid}` (валидация workspace `_validate_workspace_owns_senders` уже есть; решить, разрешать ли на `running`); мультиселект аккаунтов во фронте (репо `aimly-tg-outreach`); подтвердить равномерную раздачу least-loaded по пулу (worker уже round-robin'ит всех eligible sender'ов). Сейчас у всех кампаний привязан 1 аккаунт.
-**Requirements**: TBD (derive on plan)
+**Requirements**: POOL-01, POOL-02, POOL-03, POOL-04, POOL-05, POOL-06, POOL-06b, POOL-07, POOL-08, POOL-08b, POOL-09 (derived this phase — see 08-RESEARCH.md §Phase Requirements)
 **Depends on:** Phase 7
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 8 to break down)
+- [ ] 08-01-test-scaffold-PLAN.md — Wave 0 test scaffolding: conftest `test_queue_item_factory` + `tests/test_pool_endpoints.py` + `tests/test_rebalance.py` (POOL-01..08b RED stubs) [Wave 1, no deps]
+- [ ] 08-02-rebalance-service-PLAN.md — NEW `app/services/rebalance.py::rebalance_on_attach` campaign-scoped even-split (FOR UPDATE SKIP LOCKED, CCA-synced, idempotent) — POOL-07/08/08b [Wave 1, depends_on: 01]
+- [ ] 08-03-attach-detach-endpoints-PLAN.md — `POST /campaigns/{id}/senders` + `DELETE /campaigns/{id}/senders/{sid}` reusing _validate_workspace_owns_senders/_check_sender_lock/_campaign_to_response + MIN_POOL/DETACH guards + rebalance hook — POOL-01..06b [Wave 2, depends_on: 01, 02]
+- [ ] 08-04-frontend-pool-panel-PLAN.md — interactive Senders/Пул panel (sibling repo aimly-tg-outreach) + error-codes.ts fix + OpenAPI regen + human UAT — POOL-09 [Wave 3, depends_on: 03]
 
 ### Phase 9: Cold-Contact Failover
 
@@ -258,7 +261,7 @@ Plans:
 | 5. Inbox & Analytics | 0/3 | Planned (3 plans, waves 1→2) | - |
 | 6. Admin Master Bot | 0/2 | Deferred to v2 | - |
 | 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
-| 8. Pool Management & Even Distribution | 0/? | Not planned | - |
+| 8. Pool Management & Even Distribution | 0/4 | Planned (4 plans, waves 1→3) | - |
 | 9. Cold-Contact Failover | 0/? | Not planned | - |
 | 10. Pool Visibility (optional) | 0/? | Not planned | - |
 
