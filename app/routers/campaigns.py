@@ -267,6 +267,9 @@ async def _campaign_to_response(
         # 026: per-campaign re-contact policy.
         allow_recontact=campaign.allow_recontact,
         recontact_min_age_days=campaign.recontact_min_age_days,
+        # 029: auto-pause visibility.
+        pause_reason=campaign.pause_reason,
+        paused_at=campaign.paused_at,
         attached_senders=attached,
         is_exhausted=is_exhausted,
         created_at=campaign.created_at,
@@ -629,6 +632,8 @@ async def start_campaign(
         )
 
     c.status = "running"
+    c.pause_reason = None  # 029: clear any stale auto-pause reason on (re)start
+    c.paused_at = None
     await db.commit()
     await db.refresh(c)
     logger.info(f"[campaigns] started id={campaign_id}")
@@ -678,6 +683,8 @@ async def resume_campaign(
                     "conflicts": conflicts},
         )
     c.status = "running"
+    c.pause_reason = None  # 029: clear auto-pause reason — user is taking it back live
+    c.paused_at = None
     await db.commit()
     await db.refresh(c)
     logger.info(f"[campaigns] resumed id={campaign_id}")

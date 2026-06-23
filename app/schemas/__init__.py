@@ -718,6 +718,11 @@ class CampaignResponse(BaseModel):
     # 026: per-campaign re-contact policy.
     allow_recontact: bool = False
     recontact_min_age_days: int = 30
+    # 029: auto-pause visibility. pause_reason is NULL for a manual / never-paused
+    # campaign; 'no_senders_attached' | 'senders_unavailable' when the worker
+    # auto-paused it because it could no longer send.
+    pause_reason: Optional[str] = None
+    paused_at: Optional[datetime] = None
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
     is_exhausted: bool = False
     created_at: datetime

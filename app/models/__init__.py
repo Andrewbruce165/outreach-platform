@@ -514,6 +514,11 @@ class Campaign(Base):
     # threshold for "fresh".
     allow_recontact = Column(Boolean, nullable=False, server_default="false")
     recontact_min_age_days = Column(Integer, nullable=False, server_default="30")
+    # 029: auto-pause visibility. NULL = manual pause / never paused; a machine
+    # code ('no_senders_attached' | 'senders_unavailable') = auto-paused by the
+    # enqueue worker because the campaign could no longer send. Cleared on start/resume.
+    pause_reason = Column(String(40), nullable=True)
+    paused_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(),
                         onupdate=func.now(), nullable=False)

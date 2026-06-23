@@ -97,6 +97,11 @@ class CampaignEnqueueWorker:
             campaigns = campaigns_rows.fetchall()
             total_enqueued = 0
             for c in campaigns:
+                # Auto-pause (029): if the campaign can no longer send (no
+                # eligible sender) while work remains, flip it to paused with a
+                # reason so the UI shows it needs attention — then skip enqueue.
+                if await self._maybe_autopause(db, c):
+                    continue
                 enqueued = await self._tick_one_campaign(db, c)
                 total_enqueued += enqueued
             if total_enqueued > 0:
@@ -105,6 +110,90 @@ class CampaignEnqueueWorker:
                     total_enqueued, len(campaigns),
                 )
             return total_enqueued
+
+    async def _maybe_autopause(self, db: AsyncSession, c) -> bool:
+        """Auto-pause a running campaign that can no longer send (029).
+
+        Hard-blocker only: a campaign is paused iff it has ZERO eligible senders
+        (pool empty, or every attached sender restricted/offline/auth-failed)
+        AND there is still outstanding work (pending/processing items, or
+        registered contacts not yet assigned). A campaign with nothing left to do
+        is left alone — it is effectively finished, not blocked.
+
+        Sets ``status='paused'``, ``pause_reason`` and ``paused_at`` so the UI can
+        surface why the outreach stopped. The reason is cleared on start/resume.
+        Returns True if the campaign was paused (caller skips enqueue).
+        """
+        # Eligible-sender predicate copied from rotation.py:113-123 — keep in sync.
+        eligible = (await db.execute(
+            text("""
+                SELECT COUNT(*)
+                FROM campaign_senders cs
+                JOIN senders s ON s.id = cs.sender_id
+                WHERE cs.campaign_id = :cid
+                  AND s.lifecycle_status = 'active'
+                  AND s.auth_status = 'ok'
+                  AND s.role = 'sender'
+                  AND s.restriction_status = 'none'
+            """),
+            {"cid": str(c.id)},
+        )).scalar()
+        if eligible and eligible > 0:
+            return False
+
+        # No eligible sender — pause only if there is still work to do.
+        has_pending = (await db.execute(
+            text("""
+                SELECT EXISTS(
+                    SELECT 1 FROM message_queue
+                    WHERE campaign_id = :cid AND status IN ('pending', 'processing')
+                )
+            """),
+            {"cid": str(c.id)},
+        )).scalar()
+
+        has_unassigned = False
+        if c.folder_id is not None:
+            has_unassigned = (await db.execute(
+                text("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM contacts ct
+                        WHERE ct.folder_id = :fid
+                          AND ct.workspace_id = :wid
+                          AND ct.tg_status = 'registered'
+                          AND (ct.phone IS NOT NULL OR ct.username IS NOT NULL)
+                          AND COALESCE(ct.phone, '@' || ct.username) NOT IN (
+                              SELECT contact_phone FROM campaign_contact_assignments
+                              WHERE campaign_id = :cid
+                          )
+                    )
+                """),
+                {"fid": str(c.folder_id), "wid": str(c.workspace_id), "cid": str(c.id)},
+            )).scalar()
+
+        if not (has_pending or has_unassigned):
+            return False  # nothing to send — leave it running (effectively done)
+
+        attached = (await db.execute(
+            text("SELECT COUNT(*) FROM campaign_senders WHERE campaign_id = :cid"),
+            {"cid": str(c.id)},
+        )).scalar()
+        reason = "no_senders_attached" if not attached else "senders_unavailable"
+
+        await db.execute(
+            text("""
+                UPDATE campaigns
+                SET status = 'paused', pause_reason = :reason, paused_at = NOW()
+                WHERE id = :cid AND status = 'running'
+            """),
+            {"reason": reason, "cid": str(c.id)},
+        )
+        await db.commit()
+        logger.warning(
+            "⏸ Campaign %s auto-paused: %s (no eligible senders, work pending)",
+            c.id, reason,
+        )
+        return True
 
     async def _tick_one_campaign(self, db: AsyncSession, c) -> int:
         """Process one campaign per tick. Atomic per-contact transaction (savepoint).
