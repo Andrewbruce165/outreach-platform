@@ -273,6 +273,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/senders/{slug}/restriction-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Restriction Events
+         * @description HLTH-03: append-only restriction-event history for a sender, newest-first.
+         *
+         *     Workspace-scoped via _load_sender_by_slug (opaque 404 for foreign/unknown
+         *     slugs — no cross-tenant leakage). Read-only over the append-only log; the
+         *     event SELECT is also constrained by workspace_id (defence-in-depth) and
+         *     bounded by a default LIMIT.
+         */
+        get: operations["list_restriction_events_api_v1_senders__slug__restriction_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspace/proxies": {
         parameters: {
             query?: never;
@@ -1953,6 +1978,7 @@ export interface components {
              * @default false
              */
             is_exhausted: boolean;
+            pool_health: components["schemas"]["PoolHealth"];
             /**
              * Created At
              * Format: date-time
@@ -1985,6 +2011,14 @@ export interface components {
             locked_by_campaign_id?: string | null;
             /** Locked By Campaign Name */
             locked_by_campaign_name?: string | null;
+            /**
+             * Restriction Status
+             * @default none
+             * @enum {string}
+             */
+            restriction_status: "none" | "spam_limited" | "frozen";
+            /** Restricted Until */
+            restricted_until?: string | null;
             /**
              * Id
              * Format: uuid
@@ -2520,6 +2554,25 @@ export interface components {
              */
             folder_id: string;
         };
+        /**
+         * PoolHealth
+         * @description POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.
+         *
+         *     Presentation-free — the green/yellow/red badge is derived ON THE FRONTEND
+         *     (paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).
+         *     earliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4
+         *     recheck horizon); None when no sender is restricted.
+         */
+        PoolHealth: {
+            /** Active */
+            active: number;
+            /** Paused */
+            paused: number;
+            /** Total */
+            total: number;
+            /** Earliest Resume At */
+            earliest_resume_at?: string | null;
+        };
         /** ProxyConfig */
         ProxyConfig: {
             /**
@@ -2628,6 +2681,43 @@ export interface components {
             contact_ids?: string[] | null;
             /** Folder Id */
             folder_id?: string | null;
+        };
+        /**
+         * RestrictionEventResponse
+         * @description HLTH-03: one restriction-event row from sender_restriction_events.
+         *
+         *     Read-only response for GET /senders/{slug}/restriction-events. ORM read via
+         *     from_attributes; mirrors the migration-030 columns.
+         */
+        RestrictionEventResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Event Type */
+            event_type: string;
+            /** Source */
+            source: string;
+            /** Category */
+            category: string;
+            /** Restricted Until */
+            restricted_until?: string | null;
+            /** Raw Text */
+            raw_text?: string | null;
+            /** Activity Slice */
+            activity_slice?: {
+                [key: string]: unknown;
+            } | null;
+            /** Proxy */
+            proxy?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /**
          * SendMessageFromUIRequest
@@ -3596,6 +3686,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_restriction_events_api_v1_senders__slug__restriction_events_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestrictionEventResponse"][];
                 };
             };
             /** @description Validation Error */
