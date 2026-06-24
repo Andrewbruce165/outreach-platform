@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Send,
   MessageCircle,
@@ -13,7 +13,7 @@ import {
   RefreshCw,
   AlertTriangle,
   Check,
-  
+  X,
   Rocket,
   ChevronDown,
   ArrowRight,
@@ -41,6 +41,26 @@ function errMsg(e: unknown): string {
   return "Something went wrong";
 }
 
+type PeriodKey = "24h" | "7d" | "30d" | "90d";
+const PERIOD_LABELS: Record<PeriodKey, string> = {
+  "24h": "Last 24 hours",
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 90 days",
+};
+const PERIOD_MS: Record<PeriodKey, number> = {
+  "24h": 24 * 3600_000,
+  "7d": 7 * 24 * 3600_000,
+  "30d": 30 * 24 * 3600_000,
+  "90d": 90 * 24 * 3600_000,
+};
+
+type DashFilters = {
+  campaignId: string | null;
+  senderId: string | null;
+  status: string | null;
+};
+
 function Dashboard() {
   useEffect(() => {
     if (sessionStorage.getItem("dashboard_viewed_once") !== "1") {
@@ -49,14 +69,34 @@ function Dashboard() {
     }
   }, []);
 
+  const [period, setPeriod] = useState<PeriodKey>("7d");
+  const [filters, setFilters] = useState<DashFilters>({
+    campaignId: null,
+    senderId: null,
+    status: null,
+  });
+
   const analyticsQ = useQuery({
     queryKey: ["analytics", "workspace"],
     queryFn: () => api<AnalyticsCards>("/api/v1/analytics/workspace"),
     refetchInterval: 30_000,
   });
+
+  const funnelScope: "workspace" | "campaign" | "sender" = filters.campaignId
+    ? "campaign"
+    : filters.senderId
+      ? "sender"
+      : "workspace";
+  const funnelScopeId = filters.campaignId ?? filters.senderId ?? null;
   const funnelQ = useQuery({
-    queryKey: ["analytics", "funnel"],
-    queryFn: () => api<Funnel>("/api/v1/analytics/funnel"),
+    queryKey: ["analytics", "funnel", funnelScope, funnelScopeId],
+    queryFn: () =>
+      api<Funnel>("/api/v1/analytics/funnel", {
+        query: {
+          scope: funnelScope,
+          ...(funnelScopeId ? { id: funnelScopeId } : {}),
+        },
+      }),
     refetchInterval: 30_000,
   });
   const campaignsQ = useQuery({
@@ -78,8 +118,38 @@ function Dashboard() {
   const a = analyticsQ.data;
   const f = funnelQ.data;
   const senders = sendersQ.data?.senders ?? [];
-  const campaigns = campaignsQ.data?.items ?? [];
-  const conversations = conversationsQ.data?.conversations ?? [];
+  const allCampaigns = campaignsQ.data?.items ?? [];
+  const allConversations = conversationsQ.data?.conversations ?? [];
+
+  const periodCutoff = Date.now() - PERIOD_MS[period];
+
+  const filteredCampaigns = useMemo(() => {
+    return allCampaigns.filter((c) => {
+      const ts = new Date(c.updated_at || c.created_at).getTime();
+      if (ts < periodCutoff && c.status !== "running") return false;
+      if (filters.status && c.status !== filters.status) return false;
+      if (filters.campaignId && c.id !== filters.campaignId) return false;
+      if (filters.senderId) {
+        const has = (c.attached_senders ?? []).some(
+          (s) => s.sender_id === filters.senderId,
+        );
+        if (!has) return false;
+      }
+      return true;
+    });
+  }, [allCampaigns, filters, periodCutoff]);
+
+  const filteredConversations = useMemo(() => {
+    return allConversations.filter((c) => {
+      const ts = c.last_message_at
+        ? new Date(c.last_message_at).getTime()
+        : new Date(c.updated_at).getTime();
+      if (ts < periodCutoff) return false;
+      if (filters.campaignId && c.campaign_id !== filters.campaignId) return false;
+      if (filters.senderId && c.sender_id !== filters.senderId) return false;
+      return true;
+    });
+  }, [allConversations, filters, periodCutoff]);
 
   // Per-sender analytics to power the daily-rate bars in Account health.
   const senderAnalyticsQs = useQueries({
@@ -105,20 +175,78 @@ function Dashboard() {
   const leads = a?.leads ?? 0;
   const finished = a?.finishes ?? 0;
 
+  const activeFilterCount =
+    (filters.campaignId ? 1 : 0) +
+    (filters.senderId ? 1 : 0) +
+    (filters.status ? 1 : 0);
+
+  const handleExport = () => {
+    const headers = [
+      "id",
+      "name",
+      "status",
+      "primary_goal",
+      "attached_senders",
+      "created_at",
+      "updated_at",
+    ];
+    const rows = filteredCampaigns.map((c) =>
+      [
+        c.id,
+        c.name,
+        c.status,
+        c.primary_goal ?? "",
+        (c.attached_senders ?? []).length,
+        c.created_at,
+        c.updated_at,
+      ]
+        .map((v) => {
+          const s = String(v ?? "");
+          return s.includes(",") || s.includes('"') || s.includes("\n")
+            ? `"${s.replace(/"/g, '""')}"`
+            : s;
+        })
+        .join(","),
+    );
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `dashboard-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const funnelSubtitle =
+    funnelScope === "workspace"
+      ? "all campaigns"
+      : funnelScope === "campaign"
+        ? `campaign: ${allCampaigns.find((c) => c.id === filters.campaignId)?.name ?? "—"}`
+        : `sender: ${senders.find((s) => s.id === filters.senderId)?.name ?? "—"}`;
+
   return (
     <>
       <Topbar
         title="Welcome back"
-        crumbs={[{ label: "Last 7 days" }]}
+        crumbs={[{ label: PERIOD_LABELS[period] }]}
         right={
           <>
-            <button className="btn btn--ghost btn--sm" type="button">
-              <Calendar size={14} /> Last 7 days <ChevronDown size={12} />
-            </button>
-            <button className="btn btn--ghost btn--sm" type="button">
-              <Filter size={14} /> Filters
-            </button>
-            <button className="btn btn--ghost btn--sm" type="button">
+            <PeriodMenu value={period} onChange={setPeriod} />
+            <FiltersMenu
+              filters={filters}
+              onChange={setFilters}
+              campaigns={allCampaigns}
+              senders={senders}
+              activeCount={activeFilterCount}
+            />
+            <button
+              className="btn btn--ghost btn--sm"
+              type="button"
+              onClick={handleExport}
+            >
               <Download size={14} /> Export
             </button>
             <button className="tb__icon-btn" type="button" aria-label="Notifications">
@@ -141,7 +269,7 @@ function Dashboard() {
           <KpiCard
             label="Messages sent"
             value={sent.toLocaleString()}
-            sub={analyticsQ.isLoading ? "Loading…" : `Across ${campaigns.length} campaigns`}
+            sub={analyticsQ.isLoading ? "Loading…" : `Across ${filteredCampaigns.length} campaigns`}
             icon={<Send size={14} />}
             color="var(--tg-blue, #3390ec)"
             spark={[180, 210, 240, 260, 295, 310, 340, 360, 380, 395, 410, 420]}
@@ -157,7 +285,7 @@ function Dashboard() {
           <KpiCard
             label="Leads"
             value={leads.toLocaleString()}
-            sub={`From ${campaigns.filter((c) => c.status === "running").length} active campaigns`}
+            sub={`From ${filteredCampaigns.filter((c) => c.status === "running").length} active campaigns`}
             icon={<Flag size={14} />}
             color="var(--success, #4dcd5e)"
             spark={[3, 5, 7, 8, 12, 14, 18, 20, 24, 29, 34, 38]}
@@ -185,7 +313,7 @@ function Dashboard() {
             <div className="card__header">
               <div>
                 <div className="card__title">Conversion funnel</div>
-                <div className="card__sub">Sent → Handoff · last 7 days</div>
+                <div className="card__sub">Sent → Handoff · {funnelSubtitle}</div>
               </div>
               <div className="spacer" />
               <div
@@ -232,18 +360,243 @@ function Dashboard() {
         {/* Campaign performance + Activity */}
         <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 14 }}>
           <CampaignPerformanceCard
-            items={campaigns}
+            items={filteredCampaigns}
             loading={campaignsQ.isLoading}
+            periodLabel={PERIOD_LABELS[period]}
           />
           <ActivityFeedCard
-            conversations={conversations}
-            campaigns={campaigns}
+            conversations={filteredConversations}
+            campaigns={filteredCampaigns}
             senders={senders}
             loading={conversationsQ.isLoading}
           />
         </div>
       </div>
     </>
+  );
+}
+
+/* ----- Period dropdown ----- */
+function useOutsideClose(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open, close]);
+  return ref;
+}
+
+function PeriodMenu({
+  value,
+  onChange,
+}: {
+  value: PeriodKey;
+  onChange: (v: PeriodKey) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useOutsideClose(open, () => setOpen(false));
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        className="btn btn--ghost btn--sm"
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Calendar size={14} /> {PERIOD_LABELS[value]} <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            background: "white",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(15, 20, 25, 0.10)",
+            minWidth: 180,
+            padding: 4,
+            zIndex: 30,
+          }}
+        >
+          {(Object.keys(PERIOD_LABELS) as PeriodKey[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => {
+                onChange(k);
+                setOpen(false);
+              }}
+              style={{
+                display: "flex",
+                width: "100%",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 10px",
+                fontSize: 13,
+                border: "none",
+                background: value === k ? "var(--bg-soft)" : "transparent",
+                borderRadius: 6,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <span>{PERIOD_LABELS[k]}</span>
+              {value === k && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ----- Filters popover ----- */
+function FiltersMenu({
+  filters,
+  onChange,
+  campaigns,
+  senders,
+  activeCount,
+}: {
+  filters: DashFilters;
+  onChange: (f: DashFilters) => void;
+  campaigns: Campaign[];
+  senders: Sender[];
+  activeCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useOutsideClose(open, () => setOpen(false));
+  const statuses = ["running", "paused", "draft", "finished", "stopped"];
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        className="btn btn--ghost btn--sm"
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Filter size={14} /> Filters
+        {activeCount > 0 && (
+          <span
+            style={{
+              marginLeft: 4,
+              background: "var(--tg-blue, #3390ec)",
+              color: "white",
+              borderRadius: 10,
+              padding: "1px 6px",
+              fontSize: 10.5,
+              fontWeight: 600,
+              minWidth: 16,
+              textAlign: "center",
+            }}
+          >
+            {activeCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            background: "white",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(15, 20, 25, 0.10)",
+            width: 280,
+            padding: 14,
+            zIndex: 30,
+            display: "grid",
+            rowGap: 12,
+          }}
+        >
+          <FilterSelect
+            label="Campaign"
+            value={filters.campaignId}
+            onChange={(v) => onChange({ ...filters, campaignId: v })}
+            options={campaigns.map((c) => ({ value: c.id, label: c.name }))}
+          />
+          <FilterSelect
+            label="Sender"
+            value={filters.senderId}
+            onChange={(v) => onChange({ ...filters, senderId: v })}
+            options={senders.map((s) => ({
+              value: s.id,
+              label: s.name || s.phone || s.slug,
+            }))}
+          />
+          <FilterSelect
+            label="Campaign status"
+            value={filters.status}
+            onChange={(v) => onChange({ ...filters, status: v })}
+            options={statuses.map((s) => ({
+              value: s,
+              label: s[0].toUpperCase() + s.slice(1),
+            }))}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => onChange({ campaignId: null, senderId: null, status: null })}
+            >
+              <X size={12} /> Clear
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              onClick={() => setOpen(false)}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string | null;
+  onChange: (v: string | null) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <label style={{ display: "grid", rowGap: 4 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        {label}
+      </span>
+      <select
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        style={{
+          height: 32,
+          borderRadius: 7,
+          border: "1px solid var(--border)",
+          padding: "0 8px",
+          fontSize: 13,
+          background: "white",
+        }}
+      >
+        <option value="">All</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -889,9 +1242,11 @@ function statusDot(status: string) {
 function CampaignPerformanceCard({
   items,
   loading,
+  periodLabel,
 }: {
   items: components["schemas"]["CampaignResponse"][];
   loading: boolean;
+  periodLabel: string;
 }) {
   const rows = items.slice(0, 5);
   return (
@@ -899,7 +1254,7 @@ function CampaignPerformanceCard({
       <div className="card__header">
         <div>
           <div className="card__title">Campaign performance</div>
-          <div className="card__sub">Last 7 days</div>
+          <div className="card__sub">{periodLabel}</div>
         </div>
         <div className="spacer" />
         <Link to="/campaigns">
