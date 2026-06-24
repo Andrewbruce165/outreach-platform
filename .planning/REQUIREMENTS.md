@@ -129,8 +129,8 @@
 
 ### Account Health & Restriction Audit (Phase 10)
 
-- [ ] **HLTH-01**: Durable, append-only event-log всех предупреждений/ограничений аккаунта — типы `spam_limited` / `frozen` / `flood_wait` / `cleared` / `banned`. Каждое событие хранит: sender, тип, источник (`queue_error` / `spambot_reconcile`), `restricted_until`, сырой текст ошибки/ответа @SpamBot, server_ts. Не затирается (в отличие от `message_queue.error_message`)
-- [ ] **HLTH-02**: К каждому событию ограничения привязан срез предшествующей активности sender'а: объём отправок за 1ч / 24ч до события, число уникальных новых контактов, использованный прокси, фактический темп — чтобы реконструировать «что делали → за что получили»
+- [x] **HLTH-01**: Durable, append-only event-log всех предупреждений/ограничений аккаунта — типы `spam_limited` / `frozen` / `flood_wait` / `cleared` / `banned`. Каждое событие хранит: sender, тип, источник (`queue_error` / `spambot_reconcile`), `restricted_until`, сырой текст ошибки/ответа @SpamBot, server_ts. Не затирается (в отличие от `message_queue.error_message`)
+- [x] **HLTH-02**: К каждому событию ограничения привязан срез предшествующей активности sender'а: объём отправок за 1ч / 24ч до события, число уникальных новых контактов, использованный прокси, фактический темп — чтобы реконструировать «что делали → за что получили»
 - [ ] **HLTH-03**: Видимость для команды: история событий по конкретному аккаунту + агрегат (флуд/ограничения по дням, % пула под ограничением сейчас). Источник для будущих алертов
 
 ### Pool Visibility (Phase 10 — derived this phase, see 10-RESEARCH.md §Phase Requirements)
@@ -251,8 +251,8 @@
 | FAIL-07 | Phase 9 | Pending |
 | FAIL-08 | Phase 9 | Pending |
 | FAIL-09 | Phase 9 | Pending |
-| HLTH-01 | Phase 10 | Pending |
-| HLTH-02 | Phase 10 | Pending |
+| HLTH-01 | Phase 10 | Complete |
+| HLTH-02 | Phase 10 | Complete |
 | HLTH-03 | Phase 10 | Pending |
 | POOLV-01 | Phase 10 | Pending |
 | POOLV-02 | Phase 10 | Pending |
