@@ -15,10 +15,13 @@ can never diverge on crash. Hence the dual-mode signature (mirrors
 ``failover_cold_backlog``): ``db=None`` → open AND commit our own session;
 ``db`` passed → transaction-neutral, the CALLER commits.
 
-D-01 (event only on state-change / forward-shift): the GATE that suppresses
-no-shift reconcile ticks lives at the listener call-site (it compares old_until
-read intra-transaction against the new release date) — NOT here. This helper
-just writes whatever event the caller decided to record.
+D-01 (event only on state-change / forward-shift): for ``event_type ==
+'extension'`` the helper compares the passed ``restricted_until`` against the
+sender's CURRENT ``restricted_until`` (read in the same transaction) and writes
+NOTHING unless the release date moved meaningfully forward (> 1 minute). A pure
+recheck-interval bump on a still-limited tick therefore produces no row — this
+is the gate that kills the 37/day reconcile noise. All other event types are
+always recorded (they ARE state-changes).
 
 D-05 (snapshot at write time): the activity_slice is computed here, inline, in
 the caller's transaction — never reconstructed later from ephemeral sources.
@@ -31,7 +34,7 @@ ever logged into raw_text.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import text
@@ -100,9 +103,23 @@ async def _record(
     the call-sites; this helper only appends the audit row.
     """
     s = (await db.execute(text("""
-        SELECT workspace_id, proxy, rate_per_min, rate_per_hour, rate_per_day
+        SELECT workspace_id, proxy, rate_per_min, rate_per_hour, rate_per_day,
+               restricted_until
         FROM senders WHERE id = :sid
     """), {"sid": str(sender_id)})).one()
+
+    # D-01 gate: an 'extension' event is recorded ONLY on a genuine forward shift
+    # of the release date (> old + 1 minute). A still-limited reconcile tick that
+    # re-checks to the SAME (or earlier) release date writes NO row — this is what
+    # suppresses the 37/day reconcile noise the audit log exists to avoid.
+    if event_type == "extension":
+        old_until = s.restricted_until
+        if (
+            old_until is not None
+            and restricted_until is not None
+            and restricted_until <= old_until + timedelta(minutes=1)
+        ):
+            return
 
     slice_ = None
     if category == "restriction":

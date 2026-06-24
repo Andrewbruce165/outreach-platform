@@ -79,6 +79,7 @@ ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", "")
 
 # Decryption — use shared implementation to avoid divergence
 from app.services.encryption import decrypt_session
+from app.services.restriction_audit import record_restriction_event
 from app.config import get_settings
 import base64
 import socks
@@ -952,6 +953,14 @@ class TelegramListener:
                 from app.services.failover import failover_cold_backlog
                 await failover_cold_backlog(sender_id, session)
 
+                # Phase 10 (HLTH-01 / OQ#2): durable restriction event in the SAME
+                # session as the pause+flag. source='antispam_signal' (free-form, no
+                # CHECK) marks this unsolicited bot warning distinctly from queue_error.
+                await record_restriction_event(
+                    sender_id, "spam_limited", "antispam_signal",
+                    recheck_at, message_text, db=session,
+                )
+
                 await session.commit()
 
             logger.warning(
@@ -1400,6 +1409,15 @@ class TelegramListener:
             next_recheck = datetime.now(timezone.utc) + timedelta(seconds=recheck)
 
             async with AsyncSessionLocal() as db:
+                # D-01 gate atomicity (B-1): read the CURRENT restricted_until INSIDE
+                # this per-sender transaction (NOT from the outer batch SELECT, which
+                # is stale — a concurrent reconcile tick may have moved it). The
+                # extension event is gated against THIS old_until.
+                old_until = (await db.execute(
+                    text("SELECT restricted_until FROM senders WHERE id = :sid"),
+                    {"sid": str(r[0])},
+                )).scalar_one_or_none()
+
                 if verdict == "free":
                     await db.execute(
                         text("""
@@ -1414,6 +1432,11 @@ class TelegramListener:
                             WHERE sender_id = :sid AND status = 'pending'
                               AND scheduled_at > NOW()
                         """), {"sid": str(r[0])})
+                    # Phase 10 (HLTH-01): durable cleared event, same TX as the lift.
+                    await record_restriction_event(
+                        r[0], "cleared", "spambot_reconcile",
+                        None, result.get("raw_text"), db=db,
+                    )
                     await db.commit()
                     cleared += 1
                     logger.info(f"✅ [restriction] {slug} cleared (SpamBot: free) — queue resumed")
@@ -1421,6 +1444,11 @@ class TelegramListener:
                     await db.execute(
                         text("UPDATE senders SET auth_status = 'banned' WHERE id = :sid"),
                         {"sid": str(r[0])})
+                    # Phase 10 (HLTH-01): durable banned event, same TX.
+                    await record_restriction_event(
+                        r[0], "banned", "spambot_reconcile",
+                        old_until, result.get("raw_text"), db=db,
+                    )
                     await db.commit()
                     banned += 1
                     logger.critical(f"⛔ [restriction] {slug} suspended (SpamBot) → auth_status=banned")
@@ -1436,6 +1464,16 @@ class TelegramListener:
                                 next_at = candidate
                         except ValueError:
                             pass
+                    # Phase 10 (D-01 gate): emit an 'extension' event ONLY on a real
+                    # forward shift (> old_until + 1 min). A pure recheck-interval bump
+                    # (no SpamBot-quoted later release) is NOT an extension — suppress it
+                    # so the 37/day reconcile noise never reaches the audit log.
+                    if old_until is None or next_at > old_until + timedelta(minutes=1):
+                        await record_restriction_event(
+                            r[0], "extension", "spambot_reconcile",
+                            next_at, result.get("raw_text"), db=db,
+                        )
+                    # The unconditional recheck bump STAYS regardless of the gate.
                     await db.execute(
                         text("UPDATE senders SET restricted_until = :next WHERE id = :sid"),
                         {"next": next_at, "sid": str(r[0])})

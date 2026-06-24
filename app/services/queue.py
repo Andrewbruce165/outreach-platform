@@ -30,6 +30,7 @@ from app.database import AsyncSessionLocal
 from app.models import MessageQueue, QueueItemStatus, QueueItemType, Sender, MessageLog, MessageType
 from app.services.telegram import telegram_service, SessionAuthError
 from app.services.recontact import protected_conversation_sql
+from app.services.restriction_audit import record_restriction_event
 from telethon.errors import FloodWaitError
 from sqlalchemy import text
 
@@ -712,6 +713,13 @@ class QueueWorker:
                                     UPDATE message_queue SET scheduled_at = :reschedule
                                     WHERE sender_id = :sid AND status = 'pending'
                                 """), {"reschedule": reschedule_at, "sid": str(sender.id)})
+                                # Phase 10 (HLTH-01 / OQ#1): informational flood_wait event.
+                                # This path only PAUSES the queue — it does NOT change
+                                # senders.restriction_status, so pool_health is unaffected.
+                                await record_restriction_event(
+                                    sender.id, "flood_wait", "queue_error",
+                                    reschedule_at, error_msg, db=db2,
+                                )
                                 await db2.commit()
 
                         await db.execute(
@@ -751,6 +759,9 @@ class QueueWorker:
                                     restricted_until = :recheck_at
                                 WHERE id = :sid
                             """), {"recheck_at": recheck_at, "sid": str(sender.id)})
+                            # Phase 10 (HLTH-01): durable restriction event in the SAME
+                            # TX as the status UPDATE (audit + state never diverge).
+                            await record_restriction_event(sender.id, "spam_limited", "queue_error", recheck_at, error_msg, db=db2)
                             await db2.commit()
                         logger.critical(
                             f"PEER_FLOOD for sender {sender.slug} — all tasks paused 24h "
@@ -799,6 +810,11 @@ class QueueWorker:
                                     restricted_until = :recheck_at
                                 WHERE id = :sid
                             """), {"recheck_at": recheck_at, "sid": str(sender.id)})
+                            # Phase 10 (HLTH-01): durable frozen event, same TX.
+                            await record_restriction_event(
+                                sender.id, "frozen", "queue_error",
+                                recheck_at, error_msg, db=db2,
+                            )
                             await db2.commit()
                         logger.critical(
                             f"ACCOUNT_FROZEN for sender {sender.slug} — flagged frozen, "
@@ -810,6 +826,30 @@ class QueueWorker:
                         # backlog onto healthy senders. db=None → own committed session.
                         from app.services.failover import failover_cold_backlog
                         await failover_cold_backlog(sender.id)
+                        if item.callback_url:
+                            asyncio.create_task(self._fire_callback(
+                                url=item.callback_url,
+                                queue_id=str(item.id),
+                                status="failed",
+                                sender_slug=sender.slug,
+                                recipient_phone=item.recipient_phone,
+                                error=error_msg,
+                                extra_data=item.extra_data,
+                            ))
+                        await self._fail_item(db, item, error_msg)
+                        return
+
+                    elif error_code == "PRIVACY_RESTRICTED":
+                        # Phase 10 (D-03): recipient-level privacy error
+                        # (UserNotMutualContactError). The ACCOUNT is healthy — this
+                        # is the recipient's privacy setting, NOT a restriction on us.
+                        # Log it in the separate 'recipient_privacy' category on the
+                        # EXISTING send-loop session (db) so restriction analytics can
+                        # filter it out, and NEVER touch senders.restriction_status.
+                        await record_restriction_event(
+                            sender.id, "privacy_restricted", "queue_error",
+                            None, error_msg, category="recipient_privacy", db=db,
+                        )
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
