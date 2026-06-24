@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 11-03 (Prompt assembly and runtime)
-last_updated: "2026-06-24T14:55:00.000Z"
+stopped_at: Completed 11-04 pre-UAT tasks (frontend forms + handoff). Awaiting human UAT (Task 4).
+last_updated: "2026-06-24T15:30:00.000Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 13
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 11
-Plan: 03 complete → 04 next
-Status: In progress
+Plan: 04 pre-UAT complete → UAT pending
+Status: In progress (checkpoint:human-verify)
 Last activity: 2026-06-24
 
-Progress: [███░░░░░░░] 50% (3/6 plans done in phase 11)
+Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — plan 04 partial, UAT pending)
 
 ## Performance Metrics
 
@@ -123,6 +123,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 11]: Migration slot 031 already taken by 031_sre_flood_wait_category.sql; Phase 11 uses 032_phase11_field_split.sql
 - [Phase 11 P02]: D-01 tone_preset replaces voice_baseline/tone/tone_of_voice; D-11 response_speed/response_delay_seconds added; D-04/D-12/D-14 dialogue_flow/arguments_facts/campaign_rules on campaigns; D-13 success_criteria merged into lead_trigger_hint before DROP; migration 032 idempotent; tests 651 passing (up from 456 pre-Phase-11)
 - [Phase 11 P03]: D-03 _TONE_LINES single-source tone; D-06 dialogue_flow numbered stages replace static _PROMPT_DIALOGUE_GOAL; D-12 _PROMPT_FACTS_GUARD anti-hallucination in arguments_facts block; D-14 _dedup_rules(agent_rules, campaign_rules) exact-duplicate suppression; D-11/RT-01 response_speed instant/human/slow/manual → listener debounce delay branch; PMT-01..07 + RT-01 all GREEN (660 passing)
+- [Phase 11 P04]: openapi.json+types regenerated via export-handoff (rebuilt API container first — was stale pre-P11); frontend Agent form: tone_preset select (4 opts) replaces voice_baseline+sliders+tone_of_voice (all deleted); response_speed select + conditional delay input; Campaign wizard: StageEditor (add/remove/up-down, no dnd lib, aria-labels, empty-state copy), arguments_facts+campaign_rules textareas, audience_hints→Кому пишем relabel, success_criteria field removed→merged into leadHint (Сигнал Лид), autoFillMut→lead_trigger_hint; EditCampaignModal updated with InlineStageEditor+new fields; tsc clean; awaiting human UAT (Task 4)
 
 ### Roadmap Evolution
 
