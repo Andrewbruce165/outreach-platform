@@ -1519,7 +1519,7 @@ export interface components {
     schemas: {
         /**
          * AgentCreate
-         * @description POST /api/v1/agents body (D-02 + UI-SPEC §5.8 v2).
+         * @description POST /api/v1/agents body (D-02 + Phase 11 field split).
          */
         AgentCreate: {
             /** Name */
@@ -1528,8 +1528,6 @@ export interface components {
             system_prompt?: string | null;
             /** Rules */
             rules?: string | null;
-            /** Tone Of Voice */
-            tone_of_voice?: string | null;
             /** Faq */
             faq?: components["schemas"]["FaqItem"][];
             /** Company Info */
@@ -1542,9 +1540,12 @@ export interface components {
             company_knowledge?: string | null;
             /** Knowledge Base */
             knowledge_base?: string | null;
-            /** Voice Baseline */
-            voice_baseline?: ("Professional" | "Friendly" | "Playful") | null;
-            tone?: components["schemas"]["ToneSpec"] | null;
+            /** Tone Preset */
+            tone_preset?: ("Friendly" | "Professional" | "Direct" | "Casual") | null;
+            /** Response Speed */
+            response_speed?: ("instant" | "human" | "slow" | "manual") | null;
+            /** Response Delay Seconds */
+            response_delay_seconds?: number | null;
             /** Max Message Length */
             max_message_length?: number | null;
             /** Mirror Language */
@@ -1583,8 +1584,6 @@ export interface components {
             system_prompt?: string | null;
             /** Rules */
             rules?: string | null;
-            /** Tone Of Voice */
-            tone_of_voice?: string | null;
             /**
              * Faq
              * @default []
@@ -1600,12 +1599,12 @@ export interface components {
             company_knowledge?: string | null;
             /** Knowledge Base */
             knowledge_base?: string | null;
-            /** Voice Baseline */
-            voice_baseline?: string | null;
-            /** Tone */
-            tone?: {
-                [key: string]: unknown;
-            } | null;
+            /** Tone Preset */
+            tone_preset?: string | null;
+            /** Response Speed */
+            response_speed?: string | null;
+            /** Response Delay Seconds */
+            response_delay_seconds?: number | null;
             /** Max Message Length */
             max_message_length?: number | null;
             /** Mirror Language */
@@ -1649,8 +1648,6 @@ export interface components {
             system_prompt?: string | null;
             /** Rules */
             rules?: string | null;
-            /** Tone Of Voice */
-            tone_of_voice?: string | null;
             /** Faq */
             faq?: components["schemas"]["FaqItem"][] | null;
             /** Company Info */
@@ -1663,9 +1660,12 @@ export interface components {
             company_knowledge?: string | null;
             /** Knowledge Base */
             knowledge_base?: string | null;
-            /** Voice Baseline */
-            voice_baseline?: ("Professional" | "Friendly" | "Playful") | null;
-            tone?: components["schemas"]["ToneSpec"] | null;
+            /** Tone Preset */
+            tone_preset?: ("Friendly" | "Professional" | "Direct" | "Casual") | null;
+            /** Response Speed */
+            response_speed?: ("instant" | "human" | "slow" | "manual") | null;
+            /** Response Delay Seconds */
+            response_delay_seconds?: number | null;
             /** Max Message Length */
             max_message_length?: number | null;
             /** Mirror Language */
@@ -1872,8 +1872,6 @@ export interface components {
             audience_hints?: string | null;
             /** Primary Goal */
             primary_goal?: ("book_meeting" | "qualify" | "click" | "engage") | null;
-            /** Success Criteria */
-            success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
             /**
@@ -1886,6 +1884,12 @@ export interface components {
              * @default 30
              */
             recontact_min_age_days: number;
+            /** Dialogue Flow */
+            dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
+            /** Arguments Facts */
+            arguments_facts?: string | null;
+            /** Campaign Rules */
+            campaign_rules?: string | null;
         };
         /** CampaignListResponse */
         CampaignListResponse: {
@@ -1953,8 +1957,6 @@ export interface components {
             audience_hints?: string | null;
             /** Primary Goal */
             primary_goal?: string | null;
-            /** Success Criteria */
-            success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
             /**
@@ -1967,6 +1969,14 @@ export interface components {
              * @default 30
              */
             recontact_min_age_days: number;
+            /** Dialogue Flow */
+            dialogue_flow?: {
+                [key: string]: unknown;
+            }[];
+            /** Arguments Facts */
+            arguments_facts?: string | null;
+            /** Campaign Rules */
+            campaign_rules?: string | null;
             /** Pause Reason */
             pause_reason?: string | null;
             /** Paused At */
@@ -2090,14 +2100,18 @@ export interface components {
             audience_hints?: string | null;
             /** Primary Goal */
             primary_goal?: ("book_meeting" | "qualify" | "click" | "engage") | null;
-            /** Success Criteria */
-            success_criteria?: string | null;
             /** Webhook Url */
             webhook_url?: string | null;
             /** Allow Recontact */
             allow_recontact?: boolean | null;
             /** Recontact Min Age Days */
             recontact_min_age_days?: number | null;
+            /** Dialogue Flow */
+            dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
+            /** Arguments Facts */
+            arguments_facts?: string | null;
+            /** Campaign Rules */
+            campaign_rules?: string | null;
         };
         /** ContactImportPreviewResponse */
         ContactImportPreviewResponse: {
@@ -2306,6 +2320,20 @@ export interface components {
         DeleteContactBatchRequest: {
             /** Contact Ids */
             contact_ids: string[];
+        };
+        /**
+         * DialogueStage
+         * @description One stage in the campaign's dialogue_flow sequence.
+         *
+         *     title is optional (label for the UI); instruction is the stage directive
+         *     injected into the prompt. Validated: title≤120, instruction 1..2000 chars.
+         *     Security: conlist max_length=7 on the containing field guards array-size abuse (T2).
+         */
+        DialogueStage: {
+            /** Title */
+            title?: string | null;
+            /** Instruction */
+            instruction: string;
         };
         /** EnqueueResponse */
         EnqueueResponse: {
@@ -2974,27 +3002,6 @@ export interface components {
             client_timestamp?: string | null;
         };
         /**
-         * ToneSpec
-         * @description Bi-polar tone settings −50..+50 (UI-SPEC §5.8 Voice tab ToneSlider).
-         */
-        ToneSpec: {
-            /**
-             * Formal
-             * @default 0
-             */
-            formal: number;
-            /**
-             * Warm
-             * @default 0
-             */
-            warm: number;
-            /**
-             * Brief
-             * @default 0
-             */
-            brief: number;
-        };
-        /**
          * ToolParamSpec
          * @description Single param spec inside a custom tool's parameters[] array.
          *
@@ -3145,6 +3152,8 @@ export interface components {
         /**
          * _AutoFillResponse
          * @description Canned defaults so the UI button works without an LLM call (v1 stub).
+         *
+         *     Phase 11 D-13: success_criteria removed; auto-fill stub returns lead_trigger_hint instead.
          */
         _AutoFillResponse: {
             /** Name */
@@ -3153,8 +3162,8 @@ export interface components {
             audience_hints: string;
             /** Primary Goal */
             primary_goal: string;
-            /** Success Criteria */
-            success_criteria: string;
+            /** Lead Trigger Hint */
+            lead_trigger_hint: string;
             /** Tools */
             tools: unknown[];
         };

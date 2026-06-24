@@ -18,15 +18,33 @@ export const Route = createFileRoute("/_authenticated/agents")({
   component: AgentsPage,
 });
 
-const VOICE_OPTIONS = ["Professional", "Friendly", "Playful"] as const;
+// Phase 11 D-01: single tone source (replaces voice_baseline + tone sliders + tone_of_voice)
+const TONE_OPTIONS = ["Friendly", "Professional", "Direct", "Casual"] as const;
+type TonePreset = (typeof TONE_OPTIONS)[number];
+
+// Phase 11 D-11: response speed presets
+const SPEED_OPTIONS = [
+  { value: "instant", label: "Мгновенно" },
+  { value: "human", label: "Как человек" },
+  { value: "slow", label: "Медленно" },
+  { value: "manual", label: "Вручную" },
+] as const;
+type ResponseSpeed = (typeof SPEED_OPTIONS)[number]["value"];
 
 const agentSchema = z.object({
   name: z.string().min(1, "Required").max(100),
   who_is_agent: z.string().optional().or(z.literal("")),
   company_info: z.string().optional().or(z.literal("")),
   product_info: z.string().optional().or(z.literal("")),
-  voice_baseline: z.enum(VOICE_OPTIONS).optional().or(z.literal("")),
+  tone_preset: z.enum(TONE_OPTIONS).optional().or(z.literal("")),
   rules: z.string().optional().or(z.literal("")),
+  response_speed: z
+    .enum(["instant", "human", "slow", "manual"])
+    .optional()
+    .or(z.literal("")),
+  response_delay_seconds: z
+    .union([z.coerce.number().int().min(0), z.literal("")])
+    .optional(),
   max_message_length: z
     .union([z.coerce.number().int().min(1).max(4096), z.literal("")])
     .optional(),
@@ -39,7 +57,7 @@ type FormValues = z.infer<typeof agentSchema>;
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   if (e instanceof Error) return e.message;
-  return "Something went wrong";
+  return "Что-то пошло не так. Попробуйте ещё раз.";
 }
 
 function AgentsPage() {
@@ -94,7 +112,7 @@ function AgentsPage() {
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
                   <th style={th}>Name</th>
-                  <th style={th}>Voice</th>
+                  <th style={th}>Тон</th>
                   <th style={th}>Campaigns</th>
                   <th style={th}>Updated</th>
                   <th style={{ ...th, width: 1 }}>Actions</th>
@@ -120,7 +138,7 @@ function AgentsPage() {
                       </button>
                     </td>
                     <td style={{ ...td, color: "var(--text-soft)" }}>
-                      {a.voice_baseline || "—"}
+                      {a.tone_preset || "—"}
                     </td>
                     <td style={td}>{a.campaign_count ?? 0}</td>
                     <td style={{ ...td, color: "var(--text-soft)" }}>
@@ -138,7 +156,7 @@ function AgentsPage() {
                         <button
                           className="btn btn--ghost btn--sm"
                           onClick={() => {
-                            if (confirm(`Delete agent "${a.name}"?`)) deleteMut.mutate(a.id);
+                            if (confirm(`Удалить агента "${a.name}"? Это действие необратимо.`)) deleteMut.mutate(a.id);
                           }}
                         >
                           Delete
@@ -211,6 +229,7 @@ function AgentEditor({
 
   const {
     register,
+    watch,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
@@ -220,14 +239,17 @@ function AgentEditor({
       who_is_agent: agent?.who_is_agent ?? "",
       company_info: agent?.company_info ?? "",
       product_info: agent?.product_info ?? "",
-      voice_baseline:
-        (agent?.voice_baseline as FormValues["voice_baseline"]) ?? "",
+      tone_preset: (agent?.tone_preset as FormValues["tone_preset"]) ?? "",
       rules: agent?.rules ?? "",
+      response_speed: (agent?.response_speed as FormValues["response_speed"]) ?? "human",
+      response_delay_seconds: (agent?.response_delay_seconds ?? "") as FormValues["response_delay_seconds"],
       max_message_length: (agent?.max_message_length ?? "") as FormValues["max_message_length"],
       mirror_language: agent?.mirror_language ?? true,
       allow_emoji: agent?.allow_emoji ?? true,
     },
   });
+
+  const responseSpeed = watch("response_speed");
 
   const onSubmit = handleSubmit(async (values) => {
     setSubmitError(null);
@@ -236,10 +258,17 @@ function AgentEditor({
       who_is_agent: values.who_is_agent || null,
       company_info: values.company_info || null,
       product_info: values.product_info || null,
-      voice_baseline: values.voice_baseline
-        ? (values.voice_baseline as "Professional" | "Friendly" | "Playful")
+      tone_preset: values.tone_preset
+        ? (values.tone_preset as TonePreset)
         : null,
       rules: values.rules || null,
+      response_speed: (values.response_speed as ResponseSpeed) || "human",
+      response_delay_seconds:
+        values.response_speed === "manual" &&
+        values.response_delay_seconds !== "" &&
+        values.response_delay_seconds != null
+          ? Number(values.response_delay_seconds)
+          : null,
       max_message_length:
         values.max_message_length === "" || values.max_message_length == null
           ? null
@@ -282,7 +311,8 @@ function AgentEditor({
         </header>
         <form onSubmit={onSubmit} style={{ display: "contents" }}>
           <div className="modal__body" style={{ display: "grid", gap: 14 }}>
-            <Field label="Name *" error={errors.name?.message}>
+
+            <Field label="Название *" error={errors.name?.message}>
               <input
                 className="input"
                 placeholder="e.g. Sales rep — EU SMB"
@@ -290,45 +320,50 @@ function AgentEditor({
               />
             </Field>
 
-            <Field label="Who is the agent?">
+            {/* Идентичность — КТО: имя, роль, характер, манера речи. Без задачи/цели. */}
+            <Field label="Идентичность">
               <textarea
                 className="textarea"
                 rows={2}
-                placeholder="Short persona: role, company, what they do."
+                placeholder="Имя, роль, характер, манера речи."
                 {...register("who_is_agent")}
               />
             </Field>
 
-            <Field label="Company info">
+            <Field label="Информация о компании">
               <textarea
                 className="textarea"
                 rows={3}
-                placeholder="What does your company do, who do you serve?"
+                placeholder="Чем занимается компания, кому помогает?"
                 {...register("company_info")}
               />
             </Field>
 
-            <Field label="Product info">
+            <Field label="Что продаёт">
               <textarea
                 className="textarea"
                 rows={3}
-                placeholder="What you're pitching, key value props."
+                placeholder="Продукт / услуга, ключевые ценности."
                 {...register("product_info")}
               />
             </Field>
 
+            {/* Phase 11 D-01: tone_preset replaces voice_baseline + tone sliders + tone_of_voice */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              <Field label="Voice baseline">
-                <select className="select" {...register("voice_baseline")}>
-                  <option value="">— Select —</option>
-                  {VOICE_OPTIONS.map((v) => (
+              <Field label="Тон">
+                <select className="select" {...register("tone_preset")}>
+                  <option value="">— Выберите —</option>
+                  {TONE_OPTIONS.map((v) => (
                     <option key={v} value={v}>
                       {v}
                     </option>
                   ))}
                 </select>
+                <span className="field__hint">
+                  Единый тон агента. Не дублируйте тон в жёстких правилах.
+                </span>
               </Field>
-              <Field label="Max message length">
+              <Field label="Макс. длина сообщения">
                 <input
                   className="input"
                   type="number"
@@ -340,11 +375,38 @@ function AgentEditor({
               </Field>
             </div>
 
-            <Field label="Rules / guardrails">
+            {/* Phase 11 D-11: response_speed control */}
+            <Field label="Скорость ответа">
+              <select className="select" {...register("response_speed")}>
+                {SPEED_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {responseSpeed === "manual" && (
+              <Field label="Задержка, сек">
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  placeholder="e.g. 120"
+                  {...register("response_delay_seconds")}
+                />
+                <span className="field__hint">
+                  Фиксированная задержка перед ответом ИИ, в секундах.
+                </span>
+              </Field>
+            )}
+
+            {/* Жёсткие правила — только запреты и стоп-темы, без тона (D-03) */}
+            <Field label="Жёсткие правила">
               <textarea
                 className="textarea"
                 rows={3}
-                placeholder="Things the agent must never say or do."
+                placeholder="Только запреты и стоп-темы."
                 {...register("rules")}
               />
             </Field>
@@ -352,11 +414,11 @@ function AgentEditor({
             <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
               <label style={cbStyle}>
                 <input type="checkbox" {...register("mirror_language")} />
-                Mirror contact's language
+                Зеркалить язык контакта
               </label>
               <label style={cbStyle}>
                 <input type="checkbox" {...register("allow_emoji")} />
-                Allow emoji
+                Разрешить эмодзи
               </label>
             </div>
 
@@ -384,10 +446,10 @@ function AgentEditor({
             }}
           >
             <button type="button" className="btn btn--ghost" onClick={onClose}>
-              Cancel
+              Отмена
             </button>
             <button type="submit" className="btn btn--primary" disabled={isSubmitting}>
-              {isSubmitting ? "Saving…" : isNew ? "Create agent" : "Save changes"}
+              {isSubmitting ? "Сохранение…" : isNew ? "Создать агента" : "Сохранить агента"}
             </button>
           </footer>
         </form>
