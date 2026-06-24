@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Phase 10 complete (4/4) — ready to discuss Phase 11
-last_updated: 2026-06-24T13:47:40.731Z
-last_activity: 2026-06-24 -- Phase 11 execution started
+status: planning
+stopped_at: Completed 11-01 (Wave-0 test scaffold)
+last_updated: "2026-06-24T13:56:50.705Z"
+last_activity: 2026-06-24
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 42
-  completed_plans: 38
-  percent: 85
+  completed_plans: 39
+  percent: 17
 ---
 
 # Project State
@@ -76,6 +76,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 10 P02 | 25min | 3 tasks | 6 files |
 | Phase 10 P03 | 5min | 3 tasks | 3 files |
 | Phase 10 P04 | 12min | 1 tasks | 5 files |
+| Phase 11 P01 | 16min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -117,6 +118,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 10]: 10-02: durable append-only sender_restriction_events (HLTH-01/02) via dual-mode record_restriction_event helper; 5 account write-points + recipient_privacy in-TX; D-01 forward-shift gate in the helper; OQ#1 flood_wait informational, OQ#2 source=antispam_signal, OQ#3 PRIVACY_RESTRICTED mandatory; B-1 old_until read intra-transaction
 - [Phase 10]: 10-03: pool_health one-pass aggregate (COUNT FILTER + MIN FILTER) + per-sender restriction enrichment on CampaignResponse (POOLV-01/02); GET /senders/{slug}/restriction-events workspace-scoped newest-first (HLTH-03); API presentation-free, badge derived on frontend; earliest_resume_at=MIN(restricted_until) (OQ#4)
 - [Phase 10]: 10-04: 3-state pool badge derived on frontend from numeric pool_health (green/yellow/red); OQ#4 wording 'до проверки в T'; per-sender restriction chips on attached pool (POOLV-02); account-page restriction-event mini-list off HLTH-03 endpoint in a slug-keyed modal (POOLV-04). openapi/types regenerated via export-handoff (cross-repo: openapi→backend, components→sibling). Task 2 human-UAT PENDING.
+- [Phase 11]: Migration slot 031 already taken by 031_sre_flood_wait_category.sql; Phase 11 uses 032_phase11_field_split.sql
 
 ### Roadmap Evolution
 
@@ -173,6 +175,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-24T13:19:21.034Z
-Stopped at: Completed 10-04 (Phase 10 done, 4/4); POOLV-03/04 human-UAT PENDING (closed on trust, awaiting frontend deploy)
+Last session: 2026-06-24T13:56:50.697Z
+Stopped at: Completed 11-01 (Wave-0 test scaffold)
 Resume file: None

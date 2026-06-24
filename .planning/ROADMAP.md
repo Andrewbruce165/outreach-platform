@@ -273,12 +273,12 @@ Plans:
 **Goal:** Убрать перегруз и дубли в настройке так, чтобы GPT-5 mini перестал «плыть» и вёл диалог предсказуемо. Развести два слоя — **Агент = КТО** (стабильная личность, переиспользуема) и **Кампания = ЧТО** (задача, ход разговора, факты, цель); правило «одно поле = одна мысль, ноль пересечений». Перестроить формы Агента и Кампании, добавить новые поля (скорость ответа с ручным вводом; ход разговора 3–5 стадий; аргументы и факты; используемые базы знаний), слить/переименовать дублирующиеся (Success criteria → Сигнал «Лид», тон только в пресете, Audience hints → «Кому пишем»), и собрать итоговый системный промпт с фиксированным порядком блоков и ровно одним источником на блок. Brief auto-fill заполняет поля, но сырой текст брифа в промпт не уходит. Включает перестройку UI визарда. Полный бриф: `BRIEF.md` в директории фазы.
 **Requirements**: FLD-01..06, MIG-01..03, PMT-01..07, RT-01, UI-FLD-01..03 (derived this phase — see 11-RESEARCH.md §Phase Requirements; tracked via decisions D-01..D-15)
 **Depends on:** Phase 10
-**Plans:** 4 plans (waves 1→4)
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 11-01-test-scaffold-PLAN.md — Wave-0 RED tests + conftest migration-list fix (028/029/030/031) [Wave 1, no deps]
+- [x] 11-01-test-scaffold-PLAN.md — Wave-0 RED tests + conftest migration-list fix (028/029/030/031) [Wave 1, no deps]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
