@@ -102,11 +102,21 @@ async def _record(
     the event row. NEVER UPDATEs senders — restriction-status changes belong to
     the call-sites; this helper only appends the audit row.
     """
+    # WR-03 (Phase 10): the senders FK is ON DELETE CASCADE and reconcile/queue
+    # ticks run on stale sender_ids read from a prior batch SELECT. If the sender
+    # was deleted between the restriction event and this write, `.one()` would
+    # raise NoResultFound and — in the same-TX call-sites — abort the caller's
+    # legitimate transaction (rolling back the restriction_status UPDATE / queue
+    # resume the audit row documents). An audit write must never roll back the
+    # state change it records: use .one_or_none() and skip the write if gone.
     s = (await db.execute(text("""
         SELECT workspace_id, proxy, rate_per_min, rate_per_hour, rate_per_day,
                restricted_until
         FROM senders WHERE id = :sid
-    """), {"sid": str(sender_id)})).one()
+    """), {"sid": str(sender_id)})).one_or_none()
+    if s is None:
+        logger.warning("restriction event for missing sender %s skipped", sender_id)
+        return
 
     # D-01 gate: an 'extension' event is recorded ONLY on a genuine forward shift
     # of the release date (> old + 1 minute). A still-limited reconcile tick that
