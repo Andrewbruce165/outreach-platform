@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Send,
   MessageCircle,
@@ -13,7 +13,7 @@ import {
   RefreshCw,
   AlertTriangle,
   Check,
-  
+  X,
   Rocket,
   ChevronDown,
   ArrowRight,
