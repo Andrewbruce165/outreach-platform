@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Phase 09 complete (2/2) — ready to discuss Phase 10
-last_updated: 2026-06-24T09:56:14.547Z
-last_activity: 2026-06-24 -- Phase 09 execution started
+status: planning
+stopped_at: Phase 10 context gathered
+last_updated: "2026-06-24T11:01:22.426Z"
+last_activity: 2026-06-24
 progress:
-  total_phases: 12
-  completed_phases: 9
+  total_phases: 13
+  completed_phases: 10
   total_plans: 34
   completed_plans: 34
-  percent: 75
+  percent: 77
 ---
 
 # Project State
@@ -114,6 +114,7 @@ See full log: PROJECT.md → Key Decisions
 
 - Phase 05.1 inserted after Phase 5: Lovable UI v1 — auth + onboarding + TG accounts + contacts + agents + campaigns + inbox + analytics + settings (URGENT — closes Core Value + 7 HUMAN-UAT items from Phase 5)
 - Phases 7–10 added (2026-06-22): post-v1 block "Sender Pool Resilience & Failover" — design in `.planning/proposals/sender-pool-resilience.md`. P7 Unified Freeze Policy, P8 Pool Management & Even Distribution, P9 Cold-Contact Failover, P10 Pool Visibility (optional). Triggered by campaign b7cc7d06 antispam-stall incident (quick 260622-j52).
+- Phase 11 added (2026-06-24): Agent/Campaign Field Split & Prompt Assembly — развести слои Агент(КТО)/Кампания(ЧТО), убрать дубли в системном промпте (один источник на блок), новые поля (скорость ответа, ход разговора, аргументы и факты, базы знаний) + перестройка UI визарда. Полный бриф: `.planning/phases/11-agent-campaign-field-split-and-prompt-assembly/BRIEF.md`.
 
 ### Pending Todos
 
@@ -164,6 +165,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-24T07:54:30.552Z
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-cold-contact-failover/09-CONTEXT.md
+Last session: 2026-06-24T11:01:22.361Z
+Stopped at: Phase 10 context gathered
+Resume file: .planning/phases/10-pool-visibility/10-CONTEXT.md
