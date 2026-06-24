@@ -713,15 +713,21 @@ class QueueWorker:
                                     UPDATE message_queue SET scheduled_at = :reschedule
                                     WHERE sender_id = :sid AND status = 'pending'
                                 """), {"reschedule": reschedule_at, "sid": str(sender.id)})
-                                # Phase 10 (HLTH-01 / OQ#1): informational flood_wait event.
-                                # This path only PAUSES the queue — it does NOT change
-                                # senders.restriction_status, so pool_health is unaffected.
-                                await record_restriction_event(
-                                    sender.id, "flood_wait", "queue_error",
-                                    reschedule_at, error_msg, db=db2,
-                                )
                                 await db2.commit()
 
+                        # WR-02 (Phase 10): a FloodWait is Telegram's normal rate-limit
+                        # backoff, NOT an account restriction — record it under its own
+                        # category='flood_wait' (migration 031) so the
+                        # WHERE category='restriction' analytics filter excludes it and
+                        # no activity_slice scan runs for a non-restriction event.
+                        # WR-04 (Phase 10): file the event in the SAME session/transaction
+                        # (db) as the single-item reschedule it describes, committed once
+                        # below — so the audit row and the queue-item state can never
+                        # diverge on a crash between two separate commits.
+                        await record_restriction_event(
+                            sender.id, "flood_wait", "queue_error",
+                            reschedule_at, error_msg, category="flood_wait", db=db,
+                        )
                         await db.execute(
                             update(MessageQueue)
                             .where(MessageQueue.id == item.id)
