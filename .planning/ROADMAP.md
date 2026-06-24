@@ -276,9 +276,20 @@ Plans:
 **Plans:** 4 plans (waves 1→4)
 
 Plans:
+**Wave 1**
+
 - [ ] 11-01-test-scaffold-PLAN.md — Wave-0 RED tests + conftest migration-list fix (028/029/030/031) [Wave 1, no deps]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 11-02-migration-schema-and-crud-PLAN.md — migration 031 (tone_preset/response_speed/response_delay_seconds/dialogue_flow/arguments_facts/campaign_rules; backfill voice_baseline→tone_preset + success_criteria→lead_trigger_hint; drop legacy) + ORM/schemas/routers [Wave 2, depends_on: 11-01]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 11-03-prompt-assembly-and-runtime-PLAN.md — build_system_prompt §7 rewrite (single-source tone, dialogue_flow, facts guard, rules dedup) + context SELECTs + response_speed wire-up in listener [Wave 3, depends_on: 11-02]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 11-04-frontend-forms-and-handoff-PLAN.md — openapi regen + Agent/Campaign wizard rebuild (tone select, response-speed, stage editor) + human UAT (cross-repo) [Wave 4, depends_on: 11-02, 11-03]
 
 ---
