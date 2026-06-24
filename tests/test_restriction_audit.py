@@ -419,6 +419,113 @@ async def test_recipient_privacy_separate_category(
     assert restriction_rows == []
 
 
+# ─── CR-01 (D-01 call-site regression) ────────────────────────────────────────
+
+async def _run_reconcile_tick(monkeypatch, slug, spambot_result):
+    """Drive listener._restriction_reconcile_tick() once against the real test DB.
+
+    The tick opens its OWN sessions via AsyncSessionLocal (same DB as
+    async_db_session), so seed rows must be COMMITTED before calling. We mock
+    only telegram_service.check_spambot (no live Telegram) and register a fake
+    connected client so the sender is actually re-checked this tick.
+    """
+    from app.services import listener as listener_mod
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setattr(
+        listener_mod.telegram_service,
+        "check_spambot",
+        AsyncMock(return_value=spambot_result),
+    )
+    listener = listener_mod.TelegramListener()
+    listener.clients[slug] = MagicMock()  # connected → tick re-checks this sender
+    return await listener._restriction_reconcile_tick()
+
+
+async def test_reconcile_callsite_unknown_no_extension_across_ticks(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    """CR-01 / D-01 (call-site): a still-limited sender returning verdict='unknown'
+    (a mechanical recheck bump, NO SpamBot-quoted date) must produce NO 'extension'
+    event across repeated reconcile ticks — this is the 37/day noise the gate exists
+    to suppress. Exercises the LISTENER CALL-SITE (next_at > old_until recheck bump),
+    not just the helper at exact restricted_until equality.
+    """
+    _camp, senders = await test_running_campaign_factory(sender_count=1)
+    sender = senders[0]
+
+    # Restricted with restricted_until already in the past so the batch SELECT
+    # (restricted_until <= NOW()) picks it up for recheck.
+    past_until = (await async_db_session.execute(
+        text("SELECT NOW() - INTERVAL '5 minutes'")
+    )).scalar_one()
+    await _freeze_sender(async_db_session, sender.id, "spam_limited", until=past_until)
+
+    # Three consecutive ticks, each returning 'unknown' (no limit_until quote).
+    for _ in range(3):
+        await _run_reconcile_tick(
+            monkeypatch, sender.slug, {"status": "unknown"}
+        )
+
+    rows = await _event_rows(async_db_session, sender.id, event_type="extension")
+    assert rows == [], (
+        "verdict='unknown' recheck bumps must NOT emit extension events "
+        f"(37/day noise leaked): {rows}"
+    )
+
+
+async def test_reconcile_callsite_limited_no_quote_no_extension(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    """CR-01 / D-01 (call-site): verdict='limited' WITHOUT a parsed concrete date
+    (no limit_until) is still a mechanical recheck, not a state change — NO
+    extension event, even though next_at (recheck horizon) > old_until."""
+    _camp, senders = await test_running_campaign_factory(sender_count=1)
+    sender = senders[0]
+
+    past_until = (await async_db_session.execute(
+        text("SELECT NOW() - INTERVAL '5 minutes'")
+    )).scalar_one()
+    await _freeze_sender(async_db_session, sender.id, "spam_limited", until=past_until)
+
+    await _run_reconcile_tick(monkeypatch, sender.slug, {"status": "limited"})
+
+    rows = await _event_rows(async_db_session, sender.id, event_type="extension")
+    assert rows == [], (
+        "limited-without-a-parsed-quote is a recheck, not an extension: "
+        f"{rows}"
+    )
+
+
+async def test_reconcile_callsite_quoted_date_writes_one_extension(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    """CR-01 / D-01 (call-site): when SpamBot quotes a genuinely NEW, concrete
+    future release date materially later than the recorded restricted_until,
+    exactly ONE extension event is written (the legitimate state-change path)."""
+    from datetime import datetime, timedelta, timezone
+
+    _camp, senders = await test_running_campaign_factory(sender_count=1)
+    sender = senders[0]
+
+    past_until = (await async_db_session.execute(
+        text("SELECT NOW() - INTERVAL '5 minutes'")
+    )).scalar_one()
+    await _freeze_sender(async_db_session, sender.id, "spam_limited", until=past_until)
+
+    # SpamBot quotes a release 2 days out → genuine forward shift.
+    release = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0)
+    await _run_reconcile_tick(
+        monkeypatch, sender.slug,
+        {"status": "limited", "limit_until": release.isoformat()},
+    )
+
+    rows = await _event_rows(async_db_session, sender.id, event_type="extension")
+    assert len(rows) == 1, (
+        f"a SpamBot-quoted forward shift must write exactly one extension event: {rows}"
+    )
+
+
 # ─── HLTH-03 ──────────────────────────────────────────────────────────────────
 
 async def test_history_endpoint(

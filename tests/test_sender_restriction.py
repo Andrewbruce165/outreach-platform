@@ -101,6 +101,12 @@ class _FakeResult:
     def one(self):
         return self._rows[0]
 
+    def one_or_none(self):
+        # WR-03 (Phase 10): record_restriction_event now uses .one_or_none() so a
+        # cascade-deleted sender never aborts the caller's transaction. Mirror
+        # .one() here but tolerate an empty fake row set (returns None).
+        return self._rows[0] if self._rows else None
+
 
 # Phase 10: the restriction-audit helper (record_restriction_event) selects the
 # sender row (workspace_id, proxy, rate_*, restricted_until) then INSERTs an event.
