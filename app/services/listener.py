@@ -934,21 +934,15 @@ class TelegramListener:
 
                 # 2. Flag the sender spam_limited. The '<> frozen' guard preserves
                 #    frozen-precedence: a soft signal must not downgrade a hard freeze.
-                #    WR-01 (Phase 10): RETURNING id tells us whether the UPDATE actually
-                #    transitioned a row. When the sender is already frozen the UPDATE is a
-                #    no-op (0 rows) — we must NOT then write a spam_limited audit event for
-                #    a state-change that never happened (it would show a frozen account
-                #    "becoming spam_limited"). The event write below is gated on this.
-                flagged = (await session.execute(
+                await session.execute(
                     text("""
                         UPDATE senders
                         SET restriction_status = 'spam_limited',
                             restricted_until = :recheck_at
                         WHERE id = :sid AND restriction_status <> 'frozen'
-                        RETURNING id
                     """),
                     {"recheck_at": recheck_at, "sid": str(sender_id)},
-                )).fetchone()
+                )
 
                 # 3. Phase 9 (FAIL-02): the spam_limited flag is now set on this
                 #    session (Pitfall 3 — written BEFORE failover so the candidate
@@ -962,14 +956,10 @@ class TelegramListener:
                 # Phase 10 (HLTH-01 / OQ#2): durable restriction event in the SAME
                 # session as the pause+flag. source='antispam_signal' (free-form, no
                 # CHECK) marks this unsolicited bot warning distinctly from queue_error.
-                # WR-01: only when the sender actually transitioned to spam_limited
-                # (flagged is None when the sender was already frozen — no state change,
-                # so no audit row).
-                if flagged is not None:
-                    await record_restriction_event(
-                        sender_id, "spam_limited", "antispam_signal",
-                        recheck_at, message_text, db=session,
-                    )
+                await record_restriction_event(
+                    sender_id, "spam_limited", "antispam_signal",
+                    recheck_at, message_text, db=session,
+                )
 
                 await session.commit()
 
@@ -1465,20 +1455,35 @@ class TelegramListener:
                 else:
                     # 'limited' or 'unknown' → still restricted. Prefer SpamBot's quoted
                     # release time (recheck just after it); else use the fixed interval.
+                    #
+                    # CR-01 (Phase 10): `next_at` defaults to a MECHANICAL recheck-interval
+                    # bump (now + recheck) which is NOT a real restriction extension — it is
+                    # merely the next time we re-poll SpamBot. Only when SpamBot quotes a
+                    # concrete future release date (`limit_until`, verdict='limited') does
+                    # `next_at` represent a genuine restriction horizon. Track that as
+                    # `quoted_shift` so the D-01 gate fires on the parsed quote, NOT on the
+                    # recheck bump (which would emit the 37/day reconcile noise the gate
+                    # exists to suppress — fired on every still-limited / unknown tick).
                     next_at = next_recheck
+                    quoted_shift = False
                     iso = result.get("limit_until")
                     if verdict == "limited" and iso:
                         try:
                             candidate = datetime.fromisoformat(iso) + timedelta(minutes=5)
                             if candidate > datetime.now(timezone.utc):
                                 next_at = candidate
+                                quoted_shift = True
                         except ValueError:
                             pass
-                    # Phase 10 (D-01 gate): emit an 'extension' event ONLY on a real
-                    # forward shift (> old_until + 1 min). A pure recheck-interval bump
-                    # (no SpamBot-quoted later release) is NOT an extension — suppress it
-                    # so the 37/day reconcile noise never reaches the audit log.
-                    if old_until is None or next_at > old_until + timedelta(minutes=1):
+                    # Phase 10 (D-01 gate): emit an 'extension' event ONLY when SpamBot
+                    # reported a genuinely NEW, concrete future release date (a parsed
+                    # quote) that is materially later (> old_until + 1 min) than the
+                    # previously recorded restricted_until. A verdict='unknown' tick, or
+                    # 'limited' WITHOUT a parsed concrete date, is a mechanical recheck —
+                    # NOT a state change — so NO event is recorded.
+                    if quoted_shift and (
+                        old_until is None or next_at > old_until + timedelta(minutes=1)
+                    ):
                         await record_restriction_event(
                             r[0], "extension", "spambot_reconcile",
                             next_at, result.get("raw_text"), db=db,
