@@ -244,11 +244,11 @@ Plans:
 **Goal:** При фризе sender'а перекинуть его **не-контактированные** pending-задачи (никогда не отправлялись, диалог не начат) на здоровые аккаунты пула через `get_or_assign_sender`; идущие диалоги остаются на своём аккаунте и продолжают отвечать (континуити). Safety: не заваливать один здоровый аккаунт — учитывать rate-headroom, cap батча, логировать перенос. Точный предикат «безопасно-передать» определить на этапе плана.
 **Requirements**: FAIL-01, FAIL-02, FAIL-03, FAIL-04, FAIL-05, FAIL-06, FAIL-07, FAIL-08, FAIL-09 (derived this phase — see 09-RESEARCH.md §Phase Requirements)
 **Depends on:** Phase 8. No migration (failover uses existing columns only — FAIL-09).
-**Plans:** 2 plans (waves 1→2)
+**Plans:** 1/2 plans executed
 
 Plans:
 
-- [ ] 09-01-test-scaffold-PLAN.md — Wave 0 RED test scaffold: tests/test_failover.py (FAIL-01/03..08 stubs, import-inside-body) + conftest test_queue_item_factory with_message flag [Wave 1, no deps]
+- [x] 09-01-test-scaffold-PLAN.md — Wave 0 RED test scaffold: tests/test_failover.py (FAIL-01/03..08 stubs, import-inside-body) + conftest test_queue_item_factory with_message flag [Wave 1, no deps]
 - [ ] 09-02-failover-service-and-call-sites-PLAN.md — NEW app/services/failover.py::failover_cold_backlog (per-row even-spread off frozen sender, _COLD_PENDING_PREDICATE with empty-conv widening, scheduled_at=NOW, FOR UPDATE SKIP LOCKED, COUNT/UUID-only log) + wire 3 freeze call sites (PEER_FLOOD/ACCOUNT_FROZEN/antispam) + FAIL-02 integration tests — FAIL-01..09 [Wave 2, depends_on: 09-01]
 
 ### Phase 10: Pool Visibility & Restriction Audit (optional)
@@ -279,7 +279,7 @@ Plans:
 | 6. Admin Master Bot | 0/2 | Deferred to v2 | - |
 | 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
-| 9. Cold-Contact Failover | 0/2 | Planned (2 plans, waves 1→2) | - |
+| 9. Cold-Contact Failover | 1/2 | In Progress|  |
 | 10. Pool Visibility & Restriction Audit (optional) | 0/? | Not planned | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
