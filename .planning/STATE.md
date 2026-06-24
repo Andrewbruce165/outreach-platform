@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 10-02-event-log-and-write-points-PLAN.md
-last_updated: "2026-06-24T12:25:37.228Z"
+stopped_at: Completed 10-03-pool-health-and-history-endpoint-PLAN.md
+last_updated: "2026-06-24T12:40:55.078Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 13
   completed_phases: 10
-  total_plans: 41
-  completed_plans: 36
+  total_plans: 42
+  completed_plans: 37
   percent: 17
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 10 (pool-visibility) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-24
 
@@ -73,6 +73,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 08-pool-management-and-even-distribution P04 | ~3h | 4 tasks | 7 files |
 | Phase 10 P01 | 20min | 2 tasks | 2 files |
 | Phase 10 P02 | 25min | 3 tasks | 6 files |
+| Phase 10 P03 | 5min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 08-pool-management-and-even-distribution]: Plan 08-03: attach/detach pool endpoints on the existing campaigns router — attach reuses _validate_workspace_owns_senders + _check_sender_lock with the /start 409 SENDER_LOCK_CONFLICT contract (insert→flush→check→rollback), allowed on draft/paused/running (D-01), rebalance_on_attach gated to running (D-08); detach guards MIN_POOL_GUARD (running+last) + DETACH_BLOCKED_PENDING (cold-pending, engaged dialogs excluded via NOT EXISTS conversations, D-05), no auto-reassign (D-06). CampaignSenderAttach gained computed id; pool tests given per-test JWT subs to dodge user_workspaces UNIQUE binding. POOL-01..06b GREEN.
 - [Phase 08-pool-management-and-even-distribution]: Plan 08-04 (POOL-09, cross-repo, human-verify): interactive Senders/Пул panel in sibling aimly-tg-outreach (attachMut/detachMut mirror lifecycleMut + invalidateQueries(['campaign', id]), multiselect/chips add, per-row remove, locked display, human-readable 409s via existing actionError banner; D-10/D-11/D-12). error-codes.ts: SENDER_LOCK_CONFLICT rewritten to array-based detail.conflicts[].campaign_name + new MIN_POOL_GUARD/DETACH_BLOCKED_PENDING. openapi.json + types regenerated via export-handoff (no hand-edit). UAT-driven addition: **GET /api/v1/senders now exposes locked_by_campaign_id/name** so the add-picker disables locked-by-running-campaign senders instead of offering them then 409-ing — **D-02 lock semantics UNCHANGED, only the existing lock is surfaced**. Cross-repo reconcile: panel rebased onto origin/main over 16 concurrent Lovable commits (sibling cfefc62), no Lovable commit dropped. Backend pool tests 8/8 GREEN via test-overlay; sibling tsc clean. Phase 08 complete (4/4).
 - [Phase 10]: 10-02: durable append-only sender_restriction_events (HLTH-01/02) via dual-mode record_restriction_event helper; 5 account write-points + recipient_privacy in-TX; D-01 forward-shift gate in the helper; OQ#1 flood_wait informational, OQ#2 source=antispam_signal, OQ#3 PRIVACY_RESTRICTED mandatory; B-1 old_until read intra-transaction
+- [Phase 10]: 10-03: pool_health one-pass aggregate (COUNT FILTER + MIN FILTER) + per-sender restriction enrichment on CampaignResponse (POOLV-01/02); GET /senders/{slug}/restriction-events workspace-scoped newest-first (HLTH-03); API presentation-free, badge derived on frontend; earliest_resume_at=MIN(restricted_until) (OQ#4)
 
 ### Roadmap Evolution
 
@@ -168,6 +170,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-24T12:25:27.742Z
-Stopped at: Completed 10-02-event-log-and-write-points-PLAN.md
+Last session: 2026-06-24T12:40:47.195Z
+Stopped at: Completed 10-03-pool-health-and-history-endpoint-PLAN.md
 Resume file: None

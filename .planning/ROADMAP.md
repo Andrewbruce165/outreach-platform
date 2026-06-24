@@ -257,13 +257,13 @@ Plans:
 **Goal:** Два связанных направления. (1) **Видимость пула:** в ответе кампании показывать здоровье пула (N активно / K на паузе до T) + бейдж во фронте, чтобы была видна частичная пауза кампании. (2) **Аудит ограничений:** durable append-only event-log всех предупреждений/блокировок аккаунтов (`spam_limited`/`frozen`/`flood_wait`/`cleared`/`banned`), с источником (queue-ошибка / @SpamBot-реконсайл) и привязкой к предшествующей активности sender'а — чтобы реконструировать «что делали → за что получили». Сегодня этих данных негде взять: `message_queue.error_message` затирается при reschedule, `telemetry_events` смену restriction не пишет, логи контейнера живут ~18ч (см. `.planning/notes/account-restriction-audit-gap.md`).
 **Requirements**: HLTH-01, HLTH-02, HLTH-03, POOLV-01, POOLV-02, POOLV-03, POOLV-04 (POOLV-* derived this phase — see 10-RESEARCH.md §Phase Requirements)
 **Depends on:** Phase 8 (пул), Phase 7 (restriction lifecycle — источник событий)
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 
 - [x] 10-01-test-scaffold-PLAN.md — Wave 0 RED test scaffold: tests/test_restriction_audit.py (HLTH-01/02 + D-03 + HLTH-03 stubs) + tests/test_pool_health.py (POOLV-01/02 stubs) [Wave 1, no deps]
 - [x] 10-02-event-log-and-write-points-PLAN.md — migration 030 sender_restriction_events + SenderRestrictionEvent ORM + restriction_audit.py dual-mode helper (event + activity-slice snapshot) + wire 5 write-points (queue PEER_FLOOD/FROZEN/FLOOD_WAIT, listener antispam + reconcile cleared/banned/extension-gated, D-01 forward-shift gate) — HLTH-01/02 [Wave 2, depends_on: 01]
-- [ ] 10-03-pool-health-and-history-endpoint-PLAN.md — PoolHealth/RestrictionEventResponse schemas + pool_health aggregate & per-sender enrichment in _campaign_to_response + GET /senders/{slug}/restriction-events — POOLV-01/02, HLTH-03 [Wave 3, depends_on: 01, 02]
+- [x] 10-03-pool-health-and-history-endpoint-PLAN.md — PoolHealth/RestrictionEventResponse schemas + pool_health aggregate & per-sender enrichment in _campaign_to_response + GET /senders/{slug}/restriction-events — POOLV-01/02, HLTH-03 [Wave 3, depends_on: 01, 02]
 - [ ] 10-04-frontend-pool-badge-and-event-list-PLAN.md — sibling-repo 3-state pool badge + account-page event-list + openapi regen + human UAT — POOLV-03/04 [Wave 4, depends_on: 03]
 
 > **Non-goals (v1 этого блока):** failover **активных** диалогов на другой аккаунт (ломает континуити — ждут свой аккаунт); режим «затихать и на ответах» при мягком лимите (дефолт — продолжаем отвечать); cross-campaign load awareness; real-time алерты по банам (аудит копит данные — алерты строятся поверх позже).
@@ -297,7 +297,7 @@ Plans:
 | 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
-| 10. Pool Visibility & Restriction Audit (optional) | 2/4 | In Progress|  |
+| 10. Pool Visibility & Restriction Audit (optional) | 3/4 | In Progress|  |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
