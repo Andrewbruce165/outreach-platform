@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 11-02 (Migration schema and CRUD)
-last_updated: "2026-06-24T15:10:00.000Z"
+stopped_at: Completed 11-03 (Prompt assembly and runtime)
+last_updated: "2026-06-24T14:55:00.000Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 13
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 11
-Plan: 02 complete → 03 next
+Plan: 03 complete → 04 next
 Status: In progress
 Last activity: 2026-06-24
 
-Progress: [██░░░░░░░░] 17% (2/6 plans done in phase 11)
+Progress: [███░░░░░░░] 50% (3/6 plans done in phase 11)
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Progress: [██░░░░░░░░] 17% (2/6 plans done in phase 11)
 | Phase 10 P04 | 12min | 1 tasks | 5 files |
 | Phase 11 P01 | 16min | 3 tasks | 5 files |
 | Phase 11 P02 | 34min | 3 tasks | 17 files |
+| Phase 11 P03 | 25min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 10]: 10-04: 3-state pool badge derived on frontend from numeric pool_health (green/yellow/red); OQ#4 wording 'до проверки в T'; per-sender restriction chips on attached pool (POOLV-02); account-page restriction-event mini-list off HLTH-03 endpoint in a slug-keyed modal (POOLV-04). openapi/types regenerated via export-handoff (cross-repo: openapi→backend, components→sibling). Task 2 human-UAT PENDING.
 - [Phase 11]: Migration slot 031 already taken by 031_sre_flood_wait_category.sql; Phase 11 uses 032_phase11_field_split.sql
 - [Phase 11 P02]: D-01 tone_preset replaces voice_baseline/tone/tone_of_voice; D-11 response_speed/response_delay_seconds added; D-04/D-12/D-14 dialogue_flow/arguments_facts/campaign_rules on campaigns; D-13 success_criteria merged into lead_trigger_hint before DROP; migration 032 idempotent; tests 651 passing (up from 456 pre-Phase-11)
+- [Phase 11 P03]: D-03 _TONE_LINES single-source tone; D-06 dialogue_flow numbered stages replace static _PROMPT_DIALOGUE_GOAL; D-12 _PROMPT_FACTS_GUARD anti-hallucination in arguments_facts block; D-14 _dedup_rules(agent_rules, campaign_rules) exact-duplicate suppression; D-11/RT-01 response_speed instant/human/slow/manual → listener debounce delay branch; PMT-01..07 + RT-01 all GREEN (660 passing)
 
 ### Roadmap Evolution
 
