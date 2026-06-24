@@ -47,6 +47,8 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 - Proxy pool per-sender
 - Проверка телефонов (checker-аккаунт)
 - Базовый фронт на Lovable: онбординг, inbox, настройка AI, статистика
+- **Pool health**: `GET /campaigns/{id}` → поле `pool_health {active, paused, total, earliest_resume_at}` + каждый `attached_senders[]` несёт `restriction_status` + `restricted_until` (Phase 10)
+- **Restriction audit**: append-only лог `sender_restriction_events` — пишется с 2026-06-24, все события ограничений/снятий с activity-срезом (Phase 10)
 
 ### Чего нет — нужно построить
 
@@ -187,6 +189,33 @@ SELECT c.relname,
 При ручной отправке сообщения через `/conversations/{id}/send` (или любой другой путь по `telegram_id`) Telethon может упасть с `ValueError: Could not find the input entity for PeerUser(user_id=...)`. Это значит entity-cache в SQLite-сессии не содержит `access_hash` для этого peer'а.
 
 Фикс в `TelegramService.send_message_by_telegram_id`: при `ValueError` от `get_input_entity` подгружаем `get_dialogs(limit=200)` — Telethon заполняет access_hash для всех recent dialogs. Дальше повторный `get_input_entity` находит peer. Стоит ~500ms первый раз, далее кеш горячий.
+
+### Restriction Audit (Phase 10, с 2026-06-24)
+
+Таблица `sender_restriction_events` — append-only лог всех ограничений аккаунтов.
+
+```sql
+-- Кто попал на ограничения за последние 7 дней и за что
+SELECT s.slug, e.event_type, e.source, e.restricted_until,
+       e.sends_1h, e.sends_24h, e.created_at
+FROM sender_restriction_events e
+JOIN senders s ON s.id = e.sender_id
+WHERE e.created_at > NOW() - INTERVAL '7 days'
+ORDER BY e.created_at DESC;
+
+-- Сколько сообщений слали до заморозки (activity slice)
+SELECT s.slug, e.event_type, e.sends_1h, e.sends_24h, e.created_at
+FROM sender_restriction_events e
+JOIN senders s ON s.id = e.sender_id
+WHERE e.event_type IN ('frozen', 'spam_limited')
+ORDER BY e.created_at DESC LIMIT 20;
+```
+
+**API:** `GET /senders/{slug}/restriction-events` — workspace-scoped, newest-first, limit 200.
+
+**Поля event_type:** `spam_limited`, `frozen`, `cleared`, `extension`, `recipient_privacy`
+**Поля source:** `queue_error`, `antispam_signal`, `reconcile`, `privacy_check`
+**Важно:** данные только с 2026-06-24 (до этой даты лога нет, бэкфилла не было). Миграции: 030 (таблица), 031 (flood_wait category в CHECK).
 
 ### Семантика checker'а (is_registered)
 
