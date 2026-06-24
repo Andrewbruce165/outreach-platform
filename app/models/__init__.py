@@ -127,6 +127,34 @@ class MessageLog(Base):
     sender = relationship("Sender", back_populates="messages")
 
 
+class SenderRestrictionEvent(Base):
+    """Phase 10 (HLTH-01/02): durable append-only restriction event-log.
+
+    One row per restriction state-change OR genuine forward shift of restricted_until
+    (D-01). Restriction-category rows carry an activity_slice + proxy snapshot computed
+    at write time (D-05). The migration (030) is the DDL source of truth — this model
+    exists for ORM reads in the Wave 3 history endpoint (from_attributes).
+    """
+
+    __tablename__ = "sender_restriction_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    sender_id = Column(UUID(as_uuid=True),
+                       ForeignKey("senders.id", ondelete="CASCADE"),
+                       nullable=False)
+    category = Column(String(20), nullable=False, server_default='restriction')
+    event_type = Column(String(20), nullable=False)
+    source = Column(String(20), nullable=False)
+    restricted_until = Column(DateTime(timezone=True), nullable=True)
+    raw_text = Column(Text, nullable=True)
+    activity_slice = Column(JSONB, nullable=True)
+    proxy = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class ContactCache(Base):
     __tablename__ = "contacts_cache"
 
