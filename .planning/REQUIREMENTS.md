@@ -115,6 +115,18 @@
 - [x] **POOL-08b**: Rebalance never moves sent / processing / engaged-dialog rows; keeps campaign_contact_assignments in sync (D-08)
 - [x] **POOL-09**: Frontend "Senders / Пул" panel — add/remove, locked-sender display, human-readable 409s (D-10/D-11/D-12)
 
+### Sender Pool — Cold-Contact Failover (Phase 9)
+
+- [ ] **FAIL-01**: On freeze, the frozen sender's cold-pending backlog is reassigned to healthy pool senders via per-item least-loaded pick, inline, with zero new worker (D-01/D-09)
+- [ ] **FAIL-02**: Failover is invoked from ALL three freeze paths that pause pending — PEER_FLOOD, ACCOUNT_FROZEN, antispam-signal (D-02/D-07)
+- [ ] **FAIL-03**: A queue row is movable iff `status='pending'` AND `item_type='message'` AND no `sent`/`processing` row for `(campaign_id, recipient_phone)` AND no started dialog — no conversation OR conversation with zero `messages` rows (D-04/D-05/D-06)
+- [ ] **FAIL-04**: Moving a row updates `message_queue.sender_id` + `scheduled_at=NOW()` AND `campaign_contact_assignments.sender_id` in the SAME transaction (D-10)
+- [ ] **FAIL-05**: Failover never moves engaged-dialog rows; engaged dialogs stay on the frozen sender and keep replying (D-04/D-08)
+- [ ] **FAIL-06**: Idempotent and concurrency-safe under the parallel worker (`FOR UPDATE OF mq SKIP LOCKED` + `status='pending'` guard); second call moves 0 (discretion)
+- [ ] **FAIL-07**: When no healthy receiver exists, rows stay paused on the frozen sender; nothing is lost or failed; the existing reconcile loop resumes them; logged "nowhere to move" (D-13)
+- [ ] **FAIL-08**: Failover logs COUNT moved + source sender UUID + receiver sender UUIDs only — never recipient phones/payloads (D-12)
+- [ ] **FAIL-09**: No migration — failover operates on existing columns only (code_context)
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -217,12 +229,22 @@
 | POOL-08 | Phase 8 | Complete |
 | POOL-08b | Phase 8 | Complete |
 | POOL-09 | Phase 8 | Complete |
+| FAIL-01 | Phase 9 | Pending |
+| FAIL-02 | Phase 9 | Pending |
+| FAIL-03 | Phase 9 | Pending |
+| FAIL-04 | Phase 9 | Pending |
+| FAIL-05 | Phase 9 | Pending |
+| FAIL-06 | Phase 9 | Pending |
+| FAIL-07 | Phase 9 | Pending |
+| FAIL-08 | Phase 9 | Pending |
+| FAIL-09 | Phase 9 | Pending |
 
 **Coverage:**
 
 - v1 requirements: 70 total
 - Mapped to phases: 70
 - Unmapped: 0 ✓
+- Post-v1 (Sender Pool Resilience): FRZ-01..05 (Phase 7), POOL-01..09 (Phase 8), FAIL-01..09 (Phase 9) — all mapped
 
 **Deprecated from previous v1 scope** (replaced by new model):
 
