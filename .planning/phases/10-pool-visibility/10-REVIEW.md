@@ -20,7 +20,18 @@ findings:
   warning: 4
   info: 3
   total: 8
-status: issues_found
+status: resolved
+resolved:
+  - CR-01
+  - WR-01
+  - WR-02
+  - WR-03
+  - WR-04
+resolved_at: 2026-06-24
+resolution_note: >-
+  CR-01 + WR-01..04 fixed (see commits 25f68d7 CR-01, 8e32e43 WR-01,
+  e52cd14 WR-03, 1b4d4c2 WR-02/WR-04, f2340bd tests). IN-01..03 left open
+  (out of scope for this pass). Verified via test-overlay: 23 passed.
 ---
 
 # Phase 10: Code Review Report
@@ -51,6 +62,9 @@ crash-on-missing-sender in the writer.
 ## Critical Issues
 
 ### CR-01: D-01 extension gate fires on pure recheck-interval bumps (the noise it must suppress)
+
+**Status:** RESOLVED (commit 25f68d7) — gate now keys on `quoted_shift` (SpamBot-quoted
+`limit_until`), never on the recheck bump. Covered by new call-site regression tests.
 
 **File:** `app/services/listener.py:1471`
 **Issue:**
@@ -96,6 +110,9 @@ if quoted_shift and (old_until is None or next_at > old_until + timedelta(minute
 
 ### WR-01: `spam_limited` event written even when the sender UPDATE is a no-op (already frozen)
 
+**Status:** RESOLVED (commit 8e32e43) — UPDATE now uses `RETURNING id`; the event is
+written only when a row actually transitioned.
+
 **File:** `app/services/listener.py:937-962`
 **Issue:**
 The antispam-signal handler updates the sender with a guard:
@@ -123,6 +140,9 @@ if changed:
 
 ### WR-02: `flood_wait` events are written as `category='restriction'`, polluting restriction analytics
 
+**Status:** RESOLVED (commit 1b4d4c2) — FloodWait events now use `category='flood_wait'`;
+migration 031 widens the `sre_category_chk` CHECK to allow it.
+
 **File:** `app/services/queue.py:716-722`
 **Issue:**
 The FloodWait path records an event with the default `category='restriction'`, while its own
@@ -139,6 +159,9 @@ account hit a restriction" metric the log was built to answer. It also triggers 
 for restriction analytics. At minimum, do not file it under `category='restriction'`.
 
 ### WR-03: `record_restriction_event` crashes if the sender row is missing
+
+**Status:** RESOLVED (commit e52cd14) — switched to `.one_or_none()`; the write is skipped
+(with a warning) when the sender is gone.
 
 **File:** `app/services/restriction_audit.py:105-109`
 **Issue:**
@@ -159,6 +182,9 @@ if s is None:
 ```
 
 ### WR-04: `flood_wait` event committed in a separate transaction from the reschedule it describes
+
+**Status:** RESOLVED (commit 1b4d4c2) — the event write now shares the `db` session with the
+single-item reschedule and commits once, so audit and queue state cannot diverge.
 
 **File:** `app/services/queue.py:711-734`
 **Issue:**
