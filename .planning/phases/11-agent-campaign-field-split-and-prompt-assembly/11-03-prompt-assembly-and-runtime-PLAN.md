@@ -11,11 +11,12 @@ autonomous: true
 requirements: [PMT-01, PMT-02, PMT-03, PMT-04, PMT-05, PMT-06, PMT-07, RT-01, D-03, D-06, D-10, D-12, D-14, D-15]
 must_haves:
   truths:
-    - "The system prompt renders blocks in the fixed BRIEF §7 order with exactly one source per block"
-    - "Tone appears only in the [ТОН] block, derived solely from tone_preset"
-    - "A rule written on both agent and campaign appears once (deduped)"
-    - "Dialogue stages come from the campaign dialogue_flow, not a static hardcoded goal"
-    - "AI reply delay honours the agent response_speed (manual uses response_delay_seconds)"
+    - "The system prompt renders blocks in the fixed BRIEF §7 order with exactly one source per block; the raw brief text never reaches the prompt (D-15)"
+    - "Tone appears only in the [ТОН] block, derived solely from tone_preset (D-03)"
+    - "A rule written on both agent and campaign appears once (deduped) (D-14)"
+    - "Dialogue stages come from the campaign dialogue_flow, not a static hardcoded goal (D-06)"
+    - "The [АРГУМЕНТЫ И ФАКТЫ] block renders campaign facts behind an anti-hallucination guard (D-12)"
+    - "AI reply delay honours the agent response_speed (manual uses response_delay_seconds) (D-11)"
   artifacts:
     - path: "app/services/ai_engine.py"
       provides: "build_system_prompt §7 rewrite + get_context_for_conversation/get_context SELECT updates + _PROMPT_FACTS_GUARD"

@@ -14,9 +14,9 @@ autonomous: true
 requirements: [FLD-01, FLD-02, FLD-03, FLD-04, FLD-05, FLD-06, MIG-01, MIG-02, MIG-03, D-01, D-02, D-04, D-10, D-11, D-12, D-13, D-14]
 must_haves:
   truths:
-    - "Agent can store a single tone source (tone_preset) and a response-speed setting"
-    - "Campaign can store dialogue_flow stages, arguments_facts, and campaign_rules"
-    - "Existing voice_baseline values map to tone_preset and existing success_criteria merges into lead_trigger_hint with no data loss"
+    - "Agent can store a single tone source (tone_preset) and a response-speed setting (D-01, D-11)"
+    - "Campaign can store dialogue_flow stages, arguments_facts, and campaign_rules (D-04, D-12, D-14)"
+    - "Existing voice_baseline values map to tone_preset and existing success_criteria merges into lead_trigger_hint with no data loss (D-02, D-13)"
     - "Dropped legacy tone columns and success_criteria no longer exist"
     - "Agent/Campaign create+update API accept and return the new fields with enum validation"
   artifacts:

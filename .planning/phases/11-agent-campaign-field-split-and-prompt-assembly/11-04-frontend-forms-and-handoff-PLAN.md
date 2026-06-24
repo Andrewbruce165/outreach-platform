@@ -15,10 +15,11 @@ autonomous: false
 requirements: [UI-FLD-01, UI-FLD-02, UI-FLD-03, D-05, D-07, D-08, D-09, D-10, D-13, D-15]
 must_haves:
   truths:
-    - "The Agent form shows a single Тон select (4 options), a Скорость ответа control, and no tone sliders / free-text tone"
-    - "The Campaign form has a working Ход разговора stage editor (add/remove/reorder)"
-    - "Renamed labels: Audience hints -> Кому пишем; lead-signal field absorbs the old Success criteria"
-    - "openapi.json + generated types reflect the new schema and the frontend type-checks clean"
+    - "The Agent form shows a single Тон select (4 options), a Скорость ответа control, and no tone sliders / free-text tone (D-08)"
+    - "The Campaign form has a working Ход разговора stage editor (add/remove/reorder); the campaign only selects an agent (no per-campaign agent override) (D-05, D-07)"
+    - "Renamed labels: Audience hints -> Кому пишем; lead-signal field absorbs the old Success criteria; brief auto-fill only drafts structural fields (D-13, D-15)"
+    - "openapi.json + generated types reflect the new schema and the frontend type-checks clean (D-09)"
+    - "All commits touch only this phase's named files in both repos (D-10)"
   artifacts:
     - path: "lovable-handoff/openapi.json"
       provides: "Synced API contract with new fields"
