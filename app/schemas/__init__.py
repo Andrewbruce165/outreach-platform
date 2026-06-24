@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, computed_field, constr, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, computed_field, conint, conlist, constr, model_validator
 from typing import Any, Literal, Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -435,26 +435,32 @@ class FaqItem(BaseModel):
 # ─── Phase 05.1 agent v2 helpers (UI-SPEC §5.8) ──────────────────────────────
 
 
-class ToneSpec(BaseModel):
-    """Bi-polar tone settings −50..+50 (UI-SPEC §5.8 Voice tab ToneSlider)."""
-    formal: int = Field(default=0, ge=-50, le=50)
-    warm: int = Field(default=0, ge=-50, le=50)
-    brief: int = Field(default=0, ge=-50, le=50)
-
-
 class QAPair(BaseModel):
     """Single Q&A entry in agent.qa_pairs (UI-SPEC §5.8 FAQ tab)."""
     q: constr(min_length=1, max_length=2000)
     a: constr(min_length=1, max_length=4000)
 
 
+# ─── Phase 11: DialogueStage (D-04 / FLD-04) ─────────────────────────────────
+
+
+class DialogueStage(BaseModel):
+    """One stage in the campaign's dialogue_flow sequence.
+
+    title is optional (label for the UI); instruction is the stage directive
+    injected into the prompt. Validated: title≤120, instruction 1..2000 chars.
+    Security: conlist max_length=7 on the containing field guards array-size abuse (T2).
+    """
+    title: Optional[constr(max_length=120)] = None
+    instruction: constr(min_length=1, max_length=2000)
+
+
 class AgentCreate(BaseModel):
-    """POST /api/v1/agents body (D-02 + UI-SPEC §5.8 v2)."""
+    """POST /api/v1/agents body (D-02 + Phase 11 field split)."""
     name: constr(min_length=1, max_length=100)
     # Legacy fields (Phase 3) — kept Optional for back-compat:
     system_prompt: Optional[str] = None
     rules: Optional[str] = None
-    tone_of_voice: Optional[str] = None
     faq: List[FaqItem] = Field(default_factory=list)
     company_info: Optional[str] = None
     product_info: Optional[str] = None
@@ -462,8 +468,11 @@ class AgentCreate(BaseModel):
     who_is_agent: Optional[str] = None
     company_knowledge: Optional[str] = None
     knowledge_base: Optional[str] = None
-    voice_baseline: Optional[Literal["Professional", "Friendly", "Playful"]] = None
-    tone: Optional[ToneSpec] = None
+    # Phase 11 D-01/D-11: single-source tone and response speed (replaces voice_baseline/tone/tone_of_voice).
+    tone_preset: Optional[Literal["Friendly", "Professional", "Direct", "Casual"]] = None
+    response_speed: Optional[Literal["instant", "human", "slow", "manual"]] = None
+    # T3: delay bounded 0..3600s so manual delay cannot DoS the queue worker.
+    response_delay_seconds: Optional[conint(ge=0, le=3600)] = None
     max_message_length: Optional[int] = Field(default=None, ge=1, le=4096)
     mirror_language: Optional[bool] = None
     allow_emoji: Optional[bool] = None
@@ -478,7 +487,6 @@ class AgentUpdate(BaseModel):
     name: Optional[constr(min_length=1, max_length=100)] = None
     system_prompt: Optional[str] = None
     rules: Optional[str] = None
-    tone_of_voice: Optional[str] = None
     # None = leave unchanged; [] = clear FAQ; [...] = full replace (Pitfall 7)
     faq: Optional[List[FaqItem]] = None
     company_info: Optional[str] = None
@@ -487,8 +495,10 @@ class AgentUpdate(BaseModel):
     who_is_agent: Optional[str] = None
     company_knowledge: Optional[str] = None
     knowledge_base: Optional[str] = None
-    voice_baseline: Optional[Literal["Professional", "Friendly", "Playful"]] = None
-    tone: Optional[ToneSpec] = None
+    # Phase 11 D-01/D-11: single-source tone and response speed.
+    tone_preset: Optional[Literal["Friendly", "Professional", "Direct", "Casual"]] = None
+    response_speed: Optional[Literal["instant", "human", "slow", "manual"]] = None
+    response_delay_seconds: Optional[conint(ge=0, le=3600)] = None
     max_message_length: Optional[int] = Field(default=None, ge=1, le=4096)
     mirror_language: Optional[bool] = None
     allow_emoji: Optional[bool] = None
@@ -505,7 +515,6 @@ class AgentResponse(BaseModel):
     name: str
     system_prompt: Optional[str] = None
     rules: Optional[str] = None
-    tone_of_voice: Optional[str] = None
     faq: List[FaqItem] = []
     company_info: Optional[str] = None
     product_info: Optional[str] = None
@@ -513,10 +522,10 @@ class AgentResponse(BaseModel):
     who_is_agent: Optional[str] = None
     company_knowledge: Optional[str] = None
     knowledge_base: Optional[str] = None
-    voice_baseline: Optional[str] = None
-    # tone serialised as dict (NOT ToneSpec) — DB JSONB round-trip without
-    # re-validating the response payload (back-compat: pre-05.1 rows have NULL).
-    tone: Optional[dict] = None
+    # Phase 11 D-01/D-11: single-source tone fields (voice_baseline/tone/tone_of_voice removed).
+    tone_preset: Optional[str] = None
+    response_speed: Optional[str] = None
+    response_delay_seconds: Optional[int] = None
     max_message_length: Optional[int] = None
     mirror_language: Optional[bool] = None
     allow_emoji: Optional[bool] = None
@@ -646,7 +655,7 @@ class CampaignCreate(BaseModel):
     # ── 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6). ──
     audience_hints: Optional[str] = None
     primary_goal: Optional[Literal["book_meeting", "qualify", "click", "engage"]] = None
-    success_criteria: Optional[str] = None
+    # NB: success_criteria removed (Phase 11 D-13) — merged into lead_trigger_hint.
     # Unified webhook URL — supersedes per-tool webhook_url + 3 legacy signal URLs
     # for new campaigns. Legacy URLs remain Optional above for Phase 4 back-compat.
     webhook_url: Optional[HttpUrl] = None
@@ -655,6 +664,11 @@ class CampaignCreate(BaseModel):
     # dialogs block; closed/stale ones are re-contactable.
     allow_recontact: bool = False
     recontact_min_age_days: int = Field(default=30, ge=1, le=365)
+    # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
+    # dialogue_flow: ordered conversation stages (max 7 — T2 size guard).
+    dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
+    arguments_facts: Optional[str] = None
+    campaign_rules: Optional[str] = None
 
     @model_validator(mode="after")
     def _check_work_hours(self) -> "CampaignCreate":
@@ -692,11 +706,15 @@ class CampaignUpdate(BaseModel):
     # ── 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6). ──
     audience_hints: Optional[str] = None
     primary_goal: Optional[Literal["book_meeting", "qualify", "click", "engage"]] = None
-    success_criteria: Optional[str] = None
+    # NB: success_criteria removed (Phase 11 D-13) — merged into lead_trigger_hint.
     webhook_url: Optional[HttpUrl] = None
     # 026: per-campaign re-contact policy (partial PATCH).
     allow_recontact: Optional[bool] = None
     recontact_min_age_days: Optional[int] = Field(default=None, ge=1, le=365)
+    # ── Phase 11 campaign fields (D-04/D-12/D-14) — partial PATCH. ──
+    dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
+    arguments_facts: Optional[str] = None
+    campaign_rules: Optional[str] = None
 
 
 class CampaignResponse(BaseModel):
@@ -730,11 +748,15 @@ class CampaignResponse(BaseModel):
     # half so DB → JSON serialisation is a flat passthrough. ──
     audience_hints: Optional[str] = None
     primary_goal: Optional[str] = None
-    success_criteria: Optional[str] = None
+    # NB: success_criteria removed (Phase 11 D-13) — merged into lead_trigger_hint.
     webhook_url: Optional[str] = None
     # 026: per-campaign re-contact policy.
     allow_recontact: bool = False
     recontact_min_age_days: int = 30
+    # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
+    dialogue_flow: List[dict] = Field(default_factory=list)
+    arguments_facts: Optional[str] = None
+    campaign_rules: Optional[str] = None
     # 029: auto-pause visibility. pause_reason is NULL for a manual / never-paused
     # campaign; 'no_senders_attached' | 'senders_unavailable' when the worker
     # auto-paused it because it could no longer send.

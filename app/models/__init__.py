@@ -201,9 +201,13 @@ class AIContext(Base):
     who_is_agent = Column(Text, nullable=True)
     company_knowledge = Column(Text, nullable=True)
     knowledge_base = Column(Text, nullable=True)
-    voice_baseline = Column(String(20), nullable=True)
-    # tone JSONB default {"formal":0,"warm":0,"brief":0} — server_default lives in migration.
-    tone = Column(JSONB, nullable=True)
+    # Phase 11 D-01: tone_preset is the single tone source (replaces voice_baseline/tone/tone_of_voice).
+    # voice_baseline/tone/tone_of_voice dropped in migration 032 (Phase 11 D-01).
+    tone_preset = Column(String(20), nullable=True)
+    # Phase 11 D-11: response speed setting ('instant'|'human'|'slow'|'manual').
+    response_speed = Column(String(20), nullable=True)
+    # Phase 11 D-11: exact delay in seconds when response_speed='manual'.
+    response_delay_seconds = Column(Integer, nullable=True)
     max_message_length = Column(Integer, nullable=True, server_default="280")
     mirror_language = Column(Boolean, nullable=True, server_default="true")
     allow_emoji = Column(Boolean, nullable=True, server_default="false")
@@ -213,7 +217,9 @@ class AIContext(Base):
     auto_pause_scope = Column(String(20), nullable=True, server_default="conversation")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    # NB: response_delay_seconds, is_active dropped (Phase 3 D-01).
+    # NB: is_active dropped (Phase 3 D-01).
+    # NB: voice_baseline/tone/tone_of_voice dropped (Phase 11 D-01 via migration 032).
+    #     tone_preset is the single source; response_speed/response_delay_seconds added.
     # max_message_length re-added в Phase 05.1 (UI-SPEC §5.8 length cap setting).
     # auto_pause_triggers re-added в Phase 05.1 (UI-SPEC §5.8 banned triggers).
     # NB: senders relationship dropped (Phase 3 D-04) — связь sender↔agent больше не через FK.
@@ -537,8 +543,15 @@ class Campaign(Base):
     # legacy 3-webhook cols above kept for Phase 4 back-compat / Pitfall 6). ──
     audience_hints = Column(Text, nullable=True)
     primary_goal = Column(String(20), nullable=True)
-    success_criteria = Column(Text, nullable=True)
+    # NB: success_criteria dropped (Phase 11 D-13 via migration 032) — merged into lead_trigger_hint.
     webhook_url = Column(Text, nullable=True)
+    # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
+    # dialogue_flow: ordered list of DialogueStage objects (JSONB, full-replace on PATCH).
+    dialogue_flow = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    # arguments_facts: free-text product facts / proof points injected into the prompt.
+    arguments_facts = Column(Text, nullable=True)
+    # campaign_rules: free-text rules specific to this campaign (de-duped with agent rules in 11-03).
+    campaign_rules = Column(Text, nullable=True)
     # 026: per-campaign re-contact policy. allow_recontact=false (default) keeps
     # the strict cross-campaign dedup — never re-touch anyone with an existing
     # conversation. When true, only "protected" (active & fresh) dialogs block;
