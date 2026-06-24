@@ -13,6 +13,8 @@ type Campaign = components["schemas"]["CampaignResponse"];
 type Agent = components["schemas"]["AgentResponse"];
 type Folder = components["schemas"]["FolderResponse"];
 type Sender = components["schemas"]["SenderResponse"];
+type PoolHealth = components["schemas"]["PoolHealth"];
+type AttachedSender = components["schemas"]["CampaignSenderAttach"];
 
 export const Route = createFileRoute("/_authenticated/campaigns/$id")({
   component: CampaignDetailPage,
@@ -39,6 +41,68 @@ function StatusPill({ status }: { status: string }) {
     <span className={`pill ${s.pill}`}>
       <span className="pill__dot" style={{ background: s.dot }} />
       {s.label}
+    </span>
+  );
+}
+
+function fmtUntil(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * POOLV-03 / D-09: 3-state pool badge derived ON THE FRONTEND from the numeric
+ * pool_health aggregate (the API stays presentation-free).
+ *   paused === 0                  → 🟢 "пул активен"
+ *   0 < paused < total            → 🟡 "K из N на паузе до проверки в T"
+ *   paused === total && total > 0 → 🔴 "весь пул на паузе"
+ * earliest_resume_at is a recheck horizon (OQ#4) → wording "до проверки в T".
+ */
+function PoolBadge({ health }: { health: PoolHealth | null | undefined }) {
+  if (!health || health.total === 0) return null;
+  const { active, paused, total, earliest_resume_at } = health;
+
+  if (paused === 0) {
+    return (
+      <span className="pill pill--green" title={`${active} из ${total} аккаунтов активны`}>
+        <span className="pill__dot" style={{ background: "var(--success)" }} />
+        Пул активен
+      </span>
+    );
+  }
+  if (paused === total) {
+    return (
+      <span
+        className="pill pill--red"
+        title={
+          earliest_resume_at
+            ? `Все ${total} аккаунтов на паузе · проверка ${fmtUntil(earliest_resume_at)}`
+            : `Все ${total} аккаунтов на паузе`
+        }
+      >
+        <span className="pill__dot" style={{ background: "var(--danger)" }} />
+        Весь пул на паузе
+      </span>
+    );
+  }
+  // Partial pause — the key UX signal of this phase.
+  return (
+    <span
+      className="pill pill--orange"
+      title={`${paused} из ${total} аккаунтов на паузе${
+        earliest_resume_at ? ` · проверка ${fmtUntil(earliest_resume_at)}` : ""
+      }`}
+    >
+      <span className="pill__dot" style={{ background: "var(--warning)" }} />
+      {paused} из {total} на паузе
+      {earliest_resume_at ? ` · до проверки в ${fmtUntil(earliest_resume_at)}` : ""}
     </span>
   );
 }
@@ -217,6 +281,7 @@ function CampaignDetailPage() {
             <ArrowLeft size={14} /> Back
           </button>
           {c && <StatusPill status={c.status} />}
+          {c && <PoolBadge health={c.pool_health} />}
         </div>
 
         {actionError && (
@@ -426,6 +491,35 @@ function CampaignDetailPage() {
   );
 }
 
+/**
+ * POOLV-02: per-sender restriction chip for the attached-pool list. Reads the
+ * enriched attached_senders[].restriction_status / restricted_until (Plan 03).
+ */
+const RESTRICTION_CHIP: Record<
+  Exclude<AttachedSender["restriction_status"], "none">,
+  { label: string; pill: string; dot: string }
+> = {
+  spam_limited: { label: "Спам-лимит", pill: "pill--orange", dot: "var(--warning)" },
+  frozen: { label: "Заморожен", pill: "pill--red", dot: "var(--danger)" },
+};
+
+function RestrictionChip({ sender }: { sender: AttachedSender }) {
+  if (!sender.restriction_status || sender.restriction_status === "none") return null;
+  const meta = RESTRICTION_CHIP[sender.restriction_status];
+  const until = sender.restricted_until ? fmtUntil(sender.restricted_until) : null;
+  return (
+    <span
+      className={`pill ${meta.pill}`}
+      style={{ height: 16, fontSize: 10, padding: "0 6px", marginTop: 4 }}
+      title={until ? `${meta.label} · проверка ${until}` : meta.label}
+    >
+      <span className="pill__dot" style={{ background: meta.dot }} />
+      {meta.label}
+      {until ? ` · до ${until}` : ""}
+    </span>
+  );
+}
+
 /* ---------------- Senders / Пул panel (D-10/D-11) ---------------- */
 function SendersPanel({
   campaign,
@@ -516,6 +610,7 @@ function SendersPanel({
                       <Lock size={11} /> Locked by {s.locked_by_campaign_name}
                     </div>
                   )}
+                  <RestrictionChip sender={s} />
                 </div>
                 <button
                   type="button"

@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Filter,
   ShieldCheck,
+  History,
   Phone as PhoneIcon,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
@@ -21,6 +22,7 @@ import { api, ApiError } from "@/lib/api";
 import type { components } from "@/types/api";
 
 type Sender = components["schemas"]["SenderResponse"];
+type RestrictionEvent = components["schemas"]["RestrictionEventResponse"];
 
 export const Route = createFileRoute("/_authenticated/accounts")({
   component: AccountsPage,
@@ -225,6 +227,7 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const deleteMut = useMutation({
     mutationFn: () => api(`/api/v1/senders/${sender.slug}`, { method: "DELETE" }),
@@ -376,6 +379,14 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
                 <RefreshCcw size={13} /> Обновить статус
               </button>
               <button
+                onClick={() => {
+                  setOpen(false);
+                  setHistoryOpen(true);
+                }}
+              >
+                <History size={13} /> История ограничений
+              </button>
+              <button
                 className="is-danger"
                 disabled={deleteMut.isPending}
                 onClick={() => {
@@ -397,8 +408,185 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
         {editing && (
           <EditSenderModal sender={sender} onClose={() => setEditing(false)} />
         )}
+        {historyOpen && (
+          <RestrictionHistoryModal
+            sender={sender}
+            onClose={() => setHistoryOpen(false)}
+          />
+        )}
       </td>
     </tr>
+  );
+}
+
+/**
+ * POOLV-04: mini restriction-event list for one account. Reads the workspace-scoped,
+ * newest-first history from GET /senders/{slug}/restriction-events (HLTH-03). A
+ * freeze→extension→clear sequence reads as a clean chronology (D-01: no per-tick noise).
+ */
+const EVENT_META: Record<string, { label: string; pill: string; dot: string }> = {
+  spam_limited: { label: "Спам-лимит", pill: "pill--orange", dot: "var(--warning)" },
+  frozen: { label: "Заморожен", pill: "pill--red", dot: "var(--danger)" },
+  flood_wait: { label: "Flood-wait", pill: "pill--ghost", dot: "var(--text-muted)" },
+  extension: { label: "Продление", pill: "pill--orange", dot: "var(--warning)" },
+  cleared: { label: "Снято", pill: "pill--green", dot: "var(--success)" },
+  banned: { label: "Бан", pill: "pill--red", dot: "var(--danger)" },
+  privacy_restricted: { label: "Приватность получателя", pill: "pill--ghost", dot: "var(--text-muted)" },
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  queue_error: "очередь",
+  spambot_reconcile: "@SpamBot",
+  antispam_signal: "антиспам-сигнал",
+};
+
+function eventTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function untilTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** One-line activity-slice summary, e.g. "12 отпр./ч · 138 уник. контактов/24ч". */
+function sliceSummary(slice: RestrictionEvent["activity_slice"]): string | null {
+  if (!slice || typeof slice !== "object") return null;
+  const s = slice as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof s.sends_1h === "number") parts.push(`${s.sends_1h} отпр./ч`);
+  if (typeof s.sends_24h === "number") parts.push(`${s.sends_24h} отпр./24ч`);
+  if (typeof s.unique_contacts_24h === "number")
+    parts.push(`${s.unique_contacts_24h} уник. контактов/24ч`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+function RestrictionHistoryModal({
+  sender,
+  onClose,
+}: {
+  sender: Sender;
+  onClose: () => void;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["restriction-events", sender.slug],
+    queryFn: () =>
+      api<RestrictionEvent[]>(
+        `/api/v1/senders/${sender.slug}/restriction-events`,
+      ),
+  });
+
+  const events = data ?? [];
+
+  return (
+    <Modal
+      title={`История ограничений · ${sender.name || sender.phone}`}
+      onClose={onClose}
+    >
+      {isLoading && <div className="muted text-sm">Загрузка истории…</div>}
+      {error && (
+        <div style={{ color: "var(--danger)", fontSize: 13 }}>
+          <AlertCircle size={14} />{" "}
+          {error instanceof ApiError ? error.message : "Не удалось загрузить историю"}
+        </div>
+      )}
+      {!isLoading && !error && events.length === 0 && (
+        <div className="muted text-sm" style={{ padding: "8px 0" }}>
+          Ограничений по этому аккаунту ещё не было.
+        </div>
+      )}
+      {!isLoading && !error && events.length > 0 && (
+        <ul
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            margin: 0,
+            padding: 0,
+            listStyle: "none",
+            maxHeight: 420,
+            overflowY: "auto",
+          }}
+        >
+          {events.map((ev) => {
+            const meta = EVENT_META[ev.event_type] ?? {
+              label: ev.event_type,
+              pill: "pill--ghost",
+              dot: "var(--text-muted)",
+            };
+            const until = untilTime(ev.restricted_until);
+            const summary = sliceSummary(ev.activity_slice);
+            return (
+              <li
+                key={ev.id}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  padding: "10px 12px",
+                  background: "var(--bg-soft)",
+                  borderRadius: 8,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span className={`pill ${meta.pill}`} style={{ fontSize: 11 }}>
+                    <span className="pill__dot" style={{ background: meta.dot }} />
+                    {meta.label}
+                  </span>
+                  <span className="muted text-xs">
+                    {SOURCE_LABEL[ev.source] ?? ev.source}
+                  </span>
+                  <span className="muted text-xs" style={{ marginLeft: "auto" }}>
+                    {eventTime(ev.created_at)}
+                  </span>
+                </div>
+                {until && (
+                  <div className="muted text-xs">
+                    Ограничение до проверки в {until}
+                  </div>
+                )}
+                {summary && (
+                  <div className="muted text-xs mono">{summary}</div>
+                )}
+                {ev.raw_text && (
+                  <div
+                    className="muted text-xs"
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      opacity: 0.85,
+                    }}
+                  >
+                    {ev.raw_text}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Modal>
   );
 }
 
