@@ -934,15 +934,21 @@ class TelegramListener:
 
                 # 2. Flag the sender spam_limited. The '<> frozen' guard preserves
                 #    frozen-precedence: a soft signal must not downgrade a hard freeze.
-                await session.execute(
+                #    WR-01 (Phase 10): RETURNING id tells us whether the UPDATE actually
+                #    transitioned a row. When the sender is already frozen the UPDATE is a
+                #    no-op (0 rows) — we must NOT then write a spam_limited audit event for
+                #    a state-change that never happened (it would show a frozen account
+                #    "becoming spam_limited"). The event write below is gated on this.
+                flagged = (await session.execute(
                     text("""
                         UPDATE senders
                         SET restriction_status = 'spam_limited',
                             restricted_until = :recheck_at
                         WHERE id = :sid AND restriction_status <> 'frozen'
+                        RETURNING id
                     """),
                     {"recheck_at": recheck_at, "sid": str(sender_id)},
-                )
+                )).fetchone()
 
                 # 3. Phase 9 (FAIL-02): the spam_limited flag is now set on this
                 #    session (Pitfall 3 — written BEFORE failover so the candidate
@@ -956,10 +962,14 @@ class TelegramListener:
                 # Phase 10 (HLTH-01 / OQ#2): durable restriction event in the SAME
                 # session as the pause+flag. source='antispam_signal' (free-form, no
                 # CHECK) marks this unsolicited bot warning distinctly from queue_error.
-                await record_restriction_event(
-                    sender_id, "spam_limited", "antispam_signal",
-                    recheck_at, message_text, db=session,
-                )
+                # WR-01: only when the sender actually transitioned to spam_limited
+                # (flagged is None when the sender was already frozen — no state change,
+                # so no audit row).
+                if flagged is not None:
+                    await record_restriction_event(
+                        sender_id, "spam_limited", "antispam_signal",
+                        recheck_at, message_text, db=session,
+                    )
 
                 await session.commit()
 
