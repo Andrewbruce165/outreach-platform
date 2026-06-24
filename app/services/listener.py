@@ -934,12 +934,14 @@ class TelegramListener:
 
                 # 2. Flag the sender spam_limited. The '<> frozen' guard preserves
                 #    frozen-precedence: a soft signal must not downgrade a hard freeze.
-                await session.execute(
+                #    RETURNING id: only write the audit event when the row actually changed.
+                flagged = await session.execute(
                     text("""
                         UPDATE senders
                         SET restriction_status = 'spam_limited',
                             restricted_until = :recheck_at
                         WHERE id = :sid AND restriction_status <> 'frozen'
+                        RETURNING id
                     """),
                     {"recheck_at": recheck_at, "sid": str(sender_id)},
                 )
@@ -954,12 +956,13 @@ class TelegramListener:
                 await failover_cold_backlog(sender_id, session)
 
                 # Phase 10 (HLTH-01 / OQ#2): durable restriction event in the SAME
-                # session as the pause+flag. source='antispam_signal' (free-form, no
-                # CHECK) marks this unsolicited bot warning distinctly from queue_error.
-                await record_restriction_event(
-                    sender_id, "spam_limited", "antispam_signal",
-                    recheck_at, message_text, db=session,
-                )
+                # session as the pause+flag. Only when the UPDATE changed a row —
+                # a frozen sender's no-op must not produce a false state-change event.
+                if flagged.fetchone() is not None:
+                    await record_restriction_event(
+                        sender_id, "spam_limited", "antispam_signal",
+                        recheck_at, message_text, db=session,
+                    )
 
                 await session.commit()
 
