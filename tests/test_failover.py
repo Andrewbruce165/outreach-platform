@@ -396,3 +396,173 @@ async def test_failover_logs_count_no_pii(
     # The audit log must carry the moved COUNT and the frozen sender UUID.
     assert "1" in caplog.text, "log must contain the moved count"
     assert str(frozen.id) in caplog.text, "log must contain the source (frozen) sender UUID"
+
+
+# ─── FAIL-02 : the three freeze CALL SITES actually invoke failover ───────────
+#
+# These exercise the REAL freeze paths (no thin seam):
+#   - PEER_FLOOD / ACCOUNT_FROZEN: drive QueueWorker._send_item with a mocked
+#     telegram_service whose send_message returns the freeze error dict, so the
+#     genuine queue.py freeze block (pause +24h → flag restriction → COMMIT →
+#     failover_cold_backlog(sender.id)) runs end-to-end against the test DB.
+#   - antispam-signal: drive listener._handle_antispam_signal directly (it is the
+#     real handler) and assert pause + flag + failover land in one commit.
+# The cold backlog is seeded as separate pending rows on the frozen sender; after
+# the freeze path runs they must have moved onto the healthy pool sender.
+
+async def _seed_failover_fixture(
+    test_running_campaign_factory, test_queue_item_factory,
+    cold_phones, *, processing_item: bool,
+):
+    """Build a running 2-sender campaign with a cold backlog on sender[0].
+
+    Returns (camp, frozen, healthy, trigger_phone). When ``processing_item`` the
+    trigger row is left in 'processing' (so QueueWorker._send_item can pick it up
+    and hit the mocked Telegram error); otherwise no trigger row is seeded
+    (antispam path is driven directly, not through the queue worker).
+    """
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    frozen, healthy = senders[0], senders[1]
+    for ph in cold_phones:
+        await test_queue_item_factory(camp["id"], frozen.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+    trigger_phone = None
+    if processing_item:
+        trigger_phone = "+79900999999"
+        # The row the worker is mid-sending when Telegram returns the freeze error.
+        # It is NOT part of the cold backlog assertion (it is 'processing', not the
+        # movable 'pending' set, and the freeze block fails it).
+        await test_queue_item_factory(camp["id"], frozen.id, trigger_phone,
+                                      status="processing", with_cca=True,
+                                      with_conversation=False)
+    return camp, frozen, healthy, trigger_phone
+
+
+class _FakeTelegram:
+    """Minimal telegram_service stand-in: get_client returns a sentinel and
+    send_message returns a configured freeze error dict (no network)."""
+
+    def __init__(self, error_code: str):
+        self._error_code = error_code
+
+    async def get_client(self, *args, **kwargs):
+        return object()  # sentinel client; never actually used by the error path
+
+    async def send_message(self, *args, **kwargs):
+        return {"success": False,
+                "error": {"code": self._error_code, "message": f"{self._error_code} (test)"}}
+
+    # Defensive: _send_item only calls send_file for item_type='file'.
+    async def send_file(self, *args, **kwargs):
+        return {"success": False,
+                "error": {"code": self._error_code, "message": f"{self._error_code} (test)"}}
+
+
+async def _set_trigger_item_id(db, camp_id, trigger_phone):
+    row = (await db.execute(text("""
+        SELECT id FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'processing'
+    """), {"cid": str(camp_id), "phone": trigger_phone})).first()
+    return row[0]
+
+
+async def test_peer_flood_triggers_failover(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+    monkeypatch,
+):
+    """FAIL-02 (PEER_FLOOD): the real queue.py PEER_FLOOD freeze block calls
+    failover_cold_backlog — the frozen sender's cold backlog moves to the healthy pool."""
+    import app.services.queue as queue_mod
+    from app.services.queue import QueueWorker
+
+    cold_phones = [f"+7990100{i:04d}" for i in range(3)]
+    camp, frozen, healthy, trigger_phone = await _seed_failover_fixture(
+        test_running_campaign_factory, test_queue_item_factory,
+        cold_phones, processing_item=True,
+    )
+    trigger_id = await _set_trigger_item_id(async_db_session, camp["id"], trigger_phone)
+
+    # Replace the telegram singleton the queue module uses so the send returns PEER_FLOOD.
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("PEER_FLOOD"))
+
+    await QueueWorker()._send_item(trigger_id)
+
+    # Assert on the COLD backlog only. The trigger row (the one that hit PEER_FLOOD)
+    # is failed→retried by _fail_item and legitimately stays pending on the frozen
+    # sender — it is NOT part of the cold backlog and must not pollute the check.
+    for ph in cold_phones:
+        assert await _sender_of(async_db_session, camp["id"], ph) == str(healthy.id), (
+            "PEER_FLOOD must move each cold-pending row to the healthy sender"
+        )
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(healthy.id)
+    assert await _sender_of(async_db_session, camp["id"], trigger_phone) == str(frozen.id), (
+        "the PEER_FLOOD trigger row stays on the frozen sender (retry), not moved"
+    )
+
+
+async def test_account_frozen_triggers_failover(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+    monkeypatch,
+):
+    """FAIL-02 (ACCOUNT_FROZEN): the real queue.py ACCOUNT_FROZEN freeze block calls
+    failover_cold_backlog."""
+    import app.services.queue as queue_mod
+    from app.services.queue import QueueWorker
+
+    cold_phones = [f"+7990101{i:04d}" for i in range(3)]
+    camp, frozen, healthy, trigger_phone = await _seed_failover_fixture(
+        test_running_campaign_factory, test_queue_item_factory,
+        cold_phones, processing_item=True,
+    )
+    trigger_id = await _set_trigger_item_id(async_db_session, camp["id"], trigger_phone)
+
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("ACCOUNT_FROZEN"))
+
+    await QueueWorker()._send_item(trigger_id)
+
+    # Assert on the COLD backlog only (the trigger row retries on the frozen sender).
+    for ph in cold_phones:
+        assert await _sender_of(async_db_session, camp["id"], ph) == str(healthy.id), (
+            "ACCOUNT_FROZEN must move each cold-pending row to the healthy sender"
+        )
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(healthy.id)
+    assert await _sender_of(async_db_session, camp["id"], trigger_phone) == str(frozen.id), (
+        "the ACCOUNT_FROZEN trigger row stays on the frozen sender (retry), not moved"
+    )
+
+
+async def test_antispam_signal_triggers_failover(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """FAIL-02 (antispam): listener._handle_antispam_signal runs pause + flag +
+    failover in ONE transaction (failover passed the session) — the cold backlog
+    moves to the healthy pool and the frozen sender is flagged spam_limited."""
+    from app.services.listener import TelegramListener
+
+    cold_phones = [f"+7990102{i:04d}" for i in range(3)]
+    camp, frozen, healthy, _ = await _seed_failover_fixture(
+        test_running_campaign_factory, test_queue_item_factory,
+        cold_phones, processing_item=False,
+    )
+
+    sender_info = {
+        "id": str(frozen.id),
+        "slug": frozen.slug,
+        "workspace_id": str(frozen.workspace_id),
+    }
+    await TelegramListener()._handle_antispam_signal(
+        sender_info=sender_info, bot_name="SpamBot", bot_id=178220800,
+        message_text="Your account is now limited.",
+    )
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert after.get(str(frozen.id), 0) == 0, "antispam must move the cold backlog off the frozen sender"
+    assert after.get(str(healthy.id), 0) == len(cold_phones)
+    for ph in cold_phones:
+        assert await _sender_of(async_db_session, camp["id"], ph) == str(healthy.id)
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(healthy.id)
+    # The freeze flag must also have landed (same single commit as the failover).
+    flagged = (await async_db_session.execute(text(
+        "SELECT restriction_status FROM senders WHERE id = :sid"
+    ), {"sid": str(frozen.id)})).scalar()
+    assert flagged == "spam_limited", "antispam path must flag the sender spam_limited"

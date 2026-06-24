@@ -943,6 +943,15 @@ class TelegramListener:
                     {"recheck_at": recheck_at, "sid": str(sender_id)},
                 )
 
+                # 3. Phase 9 (FAIL-02): the spam_limited flag is now set on this
+                #    session (Pitfall 3 — written BEFORE failover so the candidate
+                #    filter sees restriction_status != 'none' and won't pick this
+                #    sender). Move the cold-pending backlog onto healthy pool
+                #    senders. Pass the session: transaction-neutral, so pause +
+                #    flag + failover all land in the single commit below.
+                from app.services.failover import failover_cold_backlog
+                await failover_cold_backlog(sender_id, session)
+
                 await session.commit()
 
             logger.warning(
