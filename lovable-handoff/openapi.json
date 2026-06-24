@@ -6268,17 +6268,6 @@
             ],
             "title": "Rules"
           },
-          "tone_of_voice": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tone Of Voice"
-          },
           "faq": {
             "items": {
               "$ref": "#/components/schemas/FaqItem"
@@ -6341,31 +6330,52 @@
             ],
             "title": "Knowledge Base"
           },
-          "voice_baseline": {
+          "tone_preset": {
             "anyOf": [
               {
                 "type": "string",
                 "enum": [
-                  "Professional",
                   "Friendly",
-                  "Playful"
+                  "Professional",
+                  "Direct",
+                  "Casual"
                 ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Voice Baseline"
+            "title": "Tone Preset"
           },
-          "tone": {
+          "response_speed": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ToneSpec"
+                "type": "string",
+                "enum": [
+                  "instant",
+                  "human",
+                  "slow",
+                  "manual"
+                ]
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Response Speed"
+          },
+          "response_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Delay Seconds"
           },
           "max_message_length": {
             "anyOf": [
@@ -6466,7 +6476,7 @@
           "name"
         ],
         "title": "AgentCreate",
-        "description": "POST /api/v1/agents body (D-02 + UI-SPEC §5.8 v2)."
+        "description": "POST /api/v1/agents body (D-02 + Phase 11 field split)."
       },
       "AgentListResponse": {
         "properties": {
@@ -6521,17 +6531,6 @@
               }
             ],
             "title": "Rules"
-          },
-          "tone_of_voice": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tone Of Voice"
           },
           "faq": {
             "items": {
@@ -6596,7 +6595,7 @@
             ],
             "title": "Knowledge Base"
           },
-          "voice_baseline": {
+          "tone_preset": {
             "anyOf": [
               {
                 "type": "string"
@@ -6605,19 +6604,29 @@
                 "type": "null"
               }
             ],
-            "title": "Voice Baseline"
+            "title": "Tone Preset"
           },
-          "tone": {
+          "response_speed": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Tone"
+            "title": "Response Speed"
+          },
+          "response_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Delay Seconds"
           },
           "max_message_length": {
             "anyOf": [
@@ -6769,17 +6778,6 @@
             ],
             "title": "Rules"
           },
-          "tone_of_voice": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tone Of Voice"
-          },
           "faq": {
             "anyOf": [
               {
@@ -6849,31 +6847,52 @@
             ],
             "title": "Knowledge Base"
           },
-          "voice_baseline": {
+          "tone_preset": {
             "anyOf": [
               {
                 "type": "string",
                 "enum": [
-                  "Professional",
                   "Friendly",
-                  "Playful"
+                  "Professional",
+                  "Direct",
+                  "Casual"
                 ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Voice Baseline"
+            "title": "Tone Preset"
           },
-          "tone": {
+          "response_speed": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ToneSpec"
+                "type": "string",
+                "enum": [
+                  "instant",
+                  "human",
+                  "slow",
+                  "manual"
+                ]
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Response Speed"
+          },
+          "response_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Delay Seconds"
           },
           "max_message_length": {
             "anyOf": [
@@ -7453,17 +7472,6 @@
             ],
             "title": "Primary Goal"
           },
-          "success_criteria": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Criteria"
-          },
           "webhook_url": {
             "anyOf": [
               {
@@ -7489,6 +7497,43 @@
             "minimum": 1.0,
             "title": "Recontact Min Age Days",
             "default": 30
+          },
+          "dialogue_flow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DialogueStage"
+                },
+                "type": "array",
+                "maxItems": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialogue Flow"
+          },
+          "arguments_facts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments Facts"
+          },
+          "campaign_rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Rules"
           }
         },
         "type": "object",
@@ -7714,17 +7759,6 @@
             ],
             "title": "Primary Goal"
           },
-          "success_criteria": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Criteria"
-          },
           "webhook_url": {
             "anyOf": [
               {
@@ -7745,6 +7779,36 @@
             "type": "integer",
             "title": "Recontact Min Age Days",
             "default": 30
+          },
+          "dialogue_flow": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Dialogue Flow"
+          },
+          "arguments_facts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments Facts"
+          },
+          "campaign_rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Rules"
           },
           "pause_reason": {
             "anyOf": [
@@ -8148,17 +8212,6 @@
             ],
             "title": "Primary Goal"
           },
-          "success_criteria": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Criteria"
-          },
           "webhook_url": {
             "anyOf": [
               {
@@ -8196,6 +8249,43 @@
               }
             ],
             "title": "Recontact Min Age Days"
+          },
+          "dialogue_flow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DialogueStage"
+                },
+                "type": "array",
+                "maxItems": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialogue Flow"
+          },
+          "arguments_facts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments Facts"
+          },
+          "campaign_rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Rules"
           }
         },
         "type": "object",
@@ -8764,6 +8854,34 @@
           "contact_ids"
         ],
         "title": "DeleteContactBatchRequest"
+      },
+      "DialogueStage": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "instruction": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Instruction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "instruction"
+        ],
+        "title": "DialogueStage",
+        "description": "One stage in the campaign's dialogue_flow sequence.\n\ntitle is optional (label for the UI); instruction is the stage directive\ninjected into the prompt. Validated: title≤120, instruction 1..2000 chars.\nSecurity: conlist max_length=7 on the containing field guards array-size abuse (T2)."
       },
       "EnqueueResponse": {
         "properties": {
@@ -10384,34 +10502,6 @@
         "title": "TelemetryEventIn",
         "description": "POST /api/v1/telemetry/events body (UI-SPEC §9).\n\nevent_id is client-supplied for navigator.sendBeacon idempotency\n(retry on flaky networks → same event lands once). Default factory\ngenerates a fresh UUIDv4 when the client omits it."
       },
-      "ToneSpec": {
-        "properties": {
-          "formal": {
-            "type": "integer",
-            "maximum": 50.0,
-            "minimum": -50.0,
-            "title": "Formal",
-            "default": 0
-          },
-          "warm": {
-            "type": "integer",
-            "maximum": 50.0,
-            "minimum": -50.0,
-            "title": "Warm",
-            "default": 0
-          },
-          "brief": {
-            "type": "integer",
-            "maximum": 50.0,
-            "minimum": -50.0,
-            "title": "Brief",
-            "default": 0
-          }
-        },
-        "type": "object",
-        "title": "ToneSpec",
-        "description": "Bi-polar tone settings −50..+50 (UI-SPEC §5.8 Voice tab ToneSlider)."
-      },
       "ToolParamSpec": {
         "properties": {
           "name": {
@@ -10744,9 +10834,9 @@
             "type": "string",
             "title": "Primary Goal"
           },
-          "success_criteria": {
+          "lead_trigger_hint": {
             "type": "string",
-            "title": "Success Criteria"
+            "title": "Lead Trigger Hint"
           },
           "tools": {
             "items": {},
@@ -10759,11 +10849,11 @@
           "name",
           "audience_hints",
           "primary_goal",
-          "success_criteria",
+          "lead_trigger_hint",
           "tools"
         ],
         "title": "_AutoFillResponse",
-        "description": "Canned defaults so the UI button works without an LLM call (v1 stub)."
+        "description": "Canned defaults so the UI button works without an LLM call (v1 stub).\n\nPhase 11 D-13: success_criteria removed; auto-fill stub returns lead_trigger_hint instead."
       }
     }
   }
