@@ -271,12 +271,15 @@ Plans:
 ### Phase 11: Agent/Campaign Field Split & Prompt Assembly
 
 **Goal:** Убрать перегруз и дубли в настройке так, чтобы GPT-5 mini перестал «плыть» и вёл диалог предсказуемо. Развести два слоя — **Агент = КТО** (стабильная личность, переиспользуема) и **Кампания = ЧТО** (задача, ход разговора, факты, цель); правило «одно поле = одна мысль, ноль пересечений». Перестроить формы Агента и Кампании, добавить новые поля (скорость ответа с ручным вводом; ход разговора 3–5 стадий; аргументы и факты; используемые базы знаний), слить/переименовать дублирующиеся (Success criteria → Сигнал «Лид», тон только в пресете, Audience hints → «Кому пишем»), и собрать итоговый системный промпт с фиксированным порядком блоков и ровно одним источником на блок. Brief auto-fill заполняет поля, но сырой текст брифа в промпт не уходит. Включает перестройку UI визарда. Полный бриф: `BRIEF.md` в директории фазы.
-**Requirements**: TBD (run /gsd:plan-phase 11)
+**Requirements**: FLD-01..06, MIG-01..03, PMT-01..07, RT-01, UI-FLD-01..03 (derived this phase — see 11-RESEARCH.md §Phase Requirements; tracked via decisions D-01..D-15)
 **Depends on:** Phase 10
-**Plans:** 0 plans
+**Plans:** 4 plans (waves 1→4)
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 11 to break down)
+- [ ] 11-01-test-scaffold-PLAN.md — Wave-0 RED tests + conftest migration-list fix (028/029/030/031) [Wave 1, no deps]
+- [ ] 11-02-migration-schema-and-crud-PLAN.md — migration 031 (tone_preset/response_speed/response_delay_seconds/dialogue_flow/arguments_facts/campaign_rules; backfill voice_baseline→tone_preset + success_criteria→lead_trigger_hint; drop legacy) + ORM/schemas/routers [Wave 2, depends_on: 11-01]
+- [ ] 11-03-prompt-assembly-and-runtime-PLAN.md — build_system_prompt §7 rewrite (single-source tone, dialogue_flow, facts guard, rules dedup) + context SELECTs + response_speed wire-up in listener [Wave 3, depends_on: 11-02]
+- [ ] 11-04-frontend-forms-and-handoff-PLAN.md — openapi regen + Agent/Campaign wizard rebuild (tone select, response-speed, stage editor) + human UAT (cross-repo) [Wave 4, depends_on: 11-02, 11-03]
 
 ---
 
