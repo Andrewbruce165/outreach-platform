@@ -308,7 +308,7 @@ Plans:
 | 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
-| 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete   | 2026-06-24 |
+| 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**

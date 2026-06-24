@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 10-04 (Phase 10 done, 4/4); POOLV-03/04 human-UAT PENDING (closed on trust, awaiting frontend deploy)
-last_updated: "2026-06-24T13:19:21.050Z"
-last_activity: 2026-06-24
+status: ready_to_plan
+stopped_at: Phase 10 complete (4/4) — ready to discuss Phase 11
+last_updated: 2026-06-24T13:47:40.731Z
+last_activity: 2026-06-24 -- Phase 11 execution started
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 42
   completed_plans: 38
-  percent: 17
+  percent: 85
 ---
 
 # Project State
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 10 — pool-visibility
+**Current focus:** Phase 11 — agent campaign field split and prompt assembly
 
 ## Current Position
 
-Phase: 10 (pool-visibility) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
+Phase: 11
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-06-24
 
 Progress: [██░░░░░░░░] 17% (1/6 phases done)
@@ -36,7 +36,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 
 **Velocity:**
 
-- Total plans completed: 16
+- Total plans completed: 20
 - Average duration: —
 - Total execution time: —
 
@@ -49,6 +49,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | 07 | 1 | - | - |
 | 08 | 4 | - | - |
 | 09 | 2 | - | - |
+| 10 | 4 | - | - |
 
 *Updated after each plan completion*
 | Phase 02 P02-02 | 50min | 3 tasks | 13 files |
