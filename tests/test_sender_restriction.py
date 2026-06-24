@@ -85,11 +85,31 @@ def test_parse_spambot_limit_until():
 
 
 class _FakeResult:
-    def __init__(self, rows):
+    def __init__(self, rows, scalar=None):
         self._rows = rows
+        self._scalar = scalar
 
     def fetchall(self):
         return self._rows
+
+    def scalar_one_or_none(self):
+        return self._scalar
+
+    def scalar_one(self):
+        return self._scalar
+
+    def one(self):
+        return self._rows[0]
+
+
+# Phase 10: the restriction-audit helper (record_restriction_event) selects the
+# sender row (workspace_id, proxy, rate_*, restricted_until) then INSERTs an event.
+# The fake serves a minimal sender row so the helper runs inside the mocked tick.
+_FAKE_SENDER_ROW = SimpleNamespace(
+    workspace_id="ws-1", proxy=None,
+    rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+    restricted_until=None,
+)
 
 
 class _FakeSession:
@@ -103,7 +123,17 @@ class _FakeSession:
         sql = str(stmt)
         self.executed.append((sql, params))
         if "FROM senders" in sql and "restriction_status <> 'none'" in sql:
+            # The batch reconcile SELECT (decides which senders to recheck).
             return _FakeResult(self._select_rows)
+        if "SELECT restricted_until FROM senders" in sql:
+            # Phase 10 B-1: per-sender intra-tx old_until read (D-01 gate).
+            return _FakeResult([], scalar=None)
+        if "FROM senders" in sql:
+            # Phase 10: the helper's sender-row read (workspace_id/proxy/rate/...).
+            return _FakeResult([_FAKE_SENDER_ROW])
+        if "FROM messages_log" in sql:
+            # Phase 10: the activity-slice counts.
+            return _FakeResult([SimpleNamespace(s1=0, s24=0, u1=0, u24=0)])
         return _FakeResult([])
 
     async def commit(self):
