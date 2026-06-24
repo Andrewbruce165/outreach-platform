@@ -37,13 +37,14 @@ decisions:
 metrics:
   duration: ~12min
   completed: 2026-06-24
-  tasks: 1 of 2 (Task 2 = blocking human-UAT checkpoint, awaiting reviewer)
+  tasks: 2 of 2 (Task 2 = human-UAT, accepted-on-trust; 6 browser steps remain PENDING — no frontend deploy)
   files: 5
+status: complete (UI human-UAT deferred — closed on trust, awaiting frontend deploy)
 ---
 
 # Phase 10 Plan 04: Frontend Pool Badge & Event-List Summary
 
-Shipped the Phase-10 mini-UI (D-11) across the two repos: a 3-state pool badge on the campaign page that makes partial pause visible (🟡 "K из N на паузе до проверки в T"), per-sender restriction chips on the attached pool, and a newest-first restriction-event mini-list on the account page — all derived on the frontend from the presentation-free numeric `pool_health` + the HLTH-03 history endpoint shipped in Plan 03. Backend was rebuilt and migration 030 applied so the regenerated handoff carries the new contract. **Task 2 is a blocking human-UAT checkpoint — NOT self-certified.**
+Shipped the Phase-10 mini-UI (D-11) across the two repos: a 3-state pool badge on the campaign page that makes partial pause visible (🟡 "K из N на паузе до проверки в T"), per-sender restriction chips on the attached pool, and a newest-first restriction-event mini-list on the account page — all derived on the frontend from the presentation-free numeric `pool_health` + the HLTH-03 history endpoint shipped in Plan 03. Backend was rebuilt and migration 030 applied so the regenerated handoff carries the new contract. **Task 2 (human-UAT) was accepted-on-trust by the user — the 6 in-browser verification steps were NOT actually performed (the frontend is committed to the sibling repo but not deployed, so there was nowhere to test). They remain PENDING in `10-04-HUMAN-UAT.md` and must be run after a frontend deploy. This SUMMARY does NOT claim the UI was visually verified.**
 
 ## What Was Built
 
@@ -95,6 +96,11 @@ None. The badge reads live `pool_health` from `GET /campaigns/{id}`; the event-l
 - FOUND: backend commit 1fed6c0
 - FOUND: sibling commit 566dce6
 
-## Human-UAT (Task 2) — PENDING
+## Human-UAT (Task 2) — ACCEPTED ON TRUST, BROWSER STEPS PENDING
 
-Task 2 is a `checkpoint:human-verify` (blocking, `auto_advance: false`). NOT self-certified. The reviewer must manually exercise the 6 steps (badge green→yellow→red→green, per-sender chips, account event-list chronology, no cross-tenant leakage) per the plan's `how-to-verify` and reply "approved". Backend is live (api rebuilt this session); the deployed frontend may need a sibling-repo deploy (Cloudflare/wrangler) for the reviewer to see it at https://aimly.agsventurelab.com.
+Task 2 is a `checkpoint:human-verify`. The user elected to **close the plan on trust** so execution could finalize. Honestly recorded: the 6 in-browser verification steps were **NOT performed** — the frontend is committed to the sibling repo (`566dce6`) but **not deployed**, so there was no live UI to exercise. The code-level work is complete and typechecks clean; the *visual/interaction* verification is **deferred**.
+
+- The 6 PENDING steps are tracked in `.planning/phases/10-pool-visibility/10-04-HUMAN-UAT.md`.
+- They must be run after the sibling repo is deployed (Cloudflare/wrangler) — see https://aimly.agsventurelab.com.
+- POOLV-03 / POOLV-04 are marked **implemented-in-code, human-UAT pending (closed on trust, awaiting frontend deploy)** — NOT fully human-verified.
+- Backend is live (api rebuilt this session, migration 030 applied); only the frontend deploy + the 6 visual checks remain.

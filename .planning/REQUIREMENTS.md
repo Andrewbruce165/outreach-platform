@@ -137,8 +137,8 @@
 
 - [x] **POOLV-01**: `CampaignResponse` exposes an aggregate `pool_health` object `{active, paused, total, earliest_resume_at}` computed in one pass in `_campaign_to_response` (derived; D-08/D-10)
 - [x] **POOLV-02**: Each `attached_senders[]` entry is enriched with `restriction_status` + `restricted_until` (reuses `SenderResponse` field names verbatim) (derived; D-08)
-- [ ] **POOLV-03**: Frontend campaign-page pool badge with 3 states (green=all active, yellow=K/N partial pause, red=all paused), derived on the frontend from numeric `pool_health` — sibling repo `aimly-tg-outreach` (derived; D-09/D-11)
-- [ ] **POOLV-04**: Frontend account-page mini event-list reading the HLTH-03 restriction-events endpoint, newest-first (derived; D-11)
+- [x] **POOLV-03**: Frontend campaign-page pool badge with 3 states (green=all active, yellow=K/N partial pause, red=all paused), derived on the frontend from numeric `pool_health` — sibling repo `aimly-tg-outreach` (derived; D-09/D-11) — _implemented in code (10-04, sibling `566dce6`); human-UAT PENDING (closed on trust, awaiting frontend deploy — see 10-04-HUMAN-UAT.md)_
+- [x] **POOLV-04**: Frontend account-page mini event-list reading the HLTH-03 restriction-events endpoint, newest-first (derived; D-11) — _implemented in code (10-04, sibling `566dce6`); human-UAT PENDING (closed on trust, awaiting frontend deploy — see 10-04-HUMAN-UAT.md)_
 
 ## v2 Requirements
 
@@ -256,8 +256,8 @@
 | HLTH-03 | Phase 10 | Complete |
 | POOLV-01 | Phase 10 | Complete |
 | POOLV-02 | Phase 10 | Complete |
-| POOLV-03 | Phase 10 | Pending |
-| POOLV-04 | Phase 10 | Pending |
+| POOLV-03 | Phase 10 | Code done · human-UAT pending |
+| POOLV-04 | Phase 10 | Code done · human-UAT pending |
 
 **Coverage:**
 
