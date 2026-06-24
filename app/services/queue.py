@@ -760,6 +760,13 @@ class QueueWorker:
                             f"Manual account review required before resuming!"
                             # TODO: add external alert (webhook/email) when monitoring infrastructure is available
                         )
+                        # Phase 9 (FAIL-02): the sender is now flagged spam_limited
+                        # (committed above), so the healthy-pool candidate filter
+                        # excludes it. Move its cold-pending backlog onto healthy
+                        # senders so cold contacts don't stall 24h. db=None → the
+                        # helper owns + commits its own session.
+                        from app.services.failover import failover_cold_backlog
+                        await failover_cold_backlog(sender.id)
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
@@ -798,6 +805,11 @@ class QueueWorker:
                             f"pending paused until {pause_until.strftime('%Y-%m-%d %H:%M UTC')}. "
                             f"Telegram appeal required."
                         )
+                        # Phase 9 (FAIL-02): sender flagged frozen (committed above)
+                        # → excluded from the healthy pool. Move its cold-pending
+                        # backlog onto healthy senders. db=None → own committed session.
+                        from app.services.failover import failover_cold_backlog
+                        await failover_cold_backlog(sender.id)
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
