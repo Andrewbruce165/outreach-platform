@@ -43,6 +43,7 @@ from app.schemas import (
     CampaignSenderAttach,
     CampaignSenderAttachRequest,
     CampaignUpdate,
+    PoolHealth,
 )
 from app.services.rebalance import rebalance_on_attach
 from app.utils.auth import AuthCtx, auth_dep
@@ -212,8 +213,11 @@ async def _build_attached_senders(
                     AND c.status = 'running'
                     AND c.id != :cid
                     AND c.workspace_id = :wid
-                  LIMIT 1) AS locked_by_name
+                  LIMIT 1) AS locked_by_name,
+               s.restriction_status,
+               s.restricted_until
         FROM campaign_senders cs
+        JOIN senders s ON s.id = cs.sender_id
         WHERE cs.campaign_id = :cid
         ORDER BY cs.added_at
     """), {"cid": str(campaign_id), "wid": str(ctx.workspace_id)})
@@ -222,15 +226,46 @@ async def _build_attached_senders(
             sender_id=row[0],
             locked_by_campaign_id=row[1],
             locked_by_campaign_name=row[2],
+            restriction_status=row[3],
+            restricted_until=row[4],
         )
         for row in rows.fetchall()
     ]
+
+
+async def _compute_pool_health(
+    db: AsyncSession, campaign_id: UUID
+) -> PoolHealth:
+    """POOLV-01: 3-state pool-health aggregate in one SELECT over the attached pool.
+
+    total = COUNT(*), active = restriction_status='none', paused = everything
+    restricted, earliest_resume_at = MIN(restricted_until) among the restricted
+    senders (OQ#4 recheck horizon). Empty pool → all zeros / None.
+    """
+    row = (await db.execute(text("""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE s.restriction_status = 'none') AS active,
+            COUNT(*) FILTER (WHERE s.restriction_status <> 'none') AS paused,
+            MIN(s.restricted_until)
+                FILTER (WHERE s.restriction_status <> 'none') AS earliest_resume_at
+        FROM campaign_senders cs
+        JOIN senders s ON s.id = cs.sender_id
+        WHERE cs.campaign_id = :cid
+    """), {"cid": str(campaign_id)})).one()
+    return PoolHealth(
+        total=row.total or 0,
+        active=row.active or 0,
+        paused=row.paused or 0,
+        earliest_resume_at=row.earliest_resume_at,
+    )
 
 
 async def _campaign_to_response(
     db: AsyncSession, ctx: AuthCtx, campaign: Campaign
 ) -> CampaignResponse:
     attached = await _build_attached_senders(db, ctx, campaign.id)
+    pool_health = await _compute_pool_health(db, campaign.id)
     # 024: draft без папки не может быть «исчерпан» — рассылать некуда. Short-circuit
     # вместо вызова _compute_is_exhausted с folder_id=None (даст бессмысленный SQL).
     if campaign.folder_id is None:
@@ -272,6 +307,7 @@ async def _campaign_to_response(
         paused_at=campaign.paused_at,
         attached_senders=attached,
         is_exhausted=is_exhausted,
+        pool_health=pool_health,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,
     )
