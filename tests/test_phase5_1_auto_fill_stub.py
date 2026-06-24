@@ -3,6 +3,8 @@
 UI-SPEC §5.5 AI co-pilot button: real LLM-driven auto-fill is deferred to v2
 per RESEARCH §"Backend Gap Map" Campaigns row. This v1 stub exists so the UI
 button stops looking broken; behaviour is intentionally deterministic.
+
+Phase 11 D-13: success_criteria removed from auto-fill response; lead_trigger_hint returned.
 """
 import pytest
 from sqlalchemy import text
@@ -25,7 +27,10 @@ async def _bind(db, ws_id, uid):
 async def test_auto_fill_returns_canned_defaults_with_empty_body(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
 ):
-    """Empty JSON body → canned defaults exactly as documented in plan 03."""
+    """Empty JSON body → canned defaults exactly as documented in plan 03.
+
+    Phase 11 D-13: success_criteria replaced by lead_trigger_hint in response.
+    """
     await _bind(async_db_session, test_workspace.id, "u-af-empty")
     resp = await async_client.post(
         "/api/v1/campaigns/auto-fill",
@@ -38,7 +43,7 @@ async def test_auto_fill_returns_canned_defaults_with_empty_body(
         "name": "Untitled campaign",
         "audience_hints": "",
         "primary_goal": "book_meeting",
-        "success_criteria": "",
+        "lead_trigger_hint": "",
         "tools": [],
     }
 
@@ -72,8 +77,10 @@ async def test_auto_fill_requires_auth(async_client):
 async def test_auto_fill_response_shape_uses_v2_field_names(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
 ):
-    """Response keys match Pydantic CampaignCreate.v2_fields — UI can feed it back
+    """Response keys match Phase 11 CampaignCreate field names — UI can feed it back
     into POST /campaigns directly without renaming.
+
+    Phase 11 D-13: lead_trigger_hint replaces success_criteria in the response.
     """
     await _bind(async_db_session, test_workspace.id, "u-af-shape")
     resp = await async_client.post(
@@ -84,4 +91,4 @@ async def test_auto_fill_response_shape_uses_v2_field_names(
     assert resp.status_code == 200
     body = resp.json()
     # UI-SPEC §5.5: response is the start of a CampaignCreate payload.
-    assert set(body.keys()) == {"name", "audience_hints", "primary_goal", "success_criteria", "tools"}
+    assert set(body.keys()) == {"name", "audience_hints", "primary_goal", "lead_trigger_hint", "tools"}

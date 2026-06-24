@@ -1,10 +1,11 @@
-"""Agent CRUD round-trip with 05.1 v2 columns + ai_engine COALESCE — UI-AGNT-01.
+"""Agent CRUD round-trip with 05.1 v2 columns + Phase 11 field split — UI-AGNT-01.
 
-Plan 03 Task 3:
-- Router persists 12 v2 columns through POST / PATCH / GET / duplicate.
+Plan 03 Task 3 (updated Phase 11):
+- Router persists v2 + Phase 11 columns through POST / PATCH / GET / duplicate.
+- Phase 11 D-01: voice_baseline/tone/tone_of_voice removed; tone_preset is single source.
+- Phase 11 D-11: response_speed + response_delay_seconds added.
 - ai_engine.get_context_for_conversation reads COALESCE(new, legacy) so legacy
   agents (only system_prompt set) keep producing identical LLM prompts.
-- Newly migrated agents (who_is_agent set) win over legacy system_prompt.
 """
 import pytest
 from sqlalchemy import text
@@ -30,15 +31,17 @@ async def _bind(db, ws_id, uid):
 async def test_agent_create_with_full_v2_payload(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
 ):
-    """All 12 v2 fields round-trip through POST + GET."""
+    """All v2 + Phase 11 fields round-trip through POST + GET."""
     await _bind(async_db_session, test_workspace.id, "u-agent-create")
     body = {
         "name": "Voiced agent",
         "who_is_agent": "Senior SDR at aimly",
         "company_knowledge": "aimly is a Telegram outreach platform",
         "knowledge_base": "Pricing: $99/mo",
-        "voice_baseline": "Friendly",
-        "tone": {"formal": -10, "warm": 20, "brief": 0},
+        # Phase 11 D-01: tone_preset replaces voice_baseline/tone/tone_of_voice
+        "tone_preset": "Friendly",
+        "response_speed": "human",
+        "response_delay_seconds": None,
         "max_message_length": 200,
         "mirror_language": True,
         "allow_emoji": True,
@@ -64,8 +67,9 @@ async def test_agent_create_with_full_v2_payload(
     assert j["who_is_agent"] == "Senior SDR at aimly"
     assert j["company_knowledge"] == "aimly is a Telegram outreach platform"
     assert j["knowledge_base"] == "Pricing: $99/mo"
-    assert j["voice_baseline"] == "Friendly"
-    assert j["tone"] == {"formal": -10, "warm": 20, "brief": 0}
+    # Phase 11 D-01 assertions:
+    assert j["tone_preset"] == "Friendly"
+    assert j["response_speed"] == "human"
     assert j["max_message_length"] == 200
     assert j["mirror_language"] is True
     assert j["allow_emoji"] is True
@@ -73,6 +77,10 @@ async def test_agent_create_with_full_v2_payload(
     assert j["qa_pairs"] == [{"q": "What's pricing?", "a": "$99/mo"}]
     assert j["auto_pause_triggers"] == ["unsubscribe"]
     assert j["auto_pause_scope"] == "contact"
+    # Removed fields must NOT be in the response
+    assert "voice_baseline" not in j
+    assert "tone" not in j
+    assert "tone_of_voice" not in j
 
 
 async def test_agent_patch_partial_v2_fields(
@@ -82,7 +90,8 @@ async def test_agent_patch_partial_v2_fields(
     """PATCH updates only the fields in the body — others stay unchanged."""
     await _bind(async_db_session, test_workspace.id, "u-agent-patch")
     a = await test_agent_factory()
-    patch = {"voice_baseline": "Professional", "max_message_length": 320}
+    # Phase 11 D-01: use tone_preset instead of voice_baseline
+    patch = {"tone_preset": "Professional", "max_message_length": 320}
     resp = await async_client.patch(
         f"/api/v1/agents/{a.id}",
         json=patch,
@@ -90,7 +99,7 @@ async def test_agent_patch_partial_v2_fields(
     )
     assert resp.status_code == 200, resp.text
     j = resp.json()
-    assert j["voice_baseline"] == "Professional"
+    assert j["tone_preset"] == "Professional"
     assert j["max_message_length"] == 320
     # Legacy system_prompt untouched (test_agent_factory default).
     assert j["system_prompt"] == "You are a helpful sales agent."
@@ -99,7 +108,7 @@ async def test_agent_patch_partial_v2_fields(
 async def test_agent_create_legacy_only_payload_returns_v2_fields_null(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
 ):
-    """Phase 3 / Phase 4 client (no v2 fields) → response shows v2 fields as None."""
+    """Phase 3 / Phase 4 client (no v2 fields) → response shows Phase 11 fields as None."""
     await _bind(async_db_session, test_workspace.id, "u-agent-legacy")
     resp = await async_client.post(
         "/api/v1/agents",
@@ -112,25 +121,28 @@ async def test_agent_create_legacy_only_payload_returns_v2_fields_null(
     assert resp.status_code == 201, resp.text
     j = resp.json()
     assert j["who_is_agent"] is None
-    assert j["voice_baseline"] is None
-    assert j["tone"] is None
+    # Phase 11 D-01: tone_preset replaces voice_baseline
+    assert j["tone_preset"] is None
+    assert j["response_speed"] is None
     assert j["banlist"] is None
-    assert j["auto_pause_scope"] is None
+    # auto_pause_scope has DB default 'conversation' — not None on fresh insert
+    assert j["auto_pause_scope"] == "conversation"
 
 
 async def test_agent_duplicate_copies_v2_fields(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
 ):
-    """POST /{id}/duplicate must copy 12 v2 fields for parity with source."""
+    """POST /{id}/duplicate must copy Phase 11 fields for parity with source."""
     await _bind(async_db_session, test_workspace.id, "u-agent-dup")
-    # Create source with v2 fields.
+    # Create source with Phase 11 fields.
     src_resp = await async_client.post(
         "/api/v1/agents",
         json={
             "name": "Dup source",
             "who_is_agent": "Source agent",
-            "voice_baseline": "Playful",
-            "tone": {"formal": 0, "warm": 30, "brief": -5},
+            # Phase 11 D-01: tone_preset replaces voice_baseline/tone
+            "tone_preset": "Casual",
+            "response_speed": "slow",
             "auto_pause_scope": "campaign",
         },
         headers=_auth_headers(valid_supabase_jwt, "u-agent-dup"),
@@ -145,8 +157,8 @@ async def test_agent_duplicate_copies_v2_fields(
     assert dup_resp.status_code == 201, dup_resp.text
     dup = dup_resp.json()
     assert dup["who_is_agent"] == "Source agent"
-    assert dup["voice_baseline"] == "Playful"
-    assert dup["tone"] == {"formal": 0, "warm": 30, "brief": -5}
+    assert dup["tone_preset"] == "Casual"
+    assert dup["response_speed"] == "slow"
     assert dup["auto_pause_scope"] == "campaign"
     assert dup["name"].startswith("Dup source (copy")
 

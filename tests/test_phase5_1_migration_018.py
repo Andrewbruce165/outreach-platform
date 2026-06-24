@@ -25,6 +25,8 @@ pytestmark = pytest.mark.asyncio
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MIG_018 = (PROJECT_ROOT / "migrations" / "018_phase5_1.sql").read_text()
+_MIG_032_PATH = PROJECT_ROOT / "migrations" / "032_phase11_field_split.sql"
+MIG_032 = _MIG_032_PATH.read_text() if _MIG_032_PATH.exists() else None
 
 
 # ─── 1. Idempotency ───────────────────────────────────────────────────────────
@@ -33,11 +35,18 @@ MIG_018 = (PROJECT_ROOT / "migrations" / "018_phase5_1.sql").read_text()
 async def test_migration_018_idempotent(async_db_session):
     """Migration 018 was applied once by conftest. Apply it again — must not fail
     (IF NOT EXISTS / DROP CONSTRAINT IF EXISTS).
+
+    Phase 11 note: migration 032 dropped voice_baseline/tone/tone_of_voice.
+    Re-applying 018 re-adds them. We re-apply 032 immediately after to restore
+    the Phase-11 schema state so subsequent tests see the correct column set.
     """
     conn = await async_db_session.connection()
     raw = await conn.get_raw_connection()
     # asyncpg driver handles the BEGIN/COMMIT inside the migration body.
     await raw.driver_connection.execute(MIG_018)
+    # Re-apply Phase 11 migration to drop the columns 018 just re-added.
+    if MIG_032:
+        await raw.driver_connection.execute(MIG_032)
 
 
 # ─── 2. telemetry_events shape ────────────────────────────────────────────────
@@ -65,54 +74,64 @@ async def test_telemetry_events_table_shape(async_db_session):
 
 
 async def test_ai_contexts_v2_columns_exist(async_db_session):
+    """Phase 11 D-01: after migration 032, voice_baseline/tone replaced by tone_preset/
+    response_speed/response_delay_seconds. Other Phase 05.1 columns still present."""
     cols = (await async_db_session.execute(text("""
         SELECT column_name FROM information_schema.columns
         WHERE table_name = 'ai_contexts'
     """))).scalars().all()
-    expected = {
+    col_set = set(cols)
+    # Phase 05.1 columns that were NOT dropped by Phase 11:
+    expected_present = {
         "who_is_agent", "company_knowledge", "knowledge_base",
-        "voice_baseline", "tone", "max_message_length",
-        "mirror_language", "allow_emoji", "banlist", "qa_pairs",
-        "auto_pause_triggers", "auto_pause_scope",
+        "max_message_length", "mirror_language", "allow_emoji",
+        "banlist", "qa_pairs", "auto_pause_triggers", "auto_pause_scope",
     }
-    missing = expected - set(cols)
-    assert not missing, f"ai_contexts missing v2 columns: {missing}"
+    # Phase 11 D-01 new columns (replaces voice_baseline/tone):
+    expected_present |= {"tone_preset", "response_speed", "response_delay_seconds"}
+    missing = expected_present - col_set
+    assert not missing, f"ai_contexts missing v2/Phase-11 columns: {missing}"
+
+    # Phase 11 D-01: voice_baseline and tone must be DROPPED (migration 032)
+    for dropped in ("voice_baseline", "tone", "tone_of_voice"):
+        assert dropped not in col_set, \
+            f"ai_contexts Phase-11 dropped column still present: {dropped}"
 
 
-# ─── 4. voice_baseline CHECK ──────────────────────────────────────────────────
+# ─── 4. tone_preset CHECK (Phase 11 replaces voice_baseline CHECK) ────────────
 
 
-async def test_voice_baseline_check_rejects_invalid(
+async def test_tone_preset_check_rejects_invalid(
     async_db_session, test_workspace
 ):
-    """Invalid voice_baseline string must violate ai_contexts_voice_baseline_check."""
+    """Invalid tone_preset string must violate ai_contexts_tone_preset_check (Phase 11 D-01)."""
     from sqlalchemy.exc import IntegrityError
 
     with pytest.raises(IntegrityError) as exc_info:
         await async_db_session.execute(text("""
-            INSERT INTO ai_contexts (workspace_id, name, voice_baseline)
-            VALUES (:wid, :name, 'Sarcastic')
+            INSERT INTO ai_contexts (workspace_id, name, tone_preset)
+            VALUES (:wid, :name, 'Aggressive')
         """), {
             "wid": str(test_workspace.id),
-            "name": f"Bad voice {_uuid.uuid4()}",
+            "name": f"Bad tone {_uuid.uuid4()}",
         })
         await async_db_session.commit()
     await async_db_session.rollback()
     err = str(exc_info.value).lower()
-    assert "voice_baseline" in err or "check constraint" in err
+    assert "tone_preset" in err or "check constraint" in err
 
 
-async def test_voice_baseline_check_accepts_three_values(
+async def test_tone_preset_check_accepts_four_values(
     async_db_session, test_workspace
 ):
-    """All three documented voice_baseline values must INSERT cleanly."""
-    for v in ("Professional", "Friendly", "Playful"):
+    """All four Phase 11 tone_preset values must INSERT cleanly."""
+    for v in ("Friendly", "Professional", "Direct", "Casual"):
         await async_db_session.execute(text("""
-            INSERT INTO ai_contexts (workspace_id, name, voice_baseline)
+            INSERT INTO ai_contexts (workspace_id, name, tone_preset)
             VALUES (:wid, :name, :v)
         """), {
             "wid": str(test_workspace.id),
-            "name": f"voice-{v}-{_uuid.uuid4()}",
+            "name": f"tone-{v}-{_uuid.uuid4()}",
             "v": v,
         })
     await async_db_session.commit()
@@ -203,7 +222,11 @@ async def test_auto_pause_scope_check(async_db_session, test_workspace):
 
 
 async def test_defaults_applied(async_db_session, test_workspace):
-    """INSERT ai_contexts with only required cols — defaults must materialise."""
+    """INSERT ai_contexts with only required cols — defaults must materialise.
+
+    Phase 11 note: `tone` (JSONB slider) was dropped by migration 032.
+    We only check the columns still present after Phase 11.
+    """
     name = f"defaults-{_uuid.uuid4()}"
     await async_db_session.execute(text("""
         INSERT INTO ai_contexts (workspace_id, name)
@@ -212,15 +235,14 @@ async def test_defaults_applied(async_db_session, test_workspace):
     await async_db_session.commit()
 
     row = (await async_db_session.execute(text("""
-        SELECT tone, max_message_length, mirror_language, allow_emoji,
+        SELECT max_message_length, mirror_language, allow_emoji,
                auto_pause_scope
         FROM ai_contexts WHERE name = :name
     """), {"name": name})).first()
 
     assert row is not None, "Inserted ai_contexts row not found"
-    tone, max_len, mirror, emoji, scope = row
-    # tone is JSONB → asyncpg returns it parsed (dict) on modern versions.
-    assert tone == {"formal": 0, "warm": 0, "brief": 0}, f"tone default wrong: {tone!r}"
+    max_len, mirror, emoji, scope = row
+    # Phase 11 D-02: tone (JSONB slider) dropped — no longer tested here.
     assert max_len == 280
     assert mirror is True
     assert emoji is False
@@ -268,6 +290,11 @@ async def test_webhook_url_backfill(
     conn = await async_db_session.connection()
     raw = await conn.get_raw_connection()
     await raw.driver_connection.execute(MIG_018)
+
+    # Phase 11 note: 018 re-adds voice_baseline/tone/tone_of_voice. Re-apply 032
+    # immediately to restore Phase-11 schema so later tests see the correct state.
+    if MIG_032:
+        await raw.driver_connection.execute(MIG_032)
 
     # asyncpg ran on a different connection; commit visibility check.
     await async_db_session.commit()

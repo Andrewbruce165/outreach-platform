@@ -58,7 +58,6 @@ def _agent_to_response(agent: AIContext, campaign_count: int = 0) -> AgentRespon
         name=agent.name,
         system_prompt=agent.system_prompt,
         rules=agent.rules,
-        tone_of_voice=agent.tone_of_voice,
         faq=[FaqItem(**item) for item in faq_data],
         company_info=agent.company_info,
         product_info=agent.product_info,
@@ -67,8 +66,10 @@ def _agent_to_response(agent: AIContext, campaign_count: int = 0) -> AgentRespon
         who_is_agent=agent.who_is_agent,
         company_knowledge=agent.company_knowledge,
         knowledge_base=agent.knowledge_base,
-        voice_baseline=agent.voice_baseline,
-        tone=agent.tone,
+        # Phase 11 D-01/D-11: single-source tone + response speed.
+        tone_preset=agent.tone_preset,
+        response_speed=agent.response_speed,
+        response_delay_seconds=agent.response_delay_seconds,
         max_message_length=agent.max_message_length,
         mirror_language=agent.mirror_language,
         allow_emoji=agent.allow_emoji,
@@ -209,7 +210,6 @@ async def create_agent(
         name=name,
         system_prompt=payload.system_prompt,
         rules=payload.rules,
-        tone_of_voice=payload.tone_of_voice,
         faq=[item.model_dump() for item in payload.faq],
         company_info=payload.company_info,
         product_info=payload.product_info,
@@ -217,8 +217,10 @@ async def create_agent(
         who_is_agent=payload.who_is_agent,
         company_knowledge=payload.company_knowledge,
         knowledge_base=payload.knowledge_base,
-        voice_baseline=payload.voice_baseline,
-        tone=payload.tone.model_dump() if payload.tone else None,
+        # Phase 11 D-01/D-11: single-source tone + response speed.
+        tone_preset=payload.tone_preset,
+        response_speed=payload.response_speed,
+        response_delay_seconds=payload.response_delay_seconds,
         max_message_length=payload.max_message_length,
         mirror_language=payload.mirror_language,
         allow_emoji=payload.allow_emoji,
@@ -280,8 +282,6 @@ async def update_agent(
         agent.system_prompt = payload.system_prompt
     if payload.rules is not None:
         agent.rules = payload.rules
-    if payload.tone_of_voice is not None:
-        agent.tone_of_voice = payload.tone_of_voice
     if payload.faq is not None:
         # Pitfall 7: full replacement (not merge)
         agent.faq = [item.model_dump() for item in payload.faq]
@@ -290,18 +290,20 @@ async def update_agent(
     if payload.product_info is not None:
         agent.product_info = payload.product_info
     # 05.1 v2 fields (UI-SPEC §5.8 — UI-AGNT-01). Partial PATCH semantics:
-    # None = leave unchanged. tone is replaced wholesale (Pitfall 7 — full
-    # replacement like faq).
+    # None = leave unchanged.
     if payload.who_is_agent is not None:
         agent.who_is_agent = payload.who_is_agent
     if payload.company_knowledge is not None:
         agent.company_knowledge = payload.company_knowledge
     if payload.knowledge_base is not None:
         agent.knowledge_base = payload.knowledge_base
-    if payload.voice_baseline is not None:
-        agent.voice_baseline = payload.voice_baseline
-    if payload.tone is not None:
-        agent.tone = payload.tone.model_dump()
+    # Phase 11 D-01/D-11: single-source tone + response speed.
+    if payload.tone_preset is not None:
+        agent.tone_preset = payload.tone_preset
+    if payload.response_speed is not None:
+        agent.response_speed = payload.response_speed
+    if payload.response_delay_seconds is not None:
+        agent.response_delay_seconds = payload.response_delay_seconds
     if payload.max_message_length is not None:
         agent.max_message_length = payload.max_message_length
     if payload.mirror_language is not None:
@@ -376,7 +378,6 @@ async def duplicate_agent(
             name=new_name,
             system_prompt=original.system_prompt,
             rules=original.rules,
-            tone_of_voice=original.tone_of_voice,
             faq=original.faq,
             company_info=original.company_info,
             product_info=original.product_info,
@@ -384,8 +385,10 @@ async def duplicate_agent(
             who_is_agent=original.who_is_agent,
             company_knowledge=original.company_knowledge,
             knowledge_base=original.knowledge_base,
-            voice_baseline=original.voice_baseline,
-            tone=original.tone,
+            # Phase 11 D-01/D-11: copy single-source tone + response speed.
+            tone_preset=original.tone_preset,
+            response_speed=original.response_speed,
+            response_delay_seconds=original.response_delay_seconds,
             max_message_length=original.max_message_length,
             mirror_language=original.mirror_language,
             allow_emoji=original.allow_emoji,

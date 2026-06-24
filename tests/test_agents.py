@@ -89,7 +89,9 @@ async def test_create_agent_persists_all_fields(async_client, async_db_session, 
             "name": "Full Agent",
             "system_prompt": "prompt",
             "rules": "be polite",
-            "tone_of_voice": "friendly",
+            # Phase 11 D-01: tone_preset replaces tone_of_voice/voice_baseline
+            "tone_preset": "Friendly",
+            "response_speed": "human",
             "faq": [{"question": "Q1", "answer": "A1"}],
             "company_info": "Co",
             "product_info": "Prod",
@@ -100,7 +102,8 @@ async def test_create_agent_persists_all_fields(async_client, async_db_session, 
     body = resp.json()
     assert body["system_prompt"] == "prompt"
     assert body["rules"] == "be polite"
-    assert body["tone_of_voice"] == "friendly"
+    assert body["tone_preset"] == "Friendly"
+    assert body["response_speed"] == "human"
     assert body["faq"] == [{"question": "Q1", "answer": "A1"}]
     assert body["company_info"] == "Co"
     assert body["product_info"] == "Prod"

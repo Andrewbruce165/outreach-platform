@@ -19,13 +19,17 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_get_context_phase3_schema(async_db_session, test_agent_factory):
-    """После миграции 015 get_context работает без is_active/max_message_length/webhook_functions."""
+    """После миграции 015 get_context работает без is_active/max_message_length/webhook_functions.
+
+    Phase 11 D-01: tone_of_voice column dropped; test updated to use tone_preset.
+    """
     from app.services.ai_engine import ai_engine
 
     agent = await test_agent_factory(
         name="Phase 3 Agent",
         system_prompt="test prompt",
-        tone_of_voice="friendly",
+        # Phase 11 D-01: tone_of_voice dropped, use tone_preset
+        tone_preset="Friendly",
         rules="rule 1",
         company_info="Test Co.",
     )
@@ -36,7 +40,6 @@ async def test_get_context_phase3_schema(async_db_session, test_agent_factory):
 
     assert ctx is not None
     assert ctx["system_prompt"] == "test prompt"
-    assert ctx["tone_of_voice"] == "friendly"
     assert ctx["rules"] == "rule 1"
     assert ctx["company_info"] == "Test Co."
     # Phase 05.1: колонка вернулась миграцией 018 (default 280) — get_context

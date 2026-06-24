@@ -297,11 +297,15 @@ async def _campaign_to_response(
         # 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6 — UI-CAMPB-01 / UI-CAMPL-01).
         audience_hints=campaign.audience_hints,
         primary_goal=campaign.primary_goal,
-        success_criteria=campaign.success_criteria,
+        # NB: success_criteria removed (Phase 11 D-13) — merged into lead_trigger_hint.
         webhook_url=campaign.webhook_url,
         # 026: per-campaign re-contact policy.
         allow_recontact=campaign.allow_recontact,
         recontact_min_age_days=campaign.recontact_min_age_days,
+        # Phase 11 campaign fields (D-04/D-12/D-14).
+        dialogue_flow=campaign.dialogue_flow or [],
+        arguments_facts=campaign.arguments_facts,
+        campaign_rules=campaign.campaign_rules,
         # 029: auto-pause visibility.
         pause_reason=campaign.pause_reason,
         paused_at=campaign.paused_at,
@@ -405,11 +409,15 @@ async def create_campaign(
         # 05.1 v2 fields (UI-SPEC §5.5 step 2 + step 6 — UI-CAMPB-01).
         audience_hints=payload.audience_hints,
         primary_goal=payload.primary_goal,
-        success_criteria=payload.success_criteria,
+        # NB: success_criteria removed (Phase 11 D-13) — merged into lead_trigger_hint.
         webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
         # 026: per-campaign re-contact policy.
         allow_recontact=payload.allow_recontact,
         recontact_min_age_days=payload.recontact_min_age_days,
+        # Phase 11 campaign fields (D-04/D-12/D-14).
+        dialogue_flow=[s.model_dump() for s in payload.dialogue_flow] if payload.dialogue_flow else [],
+        arguments_facts=payload.arguments_facts,
+        campaign_rules=payload.campaign_rules,
         status="draft",
     )
     db.add(camp)
@@ -453,11 +461,14 @@ class _AutoFillRequest(BaseModel):
 
 
 class _AutoFillResponse(BaseModel):
-    """Canned defaults so the UI button works without an LLM call (v1 stub)."""
+    """Canned defaults so the UI button works without an LLM call (v1 stub).
+
+    Phase 11 D-13: success_criteria removed; auto-fill stub returns lead_trigger_hint instead.
+    """
     name: str
     audience_hints: str
     primary_goal: str
-    success_criteria: str
+    lead_trigger_hint: str
     tools: list
 
 
@@ -479,7 +490,7 @@ async def auto_fill_campaign(
         name="Untitled campaign",
         audience_hints="",
         primary_goal="book_meeting",
-        success_criteria="",
+        lead_trigger_hint="",
         tools=[],
     )
 
@@ -567,6 +578,14 @@ async def patch_campaign(
         update_data["tools"] = [
             t.model_dump(mode="json") if hasattr(t, "model_dump") else t
             for t in update_data["tools"]
+        ]
+
+    # Phase 11 D-04: dialogue_flow PATCH = full replacement (mirrors tools/qa_pairs Pitfall 7).
+    # DialogueStage objects from Pydantic must be serialised to dicts before writing to JSONB.
+    if "dialogue_flow" in update_data and update_data["dialogue_flow"] is not None:
+        update_data["dialogue_flow"] = [
+            s.model_dump() if hasattr(s, "model_dump") else s
+            for s in update_data["dialogue_flow"]
         ]
 
     for k, v in update_data.items():
@@ -820,11 +839,15 @@ async def duplicate_campaign(
         # 05.1 v2 fields — duplicate should copy them for parity with src.
         audience_hints=src.audience_hints,
         primary_goal=src.primary_goal,
-        success_criteria=src.success_criteria,
+        # NB: success_criteria removed (Phase 11 D-13) — merged into lead_trigger_hint.
         webhook_url=src.webhook_url,
         # 026: per-campaign re-contact policy — copy for parity with src.
         allow_recontact=src.allow_recontact,
         recontact_min_age_days=src.recontact_min_age_days,
+        # Phase 11 campaign fields (D-04/D-12/D-14) — copy for parity with src.
+        dialogue_flow=src.dialogue_flow or [],
+        arguments_facts=src.arguments_facts,
+        campaign_rules=src.campaign_rules,
         status="draft",
     )
     db.add(new_c)

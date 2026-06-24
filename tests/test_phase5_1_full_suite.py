@@ -52,7 +52,8 @@ def test_all_05_1_modules_importable():
 def test_05_1_schemas_importable():
     """Every Pydantic schema added in 05.1-01 / 05.1-04 is importable + has expected fields."""
     from app.schemas import (
-        ToneSpec,
+        # ToneSpec removed in Phase 11 D-01 (replaced by tone_preset Literal field)
+        DialogueStage,
         QAPair,
         TelemetryEventIn,
         CoreValueResponse,
@@ -72,8 +73,8 @@ def test_05_1_schemas_importable():
         "total_calls", "avg_latency_ms", "prompt_tokens",
         "completion_tokens", "total_tokens", "spend_usd_cents",
     }
-    # Tone v2 (UI-SPEC §5.8) bi-polar sliders
-    assert set(ToneSpec.model_fields.keys()) == {"formal", "warm", "brief"}
+    # Phase 11 D-01: DialogueStage replaces ToneSpec
+    assert set(DialogueStage.model_fields.keys()) == {"title", "instruction"}
     # QA pair v2 (UI-SPEC §5.8 FAQ tab)
     assert set(QAPair.model_fields.keys()) == {"q", "a"}
 
@@ -85,19 +86,25 @@ def test_05_1_orm_models_importable():
     assert TelemetryEvent.__table__.name == "telemetry_events"
 
     ai_cols = {c.name for c in AIContext.__table__.columns}
+    # Phase 11 D-01: tone_preset replaces voice_baseline/tone/tone_of_voice;
+    # response_speed/response_delay_seconds added.
     expected_ai_v2 = {
         "who_is_agent", "company_knowledge", "knowledge_base",
-        "voice_baseline", "tone", "max_message_length",
+        "tone_preset", "response_speed", "response_delay_seconds",
+        "max_message_length",
         "mirror_language", "allow_emoji", "banlist", "qa_pairs",
         "auto_pause_triggers", "auto_pause_scope",
     }
     missing_ai = expected_ai_v2 - ai_cols
-    assert not missing_ai, f"AIContext missing 05.1 v2 columns: {missing_ai}"
+    assert not missing_ai, f"AIContext missing v2/Phase-11 columns: {missing_ai}"
 
     camp_cols = {c.name for c in Campaign.__table__.columns}
-    expected_camp_v2 = {"audience_hints", "primary_goal", "success_criteria", "webhook_url"}
+    # Phase 11 D-04/D-12/D-14: dialogue_flow/arguments_facts/campaign_rules added.
+    # Phase 11 D-13: success_criteria removed.
+    expected_camp_v2 = {"audience_hints", "primary_goal", "webhook_url",
+                        "dialogue_flow", "arguments_facts", "campaign_rules"}
     missing_camp = expected_camp_v2 - camp_cols
-    assert not missing_camp, f"Campaign missing 05.1 v2 columns: {missing_camp}"
+    assert not missing_camp, f"Campaign missing v2/Phase-11 columns: {missing_camp}"
 
 
 def test_app_main_includes_telemetry_router():

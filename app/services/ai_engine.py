@@ -182,12 +182,11 @@ async def get_context_for_conversation(
                     a.id AS agent_id, a.name AS agent_name,
                     COALESCE(a.who_is_agent, a.system_prompt) AS system_prompt,
                     a.rules,
-                    a.tone_of_voice,
-                    -- Phase 05.1 v2 tone fields (UI-SPEC §5.8): voice_baseline (TEXT)
-                    -- and tone JSONB {formal, warm, brief}. 2026-05-26: wired through
-                    -- build_system_prompt — were persisted via /agents but not read.
-                    a.voice_baseline,
-                    a.tone AS tone_spec,
+                    -- Phase 11 D-01: tone_preset is the single tone source.
+                    -- tone_of_voice / voice_baseline / tone (JSONB) dropped by migration 032.
+                    a.tone_preset,
+                    a.response_speed,
+                    a.response_delay_seconds,
                     COALESCE(a.qa_pairs::text, a.faq::text)::jsonb AS faq,
                     COALESCE(a.company_knowledge, a.company_info) AS company_info,
                     COALESCE(a.knowledge_base, a.product_info) AS product_info,
@@ -198,13 +197,16 @@ async def get_context_for_conversation(
                     c.tools AS campaign_tools, c.message_template,
                     c.lead_trigger_hint, c.handoff_trigger_hint, c.finish_trigger_hint,
                     c.lead_webhook_url, c.handoff_webhook_url, c.finish_webhook_url,
-                    c.webhook_url
+                    c.webhook_url,
+                    -- Phase 11 campaign fields (D-04/D-12/D-14).
+                    c.dialogue_flow, c.arguments_facts, c.campaign_rules,
+                    c.primary_goal, c.audience_hints
                 FROM conversations conv
                 LEFT JOIN campaigns c ON c.id = conv.campaign_id
                 LEFT JOIN ai_contexts a
                     ON a.id = COALESCE(c.agent_id, conv.ai_context_id)
                 WHERE conv.id = :cid
-                """
+"""
             ),
             {"cid": str(conversation_id)},
         )
@@ -224,11 +226,11 @@ async def get_context_for_conversation(
         "agent_name": row.agent_name,
         "system_prompt": row.system_prompt or "",
         "rules": row.rules or "",
-        "tone_of_voice": row.tone_of_voice or "",
-        # Phase 05.1 v2 tone fields — voice_baseline (e.g. "Professional"/"Casual")
-        # and tone JSONB {formal, warm, brief} on 0-5 scale. Read by build_system_prompt.
-        "voice_baseline": row.voice_baseline or "",
-        "tone_spec": row.tone_spec or {},
+        # Phase 11 D-01: tone_preset is the single tone source (migration 032 dropped
+        # tone_of_voice / voice_baseline / tone JSONB). build_system_prompt reads tone_preset.
+        "tone_preset": row.tone_preset or "",
+        "response_speed": row.response_speed or "",
+        "response_delay_seconds": row.response_delay_seconds,
         "faq": row.faq or {},
         "company_info": row.company_info or "",
         "product_info": row.product_info or "",
@@ -258,6 +260,13 @@ async def get_context_for_conversation(
             "handoff_webhook_url": row.handoff_webhook_url,
             "finish_webhook_url": row.finish_webhook_url,
             "webhook_url": row.webhook_url,
+            # Phase 11 campaign fields (D-04/D-12/D-14): structured dialogue flow,
+            # argument/fact injection, and campaign-specific rules.
+            "dialogue_flow": row.dialogue_flow or [],
+            "arguments_facts": row.arguments_facts or "",
+            "campaign_rules": row.campaign_rules or "",
+            "primary_goal": row.primary_goal or "",
+            "audience_hints": row.audience_hints or "",
         }
     else:
         # M3 (revision): legacy pre-Phase-4 conversation — no campaign linkage,
@@ -487,7 +496,8 @@ class AIEngine:
                 text("""
                     SELECT
                         COALESCE(who_is_agent, system_prompt) AS system_prompt,
-                        tone_of_voice,
+                        -- Phase 11 D-01: tone_preset replaces tone_of_voice/voice_baseline/tone
+                        tone_preset,
                         rules,
                         COALESCE(company_knowledge, company_info) AS company_info,
                         max_message_length
@@ -501,7 +511,8 @@ class AIEngine:
             if row:
                 ctx = {
                     "system_prompt": row[0] or "",
-                    "tone_of_voice": row[1] or "",
+                    # Phase 11 D-01: tone_preset is the single tone source.
+                    "tone_preset": row[1] or "",
                     "rules": row[2] or "",
                     "company_info": row[3] or "",
                     # max_message_length вернулась в схему миграцией 018 (Phase 05.1,
@@ -574,9 +585,9 @@ class AIEngine:
         who_is_agent = (context.get("system_prompt") or "").strip()
         company_knowledge = (context.get("company_info") or "").strip()
         knowledge_base = (context.get("product_info") or "").strip()
-        tone_of_voice = (context.get("tone_of_voice") or "").strip()
-        voice_baseline = (context.get("voice_baseline") or "").strip()
-        tone_spec = context.get("tone_spec") or {}
+        # Phase 11 D-01: tone_preset is the single tone source. Legacy voice_baseline /
+        # tone_of_voice / tone (JSONB slider) removed from schema (migration 032).
+        tone_preset = (context.get("tone_preset") or "").strip()
         rules = (context.get("rules") or "").strip()
 
         mirror_language = bool(context.get("mirror_language", True))
@@ -611,28 +622,11 @@ class AIEngine:
                 f"<product>\n{knowledge_base}\n\n{_PROMPT_PRODUCT_GUARD}\n</product>"
             )
 
-        # <tone> — composed from voice_baseline (UI v2 dropdown), tone JSONB
-        # calibration (0-5 sliders for formal/warm/brief), and tone_of_voice
-        # (legacy free-text). Render the block if any of the three is non-empty.
-        tone_lines: list[str] = []
-        if voice_baseline:
-            tone_lines.append(f"Baseline persona: {voice_baseline}.")
-        if isinstance(tone_spec, dict) and tone_spec:
-            calibration_parts = []
-            for key, label in (("formal", "formal"), ("warm", "warm"), ("brief", "brief")):
-                v = tone_spec.get(key)
-                if isinstance(v, (int, float)):
-                    calibration_parts.append(f"{label}={int(v)}/5")
-            if calibration_parts:
-                tone_lines.append(
-                    "Tone calibration (0=opposite, 5=strong): "
-                    + ", ".join(calibration_parts)
-                    + "."
-                )
-        if tone_of_voice:
-            tone_lines.append(tone_of_voice)
-        if tone_lines:
-            blocks.append("<tone>\n" + "\n\n".join(tone_lines) + "\n</tone>")
+        # <tone> — Phase 11 D-01: rendered from tone_preset only (single source).
+        # Legacy voice_baseline / tone_of_voice / tone JSONB calibration removed.
+        # Full prompt-block rewrite is Plan 11-03; this is the migration-safe stub.
+        if tone_preset:
+            blocks.append(f"<tone>\n{tone_preset}\n</tone>")
 
         if rules:
             blocks.append(f"<rules>\n{rules}\n</rules>")

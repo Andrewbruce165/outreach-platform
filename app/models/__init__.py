@@ -190,7 +190,7 @@ class AIContext(Base):
                           nullable=False)
     name = Column(String(100), nullable=False)
     system_prompt = Column(Text, nullable=True)
-    tone_of_voice = Column(Text, nullable=True)
+    # tone_of_voice dropped Phase 11 D-01 (migration 032) — use tone_preset.
     rules = Column(Text, nullable=True)
     company_info = Column(Text, nullable=True)
     product_info = Column(Text, nullable=True)

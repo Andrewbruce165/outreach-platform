@@ -456,7 +456,7 @@ async def test_agent_factory(async_db_session: AsyncSession, test_workspace: Wor
             workspace_id=test_workspace.id,
             name=f"Test Agent {counter['n']}",
             system_prompt="You are a helpful sales agent.",
-            tone_of_voice="friendly",
+            # tone_of_voice dropped Phase 11 D-01 (migration 032) — column no longer exists.
             rules="Always be polite.",
             faq={},
             company_info="Test Co.",
