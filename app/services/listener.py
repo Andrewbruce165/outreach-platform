@@ -226,9 +226,26 @@ class TelegramListener:
             await self.process_buffered_messages(conversation_id)
             return
 
-        # Создаём новый таймер
-        delay = min(random.uniform(self.DEBOUNCE_MIN, self.DEBOUNCE_MAX), self.MAX_BUFFER_TIME - buffer_age)
-        logger.info(f"⏱️ Debounce таймер для {conversation_id[:8]}: {delay:.1f}с")
+        # Phase 11 D-11 / RT-01: compute base delay from response_speed setting.
+        # Modes: instant (~0-2s), human (default DEBOUNCE range), slow (3x range),
+        #        manual (exact response_delay_seconds), missing/unknown → human.
+        # The MAX_BUFFER_TIME - buffer_age cap is applied to EVERY mode (T3 threat).
+        response_speed = context.get("response_speed") or "human"
+        if response_speed == "instant":
+            base_delay = random.uniform(0, 2.0)
+        elif response_speed == "slow":
+            base_delay = random.uniform(self.DEBOUNCE_MIN * 3, self.DEBOUNCE_MAX * 3)
+        elif response_speed == "manual":
+            try:
+                base_delay = float(context.get("response_delay_seconds") or self.DEBOUNCE_MIN)
+            except (TypeError, ValueError):
+                base_delay = self.DEBOUNCE_MIN
+        else:
+            # "human" or any unknown value → existing empirical range (back-compat).
+            base_delay = random.uniform(self.DEBOUNCE_MIN, self.DEBOUNCE_MAX)
+
+        delay = min(base_delay, self.MAX_BUFFER_TIME - buffer_age)
+        logger.info(f"⏱️ Debounce таймер для {conversation_id[:8]}: {delay:.1f}с (speed={response_speed})")
         self.debounce_tasks[conversation_id] = asyncio.create_task(
             self._debounce_timer(conversation_id, delay)
         )
@@ -844,6 +861,20 @@ class TelegramListener:
                     )
                     self.add_to_buffer(conversation_id, buffered_msg)
 
+                    # Phase 11 D-11 / RT-01: pull response_speed + response_delay_seconds
+                    # from the agent context (cached, TTL 60s) so schedule_ai_response
+                    # can branch on the speed setting without a raw SELECT.
+                    agent_ctx = None
+                    try:
+                        async with AsyncSessionLocal() as _spd_session:
+                            agent_ctx = await ai_engine.get_context(_spd_session, ai_context_id)
+                    except Exception as _spd_err:
+                        logger.warning(
+                            "⚠️ listener: failed to load agent context for response_speed "
+                            "(ai_context_id=%s): %s — defaulting to 'human'",
+                            ai_context_id, _spd_err
+                        )
+
                     # Контекст для отложенной обработки
                     context = {
                         "ai_context_id": ai_context_id,
@@ -851,7 +882,11 @@ class TelegramListener:
                         "contact_phone": phone,
                         "client": event.client,
                         "recipient_id": sender.id,
-                        "sender_info": sender_info
+                        "sender_info": sender_info,
+                        # Phase 11 D-11: response_speed drives debounce delay branch.
+                        # Default "human" = existing DEBOUNCE_MIN..MAX range (back-compat).
+                        "response_speed": (agent_ctx or {}).get("response_speed") or "human",
+                        "response_delay_seconds": (agent_ctx or {}).get("response_delay_seconds"),
                     }
 
                     logger.info(f"🤖 AI включён (context: {ai_context_id[:8]}...), добавлено в буфер...")
