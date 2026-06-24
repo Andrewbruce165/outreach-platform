@@ -282,7 +282,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 11-02-migration-schema-and-crud-PLAN.md — migration 031 (tone_preset/response_speed/response_delay_seconds/dialogue_flow/arguments_facts/campaign_rules; backfill voice_baseline→tone_preset + success_criteria→lead_trigger_hint; drop legacy) + ORM/schemas/routers [Wave 2, depends_on: 11-01]
+- [x] 11-02-migration-schema-and-crud-PLAN.md — migration 032 (tone_preset/response_speed/response_delay_seconds/dialogue_flow/arguments_facts/campaign_rules; backfill voice_baseline→tone_preset + success_criteria→lead_trigger_hint; drop legacy) + ORM/schemas/routers [Wave 2, depends_on: 11-01]
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

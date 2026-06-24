@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 11-01 (Wave-0 test scaffold)
-last_updated: "2026-06-24T13:56:50.705Z"
+stopped_at: Completed 11-02 (Migration schema and CRUD)
+last_updated: "2026-06-24T15:10:00.000Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 42
-  completed_plans: 39
+  completed_plans: 40
   percent: 17
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 11
-Plan: Not started
-Status: Ready to plan
+Plan: 02 complete → 03 next
+Status: In progress
 Last activity: 2026-06-24
 
-Progress: [██░░░░░░░░] 17% (1/6 phases done)
+Progress: [██░░░░░░░░] 17% (2/6 plans done in phase 11)
 
 ## Performance Metrics
 
@@ -77,6 +77,7 @@ Progress: [██░░░░░░░░] 17% (1/6 phases done)
 | Phase 10 P03 | 5min | 3 tasks | 3 files |
 | Phase 10 P04 | 12min | 1 tasks | 5 files |
 | Phase 11 P01 | 16min | 3 tasks | 5 files |
+| Phase 11 P02 | 34min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 10]: 10-03: pool_health one-pass aggregate (COUNT FILTER + MIN FILTER) + per-sender restriction enrichment on CampaignResponse (POOLV-01/02); GET /senders/{slug}/restriction-events workspace-scoped newest-first (HLTH-03); API presentation-free, badge derived on frontend; earliest_resume_at=MIN(restricted_until) (OQ#4)
 - [Phase 10]: 10-04: 3-state pool badge derived on frontend from numeric pool_health (green/yellow/red); OQ#4 wording 'до проверки в T'; per-sender restriction chips on attached pool (POOLV-02); account-page restriction-event mini-list off HLTH-03 endpoint in a slug-keyed modal (POOLV-04). openapi/types regenerated via export-handoff (cross-repo: openapi→backend, components→sibling). Task 2 human-UAT PENDING.
 - [Phase 11]: Migration slot 031 already taken by 031_sre_flood_wait_category.sql; Phase 11 uses 032_phase11_field_split.sql
+- [Phase 11 P02]: D-01 tone_preset replaces voice_baseline/tone/tone_of_voice; D-11 response_speed/response_delay_seconds added; D-04/D-12/D-14 dialogue_flow/arguments_facts/campaign_rules on campaigns; D-13 success_criteria merged into lead_trigger_hint before DROP; migration 032 idempotent; tests 651 passing (up from 456 pre-Phase-11)
 
 ### Roadmap Evolution
 
@@ -175,6 +177,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-24T13:56:50.697Z
-Stopped at: Completed 11-01 (Wave-0 test scaffold)
+Last session: 2026-06-24T15:10:00.000Z
+Stopped at: Completed 11-02 (Migration schema and CRUD)
 Resume file: None
