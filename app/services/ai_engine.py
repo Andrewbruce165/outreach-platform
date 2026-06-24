@@ -408,13 +408,51 @@ _PROMPT_PRODUCT_GUARD = (
     "that aren't here."
 )
 
-_PROMPT_DIALOGUE_GOAL = """The goal is to move through three steps:
+# Phase 11 D-12: anti-hallucination guard for the [АРГУМЕНТЫ И ФАКТЫ] block.
+# Mirrors the phrasing of _PROMPT_PRODUCT_GUARD — proven "strictly from this block" pattern.
+_PROMPT_FACTS_GUARD = (
+    "Use only the facts and arguments listed in this block. "
+    "Don't invent details, prices, or claims that aren't explicitly stated here."
+)
 
-1. Open the conversation. Respond to the contact's first reaction — short, no pressure.
-2. Qualify. Figure out if they're a fit. Ask one question at a time, not a form.
-3. Drive to the target action — book a meeting or demo.
+# Phase 11 D-03: single-source tone lookup — one entry per tone_preset enum value.
+# Only ONE of these lines ever reaches the <tone> block (no sliders, no free text).
+_TONE_LINES: dict[str, str] = {
+    "Friendly":     "Tone: Friendly — warm and approachable. Write like a helpful acquaintance, genuine, no stiffness.",
+    "Professional": "Tone: Professional — concise and businesslike. No filler, no small talk.",
+    "Direct":       "Tone: Direct — no hedging, no padding. Say what you mean in the fewest words.",
+    "Casual":       "Tone: Casual — relaxed and conversational, as if texting a familiar contact.",
+}
 
-Don't rush. Don't dump everything in one message. One step, one message."""
+# Phase 11 D-06: kept as tombstone reference only. Static goal removed from prompt.
+# Replaced by per-campaign dialogue_flow JSONB stages rendered in <dialogue_flow>.
+# _PROMPT_DIALOGUE_GOAL was deleted — see Plan 11-03.
+
+def _dedup_rules(*texts: str) -> list[str]:
+    """Merge multiple rule text blobs, removing exact-duplicate lines.
+
+    Normalises each line with strip()+lower() for comparison; preserves original
+    casing and order (first occurrence wins, dict.fromkeys approach). Agent rules
+    come first so they have priority in conflict resolution.
+
+    Args:
+        *texts: one or more raw rule strings (newline-separated). None/empty safe.
+
+    Returns:
+        Ordered list of unique rule lines (original case, stripped).
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in texts:
+        for line in (t or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            key = line.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(line)
+    return out
 
 _PROMPT_MESSAGE_STYLE = """Write like a real person on Telegram:
 
@@ -570,10 +608,16 @@ class AIEngine:
     def build_system_prompt(self, context: dict, contact_name: str) -> str:
         """Compose the full system prompt from agent + campaign context.
 
-        Skeleton matches the universal Telegram-outbound template:
-        <role> → optional <company>/<product>/<tone>/<rules> →
-        <dialogue_goal> → <message_style> → <out_of_scope> → <tools> →
-        contact line + anti-injection guard.
+        Phase 11 Plan 11-03 rewrite: fixed block order per BRIEF §7 with exactly
+        one source per block. No duplicate or contradictory instructions.
+
+        Block order (§7):
+          <role>(ИДЕНТИЧНОСТЬ) → <company> → <product> → <tone> →
+          <task_audience>(ЗАДАЧА+КОМУ ПИШЕМ) → <dialogue_flow>(ХОД РАЗГОВОРА) →
+          <arguments_facts>(АРГУМЕНТЫ И ФАКТЫ) → [БАЗА ЗНАНИЙ: deferred, skip] →
+          <rules>(ПРАВИЛА, agent+campaign deduped) → <language> → <banlist> →
+          <out_of_scope> → <tools> → <message_style>(ФОРМАТ ОТВЕТА) →
+          contact line + anti-injection guard
 
         Conditional blocks render only when the underlying field is non-empty.
         Tool trigger conditions render inside <tools> only when the campaign
@@ -582,13 +626,15 @@ class AIEngine:
         """
         campaign = context.get("campaign") or {}
 
+        # ── Agent-level fields ─────────────────────────────────────────────────
         who_is_agent = (context.get("system_prompt") or "").strip()
         company_knowledge = (context.get("company_info") or "").strip()
         knowledge_base = (context.get("product_info") or "").strip()
-        # Phase 11 D-01: tone_preset is the single tone source. Legacy voice_baseline /
-        # tone_of_voice / tone (JSONB slider) removed from schema (migration 032).
+        # Phase 11 D-01: tone_preset is the ONLY tone source (single source).
+        # voice_baseline / tone_of_voice / tone JSONB dropped by migration 032.
+        # _TONE_LINES maps the preset to a 1-line instruction — no duplication elsewhere.
         tone_preset = (context.get("tone_preset") or "").strip()
-        rules = (context.get("rules") or "").strip()
+        agent_rules = (context.get("rules") or "").strip()
 
         mirror_language = bool(context.get("mirror_language", True))
         allow_emoji = bool(context.get("allow_emoji", True))
@@ -601,61 +647,101 @@ class AIEngine:
         except (TypeError, ValueError):
             max_message_length = 0
 
+        # ── Campaign-level fields ──────────────────────────────────────────────
+        primary_goal = (campaign.get("primary_goal") or "").strip()
+        audience_hints = (campaign.get("audience_hints") or "").strip()
+        # Phase 11 D-04/D-06: per-campaign dialogue stages replace _PROMPT_DIALOGUE_GOAL.
+        dialogue_flow = campaign.get("dialogue_flow") or []
+        # Phase 11 D-12: facts + objection-response pairs with anti-hallucination guard.
+        arguments_facts = (campaign.get("arguments_facts") or "").strip()
+        # Phase 11 D-14: campaign-specific rules, deduped with agent rules.
+        campaign_rules = (campaign.get("campaign_rules") or "").strip()
+
         lead_hint = (campaign.get("lead_trigger_hint") or "").strip()
         handoff_hint = (campaign.get("handoff_trigger_hint") or "").strip()
         finish_hint = (campaign.get("finish_trigger_hint") or "").strip()
 
         blocks: list[str] = []
 
-        # <role> — always rendered. who_is_agent leads, real-person line
-        # follows on its own paragraph.
+        # §7 Block 1: <role> — ИДЕНТИЧНОСТЬ. Always rendered.
+        # who_is_agent is identity only (who the agent IS, not what they do).
+        # real-person camouflage line always appended. D-13: task/goal stays in
+        # <task_audience>, NOT here.
         role_lines = [who_is_agent] if who_is_agent else []
         role_lines.append(_PROMPT_REAL_PERSON_LINE)
         blocks.append("<role>\n" + "\n\n".join(role_lines) + "\n</role>")
 
-        # Optional content blocks — render only if data present.
+        # §7 Block 2: <company> — КОМПАНИЯ. Conditional.
         if company_knowledge:
             blocks.append(f"<company>\n{company_knowledge}\n</company>")
 
+        # §7 Block 3: <product> — ПРОДУКТ / ЧТО ПРОДАЁТ. Conditional + guard.
         if knowledge_base:
             blocks.append(
                 f"<product>\n{knowledge_base}\n\n{_PROMPT_PRODUCT_GUARD}\n</product>"
             )
 
-        # <tone> — Phase 11 D-01: rendered from tone_preset only (single source).
-        # Legacy voice_baseline / tone_of_voice / tone JSONB calibration removed.
-        # Full prompt-block rewrite is Plan 11-03; this is the migration-safe stub.
+        # §7 Block 4: <tone> — ТОН. Phase 11 D-01/D-03: ONLY from tone_preset.
+        # _TONE_LINES maps preset enum → 1-line instruction. Tone NEVER appears
+        # inside <rules> or any other block (D-03: single source, no duplication).
         if tone_preset:
-            blocks.append(f"<tone>\n{tone_preset}\n</tone>")
+            tone_line = _TONE_LINES.get(tone_preset, f"Tone: {tone_preset}.")
+            blocks.append(f"<tone>\n{tone_line}\n</tone>")
 
-        if rules:
-            blocks.append(f"<rules>\n{rules}\n</rules>")
+        # §7 Block 5: <task_audience> — ЗАДАЧА + КОМУ ПИШЕМ. Conditional.
+        # Sourced from campaign.primary_goal + campaign.audience_hints (D-13/PMT-06).
+        # These are campaign-level concepts — NOT agent identity.
+        task_audience_parts = []
+        if primary_goal:
+            task_audience_parts.append(f"Goal: {primary_goal}")
+        if audience_hints:
+            task_audience_parts.append(f"Audience: {audience_hints}")
+        if task_audience_parts:
+            blocks.append(
+                "<task_audience>\n" + "\n".join(task_audience_parts) + "\n</task_audience>"
+            )
 
-        # <language> — mirror the contact. Critical when persona/company
-        # blocks are in a different language than the contact uses.
+        # §7 Block 6: <dialogue_flow> — ХОД РАЗГОВОРА. Phase 11 D-04/D-06.
+        # Numbered stages from campaign.dialogue_flow JSONB (replaces the old
+        # static _PROMPT_DIALOGUE_GOAL constant — now removed).
+        if dialogue_flow:
+            stage_lines = [
+                f"{i}. {s.get('title', '').strip()}: {s.get('instruction', '').strip()}"
+                for i, s in enumerate(dialogue_flow, start=1)
+                if s.get("instruction")
+            ]
+            if stage_lines:
+                blocks.append(
+                    "<dialogue_flow>\nFollow these stages in order:\n"
+                    + "\n".join(stage_lines)
+                    + "\n</dialogue_flow>"
+                )
+
+        # §7 Block 7: <arguments_facts> — АРГУМЕНТЫ И ФАКТЫ. Phase 11 D-12.
+        # Content sits in a labelled block so any injected "ignore previous"
+        # text is treated as data, not top-level instruction (threat model T1).
+        if arguments_facts:
+            blocks.append(
+                f"<arguments_facts>\n{arguments_facts}\n\n{_PROMPT_FACTS_GUARD}\n</arguments_facts>"
+            )
+
+        # §7 Block 8: [БАЗА ЗНАНИЙ] — deferred (knowledge bases future feature).
+        # No block rendered here — see D-07/CONTEXT.md deferred section.
+
+        # §7 Block 9: <rules> — ПРАВИЛА. Phase 11 D-14: agent + campaign deduped.
+        # _dedup_rules strips exact duplicates (strip+lower compare, order-preserving).
+        # Agent rules come first so they take priority. Tone is NOT in rules (D-03).
+        merged_rules = _dedup_rules(agent_rules, campaign_rules)
+        if merged_rules:
+            blocks.append("<rules>\n" + "\n".join(merged_rules) + "\n</rules>")
+
+        # §7 Block 10: <language> — mirror the contact's language. Conditional.
+        # Placed after rules so behavioral guardrails (rules/signals/tools) are not
+        # overridden by earlier free-text (threat model T1).
         if mirror_language:
             blocks.append(
                 f"<language>\n{_PROMPT_MIRROR_LANGUAGE}\n</language>"
             )
-
-        # Static behaviour blocks — always rendered. <message_style> picks up
-        # the no-emoji rule on the fly when allow_emoji=False.
-        blocks.append(
-            f"<dialogue_goal>\n{_PROMPT_DIALOGUE_GOAL}\n</dialogue_goal>"
-        )
-
-        style_body = _PROMPT_MESSAGE_STYLE
-        if max_message_length > 0:
-            style_body = (
-                f"{style_body}\n— Keep each message under "
-                f"{max_message_length} characters. If you need more room, "
-                f"split it into a couple of short messages instead."
-            )
-        if not allow_emoji:
-            style_body = f"{style_body}\n— {_PROMPT_NO_EMOJI}"
-        blocks.append(
-            f"<message_style>\n{style_body}\n</message_style>"
-        )
 
         # <banlist> — explicit list of forbidden words/phrases.
         if banlist:
@@ -699,6 +785,21 @@ class AIEngine:
         )
 
         blocks.append("<tools>\n" + "\n".join(tools_lines) + "\n</tools>")
+
+        # §7 Block last: <message_style> — ФОРМАТ ОТВЕТА. Always rendered.
+        # Placed after <tools> so signal/tool blocks are not buried after style.
+        style_body = _PROMPT_MESSAGE_STYLE
+        if max_message_length > 0:
+            style_body = (
+                f"{style_body}\n— Keep each message under "
+                f"{max_message_length} characters. If you need more room, "
+                f"split it into a couple of short messages instead."
+            )
+        if not allow_emoji:
+            style_body = f"{style_body}\n— {_PROMPT_NO_EMOJI}"
+        blocks.append(
+            f"<message_style>\n{style_body}\n</message_style>"
+        )
 
         # Contact line + anti-prompt-injection guard always last.
         blocks.append(f"You are talking to: {contact_name}")
