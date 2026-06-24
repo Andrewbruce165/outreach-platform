@@ -12,6 +12,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Plus,
   Edit3,
   Trash2,
@@ -37,6 +39,12 @@ type Campaign = components["schemas"]["CampaignResponse"];
 type ToolSpec = components["schemas"]["ToolSpec"];
 type ToolParamSpec = components["schemas"]["ToolParamSpec"];
 type PrimaryGoal = "book_meeting" | "qualify" | "click" | "engage";
+
+// Phase 11 D-04: dialogue stage local type (matches DialogueStage schema)
+interface DialogueStage {
+  title: string;
+  instruction: string;
+}
 
 export const Route = createFileRoute("/_authenticated/campaigns/new")({
   component: CampaignBuilder,
@@ -89,7 +97,7 @@ function maskFromDays(ids: string[]): number {
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   if (e instanceof Error) return e.message;
-  return "Something went wrong";
+  return "Что-то пошло не так. Попробуйте ещё раз.";
 }
 
 function CampaignBuilder() {
@@ -105,7 +113,12 @@ function CampaignBuilder() {
   const [agentId, setAgentId] = useState("");
   const [audienceHints, setAudienceHints] = useState("");
   const [primaryGoal, setPrimaryGoal] = useState<PrimaryGoal | "">("");
-  const [successCriteria, setSuccessCriteria] = useState("");
+  // Phase 11 D-04/D-05: dialogue_flow stage editor
+  const [dialogueFlow, setDialogueFlow] = useState<DialogueStage[]>([]);
+  // Phase 11 D-12: arguments_facts
+  const [argumentsFacts, setArgumentsFacts] = useState("");
+  // Phase 11 D-14: campaign-level rules
+  const [campaignRules, setCampaignRules] = useState("");
   const [messageTemplate, setMessageTemplate] = useState("Hi {{first_name}}! ");
   const [senderIds, setSenderIds] = useState<string[]>([]);
   const [folderId, setFolderId] = useState("");
@@ -118,15 +131,10 @@ function CampaignBuilder() {
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(30);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
-  // lead_trigger_hint — plain-English condition that tells the AI when a conversation
-  // should be classified as a qualified lead (fires the `lead` signal to the webhook).
-  // Lives on the Agent step because it's a per-campaign override of the agent's lead detection.
+  // Phase 11 D-13: lead_trigger_hint now also absorbs migrated success_criteria.
+  // Relabeled «Сигнал "Лид"». The old success_criteria field is removed.
   const [leadHint, setLeadHint] = useState("");
-  // handoff_trigger_hint — plain-English condition for when the AI should stop and pass
-  // the conversation to a human (fires the `handoff` signal). Per-campaign override.
   const [handoffHint, setHandoffHint] = useState("");
-  // finish_trigger_hint — plain-English condition for when the conversation is done
-  // (contact declined, unsubscribed, deal closed). Fires the `finished` signal.
   const [finishHint, setFinishHint] = useState("");
 
   // --- queries ---
@@ -151,16 +159,18 @@ function CampaignBuilder() {
   const selectedSenders = senders.filter((s) => senderIds.includes(s.id));
 
   // --- mutations ---
+  // Phase 11 D-15: auto-fill only drafts structural fields; now maps to lead_trigger_hint
   const autoFillMut = useMutation({
     mutationFn: () =>
-      api<{ name: string; audience_hints: string; primary_goal: string; success_criteria: string }>(
+      api<{ name: string; audience_hints: string; primary_goal: string; lead_trigger_hint: string }>(
         "/api/v1/campaigns/auto-fill",
         { method: "POST", body: { brief } },
       ),
     onSuccess: (d) => {
       if (!name) setName(d.name);
       setAudienceHints(d.audience_hints);
-      setSuccessCriteria(d.success_criteria);
+      // D-13: auto-fill sets lead-signal hint (was success_criteria)
+      setLeadHint(d.lead_trigger_hint);
       if (["book_meeting", "qualify", "click", "engage"].includes(d.primary_goal)) {
         setPrimaryGoal(d.primary_goal as PrimaryGoal);
       }
@@ -186,7 +196,12 @@ function CampaignBuilder() {
     recontact_min_age_days: recontactMinAgeDays,
     audience_hints: audienceHints || null,
     primary_goal: primaryGoal || null,
-    success_criteria: successCriteria || null,
+    // Phase 11 D-04/D-06: drop stages with empty instruction before saving
+    dialogue_flow: dialogueFlow.filter((s) => s.instruction.trim().length > 0).length > 0
+      ? dialogueFlow.filter((s) => s.instruction.trim().length > 0)
+      : null,
+    arguments_facts: argumentsFacts || null,
+    campaign_rules: campaignRules || null,
     webhook_url: webhookUrl || null,
     tools: tools.length ? tools : undefined,
     lead_trigger_hint: leadHint || null,
@@ -194,9 +209,7 @@ function CampaignBuilder() {
     finish_trigger_hint: finishHint || null,
   });
 
-  // Auto-save draft after each completed step. POST creates the draft the first
-  // time we have the backend-required minimum (name + agent + folder + template);
-  // subsequent saves PATCH the existing draft.
+  // Auto-save draft after each completed step.
   const saveDraftMut = useMutation({
     mutationFn: async (): Promise<Campaign | null> => {
       const hasMinimum =
@@ -226,8 +239,6 @@ function CampaignBuilder() {
     onError: (e) => toast.error(`Draft not saved: ${errMsg(e)}`),
   });
 
-  // Continue to next step, saving a draft first. UI advances even if save fails
-  // (error shown via toast) so the user can keep editing.
   const goNext = async () => {
     try {
       await saveDraftMut.mutateAsync();
@@ -265,7 +276,7 @@ function CampaignBuilder() {
     onError: (e) => toast.error(errMsg(e)),
   });
 
-  // step validation — every field on every step is required before you can advance.
+  // step validation
   const canNext = useMemo(() => {
     const id = STEPS[step].id;
     if (id === "brief") return name.trim().length > 0 && brief.trim().length > 0;
@@ -274,7 +285,6 @@ function CampaignBuilder() {
         !!agentId &&
         audienceHints.trim().length > 0 &&
         !!primaryGoal &&
-        successCriteria.trim().length > 0 &&
         leadHint.trim().length > 0 &&
         handoffHint.trim().length > 0 &&
         finishHint.trim().length > 0
@@ -297,7 +307,6 @@ function CampaignBuilder() {
     agentId,
     audienceHints,
     primaryGoal,
-    successCriteria,
     leadHint,
     handoffHint,
     finishHint,
@@ -311,15 +320,12 @@ function CampaignBuilder() {
     webhookUrl,
   ]);
 
-  // Launch must require every step to be valid — `canNext` only knows about the
-  // current step, so a user could otherwise jump to Review and launch early.
   const allValid =
     name.trim().length > 0 &&
     brief.trim().length > 0 &&
     !!agentId &&
     audienceHints.trim().length > 0 &&
     !!primaryGoal &&
-    successCriteria.trim().length > 0 &&
     leadHint.trim().length > 0 &&
     handoffHint.trim().length > 0 &&
     finishHint.trim().length > 0 &&
@@ -508,8 +514,12 @@ function CampaignBuilder() {
                   setAudienceHints={setAudienceHints}
                   primaryGoal={primaryGoal}
                   setPrimaryGoal={setPrimaryGoal}
-                  successCriteria={successCriteria}
-                  setSuccessCriteria={setSuccessCriteria}
+                  dialogueFlow={dialogueFlow}
+                  setDialogueFlow={setDialogueFlow}
+                  argumentsFacts={argumentsFacts}
+                  setArgumentsFacts={setArgumentsFacts}
+                  campaignRules={campaignRules}
+                  setCampaignRules={setCampaignRules}
                   leadHint={leadHint}
                   setLeadHint={setLeadHint}
                   handoffHint={handoffHint}
@@ -747,6 +757,193 @@ function BriefStep({
   );
 }
 
+/* ----------------
+   Stage Editor — «Ход разговора» (Phase 11 D-04/D-05)
+   No drag-n-drop library. Reorder via up/down chevrons.
+   Empty state shows guidance text.
+   On save: stages with empty instruction are dropped.
+ ---------------- */
+function StageEditor({
+  stages,
+  onChange,
+}: {
+  stages: DialogueStage[];
+  onChange: (stages: DialogueStage[]) => void;
+}) {
+  const addStage = () => {
+    const next = [...stages, { title: "", instruction: "" }];
+    onChange(next);
+  };
+
+  const removeStage = (idx: number) => {
+    onChange(stages.filter((_, i) => i !== idx));
+  };
+
+  const moveUp = (idx: number) => {
+    if (idx === 0) return;
+    const next = [...stages];
+    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    onChange(next);
+  };
+
+  const moveDown = (idx: number) => {
+    if (idx === stages.length - 1) return;
+    const next = [...stages];
+    [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+    onChange(next);
+  };
+
+  const updateStage = (idx: number, patch: Partial<DialogueStage>) => {
+    onChange(stages.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  };
+
+  return (
+    <div>
+      {stages.length === 0 ? (
+        /* Empty state */
+        <div
+          style={{
+            padding: "28px 18px",
+            borderRadius: 10,
+            border: "1.5px dashed var(--border)",
+            background: "var(--surface-2, var(--bg-soft))",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 10,
+            textAlign: "center",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>
+            Ход разговора пока пуст
+          </div>
+          <div className="muted" style={{ fontSize: 13, maxWidth: 380, lineHeight: 1.5 }}>
+            Опишите 3–5 стадий разговора — что делать на каждом шаге. Это задаёт сценарий именно этой кампании.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+          {stages.map((stage, idx) => (
+            <div
+              key={idx}
+              style={{
+                padding: 14,
+                borderRadius: 10,
+                border: "1px solid var(--border)",
+                background: "var(--surface-2, var(--bg-soft))",
+                display: "flex",
+                gap: 12,
+                alignItems: "flex-start",
+              }}
+            >
+              {/* Stage number badge */}
+              <div
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: "50%",
+                  background: "var(--tg-blue)",
+                  color: "white",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  marginTop: 7,
+                }}
+              >
+                {idx + 1}
+              </div>
+
+              {/* Fields */}
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+                <input
+                  className="input"
+                  placeholder={`Название стадии ${idx + 1} (необязательно)`}
+                  value={stage.title}
+                  onChange={(e) => updateStage(idx, { title: e.target.value })}
+                />
+                <textarea
+                  className="textarea"
+                  rows={2}
+                  placeholder="Что должен делать ИИ на этой стадии?"
+                  value={stage.instruction}
+                  onChange={(e) => updateStage(idx, { instruction: e.target.value })}
+                />
+              </div>
+
+              {/* Reorder + remove controls */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="tb__icon-btn"
+                  aria-label="Переместить вверх"
+                  disabled={idx === 0}
+                  onClick={() => moveUp(idx)}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    color: idx === 0 ? "var(--text-faint)" : "var(--tg-blue)",
+                    cursor: idx === 0 ? "default" : "pointer",
+                  }}
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="tb__icon-btn"
+                  aria-label="Переместить вниз"
+                  disabled={idx === stages.length - 1}
+                  onClick={() => moveDown(idx)}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    color: idx === stages.length - 1 ? "var(--text-faint)" : "var(--tg-blue)",
+                    cursor: idx === stages.length - 1 ? "default" : "pointer",
+                  }}
+                >
+                  <ChevronDown size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="tb__icon-btn"
+                  aria-label="Удалить стадию"
+                  onClick={() => removeStage(idx)}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    color: "var(--danger)",
+                    marginTop: 4,
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm"
+        onClick={addStage}
+        disabled={stages.length >= 7}
+        style={{ color: "var(--tg-blue)" }}
+      >
+        <Plus size={13} /> Добавить стадию
+      </button>
+      {stages.length > 0 && (
+        <span className="field__hint" style={{ marginLeft: 10 }}>
+          {stages.length}/7 стадий
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- Step 2: Agent ---------------- */
 function AgentStep({
   agents,
@@ -756,8 +953,12 @@ function AgentStep({
   setAudienceHints,
   primaryGoal,
   setPrimaryGoal,
-  successCriteria,
-  setSuccessCriteria,
+  dialogueFlow,
+  setDialogueFlow,
+  argumentsFacts,
+  setArgumentsFacts,
+  campaignRules,
+  setCampaignRules,
   leadHint,
   setLeadHint,
   handoffHint,
@@ -772,10 +973,12 @@ function AgentStep({
   setAudienceHints: (v: string) => void;
   primaryGoal: PrimaryGoal | "";
   setPrimaryGoal: (v: PrimaryGoal | "") => void;
-  successCriteria: string;
-  setSuccessCriteria: (v: string) => void;
-  // Signal-trigger hints — see state declarations in CampaignBuilder for full context.
-  // Mapped to payload as: lead_trigger_hint / handoff_trigger_hint / finish_trigger_hint.
+  dialogueFlow: DialogueStage[];
+  setDialogueFlow: (v: DialogueStage[]) => void;
+  argumentsFacts: string;
+  setArgumentsFacts: (v: string) => void;
+  campaignRules: string;
+  setCampaignRules: (v: string) => void;
   leadHint: string;
   setLeadHint: (v: string) => void;
   handoffHint: string;
@@ -792,9 +995,11 @@ function AgentStep({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+
+      {/* Agent picker — plain select (D-07: no per-campaign override UI) */}
       <div>
         <label className="field__label" style={{ marginBottom: 8, display: "block" }}>
-          Choose agent
+          Выбрать агента
         </label>
         {agents.length === 0 ? (
           <div className="muted text-sm" style={{ padding: 16, textAlign: "center" }}>
@@ -830,7 +1035,7 @@ function AgentStep({
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13.5 }}>{a.name}</div>
                       <div className="muted text-xs">
-                        {a.tone_of_voice || "Custom agent"}
+                        {a.tone_preset || "Custom agent"}
                       </div>
                     </div>
                     {on && <Check size={16} style={{ color: "var(--tg-blue)" }} />}
@@ -849,14 +1054,15 @@ function AgentStep({
 
       <div style={{ paddingTop: 20, borderTop: "1px solid var(--divider, var(--border))" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-          Customize for this campaign
+          Настройки кампании
         </div>
         <div className="muted text-xs" style={{ marginBottom: 16 }}>
-          Override the agent&apos;s defaults just for this campaign. Won&apos;t change the agent globally.
+          Поведение ИИ именно в этой кампании.
         </div>
 
+        {/* Кому пишем (D-13: renamed from "Audience hints", column unchanged) */}
         <div className="field" style={{ marginBottom: 16 }}>
-          <label className="field__label">Audience hints</label>
+          <label className="field__label">Кому пишем</label>
           <textarea
             className="textarea"
             rows={3}
@@ -866,6 +1072,7 @@ function AgentStep({
           />
         </div>
 
+        {/* Primary goal */}
         <div className="field" style={{ marginBottom: 16 }}>
           <label className="field__label">Primary goal</label>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -915,45 +1122,58 @@ function AgentStep({
           </div>
         </div>
 
-        <div className="field">
-          <label className="field__label">Success criteria</label>
+        {/* Phase 11 D-04/D-05: Ход разговора stage editor */}
+        <div className="field" style={{ marginBottom: 16 }}>
+          <label className="field__label">Ход разговора</label>
+          <StageEditor stages={dialogueFlow} onChange={setDialogueFlow} />
+        </div>
+
+        {/* Phase 11 D-12: Аргументы и факты with anti-hallucination hint */}
+        <div className="field" style={{ marginBottom: 16 }}>
+          <label className="field__label">Аргументы и факты</label>
           <textarea
             className="textarea"
             rows={4}
-            placeholder="Demo booked / phone shared / link clicked"
-            value={successCriteria}
-            onChange={(e) => setSuccessCriteria(e.target.value)}
+            placeholder="Факты о продукте, ответы на типичные возражения."
+            value={argumentsFacts}
+            onChange={(e) => setArgumentsFacts(e.target.value)}
           />
           <span className="field__hint">
-            Free-text rule for emitting the <b>lead</b> signal in this campaign.
+            ИИ использует только эти факты и не выдумывает остальное.
           </span>
+        </div>
+
+        {/* Phase 11 D-14: Правила кампании */}
+        <div className="field" style={{ marginBottom: 16 }}>
+          <label className="field__label">Правила кампании</label>
+          <textarea
+            className="textarea"
+            rows={3}
+            placeholder="Запреты и правила, специфичные для этой кампании."
+            value={campaignRules}
+            onChange={(e) => setCampaignRules(e.target.value)}
+          />
         </div>
       </div>
 
-      {/*
-        Signal trigger hints — sent to the backend as lead_trigger_hint /
-        handoff_trigger_hint / finish_trigger_hint on CampaignCreate.
-        These are plain-English overrides that tell the AI when to fire each
-        webhook signal for this specific campaign. Living on the Agent step
-        because they're agent behavior tweaks, not sender configuration.
-      */}
+      {/* Signal triggers */}
       <div style={{ paddingTop: 20, borderTop: "1px solid var(--divider, var(--border))" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
           Signal triggers
         </div>
         <div className="muted text-xs" style={{ marginBottom: 16 }}>
-          Plain-English hints the AI uses to detect when to fire each signal in this conversation.
+          Plain-English hints the AI uses to detect when to fire each signal.
         </div>
 
+        {/* Phase 11 D-13: «Сигнал "Лид"» — merged with old success_criteria */}
         <div className="field" style={{ marginBottom: 14 }}>
           <label className="field__label">
             <Flag size={12} style={{ display: "inline", marginRight: 6, color: "var(--success)" }} />
-            Lead trigger hint
+            Сигнал «Лид»
           </label>
-          {/* lead_trigger_hint: fires the `lead` webhook signal when matched. */}
           <textarea
-            className="input"
-            rows={4}
+            className="textarea"
+            rows={3}
             value={leadHint}
             onChange={(e) => setLeadHint(e.target.value)}
             placeholder="e.g. The contact agrees to a demo or asks for pricing details."
@@ -965,13 +1185,12 @@ function AgentStep({
             <Users size={12} style={{ display: "inline", marginRight: 6, color: "var(--warning, var(--tg-blue))" }} />
             Handoff trigger hint
           </label>
-          {/* handoff_trigger_hint: fires the `handoff` signal — AI stops, human takes over. */}
           <textarea
-            className="input"
-            rows={4}
+            className="textarea"
+            rows={3}
             value={handoffHint}
             onChange={(e) => setHandoffHint(e.target.value)}
-            placeholder="e.g. The contact asks a technical or legal question the AI can’t answer."
+            placeholder="e.g. The contact asks a technical or legal question the AI can't answer."
           />
         </div>
 
@@ -980,10 +1199,9 @@ function AgentStep({
             <Check size={12} style={{ display: "inline", marginRight: 6, color: "var(--text-muted)" }} />
             Finish trigger hint
           </label>
-          {/* finish_trigger_hint: fires the `finished` signal — conversation is closed. */}
           <textarea
-            className="input"
-            rows={4}
+            className="textarea"
+            rows={3}
             value={finishHint}
             onChange={(e) => setFinishHint(e.target.value)}
             placeholder="e.g. The contact declines, unsubscribes, or the deal is closed."

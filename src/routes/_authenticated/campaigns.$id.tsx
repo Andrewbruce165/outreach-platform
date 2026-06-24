@@ -415,9 +415,12 @@ function CampaignDetailPage() {
                         "—",
                     ],
                     ["Description", c.description],
-                    ["Audience", c.audience_hints],
+                    // Phase 11 D-13: audience_hints relabeled "Кому пишем"
+                    ["Кому пишем", c.audience_hints],
                     ["Primary goal", c.primary_goal],
-                    ["Success criteria", c.success_criteria],
+                    // Phase 11 D-12/D-14: new campaign fields
+                    ["Аргументы и факты", c.arguments_facts],
+                    ["Правила кампании", c.campaign_rules],
                     [
                       "Created",
                       new Date(c.created_at).toLocaleString(),

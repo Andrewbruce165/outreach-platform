@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { components } from "@/types/api";
 
@@ -37,6 +37,193 @@ function toDateInput(v?: string | null): string {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "";
   return d.toISOString().slice(0, 10);
+}
+
+/* ----------------
+   Inline stage editor for EditCampaignModal (Phase 11 D-04/D-05).
+   Same logic as StageEditor in campaigns.new.tsx; self-contained to avoid cross-file dep.
+ ---------------- */
+interface StageItem {
+  title: string;
+  instruction: string;
+}
+
+function InlineStageEditor({
+  stages,
+  onChange,
+}: {
+  stages: StageItem[];
+  onChange: (v: StageItem[]) => void;
+}) {
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    height: 34,
+    padding: "0 10px",
+    background: "var(--bg-soft)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    fontSize: 13,
+    color: "var(--text)",
+    outline: "none",
+    boxSizing: "border-box",
+  };
+  const taStyle: React.CSSProperties = {
+    ...inputStyle,
+    height: "auto",
+    padding: 10,
+    resize: "vertical",
+    fontFamily: "inherit",
+    minHeight: 60,
+  };
+
+  const add = () => onChange([...stages, { title: "", instruction: "" }]);
+  const remove = (i: number) => onChange(stages.filter((_, k) => k !== i));
+  const up = (i: number) => {
+    if (i === 0) return;
+    const n = [...stages];
+    [n[i - 1], n[i]] = [n[i], n[i - 1]];
+    onChange(n);
+  };
+  const down = (i: number) => {
+    if (i === stages.length - 1) return;
+    const n = [...stages];
+    [n[i], n[i + 1]] = [n[i + 1], n[i]];
+    onChange(n);
+  };
+  const update = (i: number, patch: Partial<StageItem>) =>
+    onChange(stages.map((s, k) => (k === i ? { ...s, ...patch } : s)));
+
+  const btnBase: React.CSSProperties = {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    border: "1px solid var(--border)",
+    background: "var(--bg)",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    padding: 0,
+  };
+
+  return (
+    <div>
+      {stages.length === 0 ? (
+        <div
+          style={{
+            padding: "18px 14px",
+            borderRadius: 9,
+            border: "1.5px dashed var(--border)",
+            background: "var(--bg-soft)",
+            textAlign: "center",
+            marginBottom: 10,
+            fontSize: 13,
+            color: "var(--text-muted)",
+          }}
+        >
+          Ход разговора пока пуст
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+          {stages.map((s, idx) => (
+            <div
+              key={idx}
+              style={{
+                padding: 12,
+                borderRadius: 9,
+                border: "1px solid var(--border)",
+                background: "var(--bg-soft)",
+                display: "flex",
+                gap: 10,
+              }}
+            >
+              <div
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: "50%",
+                  background: "var(--tg-blue)",
+                  color: "white",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  flexShrink: 0,
+                  marginTop: 6,
+                }}
+              >
+                {idx + 1}
+              </div>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+                <input
+                  style={inputStyle}
+                  placeholder={`Название стадии ${idx + 1}`}
+                  value={s.title}
+                  onChange={(e) => update(idx, { title: e.target.value })}
+                />
+                <textarea
+                  style={taStyle}
+                  rows={2}
+                  placeholder="Что должен делать ИИ на этой стадии?"
+                  value={s.instruction}
+                  onChange={(e) => update(idx, { instruction: e.target.value })}
+                />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <button
+                  type="button"
+                  style={{ ...btnBase, color: idx === 0 ? "var(--text-faint)" : "var(--tg-blue)", cursor: idx === 0 ? "default" : "pointer" }}
+                  aria-label="Переместить вверх"
+                  disabled={idx === 0}
+                  onClick={() => up(idx)}
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  style={{ ...btnBase, color: idx === stages.length - 1 ? "var(--text-faint)" : "var(--tg-blue)", cursor: idx === stages.length - 1 ? "default" : "pointer" }}
+                  aria-label="Переместить вниз"
+                  disabled={idx === stages.length - 1}
+                  onClick={() => down(idx)}
+                >
+                  <ChevronDown size={13} />
+                </button>
+                <button
+                  type="button"
+                  style={{ ...btnBase, color: "var(--danger)", marginTop: 2 }}
+                  aria-label="Удалить стадию"
+                  onClick={() => remove(idx)}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={add}
+        disabled={stages.length >= 7}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12.5,
+          color: "var(--tg-blue)",
+          background: "none",
+          border: "none",
+          cursor: stages.length >= 7 ? "default" : "pointer",
+          padding: "4px 0",
+          opacity: stages.length >= 7 ? 0.5 : 1,
+        }}
+      >
+        <Plus size={12} /> Добавить стадию
+      </button>
+    </div>
+  );
 }
 
 export function EditCampaignModal({
@@ -87,9 +274,18 @@ export function EditCampaignModal({
   const [primaryGoal, setPrimaryGoal] = useState<string>(
     campaign.primary_goal ?? "",
   );
-  const [successCriteria, setSuccessCriteria] = useState(
-    campaign.success_criteria ?? "",
+  // Phase 11 D-04/D-05: dialogue_flow stage editor
+  const [dialogueFlow, setDialogueFlow] = useState<Array<{ title: string; instruction: string }>>(
+    (campaign.dialogue_flow ?? []).map((s) => ({
+      title: (s as { title?: string }).title ?? "",
+      instruction: (s as { instruction?: string }).instruction ?? "",
+    })),
   );
+  // Phase 11 D-12: arguments_facts
+  const [argumentsFacts, setArgumentsFacts] = useState(campaign.arguments_facts ?? "");
+  // Phase 11 D-14: campaign-level rules
+  const [campaignRules, setCampaignRules] = useState(campaign.campaign_rules ?? "");
+  // Phase 11 D-13: success_criteria removed; lead_trigger_hint is the merged field
   const [leadHint, setLeadHint] = useState(campaign.lead_trigger_hint ?? "");
   const [handoffHint, setHandoffHint] = useState(
     campaign.handoff_trigger_hint ?? "",
@@ -140,7 +336,12 @@ export function EditCampaignModal({
         stop_date: stopDate ? new Date(stopDate).toISOString() : null,
         audience_hints: audienceHints || null,
         primary_goal: (primaryGoal || null) as CampaignUpdate["primary_goal"],
-        success_criteria: successCriteria || null,
+        // Phase 11 D-04: drop stages with empty instruction before saving
+        dialogue_flow: dialogueFlow.filter((s) => s.instruction.trim().length > 0).length > 0
+          ? dialogueFlow.filter((s) => s.instruction.trim().length > 0)
+          : null,
+        arguments_facts: argumentsFacts || null,
+        campaign_rules: campaignRules || null,
         lead_trigger_hint: leadHint || null,
         handoff_trigger_hint: handoffHint || null,
         finish_trigger_hint: finishHint || null,
@@ -176,7 +377,9 @@ export function EditCampaignModal({
         stop_date: origDate(campaign.stop_date),
         audience_hints: campaign.audience_hints ?? null,
         primary_goal: campaign.primary_goal ?? null,
-        success_criteria: campaign.success_criteria ?? null,
+        dialogue_flow: (campaign.dialogue_flow ?? null) as unknown as null,
+        arguments_facts: campaign.arguments_facts ?? null,
+        campaign_rules: campaign.campaign_rules ?? null,
         lead_trigger_hint: campaign.lead_trigger_hint ?? null,
         handoff_trigger_hint: campaign.handoff_trigger_hint ?? null,
         finish_trigger_hint: campaign.finish_trigger_hint ?? null,
@@ -518,35 +721,24 @@ export function EditCampaignModal({
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div style={fieldStyle}>
-              <label style={labelStyle}>Primary goal</label>
-              <select
-                style={inputStyle}
-                value={primaryGoal}
-                onChange={(e) => setPrimaryGoal(e.target.value)}
-              >
-                <option value="">—</option>
-                <option value="book_meeting">Book meeting</option>
-                <option value="qualify">Qualify</option>
-                <option value="click">Click</option>
-                <option value="engage">Engage</option>
-              </select>
-            </div>
-            <div style={fieldStyle}>
-              <label style={labelStyle}>Success criteria</label>
-              <textarea
-                style={taStyle}
-                rows={3}
-                value={successCriteria}
-                onChange={(e) => setSuccessCriteria(e.target.value)}
-                placeholder="Demo booked / phone shared / link clicked"
-              />
-            </div>
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Primary goal</label>
+            <select
+              style={inputStyle}
+              value={primaryGoal}
+              onChange={(e) => setPrimaryGoal(e.target.value)}
+            >
+              <option value="">—</option>
+              <option value="book_meeting">Book meeting</option>
+              <option value="qualify">Qualify</option>
+              <option value="click">Click</option>
+              <option value="engage">Engage</option>
+            </select>
           </div>
 
+          {/* Phase 11 D-13: audience_hints relabeled "Кому пишем" */}
           <div style={fieldStyle}>
-            <label style={labelStyle}>Audience hints</label>
+            <label style={labelStyle}>Кому пишем</label>
             <textarea
               style={taStyle}
               rows={2}
@@ -555,9 +747,43 @@ export function EditCampaignModal({
             />
           </div>
 
+          {/* Phase 11 D-04/D-05: Ход разговора stage editor */}
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Ход разговора</label>
+            <InlineStageEditor stages={dialogueFlow} onChange={setDialogueFlow} />
+          </div>
+
+          {/* Phase 11 D-12: Аргументы и факты */}
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Аргументы и факты</label>
+            <textarea
+              style={taStyle}
+              rows={3}
+              value={argumentsFacts}
+              onChange={(e) => setArgumentsFacts(e.target.value)}
+              placeholder="Факты о продукте, ответы на типичные возражения."
+            />
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              ИИ использует только эти факты и не выдумывает остальное.
+            </span>
+          </div>
+
+          {/* Phase 11 D-14: Правила кампании */}
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Правила кампании</label>
+            <textarea
+              style={taStyle}
+              rows={2}
+              value={campaignRules}
+              onChange={(e) => setCampaignRules(e.target.value)}
+              placeholder="Запреты и правила, специфичные для этой кампании."
+            />
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
             <div style={fieldStyle}>
-              <label style={labelStyle}>Lead trigger hint</label>
+              {/* Phase 11 D-13: «Сигнал "Лид"» — merged with old success_criteria */}
+              <label style={labelStyle}>Сигнал «Лид»</label>
               <textarea
                 style={taStyle}
                 rows={4}
