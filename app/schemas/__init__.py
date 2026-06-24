@@ -571,6 +571,20 @@ class ToolSpec(BaseModel):
     webhook_method: Optional[Literal["POST", "GET"]] = "POST"
 
 
+class PoolHealth(BaseModel):
+    """POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.
+
+    Presentation-free — the green/yellow/red badge is derived ON THE FRONTEND
+    (paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).
+    earliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4
+    recheck horizon); None when no sender is restricted.
+    """
+    active: int
+    paused: int
+    total: int
+    earliest_resume_at: Optional[datetime] = None
+
+
 class CampaignSenderAttach(BaseModel):
     """Read-only sender entry inside CampaignResponse.attached_senders[].
 
@@ -584,6 +598,9 @@ class CampaignSenderAttach(BaseModel):
     sender_id: UUID
     locked_by_campaign_id: Optional[UUID] = None
     locked_by_campaign_name: Optional[str] = None
+    # Migration 028: write-restriction state, orthogonal to auth_status.
+    restriction_status: Literal["none", "spam_limited", "frozen"] = "none"
+    restricted_until: Optional[datetime] = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -725,8 +742,31 @@ class CampaignResponse(BaseModel):
     paused_at: Optional[datetime] = None
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
     is_exhausted: bool = False
+    # POOLV-01: numeric pool-health aggregate (active/paused/total + earliest
+    # resume horizon). Computed in one pass in _campaign_to_response; badge color
+    # derived on the frontend (presentation-free API).
+    pool_health: PoolHealth
     created_at: datetime
     updated_at: datetime
+
+
+class RestrictionEventResponse(BaseModel):
+    """HLTH-03: one restriction-event row from sender_restriction_events.
+
+    Read-only response for GET /senders/{slug}/restriction-events. ORM read via
+    from_attributes; mirrors the migration-030 columns.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    event_type: str
+    source: str
+    category: str
+    restricted_until: Optional[datetime] = None
+    raw_text: Optional[str] = None
+    activity_slice: Optional[dict] = None
+    proxy: Optional[dict] = None
+    created_at: datetime
 
 
 class CampaignListResponse(BaseModel):
