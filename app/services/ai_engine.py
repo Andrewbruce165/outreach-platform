@@ -538,7 +538,11 @@ class AIEngine:
                         tone_preset,
                         rules,
                         COALESCE(company_knowledge, company_info) AS company_info,
-                        max_message_length
+                        max_message_length,
+                        -- Phase 11 D-11: response_speed / response_delay_seconds for listener debounce.
+                        -- listener pulls these via get_context (cached, TTL 60s) keyed on ai_context_id.
+                        response_speed,
+                        response_delay_seconds
                     FROM ai_contexts
                     WHERE id = :id
                 """),
@@ -557,6 +561,10 @@ class AIEngine:
                     # default 280). Читается build_system_prompt → <message_style>.
                     # webhook_functions покойся с миром (миграция 015) — больше не возвращаем.
                     "max_message_length": row[4] or 280,
+                    # Phase 11 D-11: response_speed defaults to "human" when NULL so
+                    # the listener uses the existing DEBOUNCE_MIN..MAX range (back-compat).
+                    "response_speed": row[5] or "human",
+                    "response_delay_seconds": row[6],
                 }
                 self._context_cache[context_id] = (ctx, time.time())
                 return ctx
