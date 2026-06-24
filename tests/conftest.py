@@ -147,16 +147,34 @@ async def _setup_database():
             # inline constraint is skipped by CREATE TABLE IF NOT EXISTS after
             # create_all. Required for get_or_create_by_name ON CONFLICT.
             "027_folders_workspace_name_unique.sql",
+            # 028-031: Phase 7/8/9/10 sender-restriction + pool-resilience migrations.
+            # These must be in the test DB so Phase 11 integration tests don't hit
+            # UndefinedColumn on restriction_status / sender_restriction_events / etc.
+            # (RESEARCH Pitfall 3 — hardcoded list does NOT glob).
+            "028_sender_restriction.sql",
+            "029_campaign_pause_reason.sql",
+            "030_sender_restriction_events.sql",
+            "031_sre_flood_wait_category.sql",
         ):
             sql_text = (PROJECT_ROOT / "migrations" / filename).read_text()
             await asyncpg_conn.execute(sql_text)
 
+        # 032: Phase 11 field-split migration — applied only when the file exists
+        # so this conftest change is green now and auto-activates once Plan 11-02 lands.
+        _mig_032 = PROJECT_ROOT / "migrations" / "032_phase11_field_split.sql"
+        if _mig_032.exists():
+            await asyncpg_conn.execute(_mig_032.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
+        #
+        # NOTE: `tone` default is intentionally OMITTED here — migration 032 (Plan 11-02)
+        # DROPS the `tone` column. If that migration is applied, this ALTER would raise
+        # "column tone does not exist" and crash the entire integration suite.
+        # The `tone` default was handled by migration 018's ADD COLUMN DEFAULT clause
+        # before create_all bypassed it; not needed for correctness of existing tests.
         await asyncpg_conn.execute("""
-            ALTER TABLE ai_contexts ALTER COLUMN tone
-                SET DEFAULT '{"formal": 0, "warm": 0, "brief": 0}'::jsonb;
             ALTER TABLE ai_contexts ALTER COLUMN max_message_length SET DEFAULT 280;
             ALTER TABLE ai_contexts ALTER COLUMN mirror_language SET DEFAULT TRUE;
             ALTER TABLE ai_contexts ALTER COLUMN allow_emoji SET DEFAULT FALSE;
@@ -415,7 +433,24 @@ async def test_agent_factory(async_db_session: AsyncSession, test_workspace: Wor
     """
     counter = {"n": 0}
 
-    async def _make(**overrides) -> AIContext:
+    async def _make(
+        tone_preset: str | None = None,
+        response_speed: str | None = None,
+        response_delay_seconds: int | None = None,
+        **overrides,
+    ) -> AIContext:
+        """Create a test AIContext (agent).
+
+        Phase 11 kwargs:
+          tone_preset: 'Friendly'|'Professional'|'Direct'|'Casual' (new Phase 11 field)
+          response_speed: 'instant'|'human'|'slow'|'manual' (new Phase 11 field)
+          response_delay_seconds: int (new Phase 11 field, used when response_speed='manual')
+
+        These fields are passed through `overrides` so the ORM can ignore them
+        gracefully until migration 032 adds the columns (SQLAlchemy raises on
+        unknown columns only when mapped; raw-kwarg usage lets tests set them
+        conditionally). Use `**overrides` path for post-032 integration tests.
+        """
         counter["n"] += 1
         defaults = dict(
             workspace_id=test_workspace.id,
@@ -428,6 +463,14 @@ async def test_agent_factory(async_db_session: AsyncSession, test_workspace: Wor
             product_info="Test Product.",
         )
         defaults.update(overrides)
+        # Phase 11 new-era fields — only add to defaults if explicitly passed
+        # (avoids AttributeError on pre-032 ORM model that lacks these columns).
+        if tone_preset is not None:
+            defaults["tone_preset"] = tone_preset
+        if response_speed is not None:
+            defaults["response_speed"] = response_speed
+        if response_delay_seconds is not None:
+            defaults["response_delay_seconds"] = response_delay_seconds
         agent = AIContext(**defaults)
         async_db_session.add(agent)
         await async_db_session.commit()

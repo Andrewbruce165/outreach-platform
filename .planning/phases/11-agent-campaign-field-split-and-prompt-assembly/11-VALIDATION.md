@@ -3,7 +3,7 @@ phase: 11
 slug: agent-campaign-field-split-and-prompt-assembly
 status: draft
 nyquist_compliant: false
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-06-24
 ---
 
@@ -20,7 +20,7 @@ created: 2026-06-24
 |----------|-------|
 | **Framework** | pytest + pytest-asyncio (в проде) |
 | **Config file** | `tests/conftest.py` (ephemeral db-test в tmpfs через test-overlay) |
-| **Quick run command** | `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_ai_engine.py tests/test_migration_030.py -x` |
+| **Quick run command** | `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_ai_engine.py tests/test_migration_032.py -x` |
 | **Full suite command** | `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest` |
 | **Estimated runtime** | ~30s quick / full suite varies |
 
@@ -30,7 +30,7 @@ created: 2026-06-24
 
 ## Sampling Rate
 
-- **After every task commit:** Run `pytest tests/test_ai_engine.py tests/test_migration_030.py -x` (< 30s)
+- **After every task commit:** Run `pytest tests/test_ai_engine.py tests/test_migration_032.py -x` (< 30s)
 - **After every plan wave:** Run full suite (test-overlay)
 - **Before `/gsd:verify-work`:** Full suite green + frontend `cd ../aimly-tg-outreach && bun run tsc` clean
 - **Max feedback latency:** ~30 seconds (quick), full suite per wave
@@ -41,10 +41,10 @@ created: 2026-06-24
 
 | Requirement | Behavior | Test Type | Automated Command | File Exists | Status |
 |-------------|----------|-----------|-------------------|-------------|--------|
-| MIG-01 | `voice_baseline`→`tone_preset` маппится, `voice_baseline` дропнут | integration | `pytest tests/test_migration_030.py::test_tone_preset_backfill -x` | ❌ W0 | ⬜ pending |
-| MIG-02 | `tone` (JSONB) и `tone_of_voice` дропнуты | integration | `pytest tests/test_migration_030.py::test_legacy_tone_dropped -x` | ❌ W0 | ⬜ pending |
-| MIG-03 | `success_criteria`→`lead_trigger_hint` (existing hint не теряется), `success_criteria` дропнут | integration | `pytest tests/test_migration_030.py::test_lead_hint_merge -x` | ❌ W0 | ⬜ pending |
-| FLD-01..06 | новые колонки существуют с правильными CHECK/типом | integration | `pytest tests/test_migration_030.py::test_new_columns -x` | ❌ W0 | ⬜ pending |
+| MIG-01 | `voice_baseline`→`tone_preset` маппится, `voice_baseline` дропнут | integration | `pytest tests/test_migration_032.py::test_tone_preset_backfill -x` | ❌ W0 | ⬜ pending |
+| MIG-02 | `tone` (JSONB) и `tone_of_voice` дропнуты | integration | `pytest tests/test_migration_032.py::test_legacy_tone_dropped -x` | ❌ W0 | ⬜ pending |
+| MIG-03 | `success_criteria`→`lead_trigger_hint` (existing hint не теряется), `success_criteria` дропнут | integration | `pytest tests/test_migration_032.py::test_lead_hint_merge -x` | ❌ W0 | ⬜ pending |
+| FLD-01..06 | новые колонки существуют с правильными CHECK/типом | integration | `pytest tests/test_migration_032.py::test_new_columns -x` | ❌ W0 | ⬜ pending |
 | PMT-01 | блоки в точном порядке §7 (ИДЕНТИЧНОСТЬ→…→ФОРМАТ ОТВЕТА) | unit | `pytest tests/test_ai_engine.py::test_prompt_block_order -x` | ⚠️ extend | ⬜ pending |
 | PMT-02 | tone рендерится ТОЛЬКО из `tone_preset`; нет voice_baseline/слайдеров | unit | `pytest tests/test_ai_engine.py::test_tone_single_source -x` | ⚠️ extend | ⬜ pending |
 | PMT-03 | `dialogue_flow` → нумерованные стадии; нет static goal | unit | `pytest tests/test_ai_engine.py::test_dialogue_flow_render -x` | ⚠️ extend | ⬜ pending |
@@ -72,7 +72,7 @@ created: 2026-06-24
 
 ## Wave 0 Requirements
 
-- [ ] `tests/test_migration_030.py` — MIG-01/02/03 + FLD-01..06 (применить 030 на эфемерной БД, проверить backfill + drop + CHECK)
+- [ ] `tests/test_migration_032.py` — MIG-01/02/03 + FLD-01..06 (применить 030 на эфемерной БД, проверить backfill + drop + CHECK)
 - [ ] `tests/test_listener_response_speed.py` — RT-01 (мок context, проверить расчёт delay по enum)
 - [ ] Extend `tests/test_ai_engine.py` — PMT-01..07 golden-prompt assertions
 - [ ] `tests/conftest.py:127-150` — **ДОБАВИТЬ** `028_*`, `029_campaign_pause_reason.sql`, `030_*.sql` в migration list (иначе UndefinedColumn — RESEARCH Pitfall 3)
@@ -93,7 +93,7 @@ created: 2026-06-24
 
 - [ ] All requirements have automated verify or Wave 0 dependencies
 - [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (test_migration_030, test_listener_response_speed, conftest migration list)
+- [ ] Wave 0 covers all MISSING references (test_migration_032, test_listener_response_speed, conftest migration list)
 - [ ] No watch-mode flags
 - [ ] Feedback latency < 30s (quick)
 - [ ] `nyquist_compliant: true` set in frontmatter
