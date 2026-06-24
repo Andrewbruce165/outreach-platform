@@ -1,10 +1,11 @@
 ---
 phase: 11
 slug: agent-campaign-field-split-and-prompt-assembly
-status: draft
+status: approved
 shadcn_initialized: true
 preset: "new-york / slate / lucide / cssVariables (existing — aimly-tg-outreach)"
 created: 2026-06-24
+reviewed_at: 2026-06-24
 ---
 
 # Phase 11 — UI Design Contract
