@@ -620,6 +620,11 @@ async def test_queue_item_factory(async_db_session: AsyncSession, test_workspace
     - When `with_conversation=True` also INSERTs a `conversations` row for
       `(workspace_id, sender_id, contact_phone=recipient_phone)` so a recipient can be
       marked "engaged" (POOL-06b / POOL-08b — engaged dialogs must NOT be moved/blocked).
+    - When `with_message=True` (requires `with_conversation=True`) additionally INSERTs
+      one inbound `messages` row tied to that conversation so the recipient counts as a
+      *has-message* (truly engaged) dialog. With `with_conversation=True, with_message=False`
+      (default) the conversation stays EMPTY (zero messages) — the D-05 "empty conversation
+      is still cold" case that Phase 9 failover MUST still treat as movable.
     """
     from sqlalchemy import text as _t
 
@@ -631,6 +636,7 @@ async def test_queue_item_factory(async_db_session: AsyncSession, test_workspace
         *,
         with_cca: bool = True,
         with_conversation: bool = False,
+        with_message: bool = False,
         **overrides,
     ):
         wid = str(test_workspace.id)
@@ -661,15 +667,32 @@ async def test_queue_item_factory(async_db_session: AsyncSession, test_workspace
             """), {"wid": wid, "cid": cid, "phone": recipient_phone, "sid": sid})
 
         if with_conversation:
-            # An engaged dialog for this recipient. contact_phone is the same identity
-            # key the cold-pending guard joins on (NOT EXISTS conversations).
-            await async_db_session.execute(_t("""
+            # A dialog row for this recipient. contact_phone is the same identity
+            # key the cold-pending guard joins on (NOT EXISTS conversations). When
+            # with_message=False this conversation stays EMPTY (zero messages) — the
+            # D-05 "empty conversation is still cold" case (Phase 9 failover-movable).
+            conv_row = (await async_db_session.execute(_t("""
                 INSERT INTO conversations (
                     workspace_id, sender_id, contact_phone, campaign_id, status
                 ) VALUES (
                     :wid, :sid, :phone, :cid, 'active'
                 )
-            """), {"wid": wid, "sid": sid, "phone": recipient_phone, "cid": cid})
+                RETURNING id
+            """), {"wid": wid, "sid": sid, "phone": recipient_phone, "cid": cid})).first()
+
+            if with_message:
+                # One inbound (received reply) message → the conversation is now
+                # ENGAGED (has-message). Phase 9 failover must NOT move this row;
+                # rebalance must keep it on the donor. Keyed by conversation_id only
+                # (messages has no recipient_phone — migration 017).
+                await async_db_session.execute(_t("""
+                    INSERT INTO messages (
+                        workspace_id, conversation_id, direction, message_text,
+                        sent_by, created_at
+                    ) VALUES (
+                        :wid, :conv_id, 'inbound', 'engaged reply', 'contact', NOW()
+                    )
+                """), {"wid": wid, "conv_id": str(conv_row.id)})
 
         await async_db_session.commit()
 
