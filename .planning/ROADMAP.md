@@ -21,7 +21,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [ ] **Phase 7: Unified Freeze Policy** — antispam-путь как PEER_FLOOD (пауза+флаг вместо `failed`, реконсайл авто-resume; ответы в диалогах не глушим) + ротация не садит новые контакты на ограниченный аккаунт
 - [x] **Phase 8: Pool Management & Even Distribution** — attach/detach аккаунтов к кампании + фронт-мультиселект + равномерная раздача по пулу (completed 2026-06-23)
 - [ ] **Phase 9: Cold-Contact Failover** — не-контактированные задачи замёрзшего аккаунта уходят на здоровые; активные диалоги ждут свой аккаунт
-- [ ] **Phase 10: Pool Visibility** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж
+- [ ] **Phase 10: Pool Visibility & Restriction Audit** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж; durable аудит всех предупреждений/блокировок аккаунтов с привязкой к предшествующей активности
 
 ## Phase Details
 
@@ -251,18 +251,18 @@ Plans:
 - [ ] 09-01-test-scaffold-PLAN.md — Wave 0 RED test scaffold: tests/test_failover.py (FAIL-01/03..08 stubs, import-inside-body) + conftest test_queue_item_factory with_message flag [Wave 1, no deps]
 - [ ] 09-02-failover-service-and-call-sites-PLAN.md — NEW app/services/failover.py::failover_cold_backlog (per-row even-spread off frozen sender, _COLD_PENDING_PREDICATE with empty-conv widening, scheduled_at=NOW, FOR UPDATE SKIP LOCKED, COUNT/UUID-only log) + wire 3 freeze call sites (PEER_FLOOD/ACCOUNT_FROZEN/antispam) + FAIL-02 integration tests — FAIL-01..09 [Wave 2, depends_on: 09-01]
 
-### Phase 10: Pool Visibility (optional)
+### Phase 10: Pool Visibility & Restriction Audit (optional)
 
-**Goal:** В ответе кампании показывать здоровье пула (N активно / K на паузе до T) + бейдж во фронте, чтобы было видно частичную паузу кампании.
-**Requirements**: TBD (derive on plan)
-**Depends on:** Phase 8
+**Goal:** Два связанных направления. (1) **Видимость пула:** в ответе кампании показывать здоровье пула (N активно / K на паузе до T) + бейдж во фронте, чтобы была видна частичная пауза кампании. (2) **Аудит ограничений:** durable append-only event-log всех предупреждений/блокировок аккаунтов (`spam_limited`/`frozen`/`flood_wait`/`cleared`/`banned`), с источником (queue-ошибка / @SpamBot-реконсайл) и привязкой к предшествующей активности sender'а — чтобы реконструировать «что делали → за что получили». Сегодня этих данных негде взять: `message_queue.error_message` затирается при reschedule, `telemetry_events` смену restriction не пишет, логи контейнера живут ~18ч (см. `.planning/notes/account-restriction-audit-gap.md`).
+**Requirements**: HLTH-01, HLTH-02, HLTH-03 (+ pool-visibility reqs TBD on plan)
+**Depends on:** Phase 8 (пул), Phase 7 (restriction lifecycle — источник событий)
 **Plans:** 0 plans
 
 Plans:
 
 - [ ] TBD (run /gsd-plan-phase 10 to break down)
 
-> **Non-goals (v1 этого блока):** failover **активных** диалогов на другой аккаунт (ломает континуити — ждут свой аккаунт); режим «затихать и на ответах» при мягком лимите (дефолт — продолжаем отвечать); cross-campaign load awareness.
+> **Non-goals (v1 этого блока):** failover **активных** диалогов на другой аккаунт (ломает континуити — ждут свой аккаунт); режим «затихать и на ответах» при мягком лимите (дефолт — продолжаем отвечать); cross-campaign load awareness; real-time алерты по банам (аудит копит данные — алерты строятся поверх позже).
 
 ---
 
@@ -280,7 +280,7 @@ Plans:
 | 7. Unified Freeze Policy | 0/1 | Planned (1 plan, Wave 1) | - |
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 0/2 | Planned (2 plans, waves 1→2) | - |
-| 10. Pool Visibility (optional) | 0/? | Not planned | - |
+| 10. Pool Visibility & Restriction Audit (optional) | 0/? | Not planned | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**

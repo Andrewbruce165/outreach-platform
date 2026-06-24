@@ -127,6 +127,12 @@
 - [ ] **FAIL-08**: Failover logs COUNT moved + source sender UUID + receiver sender UUIDs only — never recipient phones/payloads (D-12)
 - [ ] **FAIL-09**: No migration — failover operates on existing columns only (code_context)
 
+### Account Health & Restriction Audit (Phase 10)
+
+- [ ] **HLTH-01**: Durable, append-only event-log всех предупреждений/ограничений аккаунта — типы `spam_limited` / `frozen` / `flood_wait` / `cleared` / `banned`. Каждое событие хранит: sender, тип, источник (`queue_error` / `spambot_reconcile`), `restricted_until`, сырой текст ошибки/ответа @SpamBot, server_ts. Не затирается (в отличие от `message_queue.error_message`)
+- [ ] **HLTH-02**: К каждому событию ограничения привязан срез предшествующей активности sender'а: объём отправок за 1ч / 24ч до события, число уникальных новых контактов, использованный прокси, фактический темп — чтобы реконструировать «что делали → за что получили»
+- [ ] **HLTH-03**: Видимость для команды: история событий по конкретному аккаунту + агрегат (флуд/ограничения по дням, % пула под ограничением сейчас). Источник для будущих алертов
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -238,13 +244,16 @@
 | FAIL-07 | Phase 9 | Pending |
 | FAIL-08 | Phase 9 | Pending |
 | FAIL-09 | Phase 9 | Pending |
+| HLTH-01 | Phase 10 | Pending |
+| HLTH-02 | Phase 10 | Pending |
+| HLTH-03 | Phase 10 | Pending |
 
 **Coverage:**
 
 - v1 requirements: 70 total
 - Mapped to phases: 70
 - Unmapped: 0 ✓
-- Post-v1 (Sender Pool Resilience): FRZ-01..05 (Phase 7), POOL-01..09 (Phase 8), FAIL-01..09 (Phase 9) — all mapped
+- Post-v1 (Sender Pool Resilience): FRZ-01..05 (Phase 7), POOL-01..09 (Phase 8), FAIL-01..09 (Phase 9), HLTH-01..03 (Phase 10) — all mapped
 
 **Deprecated from previous v1 scope** (replaced by new model):
 
@@ -255,3 +264,4 @@
 ---
 *Requirements defined: 2026-04-02*
 *Last updated: 2026-05-21 — restructured into 6 phases with Campaign entity*
+*2026-06-24 — added HLTH-01..03 (Account Health & Restriction Audit) to Phase 10*
