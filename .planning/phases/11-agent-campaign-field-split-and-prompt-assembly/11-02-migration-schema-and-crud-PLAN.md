@@ -11,7 +11,7 @@ files_modified:
   - app/routers/agents.py
   - app/routers/campaigns.py
 autonomous: true
-requirements: [FLD-01, FLD-02, FLD-03, FLD-04, FLD-05, FLD-06, MIG-01, MIG-02, MIG-03, D-01, D-02, D-04, D-11, D-12, D-13, D-14]
+requirements: [FLD-01, FLD-02, FLD-03, FLD-04, FLD-05, FLD-06, MIG-01, MIG-02, MIG-03, D-01, D-02, D-04, D-10, D-11, D-12, D-13, D-14]
 must_haves:
   truths:
     - "Agent can store a single tone source (tone_preset) and a response-speed setting"
@@ -52,6 +52,8 @@ Output: migration 031, updated models/schemas/routers. Flips test_migration_031.
 <execution_context>
 @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/execute-plan.md
 @/root/apps/aimly/tg-outreach/.claude/get-shit-done/templates/summary.md
+
+COMMIT SAFETY (D-10): commit ONLY this plan's named files via `--files <paths>`. NEVER `git add -A` / `git add .` — Phase 10 work runs in parallel and must not be swept in.
 </execution_context>
 
 <context>

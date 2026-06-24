@@ -10,6 +10,7 @@ files_modified:
   - /root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/agents.tsx
   - /root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/campaigns.new.tsx
   - /root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/campaigns.$id.tsx
+  - .planning/phases/11-agent-campaign-field-split-and-prompt-assembly/11-VALIDATION.md
 autonomous: false
 requirements: [UI-FLD-01, UI-FLD-02, UI-FLD-03, D-05, D-07, D-08, D-09, D-10, D-13, D-15]
 must_haves:
@@ -220,5 +221,8 @@ The free-text fields (arguments_facts, campaign_rules) are user input rendered s
 </success_criteria>
 
 <output>
-After completion, create `.planning/phases/11-agent-campaign-field-split-and-prompt-assembly/11-04-SUMMARY.md`
+After completion (UAT approved):
+1. Set `nyquist_compliant: true` in `.planning/phases/11-agent-campaign-field-split-and-prompt-assembly/11-VALIDATION.md` frontmatter — by this point every Phase 11 requirement (FLD/MIG/PMT/RT/UI-FLD) has a landed test or human-verified UAT, so the validation contract is satisfied.
+2. Create `.planning/phases/11-agent-campaign-field-split-and-prompt-assembly/11-04-SUMMARY.md`.
+3. Commit ONLY named files in BOTH repos via `--files` (D-10); never `git add -A`.
 </output>

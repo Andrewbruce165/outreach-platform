@@ -8,7 +8,7 @@ files_modified:
   - app/services/ai_engine.py
   - app/services/listener.py
 autonomous: true
-requirements: [PMT-01, PMT-02, PMT-03, PMT-04, PMT-05, PMT-06, PMT-07, RT-01, D-03, D-06, D-12, D-14, D-15]
+requirements: [PMT-01, PMT-02, PMT-03, PMT-04, PMT-05, PMT-06, PMT-07, RT-01, D-03, D-06, D-10, D-12, D-14, D-15]
 must_haves:
   truths:
     - "The system prompt renders blocks in the fixed BRIEF §7 order with exactly one source per block"
@@ -42,6 +42,8 @@ Output: rewritten build_system_prompt + updated context SELECTs + response_speed
 <execution_context>
 @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/execute-plan.md
 @/root/apps/aimly/tg-outreach/.claude/get-shit-done/templates/summary.md
+
+COMMIT SAFETY (D-10): commit ONLY this plan's named files via `--files <paths>`. NEVER `git add -A` / `git add .` — Phase 10 work runs in parallel and must not be swept in.
 </execution_context>
 
 <context>

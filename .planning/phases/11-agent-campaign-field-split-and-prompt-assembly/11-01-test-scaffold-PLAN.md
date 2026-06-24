@@ -9,8 +9,9 @@ files_modified:
   - tests/test_migration_031.py
   - tests/test_listener_response_speed.py
   - tests/test_ai_engine.py
+  - .planning/phases/11-agent-campaign-field-split-and-prompt-assembly/11-VALIDATION.md
 autonomous: true
-requirements: [FLD-01, FLD-02, FLD-03, FLD-04, FLD-05, FLD-06, MIG-01, MIG-02, MIG-03, PMT-01, PMT-02, PMT-03, PMT-04, PMT-05, PMT-06, PMT-07, RT-01]
+requirements: [FLD-01, FLD-02, FLD-03, FLD-04, FLD-05, FLD-06, MIG-01, MIG-02, MIG-03, PMT-01, PMT-02, PMT-03, PMT-04, PMT-05, PMT-06, PMT-07, RT-01, D-10]
 must_haves:
   truths:
     - "conftest applies migrations through 031 so new columns exist in the test DB"
@@ -86,12 +87,23 @@ No new input surfaces, no auth, no data migration in this plan.
 <task type="auto">
   <name>Task 1: Extend conftest migration list to 031 + widen test_agent_factory</name>
   <read_first>
-    - tests/conftest.py:122-165 (the hardcoded migration tuple + post-migration explicit-default block)
+    - tests/conftest.py:127-164 (the hardcoded migration tuple AND the post-migration explicit-default block — note lines 157-159 run a multi-line `ALTER TABLE ai_contexts ALTER COLUMN tone SET DEFAULT '{"formal":0,...}'::jsonb`)
     - migrations/028_sender_restriction.sql, migrations/029_campaign_pause_reason.sql, migrations/030_sender_restriction_events.sql (the three uncovered migrations)
     - 11-PATTERNS.md "Tests" section (Pitfall 3 — hardcoded list does NOT glob)
+    - 11-VALIDATION.md (references the OLD filename test_migration_030.py in ~6 places — must be retargeted to test_migration_031.py)
   </read_first>
   <action>
-    In tests/conftest.py append four entries to the migration tuple after "027_folders_workspace_name_unique.sql": "028_sender_restriction.sql", "029_campaign_pause_reason.sql", "030_sender_restriction_events.sql", "031_phase11_field_split.sql" (the 031 filename must match the file Plan 11-02 creates). Because 031 does not exist yet, guard its read with a conditional: only append it to the executed list if (PROJECT_ROOT / "migrations" / "031_phase11_field_split.sql").exists(), so this plan's conftest change is green now and auto-activates when 11-02 lands. Locate the test_agent_factory / test_context fixture(s) that currently set voice_baseline/tone and add optional kwargs tone_preset, response_speed, response_delay_seconds defaulting to None so downstream tests can build new-era agents without rewriting the fixture. Do NOT remove voice_baseline from the factory yet (column still exists until 11-02's migration).
+    COMMIT SAFETY (D-10): commit ONLY the files this plan names, BY NAME (--files tests/conftest.py tests/test_migration_031.py tests/test_listener_response_speed.py tests/test_ai_engine.py .planning/.../11-VALIDATION.md). NEVER `git add -A` / `git add .` — Phase 10 work runs in parallel.
+
+    (a) Migration tuple: In tests/conftest.py append four entries to the migration tuple after "027_folders_workspace_name_unique.sql": "028_sender_restriction.sql", "029_campaign_pause_reason.sql", "030_sender_restriction_events.sql", "031_phase11_field_split.sql" (the 031 filename must match the file Plan 11-02 creates). Because 031 does not exist yet, guard its read with a conditional: only append it to the executed list if (PROJECT_ROOT / "migrations" / "031_phase11_field_split.sql").exists(), so this plan's conftest change is green now and auto-activates when 11-02 lands.
+
+    (b) REMOVE the stale `tone` default: In the post-migration explicit-default block (tests/conftest.py ~157-164) DELETE the statement `ALTER TABLE ai_contexts ALTER COLUMN tone SET DEFAULT '{"formal": 0, "warm": 0, "brief": 0}'::jsonb;` (it spans conftest lines ~158-159: `ALTER TABLE ai_contexts ALTER COLUMN tone` / `SET DEFAULT ...`). Migration 031 (Plan 11-02) DROPS the `tone` column, so once 031 applies this ALTER would raise "column tone does not exist" and crash the ENTIRE integration suite from Wave 2 onward. Leave the other ALTERs in that block (max_message_length, mirror_language, allow_emoji, auto_pause_scope) intact — those columns survive 031.
+
+    (c) Fixture widening: Locate the test_agent_factory / test_context fixture(s) that currently set voice_baseline/tone and add optional kwargs tone_preset, response_speed, response_delay_seconds defaulting to None so downstream tests can build new-era agents without rewriting the fixture. Do NOT remove voice_baseline from the factory yet (column still exists until 11-02's migration).
+
+    (d) Retarget 11-VALIDATION.md filenames: 11-VALIDATION.md still references the OLD filename `tests/test_migration_030.py` in ~6 places (quick-run command ~line 23, sampling ~line 33, the per-task verification map ~lines 44-47, the Wave 0 checklist ~line 75, and the sign-off ~line 96). Replace EVERY occurrence of `test_migration_030` with `test_migration_031` (sed -i 's/test_migration_030/test_migration_031/g' on the file is fine). After this, `grep -n test_migration_030 11-VALIDATION.md` MUST return nothing.
+
+    (e) Flip wave_0 flag: In 11-VALIDATION.md frontmatter set `wave_0_complete: true` (this plan IS Wave 0 — its completion is what makes the scaffold ready).
   </action>
   <verify>
     <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest --collect-only -q 2>&1 | tail -5</automated>
@@ -99,8 +111,12 @@ No new input surfaces, no auth, no data migration in this plan.
   <acceptance_criteria>
     - tests/conftest.py migration tuple contains "028_sender_restriction.sql", "029_campaign_pause_reason.sql", "030_sender_restriction_events.sql"
     - 031 is appended only behind an `.exists()` guard (string "031_phase11_field_split.sql" present in conftest.py)
+    - conftest post-migration `ALTER COLUMN tone` default statement removed: `grep -n "ALTER COLUMN tone" tests/conftest.py` returns nothing (the statement spans two lines; the `ALTER COLUMN tone` token on line ~158 is the anchor to delete)
     - test_agent_factory (or equivalent fixture) accepts tone_preset / response_speed / response_delay_seconds kwargs
+    - 11-VALIDATION.md retargeted: `grep -n test_migration_030 11-VALIDATION.md` returns nothing (all references now test_migration_031)
+    - 11-VALIDATION.md frontmatter `wave_0_complete: true`
     - `--collect-only` exits 0 (no collection errors from the conftest change)
+    - commit used --files with named paths only; no `git add -A`/`git add .` (D-10)
   </acceptance_criteria>
   <done>conftest applies 028-030 today and auto-applies 031 once it exists; fixture supports new tone/speed fields.</done>
 </task>
