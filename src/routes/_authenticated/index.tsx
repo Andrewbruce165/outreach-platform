@@ -1242,9 +1242,11 @@ function statusDot(status: string) {
 function CampaignPerformanceCard({
   items,
   loading,
+  periodLabel,
 }: {
   items: components["schemas"]["CampaignResponse"][];
   loading: boolean;
+  periodLabel: string;
 }) {
   const rows = items.slice(0, 5);
   return (
@@ -1252,7 +1254,7 @@ function CampaignPerformanceCard({
       <div className="card__header">
         <div>
           <div className="card__title">Campaign performance</div>
-          <div className="card__sub">Last 7 days</div>
+          <div className="card__sub">{periodLabel}</div>
         </div>
         <div className="spacer" />
         <Link to="/campaigns">
