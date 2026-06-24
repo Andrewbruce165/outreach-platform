@@ -34,7 +34,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Sender, ProxyPool
+from app.models import Sender, ProxyPool, SenderRestrictionEvent
 from app.schemas import (
     AssignProxyRequest,
     ProxyConfig,
@@ -42,6 +42,7 @@ from app.schemas import (
     ProxyPoolItem,
     ProxyPoolListResponse,
     RateLimits,
+    RestrictionEventResponse,
     SenderCreate,
     SenderCreateResponse,
     SenderListResponse,
@@ -714,6 +715,38 @@ async def check_spambot(
     finally:
         if client:
             await telegram_service.disconnect_client(client)
+
+
+# ─── Restriction event history (HLTH-03) ─────────────────────────────────────
+
+
+@router.get(
+    "/senders/{slug}/restriction-events",
+    response_model=list[RestrictionEventResponse],
+)
+async def list_restriction_events(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """HLTH-03: append-only restriction-event history for a sender, newest-first.
+
+    Workspace-scoped via _load_sender_by_slug (opaque 404 for foreign/unknown
+    slugs — no cross-tenant leakage). Read-only over the append-only log; the
+    event SELECT is also constrained by workspace_id (defence-in-depth) and
+    bounded by a default LIMIT.
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    result = await db.execute(
+        select(SenderRestrictionEvent)
+        .where(
+            SenderRestrictionEvent.sender_id == sender.id,
+            SenderRestrictionEvent.workspace_id == ctx.workspace_id,
+        )
+        .order_by(SenderRestrictionEvent.created_at.desc())
+        .limit(200)
+    )
+    return result.scalars().all()
 
 
 # ─── Workspace proxy pool CRUD (D-22) ────────────────────────────────────────
