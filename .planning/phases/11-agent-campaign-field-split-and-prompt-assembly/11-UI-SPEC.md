@@ -69,18 +69,20 @@ The aimly kit is spacing-consistent on a 4px base. Declared values (multiples of
 
 ## Typography
 
-Driven by aimly tokens (base `font-size: 14px`, `line-height: 1.45`). 4 roles, 2 weights:
+Driven by aimly tokens (base `font-size: 14px`, `line-height: 1.45`). 4 roles, **exactly 2 weights — `400` and `600`**:
 
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body / input text | 13–14px | 400 | 1.45 (controls) / 1.5 (textarea) |
-| Field label | 12px | 500 | 1.45 (`.field__label`) |
+| Field label | 12px | 600 | 1.45 (`.field__label`) |
 | Field hint / helper | 11.5px | 400 | 1.4 (`.field__hint` / `.muted`) |
 | Section / step title | 17–18px | 600 | 1.2 (`.ob__title` / `.tb__title`) |
 
-**Weights:** exactly two — `400` (body/hints) and `500/600` (labels/titles; 500 for labels, 600 for titles — both treated as the single "emphasis" weight class). No third weight introduced.
+**Weights:** exactly two — `400` (body and hints) and `600` (every emphasized element: labels, section/step titles, pills, the stage-number badge). There is no third weight.
 
-**Exception:** stage-editor stage number badge and `.pill` use 11–11.5px / 500–600 — existing micro-label sizing, reuse as-is.
+> **Legacy-CSS note (not a third weight):** some existing kit classes (`.field__label`, `.pill`) ship at `font-weight: 500` in `aimly.css`. Per the contract, all emphasis is `600`; the executor MUST treat 600 as the single emphasis weight for any new markup. Pre-existing `500` rules in untouched legacy CSS may stay as-is, but no new code introduces 500 — when a new element needs emphasis, use 600.
+
+**Exception:** stage-editor stage-number badge and `.pill` are micro-labels at 11–11.5px; they take the `600` emphasis weight (no separate weight value introduced).
 
 ---
 
@@ -105,6 +107,18 @@ Driven by aimly tokens (base `font-size: 14px`, `line-height: 1.45`). 4 roles, 2
 **Semantic-color notes for this phase:**
 - `--warning` (`#f5a623` / `--warning-soft`) for the green-corridor / rate hints — **unchanged**, not introduced here.
 - `--ai-purple` (`#8774e1`) is reserved for AI/auto-fill affordances (Brief "expand with AI" / `.ai-shimmer`). The Brief auto-fill button MAY use purple accent to signal "AI-generated draft" — consistent with existing AI motif. Do not use purple for ordinary fields.
+
+---
+
+## Focal Point Per Screen
+
+Each touched screen has ONE declared visual anchor — the element the eye lands on first.
+
+| Screen / step | Focal point |
+|---------------|-------------|
+| Agent form (`agents.tsx` + wizard "Agent" step) | The **Идентичность** textarea — first and largest content field; everything below (tone, rules, speed) is supporting calibration. |
+| Campaign "Agent" step (campaign-side fields) | The **stage editor "Ход разговора"** — the largest, multi-card, interactive block; it is the phase's key new control and the screen's center of gravity. |
+| EditCampaignModal | The field group being edited; the modal title + primary save CTA (`.btn--primary`) anchor the bottom action zone. |
 
 ---
 
@@ -145,6 +159,7 @@ Reuse-first. Nothing new gets hand-rolled if a kit primitive exists.
 ### New / notable components
 
 - **Stage editor** ("Ход разговора"): vertical list of stage cards. Each card = a numbered badge + `.input` (title) + `.textarea` (instruction) + a remove (`X`) icon-button. Below the list: a ghost "+ Добавить стадию" button. Reorder via up/down chevron icon-buttons per card (NO drag-and-drop library — RESEARCH "Don't Hand-Roll"). 3–5 stages guidance; soft cap ~7. Card surface = `--surface-2` inside `--border`, radius `--r-md` (10px). Icons: `Plus`, `X`, `ChevronUp`/`ChevronDown`, `GripVertical` (display-only) from lucide.
+  - **Accessibility — icon-only buttons:** every icon-only control in the stage editor carries an explicit `aria-label`: remove → `aria-label="Удалить стадию"`; reorder up → `aria-label="Переместить вверх"`; reorder down → `aria-label="Переместить вниз"`; add → the `+` button has a visible text label «Добавить стадию» so no extra aria needed. Disabled reorder buttons (first/last) also keep their aria-label.
 
 ---
 
@@ -154,8 +169,8 @@ Reuse-first. Nothing new gets hand-rolled if a kit primitive exists.
 - **JSON shape:** `[{ "title": string, "instruction": string }]` (RESEARCH rec; D-04). `instruction` required, `title` optional but encouraged.
 - **Empty state (DEFAULT — recommended):** show an empty zone with hint text «Опишите 3–5 стадий разговора: что делать на каждом шаге.» + a single «+ Добавить стадию» button. Do NOT auto-seed template stages (keeps the form honest; no fake content reaching the prompt). *(Researcher default — confirm with user at plan time if desired.)*
 - **Add:** appends an empty stage card, focus moves to its title input.
-- **Remove:** `X` icon-button (danger on hover, `--danger-soft`); no confirmation needed for an empty/just-added stage; confirmation NOT required (cheap to re-add). For a stage with content, a lightweight inline undo via toast is acceptable but optional.
-- **Reorder:** up/down chevrons; first card's "up" and last card's "down" are disabled. Array order == prompt order (D-06).
+- **Remove:** `X` icon-button (danger on hover, `--danger-soft`, `aria-label="Удалить стадию"`); no confirmation needed for an empty/just-added stage; confirmation NOT required (cheap to re-add). For a stage with content, a lightweight inline undo via toast is acceptable but optional.
+- **Reorder:** up/down chevrons (`aria-label="Переместить вверх"` / «вниз»); first card's "up" and last card's "down" are disabled. Array order == prompt order (D-06).
 - **Validation:** stages with empty `instruction` are dropped on save (not sent to backend); surface no hard error, just don't persist blanks.
 
 ### Response-speed control (`response_speed` + `response_delay_seconds`)
