@@ -138,7 +138,11 @@ class SenderRestrictionEvent(Base):
 
     __tablename__ = "sender_restriction_events"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # server_default so the row gets an id under BOTH paths: raw text() INSERTs
+    # from restriction_audit.py (no ORM default applied) AND create_all (test
+    # overlay builds the table from metadata, not the migration's DEFAULT).
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+                server_default=text("gen_random_uuid()"))
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
