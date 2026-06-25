@@ -83,7 +83,7 @@ async def test_funnel_stages_monotonic_non_increasing(
                                        status, ai_enabled)
             VALUES (gen_random_uuid(), :wid, :sid, :phone, 'active', true)
             RETURNING id
-        """), {"wid": str(test_workspace.id), "sid": str(s["id"]),
+        """), {"wid": str(test_workspace.id), "sid": str(s.id),
                "phone": f"+1900000010{i}"})).scalar()
         conv_ids.append(cid)
         # 1 outbound for each
@@ -140,7 +140,7 @@ async def test_funnel_engaged_definition_locked(
                                    status, ai_enabled)
         VALUES (gen_random_uuid(), :wid, :sid, '+11234567890', 'active', true)
         RETURNING id
-    """), {"wid": str(test_workspace.id), "sid": str(s["id"])})).scalar()
+    """), {"wid": str(test_workspace.id), "sid": str(s.id)})).scalar()
     for i in range(2):
         await async_db_session.execute(text("""
             INSERT INTO messages (conversation_id, workspace_id, direction,
@@ -181,7 +181,7 @@ async def test_funnel_excludes_bot_ignored(
                                    status, ai_enabled)
         VALUES (gen_random_uuid(), :wid, :sid, '+10000000099', 'bot_ignored', false)
         RETURNING id
-    """), {"wid": str(test_workspace.id), "sid": str(s["id"])})).scalar()
+    """), {"wid": str(test_workspace.id), "sid": str(s.id)})).scalar()
     for i in range(3):
         await async_db_session.execute(text("""
             INSERT INTO messages (workspace_id, conversation_id, direction,

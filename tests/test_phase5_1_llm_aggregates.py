@@ -81,7 +81,7 @@ async def test_llm_aggregates_sums_token_counts(
                                    status, ai_enabled)
         VALUES (gen_random_uuid(), :wid, :sid, '+11111111199', 'active', true)
         RETURNING id
-    """), {"wid": str(test_workspace.id), "sid": str(s["id"])})).scalar()
+    """), {"wid": str(test_workspace.id), "sid": str(s.id)})).scalar()
 
     # Insert two rows with known token + latency counts.
     rows = [(100, 50, 150, 200), (200, 100, 300, 400)]
