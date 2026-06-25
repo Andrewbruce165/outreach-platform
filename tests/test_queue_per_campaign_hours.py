@@ -107,7 +107,10 @@ async def test_queue_skips_paused_campaign_items(
     with _patch_process_next_to_capture(worker, captured):
         await worker._tick()
 
-    assert captured["sender_ids"] == [], "paused campaign items must NOT dispatch"
+    # Assert about THIS test's sender, not global emptiness: the worker scans the
+    # whole shared DB and earlier tests in this file mock away _process_next_for_sender,
+    # leaving their pending rows behind (which legitimately dispatch).
+    assert senders[0].id not in captured["sender_ids"], "paused campaign items must NOT dispatch"
     status, err = await _queue_status(async_db_session, qid)
     assert status == "pending", f"item should remain pending, got status={status}"
     assert err is None
@@ -163,7 +166,7 @@ async def test_queue_skips_done_campaign_items(
     with _patch_process_next_to_capture(worker, captured):
         await worker._tick()
 
-    assert captured["sender_ids"] == []
+    assert senders[0].id not in captured["sender_ids"]
     status, _ = await _queue_status(async_db_session, qid)
     assert status == "pending"
 
@@ -191,7 +194,7 @@ async def test_queue_skips_past_stop_date(
     with _patch_process_next_to_capture(worker, captured):
         await worker._tick()
 
-    assert captured["sender_ids"] == [], (
+    assert senders[0].id not in captured["sender_ids"], (
         "past stop_date items must NOT be dispatched"
     )
 
@@ -247,7 +250,7 @@ async def test_queue_skips_before_start_date(
     with _patch_process_next_to_capture(worker, captured):
         await worker._tick()
 
-    assert captured["sender_ids"] == []
+    assert senders[0].id not in captured["sender_ids"]
     status, _ = await _queue_status(async_db_session, qid)
     assert status == "pending", "pre-start_date items must stay pending"
 
@@ -282,7 +285,7 @@ async def test_queue_respects_per_campaign_working_hours(
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         with _patch_process_next_to_capture(worker, captured1):
             await worker._tick()
-    assert captured1["sender_ids"] == [], "before window — must SKIP"
+    assert senders[0].id not in captured1["sender_ids"], "before window — must SKIP"
 
     captured2: dict = {}
     with patch.object(queue_module, "datetime") as mock_dt:
@@ -322,7 +325,7 @@ async def test_queue_respects_work_days_mask(
         mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         with _patch_process_next_to_capture(worker, captured_sat):
             await worker._tick()
-    assert captured_sat["sender_ids"] == [], "Saturday with Mo-Fri mask — must SKIP"
+    assert senders[0].id not in captured_sat["sender_ids"], "Saturday with Mo-Fri mask — must SKIP"
 
     captured_mon: dict = {}
     with patch.object(queue_module, "datetime") as mock_dt:
