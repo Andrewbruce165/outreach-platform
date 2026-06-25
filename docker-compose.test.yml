@@ -56,6 +56,11 @@ services:
       - ./tests:/app/tests
       - ./migrations:/app/migrations
       - ./pyproject.toml:/app/pyproject.toml:ro
+      # lovable-handoff/ is not COPYd into the prod image, but
+      # test_phase5_1_full_suite::test_handoff_bundle_directory_exists asserts the
+      # bundle (and its files) exist in the repo. Mount it read-only so the
+      # filesystem-shape assertion sees the real repo directory.
+      - ./lovable-handoff:/app/lovable-handoff:ro
     depends_on:
       db-test:
         condition: service_healthy

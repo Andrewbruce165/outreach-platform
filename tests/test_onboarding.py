@@ -36,6 +36,25 @@ from app.models import OnboardingSession, Sender
 pytestmark = pytest.mark.asyncio
 
 
+def _make_valid_string_session() -> str:
+    """A real (empty-auth-key) Telethon StringSession blob.
+
+    The /verify-code recovery path persists the session_string and later rebuilds
+    a real ``StringSession(session_string)``; that constructor raises ValueError on
+    anything that isn't a genuine Telethon session, so the mock must return one.
+    """
+    from telethon.crypto import AuthKey
+    from telethon.sessions import StringSession
+
+    s = StringSession()
+    s.set_dc(2, "149.154.167.40", 443)
+    s.auth_key = AuthKey(b"\x00" * 256)
+    return s.save()
+
+
+_VALID_STRING_SESSION = _make_valid_string_session()
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -61,7 +80,10 @@ def _make_mock_client(
         client.sign_in = AsyncMock(side_effect=sign_in_effect)
 
     session = MagicMock()
-    session.save = MagicMock(return_value="fake-session-string")
+    # A VALID (empty-auth-key) Telethon StringSession blob — the /verify-code
+    # recovery path rebuilds a real StringSession(session_string) from the
+    # persisted value, which raises ValueError on a non-Telethon string.
+    session.save = MagicMock(return_value=_VALID_STRING_SESSION)
     client.session = session
 
     me = MagicMock()
@@ -469,9 +491,27 @@ async def test_role_override_in_verify_code(
 
 
 async def test_no_subprocess_or_legacy_dict_in_module():
-    """Static check: legacy anti-patterns are gone from the rewritten router."""
+    """Static check: legacy anti-patterns are gone from the rewritten router.
+
+    The module docstring / comments legitimately MENTION the removed patterns
+    (documenting that they are gone), so strip comments and string/docstring
+    literals before asserting the tokens are absent from executable code.
+    """
     import inspect
+    import io
+    import tokenize
+
     src = inspect.getsource(onboarding_router)
-    assert "subprocess" not in src, "subprocess.run anti-pattern must be gone (D-18)"
-    assert "_onboarding_sessions" not in src, "legacy dict must be gone (D-16)"
-    assert "verify_api_key" not in src, "legacy verify_api_key import must be gone"
+
+    # Drop comments and string literals (incl. docstrings) via tokenize so the
+    # decision documentation that references the dead patterns is ignored.
+    code_tokens = []
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type in (tokenize.COMMENT, tokenize.STRING):
+            continue
+        code_tokens.append(tok.string)
+    code_only = " ".join(code_tokens)
+
+    assert "subprocess" not in code_only, "subprocess.run anti-pattern must be gone (D-18)"
+    assert "_onboarding_sessions" not in code_only, "legacy dict must be gone (D-16)"
+    assert "verify_api_key" not in code_only, "legacy verify_api_key import must be gone"

@@ -25,7 +25,7 @@ TENANT_SCOPED_TABLES = [
     "warmup_sessions",
     "warmup_messages",
     "proxy_pool",
-    "context_contact_assignments",
+    # context_contact_assignments was DROPPED by migration 016 (Phase 4) — removed.
 ]
 
 NEW_TABLES = ["workspaces", "user_workspaces", "workspace_api_keys"]
@@ -131,21 +131,25 @@ async def test_workspace_api_keys_partial_index(async_db_session: AsyncSession):
 
 
 async def test_no_unique_on_supabase_user_id(async_db_session: AsyncSession):
-    """D-10: НЕТ UNIQUE constraint на user_workspaces.supabase_user_id."""
+    """Migration 023 (2026-05-26 ui-data-missing incident) SUPERSEDES D-10:
+    it adds a standalone UNIQUE(supabase_user_id) so the parallel-fetch race
+    that created 4 workspaces for one user becomes a DB-level no-op. The current
+    correct schema therefore HAS a single-column UNIQUE on supabase_user_id."""
     result = await async_db_session.execute(
         text(
             """
             SELECT con.conname
             FROM pg_constraint con
             JOIN pg_class cls ON cls.oid = con.conrelid
-            JOIN pg_attribute att ON att.attrelid = cls.oid
             WHERE cls.relname = 'user_workspaces'
               AND con.contype = 'u'
-              AND att.attname = 'supabase_user_id'
-              AND att.attnum = ANY(con.conkey)
+              AND con.conkey = ARRAY[
+                  (SELECT attnum FROM pg_attribute
+                    WHERE attrelid = cls.oid AND attname = 'supabase_user_id')
+              ]
             """
         )
     )
-    assert result.fetchone() is None, (
-        "D-10 violation: UNIQUE constraint on supabase_user_id (must be many-to-many)"
+    assert result.fetchone() is not None, (
+        "migration 023 must add a single-column UNIQUE on supabase_user_id"
     )

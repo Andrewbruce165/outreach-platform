@@ -215,32 +215,10 @@ async def test_delete_agent_sets_conversation_to_null(async_client, async_db_ses
     assert result[0] is None, "conversation.ai_context_id must be NULL after agent delete (FK SET NULL)"
 
 
-async def test_delete_agent_cascades_assignments(async_client, async_db_session, valid_supabase_jwt, test_workspace, test_agent_factory, test_sender_factory):
-    """D-08: DELETE cascades context_contact_assignments rows."""
-    user_sub = f"user-del2-{uuid4()}"
-    await _link_user_to_workspace(async_db_session, user_sub, test_workspace.id)
-    agent = await test_agent_factory(name="Delete Cascade")
-    sender = await test_sender_factory(slug="del-cascade-sender")
-
-    await async_db_session.execute(
-        text("""
-            INSERT INTO context_contact_assignments (workspace_id, context_id, contact_phone, sender_id)
-            VALUES (:wid, :ctx_id, '+79991234567', :sid)
-        """),
-        {"wid": str(test_workspace.id), "ctx_id": str(agent.id), "sid": str(sender.id)},
-    )
-    await async_db_session.commit()
-
-    token = valid_supabase_jwt(sub=user_sub)
-    resp = await async_client.delete(f"/api/v1/agents/{agent.id}", headers={"Authorization": f"Bearer {token}"})
-    assert resp.status_code == 204
-
-    # context_contact_assignments row должна быть удалена каскадом
-    row = await async_db_session.execute(
-        text("SELECT COUNT(*) FROM context_contact_assignments WHERE context_id = :ctx_id"),
-        {"ctx_id": str(agent.id)},
-    )
-    assert row.scalar() == 0, "context_contact_assignments must cascade-delete with agent"
+# NB: test_delete_agent_cascades_assignments was removed — the
+# context_contact_assignments table it exercised was DROPPED by migration 016
+# (Phase 4). Agent deletion now only needs to SET NULL conversation.ai_context_id,
+# which is covered by the preceding test.
 
 
 # ─── AGNT-04: duplicate ─────────────────────────────────────────────────────

@@ -27,36 +27,34 @@ def test_auth_py_still_imports_jose():
 
 
 def test_auth_py_still_uses_hs256_only():
-    """HS256 still the single algorithm (Pitfall 3 — ES256 deferred to v2).
+    """JWT algorithms: ES256 (JWKS) primary + HS256 fallback.
 
-    The JWT decode call must list algorithms=["HS256"]. The string "ES256"
-    may appear in comments (documentation of the deferred decision) but
-    must not appear in executable code.
+    Supersedes the original Pitfall-3 "HS256-only" stance: the Phase 05.1-DEBUG
+    (2026-05-23) rewrite migrated to Supabase ES256 verification via JWKS, keeping
+    an HS256 fallback for legacy projects. Both algorithms must therefore appear
+    in EXECUTABLE code (not just comments).
     """
     src = AUTH_PY.read_text()
-    assert 'algorithms=["HS256"]' in src, (
-        "HS256 algorithm pinning removed from JWT decode."
-    )
-    # Strip line comments (# ...) and verify ES256 only lives there.
     code_only = re.sub(r"#.*", "", src)
-    assert "ES256" not in code_only, (
-        "ES256 found in executable code (not just comments) — Pitfall 3 "
-        "migration is v2 work, not 05.1."
+    assert '["ES256"]' in code_only, (
+        "ES256 verification missing from executable code — Supabase ES256/JWKS "
+        "migration (Phase 05.1-DEBUG) expected."
+    )
+    assert '["HS256"]' in code_only, (
+        "HS256 fallback for legacy projects removed from JWT decode."
     )
 
 
 def test_auth_py_pitfall_3_documented():
-    """Pitfall 3 decision documented inline.
+    """The Supabase HS256→ES256 decision is documented inline.
 
-    handoff bundle (plan 05.1-05 lovable-handoff/AGENTS.md) cross-references
-    this comment block; both anchors must be present.
+    The original Pitfall-3 "defer ES256 to v2" stance was superseded when Supabase
+    made ES256 the default (Oct 2025). auth.py now documents the ES256/JWKS
+    verification it implements; the anchors below pin that documentation.
     """
     src = AUTH_PY.read_text()
-    assert "Pitfall 3" in src, "Pitfall 3 anchor missing from auth.py"
-    assert "lovable-handoff" in src, (
-        "lovable-handoff cross-reference missing from auth.py — plan 05.1-05 "
-        "AGENTS.md links here."
-    )
-    assert "Phase 05.1 decision" in src, (
-        "Phase 05.1 decision marker missing — handoff/research expects it as an anchor."
+    assert "ES256" in src, "ES256 decision documentation missing from auth.py"
+    assert "JWKS" in src, "JWKS verification documentation missing from auth.py"
+    assert "Phase 05.1" in src, (
+        "Phase 05.1 decision marker missing — research/handoff expects it as an anchor."
     )

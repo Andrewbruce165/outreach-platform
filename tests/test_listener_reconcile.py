@@ -197,13 +197,17 @@ async def test_get_active_senders_query_shape():
     """Make sure the SQL filter still matches Phase 2 contract (D-11/D-18)."""
     import inspect
 
+    import re as _re
+
     listener_mod = _patch_listener_imports()
     src = inspect.getsource(listener_mod.TelegramListener.get_active_senders)
     assert "lifecycle_status = 'active'" in src
     assert "auth_status = 'ok'" in src
     assert "role = 'sender'" in src
-    # And make sure the dead column reference is gone.
-    assert "is_active" not in src
+    # And make sure the dead column reference is gone from executable code.
+    # (The decision comment legitimately mentions "is_active dropped".)
+    code_only = _re.sub(r"#.*", "", src)
+    assert "is_active" not in code_only
 
 
 async def test_reconcile_loop_attributes_initialised():

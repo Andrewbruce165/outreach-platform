@@ -13,15 +13,20 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_dropped_columns_absent(_setup_database):
-    """Phase 3 D-01: 6 deprecated columns must be dropped from ai_contexts."""
+    """Phase 3 D-01: deprecated columns dropped from ai_contexts.
+
+    NB: migration 018 (Phase 05.1, UI-SPEC §5.8) RE-ADDED auto_pause_triggers,
+    max_message_length and response_delay_seconds, so they are no longer in the
+    permanently-dropped set. The columns that stay dropped are webhook_functions,
+    document_webhook_url and is_active.
+    """
     async with engine.connect() as conn:
         r = await conn.execute(text(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_name='ai_contexts'"
         ))
         cols = {row[0] for row in r.fetchall()}
-    for dropped in {"auto_pause_triggers", "webhook_functions", "document_webhook_url",
-                    "max_message_length", "response_delay_seconds", "is_active"}:
+    for dropped in {"webhook_functions", "document_webhook_url", "is_active"}:
         assert dropped not in cols, f"Column '{dropped}' must be dropped by migration 015"
 
 
