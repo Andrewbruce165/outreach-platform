@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 12 context gathered
-last_updated: "2026-06-25T14:17:19.542Z"
-last_activity: 2026-06-24
+last_updated: "2026-06-25T14:57:22.855Z"
+last_activity: 2026-06-25 -- Phase 12 execution started
 progress:
-  total_phases: 14
+  total_phases: 15
   completed_phases: 12
-  total_plans: 42
+  total_plans: 46
   completed_plans: 42
-  percent: 67
+  percent: 80
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 11 — agent campaign field split and prompt assembly
+**Current focus:** Phase 12 — per-campaign-daily-new-dialog-limit-max-new-dialogs-per-day
 
 ## Current Position
 
-Phase: 11
-Plan: 04 pre-UAT complete → UAT pending
-Status: In progress (checkpoint:human-verify)
-Last activity: 2026-06-24
+Phase: 12 (per-campaign-daily-new-dialog-limit-max-new-dialogs-per-day) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 12
+Last activity: 2026-06-25 -- Phase 12 execution started
 
 Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — plan 04 partial, UAT pending)
 

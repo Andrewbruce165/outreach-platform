@@ -298,7 +298,7 @@ Plans:
 
 **Scope:**
 - **Модель + миграция:** `campaigns.max_new_dialogs_per_day INT NOT NULL DEFAULT 50`. Миграция `NNN_*.sql`, идемпотентная (`ADD COLUMN IF NOT EXISTS`), авто-применяется через `_apply_migrations`.
-- **Enforcement в queue-воркере:** в `_check_rate_limits` — проверка числа уникальных новых диалогов (первое исходящее сообщение контакту, нет предыдущих sent к этому `recipient_phone`), открытых этим sender'ом в рамках кампании за trailing-24h, против `max_new_dialogs_per_day`. При достижении — пауза (`return False`, как существующие лимиты). Фоллоу-апы существующим контактам **не блокируются**.
+- **Enforcement в queue-воркере:** per-item фильтр в выборке кандидатов `_process_next_for_sender` (НЕ в `_check_rate_limits` — D-07/D-09): подсчёт уникальных новых диалогов (нет предыдущего `status='sent'` к этому `recipient_phone` в рамках ЭТОЙ кампании), открытых этим sender'ом за trailing-24h, против `max_new_dialogs_per_day`. При достижении — из кандидатов LIMIT 8 / `FOR UPDATE OF mq SKIP LOCKED` **исключаются новые-диалоговые элементы** этой кампании, follow-up/re-contact элементы остаются eligible. Per-sender лимиты 4/20/150 + `MAX_NEW_CONTACTS_PER_HOUR=15` в `_check_rate_limits` нетронуты. Фоллоу-апы существующим контактам **не блокируются**.
 - **Soft-cap warning (как D-14):** значение >50 → не блокировать, вернуть `warnings[]` (паттерн `RATE_SOFT_CAP` / `WarningItem` из [senders.py:135-168](app/routers/senders.py#L135-L168)). Выше hard cap (**100** — верх «прогретого» диапазона из индустрии) → 422. Зелёный коридор: ≤50.
 - **API:** `max_new_dialogs_per_day` в `CampaignCreate` / `CampaignUpdate` / `CampaignResponse` (`Field(ge=1, le=100)`), warning при >50 в ответе create/update. Обновить `lovable-handoff/openapi.json` + типы.
 - **UI-контракт (UI-SPEC):** поле в форме настроек кампании, дефолт 50, inline-предупреждение при значении выше 50 («рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана»).
@@ -310,12 +310,12 @@ Plans:
 
 **Requirements**: NDLG-01, NDLG-02, NDLG-03, NDLG-04, NDLG-05, NDLG-06 (derived during /gsd:plan-phase 12, see REQUIREMENTS.md §Per-Campaign Daily New-Dialog Limit)
 **Depends on:** Phase 11
-**Plans:** 4 plans
+**Plans:** 3/4 plans executed
 
 Plans:
-- [ ] 12-01-PLAN.md — migration 033 + ORM column max_new_dialogs_per_day (DEFAULT 50) [NDLG-01]
-- [ ] 12-02-PLAN.md — queue per-(sender,campaign) new-dialog cap filter + integration test [NDLG-02]
-- [ ] 12-03-PLAN.md — API schemas + soft/hard-cap validation + warnings[] write-response + API tests [NDLG-03, NDLG-04]
+- [x] 12-01-PLAN.md — migration 033 + ORM column max_new_dialogs_per_day (DEFAULT 50) [NDLG-01]
+- [x] 12-02-PLAN.md — queue per-(sender,campaign) new-dialog cap filter + integration test [NDLG-02]
+- [x] 12-03-PLAN.md — API schemas + soft/hard-cap validation + warnings[] write-response + API tests [NDLG-03, NDLG-04]
 - [ ] 12-04-PLAN.md — regenerate openapi/types + frontend campaign field with >50 warning (cross-repo, human-UAT) [NDLG-05, NDLG-06]
 
 ---
