@@ -559,6 +559,12 @@ class Campaign(Base):
     # threshold for "fresh".
     allow_recontact = Column(Boolean, nullable=False, server_default="false")
     recontact_min_age_days = Column(Integer, nullable=False, server_default="30")
+    # Phase 12 (D-10/D-11, NDLG-01): per-sender-per-campaign daily new-dialog cap.
+    # DEFAULT 50 applies to ALL existing campaigns incl. running (D-11, no backfill).
+    # server_default="50" duplicates the migration-033 DB default for the create_all
+    # path (post-DROP-incident rebuild reconstructs tables from the ORM). API enforces
+    # the ge=1/le=100 bounds (D-12); no DB CHECK.
+    max_new_dialogs_per_day = Column(Integer, nullable=False, server_default="50")
     # 029: auto-pause visibility. NULL = manual pause / never paused; a machine
     # code ('no_senders_attached' | 'senders_unavailable') = auto-paused by the
     # enqueue worker because the campaign could no longer send. Cleared on start/resume.
