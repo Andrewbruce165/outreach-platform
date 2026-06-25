@@ -577,6 +577,8 @@ function CampaignRow({
         replied?: { conversation_count?: number; message_count?: number };
         leads?: number;
         finishes?: number;
+        contacts_messaged?: number;
+        registered_contacts?: number;
       }>(`/api/v1/analytics/campaigns/${c.id}`),
     staleTime: 30_000,
     retry: false,
@@ -585,8 +587,17 @@ function CampaignRow({
   const sent = statsQ.data?.sent ?? 0;
   const replied = statsQ.data?.replied?.conversation_count ?? 0;
   const leads = statsQ.data?.leads ?? 0;
-  const finishes = statsQ.data?.finishes ?? 0;
-  const progress = sent > 0 ? Math.min(1, finishes / sent) : 0;
+  // Progress = reachable contacts already messaged / registered contacts in the
+  // campaign's target folder. contacts_messaged = distinct conversations with an
+  // outbound (not raw message count); registered_contacts = denominator. Clamp at
+  // 100% because the registered set can shrink (re-check) below contacts already
+  // messaged. registered_contacts=0 (no folder / empty folder) → 0%.
+  const contactsMessaged = statsQ.data?.contacts_messaged ?? 0;
+  const registeredContacts = statsQ.data?.registered_contacts ?? 0;
+  const progress =
+    registeredContacts > 0
+      ? Math.min(1, contactsMessaged / registeredContacts)
+      : 0;
 
   const startedAt =
     c.start_date

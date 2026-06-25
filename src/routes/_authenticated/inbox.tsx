@@ -153,6 +153,8 @@ function InboxPage() {
           gridTemplateColumns: showTrace ? "340px 1fr 360px" : "340px 1fr",
           flex: 1,
           minHeight: 0,
+          minWidth: 0,
+          overflow: "hidden",
           background: "var(--bg-soft)",
         }}
       >
@@ -689,6 +691,7 @@ function Thread({
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
+        minWidth: 0,
         background: "var(--bg-soft)",
       }}
     >
@@ -1093,6 +1096,8 @@ function TracePane({ conversationId }: { conversationId: string }) {
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
       <header
@@ -1284,6 +1289,8 @@ function TraceCard({ call, latest }: { call: LLMCall; latest: boolean }) {
                   marginTop: 4,
                   overflow: "auto",
                   maxHeight: 200,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
                 }}
               >
                 {JSON.stringify(call.tool_calls, null, 2)}
@@ -1312,6 +1319,8 @@ function TraceCard({ call, latest }: { call: LLMCall; latest: boolean }) {
                 padding: 8,
                 borderRadius: 4,
                 marginTop: 4,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
               }}
             >
               {JSON.stringify(call.prompt, null, 2)}
