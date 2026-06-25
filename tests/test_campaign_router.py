@@ -41,7 +41,10 @@ async def _make_campaign(client, jwt, uid, agent_id, folder_id, sender_ids=None,
     r = await client.post("/api/v1/campaigns", json=payload,
                           headers={"Authorization": f"Bearer {jwt(sub=uid)}"})
     assert r.status_code == 201, r.text
-    return r.json()
+    # Phase 12 NDLG-04: create now returns the CampaignWriteResponse wrapper
+    # {campaign, warnings[]}; lifecycle/GET paths stay flat CampaignResponse.
+    body = r.json()
+    return body["campaign"] if "campaign" in body and "warnings" in body else body
 
 
 async def test_list_campaigns_workspace_isolated(
@@ -134,7 +137,8 @@ async def test_patch_campaign_partial_update(
                                  json={"description": "new desc"},
                                  headers=_auth_headers(valid_supabase_jwt, "u-pa"))
     assert r.status_code == 200
-    assert r.json()["description"] == "new desc"
+    # Phase 12 NDLG-04: PATCH now returns the CampaignWriteResponse wrapper.
+    assert r.json()["campaign"]["description"] == "new desc"
 
 
 async def test_recontact_fields_default_and_roundtrip(
@@ -157,7 +161,8 @@ async def test_recontact_fields_default_and_roundtrip(
         headers=_auth_headers(valid_supabase_jwt, "u-rc"),
     )
     assert r.status_code == 200, r.text
-    body = r.json()
+    # Phase 12 NDLG-04: PATCH now returns the CampaignWriteResponse wrapper.
+    body = r.json()["campaign"]
     assert body["allow_recontact"] is True
     assert body["recontact_min_age_days"] == 45
 
