@@ -82,6 +82,11 @@ class Sender(Base):
     slug = Column(String(50), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     phone = Column(String(20), nullable=False)
+    # Migration 006: senders.telegram_id (BIGINT, nullable) — used by the warmup-pair
+    # exclude in list_conversations (app/routers/conversations.py). Mirrored in the ORM
+    # so create_all-built test schemas include it (prod has it via migration 006, which
+    # the test setup skips — migrations 001-011 are assumed covered by the ORM).
+    telegram_id = Column(BigInteger)
     session_string = Column(Text, nullable=False)  # Encrypted
     role = Column(String(20), nullable=False, server_default='sender')  # 'sender' or 'checker' (CHECK in migration 013)
     proxy = Column(JSONB, nullable=True)  # {"type": "socks5", "host": "...", "port": 1080, ...}
