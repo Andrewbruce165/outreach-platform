@@ -100,7 +100,8 @@ async def test_render_missing_var_returns_empty_string_plus_warning(caplog):
             campaign_id="c1",
             phone="+7",
         )
-    assert result == "Hello !"
+    # D-19: whitespace around an empty var is collapsed → "Hello!" (not "Hello !").
+    assert result == "Hello!"
     assert any("not_a_var" in r.message for r in caplog.records)
 
 
@@ -109,7 +110,8 @@ async def test_render_missing_custom_key_returns_empty(caplog):
     contact = {"full_name": "X", "username": None, "phone": "", "source": "", "custom": {}}
     with caplog.at_level(logging.WARNING, logger="app.services.template"):
         result = render_template("V: {{custom.notset}}", contact)
-    assert result == "V: "
+    # D-19: trailing empty var + surrounding space collapses and is stripped → "V:".
+    assert result == "V:"
     assert any("custom.notset" in r.message for r in caplog.records)
 
 
