@@ -664,6 +664,12 @@ class CampaignCreate(BaseModel):
     # dialogs block; closed/stale ones are re-contactable.
     allow_recontact: bool = False
     recontact_min_age_days: int = Field(default=30, ge=1, le=365)
+    # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14). ──
+    max_new_dialogs_per_day: int = Field(
+        default=50, ge=1, le=100,
+        description="Daily new-dialog cap per sender within this campaign (D-12). "
+                    "Green corridor <=50; soft-warn >50; hard cap 100.",
+    )
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     # dialogue_flow: ordered conversation stages (max 7 — T2 size guard).
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
@@ -711,6 +717,8 @@ class CampaignUpdate(BaseModel):
     # 026: per-campaign re-contact policy (partial PATCH).
     allow_recontact: Optional[bool] = None
     recontact_min_age_days: Optional[int] = Field(default=None, ge=1, le=365)
+    # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14) — partial PATCH. ──
+    max_new_dialogs_per_day: Optional[int] = Field(default=None, ge=1, le=100)
     # ── Phase 11 campaign fields (D-04/D-12/D-14) — partial PATCH. ──
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
     arguments_facts: Optional[str] = None
@@ -753,6 +761,8 @@ class CampaignResponse(BaseModel):
     # 026: per-campaign re-contact policy.
     allow_recontact: bool = False
     recontact_min_age_days: int = 30
+    # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14). ──
+    max_new_dialogs_per_day: int = 50
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     dialogue_flow: List[dict] = Field(default_factory=list)
     arguments_facts: Optional[str] = None
@@ -789,6 +799,13 @@ class RestrictionEventResponse(BaseModel):
     activity_slice: Optional[dict] = None
     proxy: Optional[dict] = None
     created_at: datetime
+
+
+class CampaignWriteResponse(BaseModel):
+    """Phase 12 D-14: campaign create/update response carrying soft-cap warnings[].
+    GET paths keep returning CampaignResponse directly (no warnings)."""
+    campaign: CampaignResponse
+    warnings: List[WarningItem] = []
 
 
 class CampaignListResponse(BaseModel):
