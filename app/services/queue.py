@@ -292,6 +292,11 @@ class QueueWorker:
             # eligible based on one campaign, but the actual SELECT picks the
             # next item by (priority, created_at); we must re-verify the
             # campaign of THAT item is still running/in-window.
+            # Phase 12 (NDLG-02, D-07/D-08): per-(sender,campaign) new-dialog cap.
+            # New dialogs (no prior sent to this phone in this campaign) are excluded
+            # once max_new_dialogs_per_day unique new dialogs were opened in the
+            # trailing 24h; follow-ups stay eligible. _check_rate_limits
+            # (4/20/150 + 15/h) untouched (D-09).
             rows = await db.execute(
                 text("""
                     SELECT
@@ -309,6 +314,23 @@ class QueueWorker:
                       AND mq.campaign_id IS NOT NULL
                       AND c.status = 'running'
                       AND (c.start_date IS NULL OR NOW() >= c.start_date)
+                      AND (
+                        /* follow-up to an existing contact — never blocked by the new-dialog cap (D-06/D-08) */
+                        EXISTS (
+                          SELECT 1 FROM message_queue prior
+                          WHERE prior.campaign_id = mq.campaign_id
+                            AND prior.recipient_phone = mq.recipient_phone
+                            AND prior.status = 'sent'
+                        )
+                        OR
+                        /* new dialog — only if this (sender,campaign) is still under the cap (D-01/D-02/D-05) */
+                        (SELECT COUNT(DISTINCT opened.recipient_phone)
+                           FROM message_queue opened
+                          WHERE opened.sender_id = mq.sender_id
+                            AND opened.campaign_id = mq.campaign_id
+                            AND opened.status = 'sent'
+                            AND opened.finished_at >= NOW() - INTERVAL '24 hours') < c.max_new_dialogs_per_day
+                      )
                     ORDER BY mq.priority DESC, mq.created_at ASC
                     LIMIT 8
                     FOR UPDATE OF mq SKIP LOCKED
