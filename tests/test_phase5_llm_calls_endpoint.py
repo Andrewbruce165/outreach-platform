@@ -46,7 +46,7 @@ async def _seed_llm_call(
         INSERT INTO llm_calls (
             workspace_id, conversation_id, model, prompt, response_text
         ) VALUES (
-            :wid, :cid, :model, :prompt::jsonb, :rt
+            :wid, :cid, :model, CAST(:prompt AS jsonb), :rt
         )
     """), {
         "wid": str(conv["workspace_id"]),
