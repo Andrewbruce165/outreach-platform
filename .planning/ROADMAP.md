@@ -292,6 +292,53 @@ Plans:
 
 - [ ] 11-04-frontend-forms-and-handoff-PLAN.md — openapi regen + Agent/Campaign wizard rebuild (tone select, response-speed, stage editor) + human UAT (cross-repo) [Wave 4, depends_on: 11-02, 11-03]
 
+### Phase 12: Per-campaign daily new-dialog limit (max_new_dialogs_per_day)
+
+**Goal:** Ввести явный настраиваемый дневной лимит **новых холодных диалогов** на уровне кампании. Сейчас такого лимита нет вообще — только захардкоженный `MAX_NEW_CONTACTS_PER_HOUR = 15` ([services/queue.py:52](app/services/queue.py#L52)) и общий потолок 150 сообщений/день per-sender, что позволяет одному аккаунту написать до ~150 незнакомцам в сутки при индустриальном пороге опасности 50+/сутки.
+
+**Scope:**
+- **Модель + миграция:** `campaigns.max_new_dialogs_per_day INT NOT NULL DEFAULT 50`. Миграция `NNN_*.sql`, идемпотентная (`ADD COLUMN IF NOT EXISTS`), авто-применяется через `_apply_migrations`.
+- **Enforcement в queue-воркере:** в `_check_rate_limits` — проверка числа уникальных новых диалогов (первое исходящее сообщение контакту, нет предыдущих sent к этому `recipient_phone`), открытых этим sender'ом в рамках кампании за trailing-24h, против `max_new_dialogs_per_day`. При достижении — пауза (`return False`, как существующие лимиты). Фоллоу-апы существующим контактам **не блокируются**.
+- **Soft-cap warning (как D-14):** значение >50 → не блокировать, вернуть `warnings[]` (паттерн `RATE_SOFT_CAP` / `WarningItem` из [senders.py:135-168](app/routers/senders.py#L135-L168)). Выше hard cap (**100** — верх «прогретого» диапазона из индустрии) → 422. Зелёный коридор: ≤50.
+- **API:** `max_new_dialogs_per_day` в `CampaignCreate` / `CampaignUpdate` / `CampaignResponse` (`Field(ge=1, le=100)`), warning при >50 в ответе create/update. Обновить `lovable-handoff/openapi.json` + типы.
+- **UI-контракт (UI-SPEC):** поле в форме настроек кампании, дефолт 50, inline-предупреждение при значении выше 50 («рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана»).
+
+**Acceptance:**
+- Аккаунт в кампании с `max_new_dialogs_per_day=50` после 50 новых диалогов за 24ч встаёт на паузу по этому лимиту; фоллоу-апы существующим контактам не блокируются.
+- Создание кампании со значением >50 → 200 + `warnings[]`; >100 → 422.
+- Дефолт новой кампании = 50.
+
+**Requirements**: TBD (derive in /gsd:plan-phase 12)
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 12 to break down)
+
+---
+
+### Phase 13: Even pacing across sending window (smooth new-dialog distribution)
+
+**Goal:** Распределять открытие **новых диалогов** равномерно по активному окну рассылки кампании, а не выпаливать дневной лимит в начале окна. Сейчас движок очереди шлёт с интервалом 20–55 сек ([queue.py:41-44](app/services/queue.py#L41-L44)) + длинные паузы каждые 12–25 отправок — это сглаживает темп, но не привязано к дневному лимиту и ширине окна, поэтому весь дневной объём может уйти за первые часы. Цель — производный темп: `max_new_dialogs_per_day / активные_часы → целевой интервал`, с плавающими интервалами и батчингом пула.
+
+**Scope (предварительно — уточнить в /gsd:discuss-phase 13):**
+- **Производный темп:** активное окно = `work_hour_end − work_hour_start` за вычетом длинных пауз (≈ «7 активных часов»). Целевой интервал между новыми диалогами = окно / `max_new_dialogs_per_day` (вход из Phase 12).
+- **Батчинг пула:** пул аккаунтов кампании делится на батчи; внутри батча — 1 новый диалог каждые 3–5 мин с плавающими интервалами.
+- **Эмпирические константы под защитой** (CLAUDE.md): `MIN/MAX_SEND_INTERVAL`, `LONG_PAUSE_*`, `MAX_NEW_CONTACTS_PER_HOUR` — менять только в рамках этой фазы и с явным обсуждением. Возможен per-campaign override вместо правки глобалей.
+- **Применяется только к новым диалогам** — follow-ups (как и в Phase 12) не троттлятся этим механизмом.
+
+**Acceptance (предварительно):**
+- При `max_new_dialogs_per_day=50` и окне 9–20 новые диалоги открываются размазанно по окну (≈ целевой интервал), а не пачкой в первый час.
+- Внутри батча интервал между новыми диалогами 3–5 мин с дрожанием.
+- Follow-ups идут вне этого темпа.
+
+**Requirements**: TBD (derive in /gsd:plan-phase 13)
+**Depends on:** Phase 12
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:discuss-phase 13 → /gsd:plan-phase 13 to break down)
+
 ---
 
 ## Progress
