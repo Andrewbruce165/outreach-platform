@@ -310,10 +310,13 @@ Plans:
 
 **Requirements**: NDLG-01, NDLG-02, NDLG-03, NDLG-04, NDLG-05, NDLG-06 (derived during /gsd:plan-phase 12, see REQUIREMENTS.md §Per-Campaign Daily New-Dialog Limit)
 **Depends on:** Phase 11
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 12 to break down)
+- [ ] 12-01-PLAN.md — migration 033 + ORM column max_new_dialogs_per_day (DEFAULT 50) [NDLG-01]
+- [ ] 12-02-PLAN.md — queue per-(sender,campaign) new-dialog cap filter + integration test [NDLG-02]
+- [ ] 12-03-PLAN.md — API schemas + soft/hard-cap validation + warnings[] write-response + API tests [NDLG-03, NDLG-04]
+- [ ] 12-04-PLAN.md — regenerate openapi/types + frontend campaign field with >50 warning (cross-repo, human-UAT) [NDLG-05, NDLG-06]
 
 ---
 
