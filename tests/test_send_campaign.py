@@ -35,7 +35,7 @@ async def test_send_resolves_agent_from_campaign(
     # Bind user to workspace for AuthDep.
     user_id = "test-user-resolves-agent"
     await async_db_session.execute(text("""
-        INSERT INTO user_workspaces (user_id, workspace_id, role)
+        INSERT INTO user_workspaces (supabase_user_id, workspace_id, role)
         VALUES (:uid, :wid, 'admin') ON CONFLICT DO NOTHING
     """), {"uid": user_id, "wid": str(test_workspace.id)})
     await async_db_session.commit()
@@ -82,7 +82,7 @@ async def test_send_with_other_workspace_campaign_404(
         INSERT INTO workspaces (id, name) VALUES (:id, 'OtherWs')
     """), {"id": str(other_wid)})
     await async_db_session.execute(text("""
-        INSERT INTO user_workspaces (user_id, workspace_id, role)
+        INSERT INTO user_workspaces (supabase_user_id, workspace_id, role)
         VALUES (:uid, :wid, 'admin')
     """), {"uid": other_user, "wid": str(other_wid)})
     await async_db_session.commit()
@@ -112,14 +112,18 @@ async def test_send_via_workspace_api_key(
     test_running_campaign_factory,
 ):
     """n8n push через X-Workspace-Key — тот же endpoint (dual auth)."""
-    # Issue API key for workspace.
-    from app.utils.auth import _hash_api_key
+    # Issue API key for workspace (bcrypt hash + 12-char prefix, per CR-09).
+    import asyncio
+    import bcrypt
     raw_key = "wsk_test_12345_send_campaign"
-    key_hash = _hash_api_key(raw_key)
+    prefix = raw_key[:12]
+    hash_bytes = await asyncio.to_thread(
+        bcrypt.hashpw, raw_key.encode(), bcrypt.gensalt(rounds=4)
+    )
     await async_db_session.execute(text("""
-        INSERT INTO workspace_api_keys (workspace_id, key_hash, name, prefix)
-        VALUES (:wid, :h, 'test', 'wsk_test')
-    """), {"wid": str(test_workspace.id), "h": key_hash})
+        INSERT INTO workspace_api_keys (workspace_id, bcrypt_hash, name, prefix)
+        VALUES (:wid, :h, 'test', :prefix)
+    """), {"wid": str(test_workspace.id), "h": hash_bytes.decode(), "prefix": prefix})
     await async_db_session.commit()
 
     camp, senders = await test_running_campaign_factory(sender_count=1)
@@ -147,7 +151,7 @@ async def test_send_renders_template_when_text_not_provided(
     """Если в body нет message — render_template(campaign.message_template, contact)."""
     user_id = "user-render-test"
     await async_db_session.execute(text("""
-        INSERT INTO user_workspaces (user_id, workspace_id, role)
+        INSERT INTO user_workspaces (supabase_user_id, workspace_id, role)
         VALUES (:uid, :wid, 'admin') ON CONFLICT DO NOTHING
     """), {"uid": user_id, "wid": str(test_workspace.id)})
 
