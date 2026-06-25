@@ -11,6 +11,7 @@ Tests cover:
 import pathlib
 import uuid
 
+import asyncpg
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -22,19 +23,20 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MIG_016 = (PROJECT_ROOT / "migrations" / "016_phase4.sql").read_text()
 
 
-async def test_migration_016_idempotent(async_db_session):
+async def test_migration_016_idempotent(migrations_raw_dsn):
     """Applying migration 016 twice does not fail (IF NOT EXISTS / DROP IF EXISTS).
 
-    Migration is already applied once by conftest._setup_database fixture before
-    this test runs. We apply it ONCE more here and check no error.
+    Runs against the DEDICATED migrations DB (migrations_raw_dsn), NOT the shared session
+    DB. 016 DROPs+recreates conversations_status_check WITHOUT 'bot_ignored' (017 later
+    re-adds it); re-applying it on the shared DB via a committed raw connection reverted
+    that constraint and broke every later test inserting a 'bot_ignored' conversation.
+    conftest already applied 016 to the shared DB for the schema-assertion tests below.
     """
-    # Need autocommit (DROP CONSTRAINT / DROP TABLE inside transaction is fine,
-    # but the migration wraps its own BEGIN/COMMIT — use exec_driver_sql via raw
-    # connection to mimic conftest pattern).
-    conn = await async_db_session.connection()
-    raw_conn = await conn.get_raw_connection()
-    # asyncpg connection is here:
-    await raw_conn.driver_connection.execute(MIG_016)
+    conn = await asyncpg.connect(dsn=migrations_raw_dsn)
+    try:
+        await conn.execute(MIG_016)
+    finally:
+        await conn.close()
 
 
 async def test_campaigns_table_exists(async_db_session):
