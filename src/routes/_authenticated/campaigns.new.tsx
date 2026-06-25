@@ -12,8 +12,6 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
-  ChevronDown,
   Plus,
   Edit3,
   Trash2,
