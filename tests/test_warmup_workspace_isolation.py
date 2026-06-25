@@ -80,7 +80,7 @@ async def _add_to_pool(db, sender_id, workspace_id, days_ago: int = 5):
             VALUES (:wid, :sid, true, NOW() - (:days || ' days')::interval)
             """
         ),
-        {"wid": str(workspace_id), "sid": sender_id, "days": days_ago},
+        {"wid": str(workspace_id), "sid": sender_id, "days": str(days_ago)},
     )
     await db.commit()
 
@@ -190,10 +190,10 @@ async def test_floodwait_update_only_affects_active(
             """
             INSERT INTO warmup_sessions
                 (workspace_id, sender_a_id, sender_b_id, topic, target_messages,
-                 status, next_message_at)
+                 messages_sent, status, next_message_at)
             VALUES
-                (:wid, :a, :b, 'test', 5, 'active',    NOW() + INTERVAL '1 hour'),
-                (:wid, :a, :b, 'test', 5, 'completed', NOW() - INTERVAL '1 day')
+                (:wid, :a, :b, 'test', 5, 0, 'active',    NOW() + INTERVAL '1 hour'),
+                (:wid, :a, :b, 'test', 5, 0, 'completed', NOW() - INTERVAL '1 day')
             """
         ),
         {"wid": str(ws.id), "a": s1, "b": s2},

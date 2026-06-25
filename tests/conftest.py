@@ -198,6 +198,18 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
             ALTER TABLE ai_contexts ALTER COLUMN allow_emoji SET DEFAULT FALSE;
             ALTER TABLE ai_contexts ALTER COLUMN auto_pause_scope SET DEFAULT 'conversation';
         """)
+
+        # warmup_sessions server-side defaults: migrations 001-011 are not replayed
+        # here (warmup tables come from ORM create_all, which carries only Python-side
+        # defaults). Product code in app/services/warmup.py::_create_new_sessions INSERTs
+        # without status/messages_sent, relying on migration 005's column DEFAULTs.
+        # Replicate them so raw-SQL warmup tests (and the worker) match production.
+        await asyncpg_conn.execute("""
+            ALTER TABLE warmup_sessions ALTER COLUMN status SET DEFAULT 'active';
+            ALTER TABLE warmup_sessions ALTER COLUMN messages_sent SET DEFAULT 0;
+            ALTER TABLE warmup_sessions ALTER COLUMN target_messages SET DEFAULT 6;
+            ALTER TABLE warmup_sessions ALTER COLUMN next_message_at SET DEFAULT NOW();
+        """)
     finally:
         await asyncpg_conn.close()
 
