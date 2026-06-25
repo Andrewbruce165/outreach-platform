@@ -26,6 +26,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
+import { StageEditor } from "@/components/StageEditor";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
