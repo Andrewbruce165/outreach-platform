@@ -308,7 +308,7 @@ Plans:
 - Создание кампании со значением >50 → 200 + `warnings[]`; >100 → 422.
 - Дефолт новой кампании = 50.
 
-**Requirements**: TBD (derive in /gsd:plan-phase 12)
+**Requirements**: NDLG-01, NDLG-02, NDLG-03, NDLG-04, NDLG-05, NDLG-06 (derived during /gsd:plan-phase 12, see REQUIREMENTS.md §Per-Campaign Daily New-Dialog Limit)
 **Depends on:** Phase 11
 **Plans:** 0 plans
 

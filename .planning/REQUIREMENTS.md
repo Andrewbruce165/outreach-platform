@@ -140,6 +140,15 @@
 - [x] **POOLV-03**: Frontend campaign-page pool badge with 3 states (green=all active, yellow=K/N partial pause, red=all paused), derived on the frontend from numeric `pool_health` — sibling repo `aimly-tg-outreach` (derived; D-09/D-11) — _implemented in code (10-04, sibling `566dce6`); human-UAT PENDING (closed on trust, awaiting frontend deploy — see 10-04-HUMAN-UAT.md)_
 - [x] **POOLV-04**: Frontend account-page mini event-list reading the HLTH-03 restriction-events endpoint, newest-first (derived; D-11) — _implemented in code (10-04, sibling `566dce6`); human-UAT PENDING (closed on trust, awaiting frontend deploy — see 10-04-HUMAN-UAT.md)_
 
+### Per-Campaign Daily New-Dialog Limit (Phase 12 — derived this phase, see 12-CONTEXT.md decisions)
+
+- [ ] **NDLG-01**: `campaigns.max_new_dialogs_per_day INT NOT NULL DEFAULT 50` — idempotent migration `033_*.sql` (`ADD COLUMN IF NOT EXISTS`, auto-applied via `_apply_migrations`) + ORM `Campaign` column with `server_default="50"`; DEFAULT 50 applies to ALL existing campaigns incl. `running`, no backfill (D-10/D-11)
+- [ ] **NDLG-02**: Per-sender-per-campaign enforcement in `_process_next_for_sender` item-selection — when `(sender_id, campaign_id)` has opened `>= max_new_dialogs_per_day` unique new dialogs (first `status='sent'` to a `recipient_phone` within this campaign) over a trailing-24h rolling window, new-dialog items of that campaign are excluded from the LIMIT 8 candidate set; follow-up / re-contact items stay eligible and are sent; `_check_rate_limits` (4/20/150 + 15/hour) untouched (D-01…D-09)
+- [ ] **NDLG-03**: `max_new_dialogs_per_day: int = Field(ge=1, le=100)` (default 50) added to `CampaignCreate`, `CampaignUpdate`, and `CampaignResponse` (D-12)
+- [ ] **NDLG-04**: Soft-cap = 50, hard-cap = 100: value >50 and ≤100 → 200 + `warnings[]` (`WarningItem` / `RATE_SOFT_CAP` pattern) on the write path (POST create / PATCH update); value >100 → 422 (`RATE_LIMIT_EXCEEDS_HARD_CAP` pattern); GET path carries no warnings; re-validates on PATCH when the field changes (D-13/D-14)
+- [ ] **NDLG-05**: `lovable-handoff/openapi.json` + generated types regenerated via export-handoff flow (rebuild API container first), no manual spec editing (D-15)
+- [ ] **NDLG-06**: Frontend campaign settings form field `max_new_dialogs_per_day` (default 50) with inline warning when value >50 («рекомендуем не больше 50 новых диалогов в сутки **на аккаунт** — выше растёт риск спам-бана») — sibling repo `aimly-tg-outreach`, human-UAT (D-16)
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -258,6 +267,12 @@
 | POOLV-02 | Phase 10 | Complete |
 | POOLV-03 | Phase 10 | Code done · human-UAT pending |
 | POOLV-04 | Phase 10 | Code done · human-UAT pending |
+| NDLG-01 | Phase 12 | Pending |
+| NDLG-02 | Phase 12 | Pending |
+| NDLG-03 | Phase 12 | Pending |
+| NDLG-04 | Phase 12 | Pending |
+| NDLG-05 | Phase 12 | Pending |
+| NDLG-06 | Phase 12 | Pending |
 
 **Coverage:**
 
@@ -277,3 +292,4 @@
 *Last updated: 2026-05-21 — restructured into 6 phases with Campaign entity*
 *2026-06-24 — added HLTH-01..03 (Account Health & Restriction Audit) to Phase 10*
 *2026-06-24 — derived POOLV-01..04 (Pool Visibility) during Phase 10 planning*
+*2026-06-25 — derived NDLG-01..06 (Per-Campaign Daily New-Dialog Limit) during Phase 12 planning*
