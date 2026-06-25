@@ -3,13 +3,13 @@ status: partial
 phase: 12-per-campaign-daily-new-dialog-limit-max-new-dialogs-per-day
 source: [12-VERIFICATION.md]
 started: 2026-06-25T16:46:23Z
-updated: 2026-06-25T16:46:23Z
-blocked_on: coordinated backend+frontend production deploy (deferred by user)
+updated: 2026-06-25T17:02:00Z
+deployed: 2026-06-25T17:01Z — backend live (api recreated, migration 033 applied); frontend cfb2a51 pushed → Cloudflare building
 ---
 
 ## Current Test
 
-[awaiting deploy — all 6 items require the Phase-12 backend + new frontend to be live]
+[ready to test — backend deployed; frontend deploying via Cloudflare (allow a few minutes for the build to go live, then verify the field appears)]
 
 ## Tests
 
@@ -44,6 +44,6 @@ passed: 0
 issues: 0
 pending: 6
 skipped: 0
-blocked: 6
+blocked: 0
 
 ## Gaps
