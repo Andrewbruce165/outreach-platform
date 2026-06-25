@@ -56,7 +56,7 @@ async def test_send_happy_path_flips_to_manual(
         return_value={"success": True, "telegram_message_id": 555000}
     )
     monkeypatch.setattr(
-        "app.services.telegram.send_message_by_telegram_id", send_mock
+        "app.services.telegram.telegram_service.send_message_by_telegram_id", send_mock
     )
 
     await _bind(async_db_session, test_workspace.id, "u-send-happy")
@@ -117,7 +117,7 @@ async def test_send_rejects_inactive_sender(
         return_value={"success": True, "telegram_message_id": 1}
     )
     monkeypatch.setattr(
-        "app.services.telegram.send_message_by_telegram_id", send_mock
+        "app.services.telegram.telegram_service.send_message_by_telegram_id", send_mock
     )
 
     uid = f"u-send-inactive-{lifecycle}-{auth_status}"
@@ -150,7 +150,7 @@ async def test_send_cross_workspace_blocked(
         return_value={"success": True, "telegram_message_id": 1}
     )
     monkeypatch.setattr(
-        "app.services.telegram.send_message_by_telegram_id", send_mock
+        "app.services.telegram.telegram_service.send_message_by_telegram_id", send_mock
     )
 
     other = Workspace(name="OtherSendXws")
@@ -207,7 +207,7 @@ async def test_send_flips_pending_queue_to_failed(
         return_value={"success": True, "telegram_message_id": 999}
     )
     monkeypatch.setattr(
-        "app.services.telegram.send_message_by_telegram_id", send_mock
+        "app.services.telegram.telegram_service.send_message_by_telegram_id", send_mock
     )
 
     await _bind(async_db_session, test_workspace.id, "u-send-race")
