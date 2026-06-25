@@ -35,7 +35,9 @@ async def _mk(client, jwt, uid, agent_id, folder_id, sender_ids, name):
         "message_template": "hi",
     }, headers=_hdr(jwt, uid))
     assert r.status_code == 201, r.text
-    return r.json()
+    # Phase 12 NDLG-04: create returns CampaignWriteResponse {campaign, warnings[]}.
+    body = r.json()
+    return body["campaign"] if "campaign" in body and "warnings" in body else body
 
 
 async def test_start_409_when_sender_in_other_running_campaign(

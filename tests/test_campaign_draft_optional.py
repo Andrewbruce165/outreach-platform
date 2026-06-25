@@ -27,6 +27,13 @@ def _headers(jwt, sub):
     return {"Authorization": f"Bearer {jwt(sub=sub)}"}
 
 
+def _camp(resp_json):
+    """Phase 12 NDLG-04: create/patch return CampaignWriteResponse {campaign, warnings[]}."""
+    if isinstance(resp_json, dict) and "campaign" in resp_json and "warnings" in resp_json:
+        return resp_json["campaign"]
+    return resp_json
+
+
 async def test_create_draft_without_agent_folder_template_returns_201(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
 ):
@@ -37,7 +44,7 @@ async def test_create_draft_without_agent_folder_template_returns_201(
         headers=_headers(valid_supabase_jwt, "u-draft"),
     )
     assert r.status_code == 201, r.text
-    body = r.json()
+    body = _camp(r.json())
     assert body["status"] == "draft"
     assert body["agent_id"] is None
     assert body["folder_id"] is None
@@ -55,7 +62,7 @@ async def test_start_incomplete_draft_returns_422_campaign_incomplete(
         headers=_headers(valid_supabase_jwt, "u-inc"),
     )
     assert r.status_code == 201, r.text
-    cid = r.json()["id"]
+    cid = _camp(r.json())["id"]
 
     r2 = await async_client.post(
         f"/api/v1/campaigns/{cid}/start",
@@ -89,7 +96,7 @@ async def test_start_complete_draft_transitions_to_running(
         headers=_headers(valid_supabase_jwt, "u-cmpl"),
     )
     assert r.status_code == 201, r.text
-    cid = r.json()["id"]
+    cid = _camp(r.json())["id"]
 
     r2 = await async_client.post(
         f"/api/v1/campaigns/{cid}/start",

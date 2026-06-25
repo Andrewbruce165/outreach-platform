@@ -19,6 +19,13 @@ def _auth_headers(jwt_factory, sub: str = "user-default") -> dict:
     return {"Authorization": f"Bearer {jwt_factory(sub=sub)}"}
 
 
+def _camp(resp_json):
+    """Phase 12 NDLG-04: create/patch return CampaignWriteResponse {campaign, warnings[]}."""
+    if isinstance(resp_json, dict) and "campaign" in resp_json and "warnings" in resp_json:
+        return resp_json["campaign"]
+    return resp_json
+
+
 async def _bind_workspace_to_user(db_session, workspace_id, supabase_user_id: str):
     """auth_dep resolves workspace via user_workspaces table — bind helper."""
     from sqlalchemy import text
@@ -49,7 +56,7 @@ async def test_create_campaign(
     r = await async_client.post("/api/v1/campaigns", json=payload,
                                 headers=_auth_headers(valid_supabase_jwt, "user-1"))
     assert r.status_code == 201, r.text
-    body = r.json()
+    body = _camp(r.json())
     assert body["name"] == "Test Campaign 01"
     assert body["status"] == "draft"
     assert body["workspace_id"] == str(test_workspace.id)
@@ -170,7 +177,7 @@ async def test_default_timezone_is_europe_moscow(
         "message_template": "hi",
     }, headers=_auth_headers(valid_supabase_jwt, "user-5"))
     assert r.status_code == 201
-    assert r.json()["timezone"] == "Europe/Moscow"
+    assert _camp(r.json())["timezone"] == "Europe/Moscow"
 
 
 async def test_default_work_hours_9_to_20(
@@ -186,7 +193,7 @@ async def test_default_work_hours_9_to_20(
         "message_template": "hi",
     }, headers=_auth_headers(valid_supabase_jwt, "user-6"))
     assert r.status_code == 201
-    b = r.json()
+    b = _camp(r.json())
     assert b["work_hour_start"] == 9
     assert b["work_hour_end"] == 20
 
@@ -204,7 +211,7 @@ async def test_default_work_days_mask_31(
         "message_template": "hi",
     }, headers=_auth_headers(valid_supabase_jwt, "user-7"))
     assert r.status_code == 201
-    assert r.json()["work_days_mask"] == 31
+    assert _camp(r.json())["work_days_mask"] == 31
 
 
 async def test_create_status_default_draft(
@@ -220,7 +227,7 @@ async def test_create_status_default_draft(
         "message_template": "hi",
     }, headers=_auth_headers(valid_supabase_jwt, "user-8"))
     assert r.status_code == 201
-    assert r.json()["status"] == "draft"
+    assert _camp(r.json())["status"] == "draft"
 
 
 async def test_create_duplicate_name_409(

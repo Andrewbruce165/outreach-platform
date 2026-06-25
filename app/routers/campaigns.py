@@ -19,7 +19,7 @@ Endpoints:
 
 import logging
 import zoneinfo
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -43,7 +43,9 @@ from app.schemas import (
     CampaignSenderAttach,
     CampaignSenderAttachRequest,
     CampaignUpdate,
+    CampaignWriteResponse,
     PoolHealth,
+    WarningItem,
 )
 from app.services.rebalance import rebalance_on_attach
 from app.utils.auth import AuthCtx, auth_dep
@@ -51,6 +53,45 @@ from app.utils.auth import AuthCtx, auth_dep
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
+
+# Phase 12 D-13/D-14: green corridor <=50; hard cap 100 (top of the "warmed" range).
+DIALOG_LIMIT_SOFT_CAP = 50
+DIALOG_LIMIT_HARD_CAP = 100
+
+
+def _validate_max_new_dialogs(value: Optional[int]) -> List[WarningItem]:
+    """Phase 12 D-13/D-14: hard cap 100 → 422; soft cap 50 → warnings[].
+
+    Mirrors senders._validate_rate_limits: Pydantic already clips the hard cap via
+    Field(le=100), but Lovable sometimes posts raw JSON — the explicit check here is
+    harmless and yields a clearer senders-style detail payload.
+    """
+    warnings: List[WarningItem] = []
+    if value is None:
+        return warnings
+    if value > DIALOG_LIMIT_HARD_CAP:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "NEW_DIALOG_LIMIT_EXCEEDS_HARD_CAP",
+                "field": "max_new_dialogs_per_day",
+                "value": value,
+                "hard_cap": DIALOG_LIMIT_HARD_CAP,
+                "message": (
+                    "превышает максимально безопасный лимит новых диалогов на "
+                    "аккаунт; обратитесь в поддержку, если нужно выше"
+                ),
+            },
+        )
+    if value > DIALOG_LIMIT_SOFT_CAP:
+        warnings.append(
+            WarningItem(
+                field="max_new_dialogs_per_day",
+                value=value,
+                recommended_max=DIALOG_LIMIT_SOFT_CAP,
+            )
+        )
+    return warnings
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -302,6 +343,8 @@ async def _campaign_to_response(
         # 026: per-campaign re-contact policy.
         allow_recontact=campaign.allow_recontact,
         recontact_min_age_days=campaign.recontact_min_age_days,
+        # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
+        max_new_dialogs_per_day=campaign.max_new_dialogs_per_day,
         # Phase 11 campaign fields (D-04/D-12/D-14).
         dialogue_flow=campaign.dialogue_flow or [],
         arguments_facts=campaign.arguments_facts,
@@ -346,7 +389,7 @@ async def _check_sender_lock(
 # ── Endpoints: CRUD ──────────────────────────────────────────────────────────
 
 
-@router.post("", response_model=CampaignResponse, status_code=201)
+@router.post("", response_model=CampaignWriteResponse, status_code=201)
 async def create_campaign(
     payload: CampaignCreate,
     ctx: AuthCtx = Depends(auth_dep),
@@ -362,6 +405,8 @@ async def create_campaign(
     5. Duplicate name → 409
     """
     _validate_timezone(payload.timezone)
+    # Phase 12 D-13/D-14: soft cap → warnings[]; hard cap → 422.
+    warnings = _validate_max_new_dialogs(payload.max_new_dialogs_per_day)
     # 024: agent/folder опциональны для draft — валидируем принадлежность workspace
     # только когда значение передано (None = ещё не заполнено в визарде).
     if payload.agent_id is not None:
@@ -414,6 +459,8 @@ async def create_campaign(
         # 026: per-campaign re-contact policy.
         allow_recontact=payload.allow_recontact,
         recontact_min_age_days=payload.recontact_min_age_days,
+        # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
+        max_new_dialogs_per_day=payload.max_new_dialogs_per_day,
         # Phase 11 campaign fields (D-04/D-12/D-14).
         dialogue_flow=[s.model_dump() for s in payload.dialogue_flow] if payload.dialogue_flow else [],
         arguments_facts=payload.arguments_facts,
@@ -446,7 +493,8 @@ async def create_campaign(
         f"[campaigns] created workspace={ctx.workspace_id} name='{name}' "
         f"id={camp.id} senders={len(payload.sender_ids)}"
     )
-    return await _campaign_to_response(db, ctx, camp)
+    resp = await _campaign_to_response(db, ctx, camp)
+    return CampaignWriteResponse(campaign=resp, warnings=warnings)
 
 
 # ── Endpoint: AI co-pilot auto-fill (UI-SPEC §5.5 — v1 stub) ─────────────────
@@ -523,7 +571,7 @@ async def get_campaign(
     return await _campaign_to_response(db, ctx, c)
 
 
-@router.patch("/{campaign_id}", response_model=CampaignResponse)
+@router.patch("/{campaign_id}", response_model=CampaignWriteResponse)
 async def patch_campaign(
     campaign_id: UUID,
     payload: CampaignUpdate,
@@ -533,6 +581,11 @@ async def patch_campaign(
     """Partial PATCH. On running campaign: agent_id / folder_id immutable."""
     c = await _load_campaign(db, ctx, campaign_id)
     update_data = payload.model_dump(exclude_unset=True)
+
+    # Phase 12 D-14: re-validate the cap when the field changes (soft → warnings[], hard → 422).
+    warnings: List[WarningItem] = []
+    if "max_new_dialogs_per_day" in update_data and update_data["max_new_dialogs_per_day"] is not None:
+        warnings = _validate_max_new_dialogs(update_data["max_new_dialogs_per_day"])
 
     if c.status == "running":
         forbidden = {"agent_id", "folder_id"}
@@ -603,7 +656,8 @@ async def patch_campaign(
             )
         raise
     await db.refresh(c)
-    return await _campaign_to_response(db, ctx, c)
+    resp = await _campaign_to_response(db, ctx, c)
+    return CampaignWriteResponse(campaign=resp, warnings=warnings)
 
 
 @router.delete("/{campaign_id}", status_code=204)

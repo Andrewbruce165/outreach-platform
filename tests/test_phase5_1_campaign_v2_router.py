@@ -17,6 +17,14 @@ def _auth_headers(jwt_factory, sub: str = "v2-router-user") -> dict:
     return {"Authorization": f"Bearer {jwt_factory(sub=sub)}"}
 
 
+def _camp(resp_json: dict) -> dict:
+    """Phase 12 NDLG-04: create/patch now return CampaignWriteResponse
+    {campaign, warnings[]}; GET stays flat CampaignResponse. Unwrap when wrapped."""
+    if isinstance(resp_json, dict) and "campaign" in resp_json and "warnings" in resp_json:
+        return resp_json["campaign"]
+    return resp_json
+
+
 async def _bind(db, ws_id, uid):
     await db.execute(text("""
         INSERT INTO user_workspaces (supabase_user_id, workspace_id, role)
@@ -56,7 +64,7 @@ async def test_campaign_create_and_get_with_v2_fields(
         headers=_auth_headers(valid_supabase_jwt, "u-v2-create"),
     )
     assert resp.status_code == 201, resp.text
-    cid = resp.json()["id"]
+    cid = _camp(resp.json())["id"]
 
     got = await async_client.get(
         f"/api/v1/campaigns/{cid}",
@@ -102,7 +110,7 @@ async def test_campaign_patch_v2_fields_partial(
         headers=_auth_headers(valid_supabase_jwt, "u-v2-patch"),
     )
     assert create.status_code == 201, create.text
-    cid = create.json()["id"]
+    cid = _camp(create.json())["id"]
 
     patch = {"primary_goal": "qualify", "audience_hints": "Different hint"}
     resp = await async_client.patch(
@@ -111,7 +119,7 @@ async def test_campaign_patch_v2_fields_partial(
         headers=_auth_headers(valid_supabase_jwt, "u-v2-patch"),
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    body = _camp(resp.json())
     assert body["primary_goal"] == "qualify"
     assert body["audience_hints"] == "Different hint"
     # Untouched fields preserved.
@@ -138,7 +146,7 @@ async def test_campaign_patch_v2_webhook_url_only(
         headers=_auth_headers(valid_supabase_jwt, "u-v2-hookpatch"),
     )
     assert create.status_code == 201, create.text
-    cid = create.json()["id"]
+    cid = _camp(create.json())["id"]
 
     resp = await async_client.patch(
         f"/api/v1/campaigns/{cid}",
@@ -146,7 +154,7 @@ async def test_campaign_patch_v2_webhook_url_only(
         headers=_auth_headers(valid_supabase_jwt, "u-v2-hookpatch"),
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["webhook_url"] == "https://hook.test/new"
+    assert _camp(resp.json())["webhook_url"] == "https://hook.test/new"
 
 
 async def test_campaign_create_rejects_invalid_primary_goal(
@@ -188,7 +196,7 @@ async def test_campaign_legacy_create_v2_fields_default_null(
         headers=_auth_headers(valid_supabase_jwt, "u-legacy-create"),
     )
     assert resp.status_code == 201, resp.text
-    body = resp.json()
+    body = _camp(resp.json())
     assert body["audience_hints"] is None
     assert body["primary_goal"] is None
     # Phase 11 D-13: success_criteria removed
@@ -222,7 +230,7 @@ async def test_campaign_phase11_dialogue_flow_patch_full_replace(
         headers=_auth_headers(valid_supabase_jwt, "u-df-patch"),
     )
     assert create.status_code == 201, create.text
-    cid = create.json()["id"]
+    cid = _camp(create.json())["id"]
 
     # PATCH with single-item list — must REPLACE (full replacement, not append)
     resp = await async_client.patch(
@@ -231,7 +239,7 @@ async def test_campaign_phase11_dialogue_flow_patch_full_replace(
         headers=_auth_headers(valid_supabase_jwt, "u-df-patch"),
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    body = _camp(resp.json())
     assert len(body["dialogue_flow"]) == 1, \
         f"dialogue_flow must be replaced (not merged), got {len(body['dialogue_flow'])} stages"
     assert body["dialogue_flow"][0]["instruction"] == "Only stage now"
