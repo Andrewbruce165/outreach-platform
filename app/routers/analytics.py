@@ -204,6 +204,34 @@ async def _compute_cards(
     conv_count = (replied_row.conv_count if replied_row else 0) or 0
     msg_count = (replied_row.msg_count if replied_row else 0) or 0
 
+    # 5. Progress numerator/denominator — ТОЛЬКО для campaign scope.
+    # numerator   = distinct контакты, получившие ≥1 outbound (НЕ raw msg count).
+    # denominator = registered контакты в папке кампании (как _compute_is_exhausted).
+    # Прочие scope (workspace/agent/sender) не имеют единой целевой папки → 0/0,
+    # UI для них progress-бар не рисует.
+    contacts_messaged = 0
+    registered_contacts = 0
+    if scope is not None and scope[0] == "campaign_id":
+        contacts_messaged = (await db.execute(text(f"""
+            SELECT COUNT(DISTINCT m.conversation_id)
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE c.workspace_id = :wid
+              AND c.status != 'bot_ignored'
+              {scope_clause}
+              AND m.direction = 'outbound'
+        """), params)).scalar() or 0
+
+        registered_contacts = (await db.execute(text("""
+            SELECT COUNT(*)
+            FROM contacts ct
+            JOIN campaigns cmp ON cmp.folder_id = ct.folder_id
+            WHERE cmp.id = :scope_val
+              AND cmp.workspace_id = :wid
+              AND ct.tg_status = 'registered'
+              AND (ct.phone IS NOT NULL OR ct.username IS NOT NULL)
+        """), params)).scalar() or 0
+
     return AnalyticsCards(
         sent=sent,
         replied=AnalyticsReplied(
@@ -212,6 +240,8 @@ async def _compute_cards(
         ),
         leads=leads,
         finishes=finishes,
+        contacts_messaged=contacts_messaged,
+        registered_contacts=registered_contacts,
     )
 
 

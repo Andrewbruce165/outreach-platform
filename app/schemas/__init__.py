@@ -923,12 +923,25 @@ class AnalyticsCards(BaseModel):
     Pitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает
     status='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».
     Все counts исключают status='bot_ignored' (Pitfall 8).
+
+    Progress fields (campaign scope only): прогресс кампании = доля reachable
+    контактов, до которых уже дотянулись.
+    - ``contacts_messaged`` = COUNT(DISTINCT conversation_id) среди outbound —
+      сколько РАЗНЫХ контактов получили хотя бы одно сообщение (НЕ raw message
+      count, иначе несколько сообщений одному контакту раздувают числитель).
+    - ``registered_contacts`` = COUNT(contacts WHERE folder_id=campaign.folder_id
+      AND tg_status='registered') — знаменатель «достижимые контакты в папке»
+      (та же семантика, что _compute_is_exhausted, migration 013).
+    Для workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),
+    UI не рисует для них progress-бар.
     """
 
     sent: int
     replied: AnalyticsReplied
     leads: int
     finishes: int
+    contacts_messaged: int = 0
+    registered_contacts: int = 0
 
 
 # === Phase 5 LLM call schemas (ANLX-05) ======================================
