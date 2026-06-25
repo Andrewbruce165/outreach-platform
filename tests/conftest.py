@@ -30,66 +30,84 @@ from app.main import app  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def _setup_database():
-    """Создаёт схему перед всеми тестами и применяет миграцию 012."""
-    import pathlib
+# ⚠ HARD GUARD against destructive setup on prod DB.
+# 2026-05-26: `docker compose run --rm api pytest …` resolves DATABASE_URL from
+# docker-compose.yml::api::environment, which points at prod (`outreach_user@db:5432/
+# outreach_platform`). The DROP SCHEMA below WILL execute against prod under that
+# invocation and has done so before — the full outreach_platform schema was rebuilt at
+# 2026-05-26 13:18:21 UTC (proven by identical `file_mtime` across all 22 relations).
+# Refuse to run unless the DSN clearly identifies a test DB.
+_ALLOWED_TEST_DSN_MARKERS = (
+    "outreach_test",        # explicit test DB (incl. outreach_test_migrations)
+    "_test@", "_test/",     # *_test user/db suffix
+    "/test_",               # /test_db naming
+    "@localhost",           # host-run pytest with local DB
+    "@127.0.0.1",
+)
 
-    # Setup strategy:
-    # 1. Base.metadata.create_all builds base tables from the ORM (defines `messages`,
-    #    `ai_contexts`, `senders`, etc. that the migrations 001-011 ALTER but never CREATE).
-    # 2. Migrations 012-018 then layer the Phase 1-5.1 extensions on top.
-    # 3. The ORM has `default=uuid.uuid4` (Python-side) for id columns. Tests that do raw
-    #    SQL INSERT need server-side defaults — we add them post-create_all.
-    import asyncpg
+# Dedicated throwaway DB for migration RE-application (idempotency) tests. Those run raw
+# DDL via asyncpg which COMMITS and is NOT rolled back by async_db_session — re-applying a
+# destructive migration (e.g. 015 drops ai_contexts columns that 018 re-adds) on the SHARED
+# session DB poisons every later test. Built identically to the main DB, dropped at teardown.
+_MIGRATIONS_DB_NAME = "outreach_test_migrations"
 
-    settings = get_settings()
-    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-    # ⚠ HARD GUARD against destructive setup on prod DB.
-    # 2026-05-26: `docker compose run --rm api pytest …` resolves DATABASE_URL from
-    # docker-compose.yml::api::environment, which points at prod (`outreach_user@db:5432/
-    # outreach_platform`). The DROP SCHEMA on line below WILL execute against prod under
-    # that invocation and has done so before — the full outreach_platform schema was
-    # rebuilt at 2026-05-26 13:18:21 UTC (proven by identical `file_mtime` across all
-    # 22 relations). Refuse to run unless the DSN clearly identifies a test DB.
-    _ALLOWED_TEST_DSN_MARKERS = (
-        "outreach_test",        # explicit test DB
-        "_test@", "_test/",     # *_test user/db suffix
-        "/test_",               # /test_db naming
-        "@localhost",           # host-run pytest with local DB
-        "@127.0.0.1",
-    )
+def _assert_test_dsn(dsn: str, action: str = "DESTRUCTIVE TEST SETUP") -> None:
     if not any(marker in dsn for marker in _ALLOWED_TEST_DSN_MARKERS):
         raise RuntimeError(
-            f"REFUSING TO RUN DESTRUCTIVE TEST SETUP AGAINST {dsn!r}. "
+            f"REFUSING TO RUN {action} AGAINST {dsn!r}. "
             f"None of the allowed test-DSN markers {_ALLOWED_TEST_DSN_MARKERS!r} are present. "
             "DATABASE_URL must point at a test database (containing one of the markers above). "
             "Inside `docker compose run/exec api`, DATABASE_URL is inherited from "
             "docker-compose.yml and points at PROD outreach_platform — pytest must NOT run "
-            "in that context. Options: "
-            "(a) run pytest on the host with localhost DSN, "
-            "(b) add a `db-test` service in docker-compose.yml and override DATABASE_URL via "
-            "`docker compose run --rm -e DATABASE_URL=postgresql://...outreach_test ...`, "
-            "(c) ask before running pytest in an unfamiliar service. "
-            "See .claude/projects/-root/memory/feedback_pytest_drop_schema_prod.md."
+            "in that context. See .claude/projects/-root/memory/feedback_pytest_drop_schema_prod.md."
         )
 
-    # 1. Wipe + create base tables from ORM
-    asyncpg_conn = await asyncpg.connect(dsn=dsn)
-    try:
-        await asyncpg_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    finally:
-        await asyncpg_conn.close()
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+def _swap_db_name(raw_dsn: str, new_db: str) -> str:
+    """Replace the database name in a `postgresql://…/db[?params]` DSN."""
+    base, sep, query = raw_dsn.partition("?")
+    head, _, _old = base.rpartition("/")
+    return f"{head}/{new_db}" + (f"{sep}{query}" if sep else "")
+
+
+async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
+    """Build the full test schema on the target DB: create_all (ORM) + migrations
+    012-032 + post-migration default tweaks. `raw_dsn` is the asyncpg DSN; `sa_url`
+    is the matching `postgresql+asyncpg://` URL used to build a throwaway engine for
+    create_all. Used for BOTH the main test DB and the dedicated migrations DB.
+
+    Setup strategy:
+    1. Base.metadata.create_all builds base tables from the ORM (defines `messages`,
+       `ai_contexts`, `senders`, etc. that migrations 001-011 ALTER but never CREATE).
+    2. Migrations 012-032 layer the Phase 1-11 extensions on top.
+    3. The ORM has `default=uuid.uuid4` (Python-side) for id columns. Raw-SQL INSERT
+       tests need server-side defaults — added post-create_all.
+    """
+    import asyncpg
+    import pathlib
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+    # 1. Wipe + create base tables from ORM
+    conn = await asyncpg.connect(dsn=raw_dsn)
+    try:
+        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    finally:
+        await conn.close()
+
+    build_engine = create_async_engine(sa_url)
+    try:
+        async with build_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    finally:
+        await build_engine.dispose()
 
     # 2. Defensive stub: cca was dropped from the ORM by Phase 4 (016) but migration 012
     #    still ALTERs it. Stub it minimally so 012 can run; 016 drops it again.
     # 3. Add server-side `gen_random_uuid()` default on UUID PKs so raw-SQL tests work.
-    asyncpg_conn = await asyncpg.connect(dsn=dsn)
+    asyncpg_conn = await asyncpg.connect(dsn=raw_dsn)
     try:
         # Stub for migration 012's cca ALTER
         await asyncpg_conn.execute(
@@ -183,22 +201,73 @@ async def _setup_database():
     finally:
         await asyncpg_conn.close()
 
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _setup_database():
+    """Создаёт схему перед всеми тестами и применяет миграции 012-032."""
+    import asyncpg
+
+    settings = get_settings()
+    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    _assert_test_dsn(dsn)
+
+    await _build_outreach_schema(dsn, settings.database_url)
+
     yield
 
     # Teardown: drop schema with CASCADE (drop_all can't handle FK cycles like
-    # messages -> conversations -> messages).
-    # Guard re-checked here defensively — DSN must still be a test DB at teardown time
-    # (the setup-time guard is the primary defense; this is belt-and-suspenders).
-    if not any(marker in dsn for marker in _ALLOWED_TEST_DSN_MARKERS):
-        raise RuntimeError(
-            f"REFUSING TO RUN DESTRUCTIVE TEARDOWN AGAINST {dsn!r}. "
-            "See .claude/projects/-root/memory/feedback_pytest_drop_schema_prod.md."
-        )
+    # messages -> conversations -> messages). Guard re-checked defensively.
+    _assert_test_dsn(dsn, action="DESTRUCTIVE TEARDOWN")
     asyncpg_conn = await asyncpg.connect(dsn=dsn)
     try:
         await asyncpg_conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
     finally:
         await asyncpg_conn.close()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def migrations_raw_dsn():
+    """Session-scoped throwaway database for migration RE-application (idempotency) tests.
+
+    Migration tests re-run a .sql file to prove idempotency; that DDL COMMITS and is NOT
+    rolled back by async_db_session. Re-applying a destructive migration on the SHARED
+    session DB poisons later tests (e.g. 015 drops ai_contexts columns that 018 re-adds).
+    This dedicated DB is built identically to the main test DB so re-application exercises
+    each migration's IF EXISTS / IF NOT EXISTS guards without touching the shared schema.
+    """
+    import asyncpg
+
+    settings = get_settings()
+    main_dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    _assert_test_dsn(main_dsn, action="DEDICATED MIGRATIONS DB SETUP")
+
+    mig_dsn = _swap_db_name(main_dsn, _MIGRATIONS_DB_NAME)
+    mig_sa_url = _swap_db_name(settings.database_url, _MIGRATIONS_DB_NAME)
+    admin_dsn = _swap_db_name(main_dsn, "postgres")
+
+    async def _drop_db():
+        admin = await asyncpg.connect(dsn=admin_dsn)
+        try:
+            await admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                f"WHERE datname = '{_MIGRATIONS_DB_NAME}' AND pid <> pg_backend_pid()"
+            )
+            await admin.execute(f'DROP DATABASE IF EXISTS "{_MIGRATIONS_DB_NAME}"')
+        finally:
+            await admin.close()
+
+    admin = await asyncpg.connect(dsn=admin_dsn)
+    try:
+        await admin.execute(f'DROP DATABASE IF EXISTS "{_MIGRATIONS_DB_NAME}"')
+        await admin.execute(f'CREATE DATABASE "{_MIGRATIONS_DB_NAME}"')
+    finally:
+        await admin.close()
+
+    await _build_outreach_schema(mig_dsn, mig_sa_url)
+
+    yield mig_dsn
+
+    await _drop_db()
 
 
 @pytest_asyncio.fixture

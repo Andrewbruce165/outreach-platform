@@ -31,7 +31,7 @@ from sqlalchemy import select, text
 # test_migration_014.py имеет module-scope autouse fixture, но если pytest
 # выбирает только этот файл — нам нужен независимый apply.
 import pathlib
-from app.database import engine
+import asyncpg
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MIGRATION_014 = PROJECT_ROOT / "migrations" / "014_phase2_1_hardening.sql"
@@ -48,11 +48,19 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture(scope="module", autouse=True)
-async def apply_migration_014():
-    """Применяем 014 — idempotent, поэтому повторное применение в одной сессии ok."""
-    sql = MIGRATION_014.read_text()
-    async with engine.begin() as conn:
-        await conn.exec_driver_sql(sql)
+async def apply_migration_014(migrations_raw_dsn):
+    """Re-apply 014 on the DEDICATED migrations DB, NOT the shared session DB.
+
+    conftest._setup_database already applied 014 to the shared DB (which the reauth tests
+    below use via async_db_session); this only proves 014 re-applies cleanly without
+    committing DDL to the shared schema. Raw asyncpg (simple query protocol) — a
+    multi-statement .sql file can't go through SQLAlchemy exec_driver_sql.
+    """
+    conn = await asyncpg.connect(dsn=migrations_raw_dsn)
+    try:
+        await conn.execute(MIGRATION_014.read_text())
+    finally:
+        await conn.close()
     yield
 
 

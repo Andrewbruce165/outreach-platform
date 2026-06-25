@@ -16,12 +16,11 @@ Tests для миграции 014_phase2_1_hardening.sql.
 import pathlib
 import uuid
 
+import asyncpg
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.database import engine
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -29,14 +28,20 @@ MIGRATION_014 = PROJECT_ROOT / "migrations" / "014_phase2_1_hardening.sql"
 
 
 @pytest_asyncio.fixture(scope="module", autouse=True)
-async def apply_migration_014():
-    """Применяем 014 поверх 012+013 (conftest._setup_database session-scope их уже применил).
+async def apply_migration_014(migrations_raw_dsn):
+    """Re-apply 014 on the DEDICATED migrations DB (migrations_raw_dsn), NOT the shared
+    session DB. conftest._setup_database already applied 014 to the shared DB (which the
+    schema-assertion tests below query); this only proves 014 re-applies cleanly without
+    polluting the shared schema.
 
-    Idempotent — повторное применение в рамках одной сессии БД не упадёт.
+    Raw asyncpg (simple query protocol) — мульти-командный .sql нельзя гнать через
+    SQLAlchemy exec_driver_sql (prepared statement → "cannot insert multiple commands").
     """
-    sql = MIGRATION_014.read_text()
-    async with engine.begin() as conn:
-        await conn.exec_driver_sql(sql)
+    conn = await asyncpg.connect(dsn=migrations_raw_dsn)
+    try:
+        await conn.execute(MIGRATION_014.read_text())
+    finally:
+        await conn.close()
     yield
 
 
@@ -232,12 +237,19 @@ async def test_same_workspace_cannot_duplicate_slug(async_db_session: AsyncSessi
 # ─── Idempotency ────────────────────────────────────────────────────────────
 
 
-async def test_migration_014_is_idempotent():
-    """Повторное применение 014 на той же БД не падает (IF NOT EXISTS / IF EXISTS)."""
+async def test_migration_014_is_idempotent(migrations_raw_dsn):
+    """Повторное применение 014 не падает (IF NOT EXISTS / IF EXISTS).
+
+    Runs on the dedicated migrations DB so the re-application never touches the shared
+    session schema.
+    """
     sql = MIGRATION_014.read_text()
-    async with engine.begin() as conn:
-        await conn.exec_driver_sql(sql)
-        await conn.exec_driver_sql(sql)  # повторно — должно пройти без ошибки
+    conn = await asyncpg.connect(dsn=migrations_raw_dsn)
+    try:
+        await conn.execute(sql)
+        await conn.execute(sql)  # повторно — должно пройти без ошибки
+    finally:
+        await conn.close()
 
 
 # ─── ORM sync ────────────────────────────────────────────────────────────────
