@@ -114,13 +114,19 @@ async def test_workspace_endpoint_returns_4_metrics(
     )
     assert r.status_code == 200
     data = r.json()
-    assert set(data.keys()) == {"sent", "replied", "leads", "finishes"}
+    assert set(data.keys()) == {
+        "sent", "replied", "leads", "finishes",
+        "contacts_messaged", "registered_contacts",
+    }
     assert set(data["replied"].keys()) == {"conversation_count", "message_count"}
     assert data["sent"] == 0
     assert data["replied"]["conversation_count"] == 0
     assert data["replied"]["message_count"] == 0
     assert data["leads"] == 0
     assert data["finishes"] == 0
+    # Progress fields are campaign-scoped only → 0 for workspace scope.
+    assert data["contacts_messaged"] == 0
+    assert data["registered_contacts"] == 0
 
 
 async def test_workspace_endpoint_workspace_isolation(
@@ -289,7 +295,10 @@ async def test_all_4_endpoints_same_schema(
     agent = await test_agent_factory()
     sender = await test_sender_factory()
 
-    expected_top = {"sent", "replied", "leads", "finishes"}
+    expected_top = {
+        "sent", "replied", "leads", "finishes",
+        "contacts_messaged", "registered_contacts",
+    }
     expected_replied = {"conversation_count", "message_count"}
 
     paths = [
