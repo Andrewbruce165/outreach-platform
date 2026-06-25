@@ -306,8 +306,8 @@ function AgentEditor({
       >
         <header className="modal__head">
           <h3>{isNew ? "Create agent" : `Edit ${agent.name}`}</h3>
-          <button className="btn btn--ghost btn--sm" onClick={onClose} aria-label="Close">
-            ×
+          <button className="tb__icon-btn" onClick={onClose} aria-label="Close">
+            <X size={16} />
           </button>
         </header>
         <form onSubmit={onSubmit} style={{ display: "contents" }}>
