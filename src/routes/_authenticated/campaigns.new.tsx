@@ -35,6 +35,8 @@ type Folder = components["schemas"]["FolderResponse"];
 type Sender = components["schemas"]["SenderResponse"];
 type CampaignCreate = components["schemas"]["CampaignCreate"];
 type Campaign = components["schemas"]["CampaignResponse"];
+// Phase 12 NDLG-06: create/update now return {campaign, warnings[]}
+type CampaignWriteResponse = components["schemas"]["CampaignWriteResponse"];
 type ToolSpec = components["schemas"]["ToolSpec"];
 type ToolParamSpec = components["schemas"]["ToolParamSpec"];
 type PrimaryGoal = "book_meeting" | "qualify" | "click" | "engage";
@@ -128,6 +130,8 @@ function CampaignBuilder() {
   // 026: per-campaign re-contact policy. Off by default — strict no-re-touch.
   const [allowRecontact, setAllowRecontact] = useState(false);
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(30);
+  // Phase 12 NDLG-06: per-attached-account daily new-dialog cap. Default 50.
+  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(50);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
   // Phase 11 D-13: lead_trigger_hint now also absorbs migrated success_criteria.
@@ -193,6 +197,7 @@ function CampaignBuilder() {
     work_days_mask: maskFromDays(days),
     allow_recontact: allowRecontact,
     recontact_min_age_days: recontactMinAgeDays,
+    max_new_dialogs_per_day: maxNewDialogsPerDay,
     audience_hints: audienceHints || null,
     primary_goal: primaryGoal || null,
     // Phase 11 D-04/D-06: drop stages with empty instruction before saving
@@ -215,16 +220,19 @@ function CampaignBuilder() {
         name.trim().length > 0 && !!agentId && !!folderId && messageTemplate.trim().length > 0;
       if (!hasMinimum && !draftId) return null;
       const payload = buildPayload();
+      // Phase 12 NDLG-06: POST/PATCH now wrap the campaign in {campaign, warnings[]}.
       if (draftId) {
-        return api<Campaign>(`/api/v1/campaigns/${draftId}`, {
+        const res = await api<CampaignWriteResponse>(`/api/v1/campaigns/${draftId}`, {
           method: "PATCH",
           body: payload as unknown as Record<string, unknown>,
         });
+        return res.campaign;
       }
-      return api<Campaign>("/api/v1/campaigns", {
+      const res = await api<CampaignWriteResponse>("/api/v1/campaigns", {
         method: "POST",
         body: payload as unknown as Record<string, unknown>,
       });
+      return res.campaign;
     },
     onSuccess: (c) => {
       if (!c) return;
@@ -250,17 +258,20 @@ function CampaignBuilder() {
   const launchMut = useMutation({
     mutationFn: async () => {
       const payload = buildPayload();
+      // Phase 12 NDLG-06: unwrap {campaign, warnings[]} from create/update.
       let campaign: Campaign;
       if (draftId) {
-        campaign = await api<Campaign>(`/api/v1/campaigns/${draftId}`, {
+        const res = await api<CampaignWriteResponse>(`/api/v1/campaigns/${draftId}`, {
           method: "PATCH",
           body: payload as unknown as Record<string, unknown>,
         });
+        campaign = res.campaign;
       } else {
-        campaign = await api<Campaign>("/api/v1/campaigns", {
+        const res = await api<CampaignWriteResponse>("/api/v1/campaigns", {
           method: "POST",
           body: payload as unknown as Record<string, unknown>,
         });
+        campaign = res.campaign;
         setDraftId(campaign.id);
         track("campaign_created", { campaign_id: campaign.id });
       }
@@ -557,6 +568,8 @@ function CampaignBuilder() {
                   setAllowRecontact={setAllowRecontact}
                   recontactMinAgeDays={recontactMinAgeDays}
                   setRecontactMinAgeDays={setRecontactMinAgeDays}
+                  maxNewDialogsPerDay={maxNewDialogsPerDay}
+                  setMaxNewDialogsPerDay={setMaxNewDialogsPerDay}
                 />
               )}
               {cur.id === "integrations" && (
@@ -1223,6 +1236,8 @@ function ScheduleStep({
   setAllowRecontact,
   recontactMinAgeDays,
   setRecontactMinAgeDays,
+  maxNewDialogsPerDay,
+  setMaxNewDialogsPerDay,
 }: {
   days: string[];
   setDays: (v: string[]) => void;
@@ -1238,6 +1253,8 @@ function ScheduleStep({
   setAllowRecontact: (v: boolean) => void;
   recontactMinAgeDays: number;
   setRecontactMinAgeDays: (v: number) => void;
+  maxNewDialogsPerDay: number;
+  setMaxNewDialogsPerDay: (v: number) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1375,6 +1392,31 @@ function ScheduleStep({
           </span>
         </div>
       )}
+
+      {/* Phase 12 NDLG-06: per-account daily new-dialog cap */}
+      <div className="field">
+        <label className="field__label">Новых диалогов в сутки на аккаунт</label>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={100}
+          value={maxNewDialogsPerDay}
+          onChange={(e) => setMaxNewDialogsPerDay(Number(e.target.value))}
+        />
+        <span className="field__hint">
+          Лимит новых диалогов в сутки для каждого подключённого аккаунта (не на всю кампанию).
+        </span>
+        {maxNewDialogsPerDay > 50 && (
+          <span
+            className="field__hint"
+            role="alert"
+            style={{ color: "var(--warning, var(--danger))", marginTop: 4 }}
+          >
+            рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана
+          </span>
+        )}
+      </div>
 
       <div
         style={{

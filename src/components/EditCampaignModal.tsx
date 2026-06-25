@@ -7,6 +7,8 @@ import type { components } from "@/types/api";
 
 type Campaign = components["schemas"]["CampaignResponse"];
 type CampaignUpdate = components["schemas"]["CampaignUpdate"];
+// Phase 12 NDLG-06: PATCH now returns {campaign, warnings[]}
+type CampaignWriteResponse = components["schemas"]["CampaignWriteResponse"];
 type Agent = components["schemas"]["AgentResponse"];
 type Folder = components["schemas"]["FolderResponse"];
 
@@ -89,6 +91,8 @@ export function EditCampaignModal({
   const [days, setDays] = useState<string[]>(daysFromMask(campaign.work_days_mask ?? 0));
   const [allowRecontact, setAllowRecontact] = useState(campaign.allow_recontact ?? false);
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(campaign.recontact_min_age_days ?? 30);
+  // Phase 12 NDLG-06: per-account daily new-dialog cap
+  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(campaign.max_new_dialogs_per_day ?? 50);
   const [startDate, setStartDate] = useState(toDateInput(campaign.start_date));
   const [stopDate, setStopDate] = useState(toDateInput(campaign.stop_date));
   const [audienceHints, setAudienceHints] = useState(campaign.audience_hints ?? "");
@@ -133,6 +137,7 @@ export function EditCampaignModal({
         work_days_mask: maskFromDays(days),
         allow_recontact: allowRecontact,
         recontact_min_age_days: recontactMinAgeDays,
+        max_new_dialogs_per_day: maxNewDialogsPerDay,
         start_date: startDate ? new Date(startDate).toISOString() : null,
         stop_date: stopDate ? new Date(stopDate).toISOString() : null,
         audience_hints: audienceHints || null,
@@ -170,6 +175,7 @@ export function EditCampaignModal({
         work_days_mask: campaign.work_days_mask ?? null,
         allow_recontact: campaign.allow_recontact ?? false,
         recontact_min_age_days: campaign.recontact_min_age_days ?? 30,
+        max_new_dialogs_per_day: campaign.max_new_dialogs_per_day ?? 50,
         start_date: origDate(campaign.start_date),
         stop_date: origDate(campaign.stop_date),
         audience_hints: campaign.audience_hints ?? null,
@@ -191,7 +197,8 @@ export function EditCampaignModal({
         if (norm(v) !== norm(original[k])) body[k] = v;
       }
 
-      return api(`/api/v1/campaigns/${campaign.id}`, {
+      // Phase 12 NDLG-06: response is now {campaign, warnings[]}; we only need it to settle.
+      return api<CampaignWriteResponse>(`/api/v1/campaigns/${campaign.id}`, {
         method: "PATCH",
         body,
       });
@@ -561,6 +568,31 @@ export function EditCampaignModal({
               />
             </div>
           )}
+
+          {/* Phase 12 NDLG-06: per-account daily new-dialog cap */}
+          <div className="field">
+            <label className="field__label">Новых диалогов в сутки на аккаунт</label>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={100}
+              value={maxNewDialogsPerDay}
+              onChange={(e) => setMaxNewDialogsPerDay(Number(e.target.value))}
+            />
+            <span className="field__hint">
+              Лимит новых диалогов в сутки для каждого подключённого аккаунта (не на всю кампанию).
+            </span>
+            {maxNewDialogsPerDay > 50 && (
+              <span
+                className="field__hint"
+                role="alert"
+                style={{ color: "var(--warning, var(--danger))", marginTop: 4 }}
+              >
+                рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана
+              </span>
+            )}
+          </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div className="field">

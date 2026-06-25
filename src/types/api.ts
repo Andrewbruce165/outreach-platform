@@ -1691,6 +1691,17 @@ export interface components {
          *     Pitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает
          *     status='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».
          *     Все counts исключают status='bot_ignored' (Pitfall 8).
+         *
+         *     Progress fields (campaign scope only): прогресс кампании = доля reachable
+         *     контактов, до которых уже дотянулись.
+         *     - ``contacts_messaged`` = COUNT(DISTINCT conversation_id) среди outbound —
+         *       сколько РАЗНЫХ контактов получили хотя бы одно сообщение (НЕ raw message
+         *       count, иначе несколько сообщений одному контакту раздувают числитель).
+         *     - ``registered_contacts`` = COUNT(contacts WHERE folder_id=campaign.folder_id
+         *       AND tg_status='registered') — знаменатель «достижимые контакты в папке»
+         *       (та же семантика, что _compute_is_exhausted, migration 013).
+         *     Для workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),
+         *     UI не рисует для них progress-бар.
          */
         AnalyticsCards: {
             /** Sent */
@@ -1702,16 +1713,14 @@ export interface components {
             finishes: number;
             /**
              * Contacts Messaged
-             * @description Distinct contacts that received >=1 outbound (campaign scope only, else 0).
              * @default 0
              */
-            contacts_messaged?: number;
+            contacts_messaged: number;
             /**
              * Registered Contacts
-             * @description Registered contacts in the campaign's folder = progress denominator (campaign scope only, else 0).
              * @default 0
              */
-            registered_contacts?: number;
+            registered_contacts: number;
         };
         /**
          * AnalyticsReplied
@@ -1896,6 +1905,12 @@ export interface components {
              * @default 30
              */
             recontact_min_age_days: number;
+            /**
+             * Max New Dialogs Per Day
+             * @description Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=50; soft-warn >50; hard cap 100.
+             * @default 50
+             */
+            max_new_dialogs_per_day: number;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
@@ -1981,6 +1996,11 @@ export interface components {
              * @default 30
              */
             recontact_min_age_days: number;
+            /**
+             * Max New Dialogs Per Day
+             * @default 50
+             */
+            max_new_dialogs_per_day: number;
             /** Dialogue Flow */
             dialogue_flow?: {
                 [key: string]: unknown;
@@ -2118,12 +2138,27 @@ export interface components {
             allow_recontact?: boolean | null;
             /** Recontact Min Age Days */
             recontact_min_age_days?: number | null;
+            /** Max New Dialogs Per Day */
+            max_new_dialogs_per_day?: number | null;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
             arguments_facts?: string | null;
             /** Campaign Rules */
             campaign_rules?: string | null;
+        };
+        /**
+         * CampaignWriteResponse
+         * @description Phase 12 D-14: campaign create/update response carrying soft-cap warnings[].
+         *     GET paths keep returning CampaignResponse directly (no warnings).
+         */
+        CampaignWriteResponse: {
+            campaign: components["schemas"]["CampaignResponse"];
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: components["schemas"]["WarningItem"][];
         };
         /** ContactImportPreviewResponse */
         ContactImportPreviewResponse: {
@@ -4934,7 +4969,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CampaignResponse"];
+                    "application/json": components["schemas"]["CampaignWriteResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5074,7 +5109,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CampaignResponse"];
+                    "application/json": components["schemas"]["CampaignWriteResponse"];
                 };
             };
             /** @description Validation Error */
