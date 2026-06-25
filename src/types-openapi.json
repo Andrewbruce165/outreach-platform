@@ -6910,6 +6910,16 @@
           "finishes": {
             "type": "integer",
             "title": "Finishes"
+          },
+          "contacts_messaged": {
+            "type": "integer",
+            "title": "Contacts Messaged",
+            "default": 0
+          },
+          "registered_contacts": {
+            "type": "integer",
+            "title": "Registered Contacts",
+            "default": 0
           }
         },
         "type": "object",
@@ -6920,7 +6930,7 @@
           "finishes"
         ],
         "title": "AnalyticsCards",
-        "description": "Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).\n\nВсе 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})\nвозвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.\n\nPitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает\nstatus='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».\nВсе counts исключают status='bot_ignored' (Pitfall 8)."
+        "description": "Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).\n\nВсе 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})\nвозвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.\n\nPitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает\nstatus='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».\nВсе counts исключают status='bot_ignored' (Pitfall 8).\n\nProgress fields (campaign scope only): прогресс кампании = доля reachable\nконтактов, до которых уже дотянулись.\n- ``contacts_messaged`` = COUNT(DISTINCT conversation_id) среди outbound —\n  сколько РАЗНЫХ контактов получили хотя бы одно сообщение (НЕ raw message\n  count, иначе несколько сообщений одному контакту раздувают числитель).\n- ``registered_contacts`` = COUNT(contacts WHERE folder_id=campaign.folder_id\n  AND tg_status='registered') — знаменатель «достижимые контакты в папке»\n  (та же семантика, что _compute_is_exhausted, migration 013).\nДля workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),\nUI не рисует для них progress-бар."
       },
       "AnalyticsReplied": {
         "properties": {

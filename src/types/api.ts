@@ -1700,6 +1700,18 @@ export interface components {
             leads: number;
             /** Finishes */
             finishes: number;
+            /**
+             * Contacts Messaged
+             * @description Distinct contacts that received >=1 outbound (campaign scope only, else 0).
+             * @default 0
+             */
+            contacts_messaged?: number;
+            /**
+             * Registered Contacts
+             * @description Registered contacts in the campaign's folder = progress denominator (campaign scope only, else 0).
+             * @default 0
+             */
+            registered_contacts?: number;
         };
         /**
          * AnalyticsReplied
