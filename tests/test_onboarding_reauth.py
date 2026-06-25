@@ -307,12 +307,22 @@ async def test_finalize_with_original_sender_id_takes_refresh_branch(
 
 
 async def test_finalize_with_deleted_sender_falls_back_to_create(
-    async_db_session, test_workspace
+    async_db_session, test_workspace, test_sender_factory
 ):
-    """Edge case: original_sender_id указывает на удалённого sender'а
-    → fallback на _create_sender_from_session, не блокирует юзера.
+    """Edge case: sender удалён пока шёл reauth → original_sender_id больше не
+    резолвится → fallback на _create_sender_from_session, не блокирует юзера.
+
+    onboarding_sessions.original_sender_id is a FK with ON DELETE CASCADE
+    (migration 014), so a *dangling* FK can never exist in the DB. We reproduce
+    the in-flight-delete race instead: seed a real sender, create the reauth
+    onboarding row referencing it, commit, then delete the sender. The cascade
+    removes the DB row, but the in-memory session_row object _finalize_*
+    operates on still carries original_sender_id; the helper's SELECT now
+    returns None → fallback create.
     """
-    bogus_sender_id = uuid.uuid4()
+    sender = await test_sender_factory(slug="reauth-doomed-sender")
+    doomed_sender_id = sender.id
+
     mock_client = _make_mock_client(new_session="fallback_session")
     # get_me нужен _create_sender_from_session
     mock_client.get_me = AsyncMock(
@@ -327,10 +337,18 @@ async def test_finalize_with_deleted_sender_falls_back_to_create(
         role="sender",
         proxy=None,
         status="code_sent",
-        original_sender_id=bogus_sender_id,  # не существует в БД
+        original_sender_id=doomed_sender_id,  # references a real sender (FK ok)
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
     )
     async_db_session.add(row)
+    await async_db_session.commit()
+
+    # Simulate the sender being deleted mid-reauth. CASCADE also deletes the
+    # onboarding row in the DB, but `row` (in memory) still holds the FK.
+    async_db_session.expunge(row)
+    await async_db_session.execute(
+        text("DELETE FROM senders WHERE id = :sid"), {"sid": str(doomed_sender_id)}
+    )
     await async_db_session.commit()
 
     result = await _finalize_onboarding_or_reauth(
@@ -338,7 +356,7 @@ async def test_finalize_with_deleted_sender_falls_back_to_create(
     )
 
     # Создан новый sender (fallback), не упало с 404.
-    assert result.id != bogus_sender_id
+    assert result.id != doomed_sender_id
     assert result.workspace_id == test_workspace.id
     assert result.slug == "sender-999111"
 

@@ -444,7 +444,7 @@ async def test_message_history_excerpt_last_20(
                 "dir": direction,
                 "txt": f"msg {i}",
                 "sent_by": "contact" if direction == "inbound" else "ai",
-                "i": i,
+                "i": str(i),
             },
         )
     await async_db_session.commit()
