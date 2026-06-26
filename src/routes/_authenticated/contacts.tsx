@@ -690,17 +690,100 @@ function FolderDetail({
             <input
               className="input"
               style={{ paddingLeft: 30, height: 32, fontSize: 12.5, width: 240 }}
-              placeholder="Search contacts…"
+              placeholder="Search by phone or @username…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button className="btn btn--ghost btn--sm" type="button">
-            <Filter size={12} /> Filters
-          </button>
+          <div style={{ position: "relative" }}>
+            <button
+              className="btn btn--ghost btn--sm"
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              style={tgFilter !== "all" ? { color: "var(--tg-blue)" } : undefined}
+            >
+              <Filter size={12} /> Filters
+              {tgFilter !== "all" && (
+                <span
+                  style={{
+                    marginLeft: 4,
+                    background: "var(--tg-blue)",
+                    color: "white",
+                    borderRadius: 999,
+                    padding: "0 6px",
+                    fontSize: 10,
+                    fontWeight: 600,
+                  }}
+                >
+                  1
+                </span>
+              )}
+            </button>
+            {filtersOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  left: 0,
+                  zIndex: 20,
+                  minWidth: 200,
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                  padding: 6,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-faint)",
+                    padding: "6px 8px 4px",
+                  }}
+                >
+                  Telegram status
+                </div>
+                {(
+                  [
+                    ["all", "All"],
+                    ["in_tg", "In Telegram"],
+                    ["checking", "Checking"],
+                    ["not_found", "Not found"],
+                  ] as [TgFilter, string][]
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    className="btn btn--ghost btn--sm"
+                    style={{
+                      width: "100%",
+                      justifyContent: "flex-start",
+                      color: tgFilter === key ? "var(--tg-blue)" : undefined,
+                      fontWeight: tgFilter === key ? 600 : 500,
+                    }}
+                    onClick={() => {
+                      setTgFilter(key);
+                      setFiltersOpen(false);
+                    }}
+                  >
+                    {tgFilter === key ? <Check size={12} /> : <span style={{ width: 12 }} />}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <span style={{ flex: 1 }} />
           <span className="muted text-xs">
-            Showing {filtered.length.toLocaleString()} of {total.toLocaleString()}
+            {(() => {
+              const start = page * PAGE_SIZE + 1;
+              const end = page * PAGE_SIZE + contacts.length;
+              return total > 0
+                ? `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`
+                : "0 contacts";
+            })()}
           </span>
         </div>
 
