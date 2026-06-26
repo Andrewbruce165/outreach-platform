@@ -73,3 +73,36 @@ auth_status='ok'` — НЕ смотрит `restriction_status`/`lifecycle_status
 - Скрипты: `scratchpad/diag_resolve.py`, `sample_fn.py`, `sample_true_rate.py`, `known_live_probe.py`
 - Health-probe контрольный набор (49 заведомо-живых): `.planning/phases/14-reliable-contact-resolution/control-set-known-live.txt`
 - Папка-источник: «Barter_список пещивиков Ромы» `folder_id 4ecdde17-f454-4a1b-b4ba-732fd6b9449f`
+
+## Часть 2 — Live-smoke провал активации (2026-06-26, Phase 14 / 14-04)
+
+После мёржа волн 1–3 (768 тестов GREEN) и деплоя (`docker compose up -d --build api`,
+миграция 034 применена, `probe_checker`/`resolve_phone_with_fallback`/`tg_probe_state`
+в рантайме) активировали два «здоровых» запаркованных чекера
+(`sender-7979031303`, `sender-8364639216`, guard `restriction_status='none'`).
+
+**Результат: тот же throttle-сигнатур.** За первый бёрст воркер дал
+`checked=20..30 reg=0 not_reg=20..30 flood=True` по мобильным `+79…` —
+**0% registered** (калибровка ждёт ~50% на мобильных, baseline 48/49). То есть
+оба «здоровых» чекера тоже отдают FloodWait/пустой resolve по телефону.
+
+**Дыра в коде (gap для gap-closure):** при `flood=True` воркер всё равно
+финализировал пустые результаты как `tg_status='not_registered'` с
+`tg_confidence='high'`, `tg_probe_state='clean'` — control-probe НЕ выставил ни
+одного `sender_restriction_events`, suspect-rollback НЕ сработал. Throttle/flood-
+ответ нельзя трактовать как «не зарегистрирован» и нельзя писать high-confidence.
+
+**Откат (prod восстановлен в baseline):** оба чекера ре-паркнуты (0 активных);
+api остановлен чтобы заглушить in-memory воркер; откат `UPDATE 50` строк →
+`pending` (+ обнуление `tg_*`), `DELETE 50` ложных `contacts_cache`; 49 control
+не тронуты. Итог contacts: **not_registered=5 / pending=14484 / registered=53**,
+provenance-строк 0. api перезапущен, воркер idle (все чекеры parked).
+
+**Операционная заметка:** `docker exec <c> psql … <<'SQL'` без `-i` НЕ доставляет
+heredoc в stdin — UPDATE'ы прошли как no-op (счётчики не менялись, пока воркер
+параллельно докидывал ложь). Правильно: `psql -c "…"` или `docker exec -i`.
+
+**Вывод:** Phase 14 НЕ завершён. Нужен gap-closure: (1) flood/throttle-aware
+финализация (не писать not_registered/ high-confidence при flood; помечать
+чекер restricted и выводить из ротации); (2) разобраться, throttle ли это всего
+пула (возможно нужен длинный cooldown или резолв только по @username, см. выше).
