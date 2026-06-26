@@ -11,9 +11,9 @@ Generate a structured SESSION_REPORT.md document capturing session outcomes, wor
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/session-report.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/session-report.md
 </execution_context>
 
 <process>
-Execute the session-report workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/session-report.md end-to-end.
+Execute the session-report workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/session-report.md end-to-end.
 </process>

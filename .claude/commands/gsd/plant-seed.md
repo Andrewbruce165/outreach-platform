@@ -20,9 +20,9 @@ Consumed by: /gsd:new-milestone (scans seeds and presents matches)
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/plant-seed.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/plant-seed.md
 </execution_context>
 
 <process>
-Execute the plant-seed workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/plant-seed.md end-to-end.
+Execute the plant-seed workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/plant-seed.md end-to-end.
 </process>

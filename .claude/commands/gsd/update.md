@@ -19,11 +19,11 @@ Routes to the update workflow which handles:
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/update.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/update.md
 </execution_context>
 
 <process>
-**Follow the update workflow** from `@/root/apps/telegram-api/.claude/get-shit-done/workflows/update.md`.
+**Follow the update workflow** from `@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/update.md`.
 
 The workflow handles all logic including:
 1. Installed version detection (local/global)

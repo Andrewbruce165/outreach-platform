@@ -20,8 +20,8 @@ Flow: Validate → Research UI → Verify UI-SPEC → Done
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/ui-phase.md
-@/root/apps/telegram-api/.claude/get-shit-done/references/ui-brand.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/ui-phase.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/references/ui-brand.md
 </execution_context>
 
 <context>
@@ -29,6 +29,6 @@ Phase number: $ARGUMENTS — optional, auto-detects next unplanned phase if omit
 </context>
 
 <process>
-Execute @/root/apps/telegram-api/.claude/get-shit-done/workflows/ui-phase.md end-to-end.
+Execute @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/ui-phase.md end-to-end.
 Preserve all workflow gates.
 </process>

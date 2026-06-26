@@ -19,8 +19,8 @@ Routes to the profile-user workflow which orchestrates the full flow: consent ga
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/profile-user.md
-@/root/apps/telegram-api/.claude/get-shit-done/references/ui-brand.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/profile-user.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/references/ui-brand.md
 </execution_context>
 
 <context>

@@ -13,7 +13,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 **MANDATORY FIRST STEP — Execute init command:**
 
 ```bash
-INIT=$(node "/root/apps/telegram-api/.claude/get-shit-done/bin/gsd-tools.cjs" init new-workspace)
+INIT=$(node "/root/apps/aimly/tg-outreach/.claude/get-shit-done/bin/gsd-tools.cjs" init new-workspace)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 

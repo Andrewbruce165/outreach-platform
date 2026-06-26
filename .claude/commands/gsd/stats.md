@@ -10,9 +10,9 @@ Display comprehensive project statistics including phase progress, plan executio
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/stats.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/stats.md
 </execution_context>
 
 <process>
-Execute the stats workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/stats.md end-to-end.
+Execute the stats workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/stats.md end-to-end.
 </process>

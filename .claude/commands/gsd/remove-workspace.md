@@ -17,10 +17,10 @@ Remove a workspace directory after confirmation. For worktree strategy, runs `gi
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/remove-workspace.md
-@/root/apps/telegram-api/.claude/get-shit-done/references/ui-brand.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/remove-workspace.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/references/ui-brand.md
 </execution_context>
 
 <process>
-Execute the remove-workspace workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/remove-workspace.md end-to-end.
+Execute the remove-workspace workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/remove-workspace.md end-to-end.
 </process>

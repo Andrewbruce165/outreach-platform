@@ -16,9 +16,9 @@ Designed for rapid multi-project workflows where remembering which phase/step yo
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/next.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/next.md
 </execution_context>
 
 <process>
-Execute the next workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/next.md end-to-end.
+Execute the next workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/next.md end-to-end.
 </process>

@@ -20,8 +20,8 @@ Runs inline — no Task, no AskUserQuestion, no Bash.
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/note.md
-@/root/apps/telegram-api/.claude/get-shit-done/references/ui-brand.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/note.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/references/ui-brand.md
 </execution_context>
 
 <context>
@@ -29,6 +29,6 @@ $ARGUMENTS
 </context>
 
 <process>
-Execute the note workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/note.md end-to-end.
+Execute the note workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/note.md end-to-end.
 Capture the note, list notes, or promote to todo — depending on arguments.
 </process>

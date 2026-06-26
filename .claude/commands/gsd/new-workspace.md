@@ -34,11 +34,11 @@ Create a physical workspace directory containing copies of specified git repos (
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/new-workspace.md
-@/root/apps/telegram-api/.claude/get-shit-done/references/ui-brand.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/new-workspace.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/references/ui-brand.md
 </execution_context>
 
 <process>
-Execute the new-workspace workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/new-workspace.md end-to-end.
+Execute the new-workspace workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/new-workspace.md end-to-end.
 Preserve all workflow gates (validation, approvals, commits, routing).
 </process>

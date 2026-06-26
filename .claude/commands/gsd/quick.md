@@ -32,7 +32,7 @@ Flags are composable: `--discuss --research --full` gives discussion + research 
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/quick.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/quick.md
 </execution_context>
 
 <context>
@@ -42,6 +42,6 @@ Context files are resolved inside the workflow (`init quick`) and delegated via 
 </context>
 
 <process>
-Execute the quick workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/quick.md end-to-end.
+Execute the quick workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/quick.md end-to-end.
 Preserve all workflow gates (validation, task description, planning, execution, state updates, commits).
 </process>

@@ -19,8 +19,8 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 <execution_context>
 **Load these files NOW (before proceeding):**
 
-- @/root/apps/telegram-api/.claude/get-shit-done/workflows/complete-milestone.md (main workflow)
-- @/root/apps/telegram-api/.claude/get-shit-done/templates/milestone-archive.md (archive template)
+- @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/complete-milestone.md (main workflow)
+- @/root/apps/aimly/tg-outreach/.claude/get-shit-done/templates/milestone-archive.md (archive template)
   </execution_context>
 
 <context>

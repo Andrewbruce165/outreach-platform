@@ -12,7 +12,7 @@ Default: `balanced` if not set or config missing.
 
 ## Lookup Table
 
-@/root/apps/telegram-api/.claude/get-shit-done/references/model-profiles.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/references/model-profiles.md
 
 Look up the agent in the table for the resolved profile. Pass the model parameter to Task calls:
 

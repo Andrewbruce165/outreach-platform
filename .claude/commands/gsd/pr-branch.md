@@ -17,9 +17,9 @@ changes that are irrelevant to code review.
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/pr-branch.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/pr-branch.md
 </execution_context>
 
 <process>
-Execute the pr-branch workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/pr-branch.md end-to-end.
+Execute the pr-branch workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/pr-branch.md end-to-end.
 </process>

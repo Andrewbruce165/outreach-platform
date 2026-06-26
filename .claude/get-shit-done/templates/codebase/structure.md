@@ -216,7 +216,7 @@ get-shit-done/
 
 **New Workflow:**
 - Implementation: `get-shit-done/workflows/{name}.md`
-- Usage: Reference from command with `@/root/apps/telegram-api/.claude/get-shit-done/workflows/{name}.md`
+- Usage: Reference from command with `@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/{name}.md`
 
 **New Reference Document:**
 - Implementation: `get-shit-done/references/{name}.md`
@@ -229,12 +229,12 @@ get-shit-done/
 ## Special Directories
 
 **get-shit-done/**
-- Purpose: Resources installed to /root/apps/telegram-api/.claude/
+- Purpose: Resources installed to /root/apps/aimly/tg-outreach/.claude/
 - Source: Copied by bin/install.js during installation
 - Committed: Yes (source of truth)
 
 **commands/**
-- Purpose: Slash commands installed to /root/apps/telegram-api/.claude/commands/
+- Purpose: Slash commands installed to /root/apps/aimly/tg-outreach/.claude/commands/
 - Source: Copied by bin/install.js during installation
 - Committed: Yes (source of truth)
 

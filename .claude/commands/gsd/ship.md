@@ -17,7 +17,7 @@ Closes the plan → execute → verify → ship loop.
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/ship.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/ship.md
 </execution_context>
 
-Execute the ship workflow from @/root/apps/telegram-api/.claude/get-shit-done/workflows/ship.md end-to-end.
+Execute the ship workflow from @/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/ship.md end-to-end.

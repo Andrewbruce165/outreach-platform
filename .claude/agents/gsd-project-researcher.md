@@ -105,7 +105,7 @@ Always include current year. Use multiple query variations. Mark WebSearch-only 
 Check `brave_search` from orchestrator context. If `true`, use Brave Search for higher quality results:
 
 ```bash
-node "/root/apps/telegram-api/.claude/get-shit-done/bin/gsd-tools.cjs" websearch "your query" --limit 10
+node "/root/apps/aimly/tg-outreach/.claude/get-shit-done/bin/gsd-tools.cjs" websearch "your query" --limit 10
 ```
 
 **Options:**

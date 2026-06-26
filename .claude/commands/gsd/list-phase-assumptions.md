@@ -17,7 +17,7 @@ Output: Conversational output only (no file creation) - ends with "What do you t
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/list-phase-assumptions.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/list-phase-assumptions.md
 </execution_context>
 
 <context>

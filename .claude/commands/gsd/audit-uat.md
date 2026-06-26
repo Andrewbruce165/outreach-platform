@@ -12,7 +12,7 @@ Scan all phases for pending, skipped, blocked, and human_needed UAT items. Cross
 </objective>
 
 <execution_context>
-@/root/apps/telegram-api/.claude/get-shit-done/workflows/audit-uat.md
+@/root/apps/aimly/tg-outreach/.claude/get-shit-done/workflows/audit-uat.md
 </execution_context>
 
 <context>
