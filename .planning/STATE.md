@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-06-26T09:56:14.804Z"
+status: verifying
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-06-26T10:07:11.576Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 15
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 48
-  completed_plans: 47
+  completed_plans: 48
   percent: 67
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 13 (even-pacing-across-sending-window-smooth-new-dialog-distribu) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-26
 
 Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — plan 04 partial, UAT pending)
@@ -80,6 +80,7 @@ Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — p
 | Phase 11 P02 | 34min | 3 tasks | 17 files |
 | Phase 11 P03 | 25min | 3 tasks | 2 files |
 | Phase 13 P01 | 6min | 2 tasks | 1 files |
+| Phase 13 P02 | 8min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 11 P03]: D-03 _TONE_LINES single-source tone; D-06 dialogue_flow numbered stages replace static _PROMPT_DIALOGUE_GOAL; D-12 _PROMPT_FACTS_GUARD anti-hallucination in arguments_facts block; D-14 _dedup_rules(agent_rules, campaign_rules) exact-duplicate suppression; D-11/RT-01 response_speed instant/human/slow/manual → listener debounce delay branch; PMT-01..07 + RT-01 all GREEN (660 passing)
 - [Phase 11 P04]: openapi.json+types regenerated via export-handoff (rebuilt API container first — was stale pre-P11); frontend Agent form: tone_preset select (4 opts) replaces voice_baseline+sliders+tone_of_voice (all deleted); response_speed select + conditional delay input; Campaign wizard: StageEditor (add/remove/up-down, no dnd lib, aria-labels, empty-state copy), arguments_facts+campaign_rules textareas, audience_hints→Кому пишем relabel, success_criteria field removed→merged into leadHint (Сигнал Лид), autoFillMut→lead_trigger_hint; EditCampaignModal updated with InlineStageEditor+new fields; tsc clean; awaiting human UAT (Task 4)
 - [Phase 13]: 13-01: Wave-0 RED scaffold tests/test_queue_even_pacing.py (7 tests, PACE-01..07) reuses Phase 12 helpers verbatim; deferred in-body imports keep --collect-only clean; _assert_pacing_predicate_wired() introspection guard (binds :expected_now/:window_start_utc) makes the four behavioural integration tests genuinely RED instead of coincidentally passing on the Phase 12 cap. All 7 RED, 16 pre-existing queue tests stay GREEN.
+- [Phase 13]: 13-02: even pacing implemented in queue.py only (D-09) — _window_elapsed_fraction (raw window D-01, window_start floor D-06, clamped, injectable now) + expected_now = cap*frac*jitter (D-05/D-08) ANDed beside the Phase 12 cap in the candidate SELECT; follow-ups bypass (D-07/D-10), no max() clamp (structural floor D-03), LIMIT 8 / SKIP LOCKED preserved. PACE-01..07 GREEN, full suite 756 passed. Phase 12 test_new_dialog_allowed_under_cap re-seeded 23h-ago (cap vs pace two-counter isolation, assertion unchanged).
 
 ### Roadmap Evolution
 
@@ -184,6 +186,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-26T09:56:05.360Z
-Stopped at: Completed 13-01-PLAN.md
+Last session: 2026-06-26T10:07:01.379Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None

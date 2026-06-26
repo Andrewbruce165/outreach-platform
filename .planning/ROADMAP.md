@@ -342,7 +342,7 @@ Plans:
 
 **Requirements**: PACE-01, PACE-02, PACE-03, PACE-04, PACE-05, PACE-06, PACE-07 (derived during /gsd:plan-phase 13, see REQUIREMENTS.md §Even Pacing Across Sending Window)
 **Depends on:** Phase 12
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 **Wave 1**
@@ -351,7 +351,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 13-02-PLAN.md — PACE_JITTER constants + _window_elapsed_fraction helper + expected-by-now pacing predicate in _process_next_for_sender (queue.py only, D-09) [Wave 2, depends_on: 13-01]
+- [x] 13-02-PLAN.md — PACE_JITTER constants + _window_elapsed_fraction helper + expected-by-now pacing predicate in _process_next_for_sender (queue.py only, D-09) [Wave 2, depends_on: 13-01]
 
 ---
 
