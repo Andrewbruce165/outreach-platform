@@ -88,6 +88,42 @@ class Settings(BaseSettings):
         description="Cadence of the listener background sweep that re-checks restricted senders (seconds).",
     )
 
+    # Phase 14 (RESV-02 / D-10): contact-resolution rate knobs for the checker pool.
+    # Conservative defaults keep resolve volume under the ~45–50 empirical shadow-ban
+    # onset so a misconfigured deploy cannot uncap the worker. SEPARATE knob set from
+    # the empirical send-queue constants in queue.py (CLAUDE.md guard — do not unify).
+    contact_check_burst_cap: int = Field(
+        default=30,
+        validation_alias="CONTACT_CHECK_BURST_CAP",
+        description="Max resolves a single checker performs per batch, under the "
+                    "~45–50 empirical contacts-API throttle onset.",
+    )
+    contact_check_pace_low: float = Field(
+        default=2.0,
+        validation_alias="CONTACT_CHECK_PACE_LOW",
+        description="Lower bound (seconds) of the polite delay between resolves — "
+                    "matches random.uniform(2.0, 3.5) at checker.py:259 so the knob "
+                    "and the hard-coded delay stay consistent.",
+    )
+    contact_check_pace_high: float = Field(
+        default=3.5,
+        validation_alias="CONTACT_CHECK_PACE_HIGH",
+        description="Upper bound (seconds) of the polite delay between resolves — "
+                    "matches random.uniform(2.0, 3.5) at checker.py:259.",
+    )
+    contact_check_cooldown_seconds: int = Field(
+        default=900,
+        validation_alias="CONTACT_CHECK_COOLDOWN_SECONDS",
+        description="How long a degraded checker rests before a fresh control-probe "
+                    "is attempted (D-04 checker recovery).",
+    )
+    contact_check_daily_cap: int = Field(
+        default=400,
+        validation_alias="CONTACT_CHECK_DAILY_CAP",
+        description="Per-checker resolves/day ceiling (durable-counted from "
+                    "contacts_cache writes today in Plan 02).",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Парсит CORS_ALLOWED_ORIGINS в list для FastAPI CORSMiddleware."""

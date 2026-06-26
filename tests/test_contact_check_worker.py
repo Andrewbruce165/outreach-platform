@@ -24,6 +24,22 @@ from app.services.contact_check_worker import ContactCheckWorker
 pytestmark = pytest.mark.asyncio
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _cleanup_resolution_state(async_db_session):
+    """Delete committed pending contacts / cache rows after each test.
+
+    The session-scoped test DB is NOT rolled back for committed rows. _tick()
+    resolves ANY workspace's pending contacts globally, so leftover pending rows
+    (e.g. the Phase 14 selection-skip / mobile-first tests, or a partial batch)
+    would leak into a later worker test and break its assertions. Clean up
+    post-test to keep the worker tests isolated.
+    """
+    yield
+    await async_db_session.execute(text("DELETE FROM contacts_cache"))
+    await async_db_session.execute(text("DELETE FROM contacts WHERE tg_status = 'pending'"))
+    await async_db_session.commit()
+
+
 # ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 
@@ -336,3 +352,161 @@ async def test_tick_skips_when_checker_auth_status_not_ok(
     ) as mock:
         await worker._tick()
         mock.assert_not_awaited()
+
+
+# ─── Phase 14 Wave-0 RED scaffold ────────────────────────────────────────────
+# RESV-05/D-11 selection-skip, RESV-04/D-08 mobile-first, RESV-06/D-09 confidence.
+# Intentionally RED until Wave 2-3 add the JOIN LATERAL restriction/lifecycle
+# gate, mobile-first ORDER BY, and confidence/source writes.
+
+
+async def test_selection_skips_restricted(
+    async_db_session, test_workspace, test_sender_factory, test_contacts_factory
+):
+    """RESV-05/D-11: a checker with restriction_status='spam_limited' is NOT picked
+    by _tick — its pending contacts stay pending.
+
+    This is the root-cause fix (the hole that let the broken checker keep lying):
+    the JOIN LATERAL currently filters only auth_status='ok', so a semantically
+    correct spam_limited flag does NOT stop the worker. Wave 2 adds
+    `AND restriction_status='none'` to the selection.
+    """
+    await test_sender_factory(
+        role="checker",
+        auth_status="ok",
+        restriction_status="spam_limited",
+        slug="spam-limited-checker",
+    )
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(),
+    ) as mock:
+        await worker._tick()
+        mock.assert_not_awaited()
+
+    rows = (
+        await async_db_session.execute(
+            text("SELECT tg_status FROM contacts WHERE id = ANY(:ids)"),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchall()
+    assert all(r.tg_status == "pending" for r in rows)
+
+
+async def test_selection_skips_paused(
+    async_db_session, test_workspace, test_sender_factory, test_contacts_factory
+):
+    """RESV-05/D-11: a checker with lifecycle_status='paused' is NOT picked by _tick."""
+    await test_sender_factory(
+        role="checker",
+        auth_status="ok",
+        lifecycle_status="paused",
+        slug="paused-checker",
+    )
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(),
+    ) as mock:
+        await worker._tick()
+        mock.assert_not_awaited()
+
+    rows = (
+        await async_db_session.execute(
+            text("SELECT tg_status FROM contacts WHERE id = ANY(:ids)"),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchall()
+    assert all(r.tg_status == "pending" for r in rows)
+
+
+async def test_mobile_first_order(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """RESV-04/D-08: given mixed +79… (mobile) and +73… (landline) pending, the
+    claim SELECT returns mobiles first.
+
+    Mobiles (+79…) are ~50% live and should drain before landlines. We seed a
+    landline FIRST (older created_at) and a mobile SECOND; with mobile-first
+    ordering the worker must still hand the +79 number to check_phones before
+    the +73 one even though it was created later. Asserted via the order of
+    phones passed to check_phones with batch_size=1.
+    """
+    # Landline created first (older), mobile created second (newer).
+    await test_contacts_factory(count=1, tg_status="pending", phone="+73491234567")
+    await test_contacts_factory(count=1, tg_status="pending", phone="+79991234567")
+
+    def _fake(phones, **kwargs):
+        return {
+            "checked": len(phones),
+            "registered": len(phones),
+            "not_registered": 0,
+            "flood_wait_hit": False,
+            "results": [
+                {"phone": p, "is_registered": True, "telegram_id": 1} for p in phones
+            ],
+        }
+
+    worker = ContactCheckWorker()
+    worker.batch_size = 1  # one phone per tick → first claimed phone is observable
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda **kw: _fake(**kw)),
+    ) as mock:
+        await worker._tick()
+
+    assert mock.await_count == 1
+    first_phones = mock.await_args.kwargs["phones"]
+    assert first_phones == ["+79991234567"], (
+        "mobile (+79…) must be claimed before landline (+73…) regardless of created_at"
+    )
+
+
+async def test_confidence_written(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """RESV-06/D-09: a clean-probe checker writes tg_confidence='high',
+    tg_resolved_by=<checker_id>, tg_probe_state='clean' on resolution.
+
+    Both registered and not_registered results from a clean (non-degraded) checker
+    carry high-confidence provenance so downstream code can trust the result.
+    """
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+    reg, notreg = contacts[0], contacts[1]
+    fake_summary = {
+        "checked": 2,
+        "registered": 1,
+        "not_registered": 1,
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": reg.phone, "is_registered": True, "telegram_id": 555},
+            {"phone": notreg.phone, "is_registered": False},
+        ],
+    }
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=fake_summary),
+    ):
+        await worker._tick()
+
+    rows = (
+        await async_db_session.execute(
+            text(
+                "SELECT tg_status, tg_confidence, tg_resolved_by, tg_probe_state "
+                "FROM contacts WHERE id = ANY(:ids)"
+            ),
+            {"ids": [str(reg.id), str(notreg.id)]},
+        )
+    ).fetchall()
+    assert len(rows) == 2
+    for r in rows:
+        assert r.tg_confidence == "high", "clean-probe checker → high confidence"
+        assert str(r.tg_resolved_by) == str(test_checker.id), "resolver-provenance (D-09)"
+        assert r.tg_probe_state == "clean"

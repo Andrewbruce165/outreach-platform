@@ -451,6 +451,12 @@ class Contact(Base):
     tg_username_resolved = Column(String(50), nullable=True)
     tg_error = Column(Text, nullable=True)
     tg_checked_at = Column(DateTime(timezone=True), nullable=True)
+    # Phase 14 (migration 034, RESV-06/D-09): resolution confidence/source.
+    # The migration is prod source-of-truth; this ORM mirror is for the test-overlay
+    # which builds schema via Base.metadata.create_all, not migrations.
+    tg_confidence = Column(String(10), nullable=True)        # 'high'|'low'|NULL
+    tg_resolved_by = Column(UUID(as_uuid=True), nullable=True)  # checker sender_id (resolver-provenance, D-09)
+    tg_probe_state = Column(String(10), nullable=True)       # 'clean'|'suspect'|NULL
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

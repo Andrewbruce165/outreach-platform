@@ -952,3 +952,62 @@ async def test_message_factory(async_db_session: AsyncSession):
         return rows
 
     return _make
+
+
+# ─── Phase 14 fixtures: Telethon client mock (probe / importContacts fallback) ──
+
+@pytest_asyncio.fixture
+async def mock_telethon_client():
+    """Minimal mocked Telethon client for the Phase 14 checker tests.
+
+    Phase 14 needs to exercise the resolve path (`ResolvePhoneRequest`), the
+    importContacts fallback (`ImportContactsRequest`) and the address-book cleanup
+    (`DeleteContactsRequest`) without a live Telegram session (RESV-01/D-02). No
+    such fixture existed in conftest before Phase 14 (verified 2026-06-26), so this
+    is the canonical mock the 14-03 `test_import_fallback_and_cleanup` test depends
+    on.
+
+    The returned object is an `AsyncMock` whose `__call__` (i.e. `await client(req)`)
+    dispatches on the request type name and returns a configurable response. Tests
+    drive behaviour by mutating the per-request-type response map, e.g.:
+
+        client = mock_telethon_client
+        client.set_response("ResolvePhoneRequest", _resolved_users(telegram_id=123))
+        client.set_response("ImportContactsRequest", _imported(telegram_id=123))
+        res = await client(SomeResolvePhoneRequest(phone="+79990001111"))
+
+    `client.calls` records `(request_type_name, request_obj)` tuples in order so a
+    test can assert that `DeleteContactsRequest` was invoked after an import.
+    """
+    from unittest.mock import AsyncMock
+
+    class _MockTelethonClient(AsyncMock):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # request-type-name -> response object (or callable(request)->response)
+            self._responses: dict[str, object] = {}
+            # ordered log of (request_type_name, request_obj)
+            self.calls: list[tuple[str, object]] = []
+
+        def set_response(self, request_type_name: str, response) -> None:
+            self._responses[request_type_name] = response
+
+        async def __call__(self, request, *args, **kwargs):  # noqa: D401
+            name = type(request).__name__
+            self.calls.append((name, request))
+            resp = self._responses.get(name)
+            if callable(resp):
+                return resp(request)
+            return resp
+
+        # Connection lifecycle no-ops so `async with` / connect/disconnect work.
+        async def connect(self):
+            return None
+
+        async def disconnect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return True
+
+    return _MockTelethonClient()
