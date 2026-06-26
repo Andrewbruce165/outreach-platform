@@ -408,7 +408,11 @@ class QueueWorker:
         )
         # Expected-by-now = daily limit × elapsed fraction × jitter (D-08, fresh
         # each call so openings don't form a machine grid). No floor/ceil — the
-        # jitter already blurs the boundary, and PG compares int < numeric fine.
+        # jitter already blurs the boundary. NOTE: the SELECT compares the bigint
+        # COUNT against CAST(:expected_now AS DOUBLE PRECISION); without the cast PG
+        # infers the untyped bind as bigint and truncates a fractional expected_now
+        # (e.g. 0.86 → 0), silently blocking all new dialogs until expected reaches
+        # an integer — keep the explicit float cast so the gate stays fractional.
         expected_now = (
             camp_row.c_cap * frac * random.uniform(PACE_JITTER_LOW, PACE_JITTER_HIGH)
         )
@@ -476,7 +480,7 @@ class QueueWorker:
                                WHERE paced.sender_id = mq.sender_id
                                  AND paced.campaign_id = mq.campaign_id
                                  AND paced.status = 'sent'
-                                 AND paced.finished_at >= :window_start_utc) < :expected_now)
+                                 AND paced.finished_at >= :window_start_utc) < CAST(:expected_now AS DOUBLE PRECISION))
                       )
                     ORDER BY mq.priority DESC, mq.created_at ASC
                     LIMIT 8
