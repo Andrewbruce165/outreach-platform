@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 14 (reliable-contact-resolution) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 14
-Last activity: 2026-06-26 -- Phase 14 execution started
+Phase: 14 (reliable-contact-resolution) — BLOCKED at 14-04 live smoke (gap-closure needed)
+Plan: 3 of 4 complete (14-01/02/03 merged + deployed, 768 tests GREEN); 14-04 Tasks 1-3 done, Task-4 smoke FAILED
+Status: Phase 14 NOT complete — live activation reproduced 0% mobile throttle; prod rolled back to baseline
+Last activity: 2026-06-26 -- 14-04 live-smoke failure, prod restored
 
-Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — plan 04 partial, UAT pending)
+Progress: [████████░░] 3/4 plans (14-04 blocked at human-verify smoke)
 
 ## Performance Metrics
 
@@ -147,7 +147,7 @@ None yet.
 
 - Phase 4 первым планом — аудит существующего webhook + function calling (вынести с уровня sender/AIContext на уровень кампании)
 - rotation.py:59,89,122,138 still references DROPPED context_contact_assignments table — 04-04 must rewrite per AUDIT TODO #6 (context_id → campaign_id signature)
-- 14-04 HALTED at Task-4: running prod api image (built 10:59, pre-merge) has ZERO Phase-14 guards (no probe_checker/resolve_phone_with_fallback) and migration 034 NOT applied (prod at 033). Activating the 2 checkers fed them to the OLD uncapped/no-probe worker which re-poisoned 74 rows at 0% mobile-live. Activation rolled back, data restored to pre-activation baseline. MUST deploy (docker compose up -d --build api → applies mig 034 + Phase-14 code), verify container has probe_checker + tg_probe_state, THEN re-run Task-2 activation + Task-4 live probe.
+- **14-04 live smoke FAILED → Phase 14 needs gap-closure (2026-06-26).** Waves 1-3 merged + DEPLOYED (mig 034 applied, probe_checker/resolve_phone_with_fallback/tg_probe_state confirmed in running container; 768 tests GREEN). Re-activated the 2 "healthy" checkers (sender-7979031303/8364639216) under the deployed guards — they STILL produced the throttle signature: `checked=20..30 reg=0 flood=True` = 0% mobile-registered (calibration expects ~50%). **Code gap:** on `flood=True` the worker finalized empty results as `tg_status='not_registered'` with `tg_confidence='high'`/`tg_probe_state='clean'`; control-probe fired NO `sender_restriction_events`, suspect-rollback never engaged. Prod fully rolled back (UPDATE 50 → pending, DELETE 50 false cache; 49 control intact; baseline not_registered=5/pending=14484/registered=53; 0 provenance). All 3 checkers parked, api restarted, worker idle. Gap-closure scope in `.planning/notes/checker-false-negatives.md` §"Часть 2": (1) flood/throttle-aware finalization (never trust flood resolve as not_registered; mark checker restricted + pull from rotation); (2) investigate whether throttle is pool-wide (long cooldown? @username-only resolve?). Docs RESV-07 done (CLAUDE.md commit 9669e7c).
 
 ### Quick Tasks Completed
 
