@@ -23,6 +23,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [x] **Phase 9: Cold-Contact Failover** — не-контактированные задачи замёрзшего аккаунта уходят на здоровые; активные диалоги ждут свой аккаунт (completed 2026-06-24)
 - [x] **Phase 10: Pool Visibility & Restriction Audit** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж; durable аудит всех предупреждений/блокировок аккаунтов с привязкой к предшествующей активности (completed 2026-06-24)
 - [ ] **Phase 11: Agent/Campaign Field Split & Prompt Assembly** — развести слои Агент(КТО)/Кампания(ЧТО), убрать дубли в системном промпте (один источник на блок), новые поля (скорость ответа, ход разговора, аргументы и факты, базы знаний) + перестройка UI визарда
+- [ ] **Phase 14: Reliable Contact Resolution** — надёжная и масштабируемая проверка контактов в TG: health-probe на заведомо-живых, burst-кап + cooldown, пул чекеров с ротацией, перепроверка контаминированных данных (диагноз: единственный чекер занижал живых в ~15–20 раз)
 
 ## Phase Details
 
@@ -353,6 +354,34 @@ Plans:
 
 - [x] 13-02-PLAN.md — PACE_JITTER constants + _window_elapsed_fraction helper + expected-by-now pacing predicate in _process_next_for_sender (queue.py only, D-09) [Wave 2, depends_on: 13-01]
 
+### Phase 14: Reliable Contact Resolution
+
+**Goal:** Сделать проверку контактов (phone → есть ли в Telegram) надёжной и масштабируемой, чтобы кампании доставали всех достижимых лидов, а не сливали их молча из-за деградировавшего чекера.
+**Requirements**: RESV-01..RESV-07 (см. REQUIREMENTS.md)
+**Depends on:** Phase 2 (checker / contacts_cache / contact_check_worker). Связано с Phase 10 (sender_restriction_events, restriction_status).
+**Plans:** 0 plans
+
+**Контекст (расследование 2026-06-26 — `.planning/notes/checker-false-negatives.md`):**
+
+- Единственный checker `sender-8428118140` получил теневое ограничение contacts-API → систематические ложноотрицательные. Рапортовал **2.5%** живых (53/2148) против настоящих **~26%** в целом / **~50%+** среди мобильных. Занижение в ~15–20 раз.
+- Два режима троттла: **мягкий burst** (~45–50 быстрых резолвов подряд → редкие ложные «нет», восстановление минуты) и **жёсткий shadow-ban** (тысячи/день изо дня в день → почти всё ложное «нет», 0.07%, восстановление дни).
+- Доказано: тот же номер/момент — checker пусто, два здоровых сендера резолвят обоими методами (resolvePhone + importContacts). Метод-асимметрии нет; дело в поведенческом профиле аккаунта (объём resolve).
+- **Часть 1 уже выполнена вручную:** чекер на паузе (`auth_status=restricted`, `restriction_status=spam_limited`, `lifecycle_status=paused`), удалено 2216 ложных строк `contacts_cache`, **2110** контактов возвращены в `pending`. Активных чекеров сейчас НЕТ → проверка остановлена (безопасное состояние).
+- Готовый health-probe набор: **49** заведомо-живых номеров (registered из папки «Barter_список пещивиков Ромы», `folder_id 4ecdde17-f454-4a1b-b4ba-732fd6b9449f`).
+
+**Success Criteria** (what must be TRUE):
+
+1. Затроттленный/деградировавший чекер авто-детектится в пределах N резолвов (health-probe на контролях) и перестаёт продуцировать `not_registered`.
+2. `not_registered` несёт confidence/source; результаты деградировавшего чекера никогда не финализируются как истина.
+3. 14k контактов проверяются end-to-end по пулу чекеров без жёсткого shadow-ban (контроль-проба держит высокую точность).
+4. Возвращённые в `pending` 2110 + 699 (папка Barter) контактов перепроверены здоровыми резолверами.
+5. `contact_check_worker` никогда не выбирает чекер с флагом `restricted`/`paused` (сейчас фильтрует только `role='checker' AND auth_status='ok'` — эта дыра позволила битому чекеру продолжать врать).
+
+**Открытая развилка (решить в discuss/plan):** отдельный управляемый пул чекеров (probe + кап + ротация + отдых) vs ленивый резолв при отправке самим сендером (низкий объём, но без предварительного знания «сколько живых»).
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 14 to break down)
+
 ---
 
 ## Progress
@@ -370,6 +399,7 @@ Plans:
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
+| 14. Reliable Contact Resolution | 0/? | Not planned | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**

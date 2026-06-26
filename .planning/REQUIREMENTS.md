@@ -159,6 +159,18 @@
 - [x] **PACE-06**: Jitter (`random.uniform(PACE_JITTER_LOW, PACE_JITTER_HIGH)`) is applied to `expected_now` per evaluation so new-dialog openings don't form a machine grid; the worker sends exactly ONE item per `_process_next_for_sender` call so the `LIMIT 8` batch never multi-fires; follow-ups unaffected (D-04, D-08)
 - [x] **PACE-07**: Follow-ups and AI replies are NEVER throttled by pacing (only cold first-touches via the queue are paced); `_check_rate_limits` (4/20/150 + 15/h) stays untouched and pacing-free (verified by introspection) (D-07, D-10, CLAUDE.md guard)
 
+### Reliable Contact Resolution (Phase 14 — derived from investigation 2026-06-26, see `.planning/notes/checker-false-negatives.md`)
+
+- [ ] **RESV-01**: Health-probe — между резолвами чекер периодически проверяет набор заведомо-живых контрольных номеров (стартовый набор: 49 registered из папки «Barter», `folder_id 4ecdde17-…`); контроль вернул `not_registered` → чекер помечается затроттленным (`restriction_status='spam_limited'` + событие в `sender_restriction_events`), выводится из ротации на cooldown, текущая пачка результатов помечается suspect и не финализируется. Обязательный механизм: «магического капа» нет — троттл молчаливый и стохастичный.
+- [ ] **RESV-02**: Per-account burst-кап + cooldown — резолвов на пачку ≤ ~30 (под эмпирическим онсетом мягкого троттла ~45–50 при темпе 2–3с), минимальный темп 2–3с между резолвами, cooldown между пачками, дневной кап на аккаунт; калибруется и выносится в env-knobs (паттерн `CONTACT_CHECK_*`).
+- [ ] **RESV-03**: Пул из нескольких checker-аккаунтов + ротация — resolve-нагрузка размазана так, чтобы ни один аккаунт не словил жёсткий shadow-ban (тысячи/день); ротация учитывает `restriction_status`, `restricted_until` и даёт аккаунтам отдых.
+- [ ] **RESV-04**: Перепроверка контаминированных данных — вернутые в `pending` 2110 контактов (+ 699 из папки «Barter») перечекиваются здоровыми резолверами; результаты `not_registered`, полученные от деградировавшего чекера, не доверяются как финальные.
+- [ ] **RESV-05**: `contact_check_worker` selection пропускает чекеры с `restriction_status != 'none'` ИЛИ `lifecycle_status='paused'` (сейчас фильтрует только `role='checker' AND auth_status='ok'` — дыра, позволившая битому чекеру продолжать врать).
+- [ ] **RESV-06**: `not_registered` несёт confidence/source (каким чекером и когда получен) — чтобы отличать «честное отсутствие» от результата подозрительного аккаунта и не строить на нём аналитику/дедуп.
+- [ ] **RESV-07**: Docs — поправить раздел «Семантика checker'а (is_registered)» в `/root/CLAUDE.md` (сейчас утверждает, что checker здоров на 2026-06-23) + зафиксировать диагноз и калибровку в `.planning/notes/checker-false-negatives.md`.
+
+**Открытая развилка (решить в discuss/plan Phase 14):** отдельный управляемый пул чекеров (probe + кап + ротация + отдых) vs ленивый резолв при отправке самим сендером.
+
 ## v2 Requirements
 
 ### Advanced Outreach
