@@ -37,6 +37,7 @@ NEVER bare ``docker compose run --rm api pytest`` (conftest guard DROP SCHEMA on
 
 import inspect
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -261,6 +262,31 @@ async def _count_since_window_start_sent(db, *, sender_id, campaign_id, since) -
     """), {"sid": str(sender_id), "cid": str(campaign_id), "since": since})).scalar()
 
 
+@contextmanager
+def _pin_pacing(*, window_start_utc, frac, jitter=1.0):
+    """Pin the two non-deterministic inputs to the pacing predicate so the
+    expected-by-now math is exact and the assertion direction cannot flip on
+    wall-clock or RNG:
+
+      * ``_window_elapsed_fraction`` (wall-clock dependent) → fixed
+        ``(window_start_utc, frac)``;
+      * ``random.uniform`` (per-call jitter) → fixed ``jitter``.
+
+    With both pinned, ``expected_now == max_new_dialogs_per_day * frac * jitter``
+    deterministically. The real ``_window_elapsed_fraction`` is exercised
+    independently by the PACE-02 unit test; here we only need the predicate's
+    behaviour for a KNOWN (window_start, expected_now). ``window_start_utc`` must
+    sit at/after any ``finished_at`` rows the test wants the pace numerator to
+    count and before any it wants excluded.
+    """
+    def _fixed(**_kwargs):
+        return window_start_utc, frac
+
+    with patch.object(queue_module, "_window_elapsed_fraction", _fixed), \
+         patch.object(queue_module.random, "uniform", lambda _lo, _hi: jitter):
+        yield
+
+
 def _assert_pacing_predicate_wired():
     """Guard that the expected-by-now pacing predicate is actually wired into the
     candidate SELECT (RESEARCH Pattern 2 / threat-model: the implementation must
@@ -307,24 +333,32 @@ async def test_pacing_gate(async_db_session, test_running_campaign_factory):
     wid = camp["workspace_id"]
     cid = camp["id"]
 
-    # ── Case 1: OVER expected ⇒ blocked.
-    # High cap so Phase 12 cap can't be what blocks; tiny daily limit so
-    # expected_now = limit × frac ≤ 1 at essentially any time of day.
-    await _set_cap(async_db_session, campaign_id=cid, cap=1)
+    # Pacing inputs are pinned via _pin_pacing so the assertion direction is set
+    # purely by (count_opened vs expected_now), never by wall-clock fraction or
+    # jitter — this is what keeps the test deterministic across time-of-day/RNG.
+    # The daily cap is deliberately set ABOVE count_opened so the Phase 12 cap is
+    # NOT the binding constraint — the expected-by-now pace predicate is.
+    now = datetime.now(timezone.utc)
+    ws = now - timedelta(hours=2)  # window start 2h ago: seeded sent rows (NOW()) count
 
-    # One new dialog already opened since window start → count_opened (1) >=
-    # expected_now (≤1) at virtually any fraction → a fresh new dialog is blocked.
+    # ── Case 1: OVER expected ⇒ blocked.
+    # cap=10 (cap not binding: 2 opened < 10); frac=0.1 → expected_now = 10×0.1 = 1.0;
+    # 2 new dialogs opened since window start → count_opened (2) ≥ expected_now (1.0)
+    # ⇒ a fresh new dialog is paced out.
+    await _set_cap(async_db_session, campaign_id=cid, cap=10)
     await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
                             campaign_id=cid, recipient_phone="+79991110001")
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid, recipient_phone="+79991110002")
 
     blocked_qid = await _insert_pending_item(
         async_db_session, workspace_id=wid, sender_id=sid,
-        campaign_id=cid, recipient_phone="+79991110002",
+        campaign_id=cid, recipient_phone="+79991110003",
     )
 
     worker = QueueWorker()
     captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
-    with cm_rate, cm_pause, cm_send:
+    with _pin_pacing(window_start_utc=ws, frac=0.1), cm_rate, cm_pause, cm_send:
         await worker._process_next_for_sender(sid)
 
     assert blocked_qid not in captured["picked"], (
@@ -342,9 +376,8 @@ async def test_pacing_gate(async_db_session, test_running_campaign_factory):
     sid2 = senders2[0].id
     wid2 = camp2["workspace_id"]
     cid2 = camp2["id"]
-    # Large limit → expected_now = limit × frac ≫ 1 except in the first seconds
-    # of the UTC day; count_opened == 0 ⇒ 0 < expected ⇒ allowed.
-    await _set_cap(async_db_session, campaign_id=cid2, cap=1000)
+    # cap=10, frac=0.9 → expected_now = 10×0.9 = 9.0; count_opened == 0 ⇒ 0 < 9 ⇒ allowed.
+    await _set_cap(async_db_session, campaign_id=cid2, cap=10)
 
     allowed_qid = await _insert_pending_item(
         async_db_session, workspace_id=wid2, sender_id=sid2,
@@ -353,7 +386,7 @@ async def test_pacing_gate(async_db_session, test_running_campaign_factory):
 
     worker2 = QueueWorker()
     captured2, cm_rate2, cm_pause2, cm_send2 = _run_worker_capturing_picked(worker2)
-    with cm_rate2, cm_pause2, cm_send2:
+    with _pin_pacing(window_start_utc=ws, frac=0.9), cm_rate2, cm_pause2, cm_send2:
         await worker2._process_next_for_sender(sid2)
 
     assert allowed_qid in captured2["picked"], (
