@@ -447,3 +447,260 @@ async def test_anomalous_all_empty_batch_treated_as_throttle(
     ).fetchone()
     assert checker.restriction_status == "spam_limited"
     assert checker.lifecycle_status == "paused"
+
+
+# ─── Post-batch REST (Plan 14-07, Q3 prevention gap) ─────────────────────────
+#
+# The 14-06 spike (Q3): one batch (≤ burst_cap 30) is safe, but the worker chains
+# batch-after-batch on the SAME checker with only a ~5s poll between them, so the
+# cumulative burst crosses the ~45-50 throttle onset within ~2 batches. The fix is
+# a BENIGN per-checker post-batch REST: after a checker finishes a (non-raising)
+# resolve batch the worker stamps senders.checker_rest_until = NOW() + rest, and the
+# selection LATERAL excludes a checker while that rest is in the future. With ≥2
+# healthy checkers the existing rotation naturally alternates them (≈2x throughput,
+# no parallel execution). The rest is SEPARATE from the restriction machinery: it
+# touches ONLY checker_rest_until — never restriction_status / lifecycle_status /
+# restricted_until, writes NO sender_restriction_events row, and a rested checker
+# waking up is just re-selected (no recovery control-probe, which keys on
+# restricted_until — a column the rest never touches).
+#
+# These tests drive _tick() DIRECTLY (so _probe_cycle never runs) and isolate the
+# rest contract from the degrade path: a CLEAN batch (registered results, no flood,
+# no anomaly) still rests the checker, and the rest leaves the checker otherwise
+# healthy.
+
+
+def _clean_registered_summary(phones: list[str]) -> dict:
+    """A clean, healthy resolve batch: every phone registered, no flood/anomaly.
+
+    Used by the rest tests so the ONLY state change attributable to the batch is the
+    benign post-batch rest — there is no throttle signal, so the inline degrade path
+    (Plan 14-05) does not fire and restriction state must stay pristine."""
+    return {
+        "checked": len(phones),
+        "registered": len(phones),
+        "not_registered": 0,
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": p, "is_registered": True, "telegram_id": 1000 + i, "from_cache": False}
+            for i, p in enumerate(phones)
+        ],
+    }
+
+
+async def test_post_batch_rest_excludes_checker_until_elapsed(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """After a clean batch, senders.checker_rest_until is set ~NOW()+rest in the
+    future, and on the NEXT tick (rest still future) the checker is NOT selected —
+    check_phones is not awaited and the remaining contacts stay pending."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    # Two contacts but batch_size 1 so the second stays pending for the next tick.
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+    checker_id = str(test_checker.id)
+
+    worker = ContactCheckWorker()
+    worker.batch_size = 1
+
+    # Tick 1: resolves ONE contact cleanly → checker put on post-batch rest.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda phones, **kw: _clean_registered_summary(phones)),
+    ):
+        await worker._tick()
+
+    rest_row = (
+        await async_db_session.execute(
+            text("SELECT checker_rest_until FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert rest_row.checker_rest_until is not None, "clean batch must stamp checker_rest_until"
+    # Rest is in the future (≈ NOW() + contact_check_rest_seconds).
+    future = (
+        await async_db_session.execute(
+            text("SELECT (checker_rest_until > NOW()) AS f FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert future.f is True, "post-batch rest must be in the future"
+
+    # Tick 2: the checker is resting → the LATERAL gate excludes it.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda phones, **kw: _clean_registered_summary(phones)),
+    ) as mock2:
+        await worker._tick()
+        mock2.assert_not_awaited()
+
+    pending = (
+        await async_db_session.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM contacts "
+                "WHERE id = ANY(:ids) AND tg_status = 'pending'"
+            ),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchone()
+    assert pending.n == 1, "the un-resolved contact stays pending while the checker rests"
+
+
+async def test_second_healthy_checker_selected_while_first_rests(
+    async_db_session, test_workspace, test_sender_factory, test_contacts_factory
+):
+    """With TWO healthy checkers, while checker A rests after its batch, checker B IS
+    selected on the next tick — the existing rotation alternates them (≈2x throughput,
+    no parallel execution). Proven by check_phones being awaited on BOTH ticks."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    await test_sender_factory(role="checker", slug="checker-a")
+    await test_sender_factory(role="checker", slug="checker-b")
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    worker.batch_size = 1
+
+    used_slugs: list[str] = []
+
+    async def _record(phones, **kw):
+        used_slugs.append(kw.get("checker_slug"))
+        return _clean_registered_summary(phones)
+
+    # Tick 1: one checker resolves contact #1 and goes to rest.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=_record),
+    ) as mock1:
+        await worker._tick()
+        mock1.assert_awaited()
+
+    # Tick 2: the first checker rests → the LATERAL gate routes contact #2 to the
+    # OTHER healthy checker (rotation alternation).
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=_record),
+    ) as mock2:
+        await worker._tick()
+        mock2.assert_awaited(), "second healthy checker must be selected while the first rests"
+
+    # Both contacts resolved, and two DISTINCT checkers did the work.
+    resolved = (
+        await async_db_session.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM contacts "
+                "WHERE id = ANY(:ids) AND tg_status = 'registered'"
+            ),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchone()
+    assert resolved.n == 2, "both contacts resolve across the two alternating checkers"
+    assert len(set(used_slugs)) == 2, "two distinct checkers must have been used (rotation)"
+
+
+async def test_post_batch_rest_touches_only_rest_column(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """The rest path sets ONLY checker_rest_until — restriction_status stays 'none',
+    lifecycle_status stays 'active', restricted_until stays NULL, and NO
+    sender_restriction_events row is written by the rest of a clean batch."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+    phones = [c.phone for c in contacts]
+    checker_id = str(test_checker.id)
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda phones, **kw: _clean_registered_summary(phones)),
+    ):
+        await worker._tick()
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, lifecycle_status, restricted_until, "
+                "checker_rest_until, auth_status FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.checker_rest_until is not None, "rest must be stamped"
+    assert row.restriction_status == "none", "rest must NOT touch restriction_status"
+    assert row.lifecycle_status == "active", "rest must NOT touch lifecycle_status"
+    assert row.restricted_until is None, "rest must NOT touch restricted_until"
+    assert row.auth_status == "ok"
+
+    events = (
+        await async_db_session.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM sender_restriction_events WHERE sender_id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert events.n == 0, "a benign post-batch rest must write NO sender_restriction_events row"
+
+
+async def test_rested_checker_reselected_without_recovery_probe(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """Once checker_rest_until <= NOW() the checker is selected again WITHOUT going
+    through the degradation recovery control-probe (it was never degraded — the
+    recovery path in _recover_checkers keys on restriction_status='spam_limited'
+    + restricted_until, which the rest never touches)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+    checker_id = str(test_checker.id)
+
+    worker = ContactCheckWorker()
+    worker.batch_size = 1
+
+    # Tick 1: clean batch → rest stamped in the future.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda phones, **kw: _clean_registered_summary(phones)),
+    ):
+        await worker._tick()
+
+    # Manually expire the rest (simulate rest elapsed) — set it in the past.
+    await async_db_session.execute(
+        text(
+            "UPDATE senders SET checker_rest_until = NOW() - INTERVAL '1 minute' "
+            "WHERE id = :id"
+        ),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    # _recover_checkers must be a no-op for a rested (never-restricted) checker —
+    # it only probes restriction_status='spam_limited' rows. Prove no probe fires.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda phones, **kw: _clean_registered_summary(phones)),
+    ) as probe_mock:
+        await worker._recover_checkers()
+        probe_mock.assert_not_awaited(), (
+            "a rested (never-degraded) checker must NOT go through the recovery control-probe"
+        )
+
+    # Tick 2 (rest elapsed): the checker is selected again and resolves contact #2.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=lambda phones, **kw: _clean_registered_summary(phones)),
+    ) as mock2:
+        await worker._tick()
+        mock2.assert_awaited(), "a checker whose rest has elapsed must be re-selected"
+
+    resolved = (
+        await async_db_session.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM contacts "
+                "WHERE id = ANY(:ids) AND tg_status = 'registered'"
+            ),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchone()
+    assert resolved.n == 2, "both contacts resolve once the rest has elapsed"
