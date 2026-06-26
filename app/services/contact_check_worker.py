@@ -4,7 +4,13 @@ Background asyncio task в lifespan API-контейнера:
 
 - SELECT pending contacts вместе с workspace's active checker через JOIN LATERAL
   (workspace-isolated: ``s.workspace_id = c.workspace_id`` AND ``role='checker'``
-  AND ``auth_status='ok'``).
+  AND ``auth_status='ok'``). Phase 14 (RESV-05/D-11) добавляет
+  ``restriction_status='none'`` AND ``lifecycle_status <> 'paused'`` AND
+  ``(restricted_until IS NULL OR restricted_until <= NOW())`` — degraded/paused/
+  cooling-down checker НЕ выбирается, поэтому ``spam_limited``-флаг реально
+  останавливает worker (закрытая дыра «checker keeps lying»). Mobiles (+79…)
+  дренируются первыми (RESV-04/D-08), а per-checker daily-cap считается из
+  durable источника (``contacts_cache`` writes today, RESV-02/D-10).
 - Группируем по checker_id, батчем зовём
   ``checker_service.check_phones(...)`` — он уже умеет lock per checker_slug,
   FloodWait handling и polite delay 2–3.5s.
@@ -31,6 +37,7 @@ from typing import Optional
 
 from sqlalchemy import text
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.checker import checker_service
 
@@ -40,7 +47,12 @@ logger = logging.getLogger(__name__)
 # Env-overridable knobs (RESEARCH §"ContactCheckWorker — стратегия rate-limit"
 # + CONTEXT C-06). Defaults: batch=5, poll=5s — ~30 phones/min per checker
 # с учётом polite delay 2–3.5s внутри CheckerService.check_phones.
-CONTACT_CHECK_BATCH_SIZE = int(os.environ.get("CONTACT_CHECK_BATCH_SIZE", "5"))
+# CONTACT_CHECK_BATCH_SIZE is now an OPTIONAL back-compat override (sentinel None
+# when unset) — the effective per-batch claim LIMIT defaults to
+# settings.contact_check_burst_cap (RESV-02/D-10). An explicit env value can only
+# LOWER the cap (it is min()'d with burst_cap); it can never uncap the worker.
+_BATCH_SIZE_OVERRIDE = os.environ.get("CONTACT_CHECK_BATCH_SIZE")
+CONTACT_CHECK_BATCH_SIZE = int(_BATCH_SIZE_OVERRIDE) if _BATCH_SIZE_OVERRIDE else None
 CONTACT_CHECK_POLL_INTERVAL = int(os.environ.get("CONTACT_CHECK_POLL_INTERVAL", "5"))
 
 
@@ -55,7 +67,15 @@ class ContactCheckWorker:
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._running = False
-        self.batch_size = CONTACT_CHECK_BATCH_SIZE
+        # RESV-02/D-10: the per-batch claim LIMIT is the burst-cap (≤ the ~45–50
+        # empirical throttle onset). An explicit CONTACT_CHECK_BATCH_SIZE env can
+        # only LOWER it (min with burst_cap) — never uncap the worker.
+        settings = get_settings()
+        burst_cap = settings.contact_check_burst_cap
+        if CONTACT_CHECK_BATCH_SIZE is not None:
+            self.batch_size = min(CONTACT_CHECK_BATCH_SIZE, burst_cap)
+        else:
+            self.batch_size = burst_cap
         self.poll_interval = CONTACT_CHECK_POLL_INTERVAL
 
     def start(self):
@@ -135,18 +155,42 @@ class ContactCheckWorker:
                             WHERE workspace_id = c.workspace_id
                               AND role = 'checker'
                               AND auth_status = 'ok'
+                              -- RESV-05/D-11: a degraded/paused checker is NEVER
+                              -- selected, so the spam_limited flag actually stops
+                              -- the worker (the hole that let the broken checker lie).
+                              AND restriction_status = 'none'
+                              AND lifecycle_status <> 'paused'
+                              -- RESV-02/D-10 cooldown gate: a checker resting on a
+                              -- future restricted_until is skipped even if its status
+                              -- was cleared early (durable — survives api restart).
+                              AND (restricted_until IS NULL
+                                   OR restricted_until <= NOW())
+                              -- RESV-02/D-10 durable daily-cap: count today's
+                              -- contacts_cache writes by this checker (NOT an
+                              -- in-memory counter, Pitfall 5). Over-quota → excluded.
+                              AND (
+                                  SELECT COUNT(*)
+                                  FROM contacts_cache cc
+                                  WHERE cc.sender_id = senders.id
+                                    AND cc.updated_at >= date_trunc('day', now())
+                              ) < :daily_cap
                             LIMIT 1
                         ) s ON TRUE
                         WHERE c.tg_status = 'pending'
                           AND (c.phone IS NOT NULL OR c.username IS NOT NULL)
                           AND (c.tg_checked_at IS NULL
                                OR c.tg_checked_at < NOW() - INTERVAL '5 minutes')
-                        ORDER BY c.created_at ASC
+                        -- RESV-04/D-08: mobiles (+79…) ~50% live → drain first.
+                        ORDER BY (c.phone LIKE '+79%') DESC,
+                                 c.created_at ASC
                         LIMIT :n
                         FOR UPDATE OF c SKIP LOCKED
                         """
                     ),
-                    {"n": self.batch_size},
+                    {
+                        "n": self.batch_size,
+                        "daily_cap": get_settings().contact_check_daily_cap,
+                    },
                 )
                 rows = result.fetchall()
 
