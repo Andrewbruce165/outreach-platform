@@ -339,7 +339,14 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
         </span>
       </td>
       <td>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}
+          title={
+            isChecker
+              ? `Overall message limit — ${dailyLimit}/day (incl. follow-ups).`
+              : `Overall message limit — ${dailyLimit}/day (incl. follow-ups). New-contact outreach is capped separately at 50 new dialogs/day per account.`
+          }
+        >
           <span className="num text-xs muted">{sender.sent_today ?? 0} / {dailyLimit}</span>
           <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
         </div>
@@ -596,32 +603,12 @@ function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => v
   const [role, setRole] = useState<"sender" | "checker">(
     sender.role === "checker" ? "checker" : "sender",
   );
-  const [perMin, setPerMin] = useState<number>(sender.rate_limits.per_minute);
-  const [perHour, setPerHour] = useState<number>(sender.rate_limits.per_hour);
-  const [perDay, setPerDay] = useState<number>(sender.rate_limits.per_day);
-
-  const SOFT = { min: 4, hour: 20, day: 150 };
-  const HARD = { min: 10, hour: 50, day: 300 };
-
-  const overHard =
-    perMin > HARD.min || perHour > HARD.hour || perDay > HARD.day;
-  const overSoft =
-    !overHard &&
-    (perMin > SOFT.min || perHour > SOFT.hour || perDay > SOFT.day);
-  const invalid =
-    perMin < 1 || perHour < 1 || perDay < 1 || perHour < perMin || perDay < perHour;
 
   const mut = useMutation({
     mutationFn: () =>
       api(`/api/v1/senders/${sender.slug}`, {
         method: "PATCH",
-        body: {
-          name: name.trim() || null,
-          role,
-          rate_per_min: perMin,
-          rate_per_hour: perHour,
-          rate_per_day: perDay,
-        },
+        body: { name: name.trim() || null, role },
       }),
     onSuccess: () => {
       toast.success("Сохранено");
@@ -673,45 +660,6 @@ function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => v
             </button>
           </div>
         </div>
-        <div>
-          <label className="muted text-xs" style={{ display: "block", marginBottom: 6 }}>
-            Лимиты отправки
-          </label>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            <LimitField label="В минуту" value={perMin} soft={SOFT.min} hard={HARD.min} onChange={setPerMin} />
-            <LimitField label="В час" value={perHour} soft={SOFT.hour} hard={HARD.hour} onChange={setPerHour} />
-            <LimitField label="В день" value={perDay} soft={SOFT.day} hard={HARD.day} onChange={setPerDay} />
-          </div>
-          <div
-            className="text-xs"
-            style={{
-              marginTop: 8,
-              padding: "8px 10px",
-              borderRadius: 8,
-              background: overHard
-                ? "rgba(220,38,38,0.08)"
-                : overSoft
-                ? "rgba(234,179,8,0.10)"
-                : "var(--bg-soft)",
-              color: overHard
-                ? "var(--danger)"
-                : overSoft
-                ? "var(--warning)"
-                : "var(--text-muted)",
-              lineHeight: 1.45,
-            }}
-          >
-            {overHard ? (
-              <>Превышен hard cap (10 · 50 · 300) — бэкенд отклонит запрос (422).</>
-            ) : overSoft ? (
-              <>Выше «зелёного коридора» (4 · 20 · 150). Бэкенд примет (200) но повысит риск ограничений.</>
-            ) : invalid ? (
-              <>Проверьте значения: per_hour ≥ per_minute, per_day ≥ per_hour, все ≥ 1.</>
-            ) : (
-              <>Зелёный коридор: 4 / мин · 20 / ч · 150 / день. Применится сразу.</>
-            )}
-          </div>
-        </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button className="btn btn--ghost" type="button" onClick={onClose}>
             Отмена
@@ -719,7 +667,7 @@ function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => v
           <button
             className="btn btn--primary"
             type="button"
-            disabled={mut.isPending || overHard || invalid}
+            disabled={mut.isPending}
             onClick={() => mut.mutate()}
           >
             {mut.isPending ? "Сохранение…" : "Сохранить"}
@@ -727,42 +675,6 @@ function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => v
         </div>
       </div>
     </Modal>
-  );
-}
-
-function LimitField({
-  label,
-  value,
-  soft,
-  hard,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  soft: number;
-  hard: number;
-  onChange: (v: number) => void;
-}) {
-  const tone =
-    value > hard ? "var(--danger)" : value > soft ? "var(--warning)" : "var(--text)";
-  return (
-    <div>
-      <span className="muted text-xs" style={{ display: "block", marginBottom: 4 }}>
-        {label}
-      </span>
-      <input
-        className="ob__input"
-        type="number"
-        min={1}
-        max={hard}
-        value={value}
-        onChange={(e) => onChange(Math.max(0, parseInt(e.target.value || "0", 10)))}
-        style={{ width: "100%", color: tone, fontVariantNumeric: "tabular-nums" }}
-      />
-      <span className="muted text-xs" style={{ display: "block", marginTop: 3 }}>
-        soft {soft} · hard {hard}
-      </span>
-    </div>
   );
 }
 
