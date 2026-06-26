@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 14 context gathered
-last_updated: "2026-06-26T12:25:00.628Z"
+last_updated: "2026-06-26T13:58:29.489Z"
 last_activity: 2026-06-26 -- Phase 14 execution started
 progress:
   total_phases: 16
   completed_phases: 14
   total_plans: 52
-  completed_plans: 48
-  percent: 88
+  completed_plans: 51
+  percent: 67
 ---
 
 # Project State
@@ -147,6 +147,7 @@ None yet.
 
 - Phase 4 первым планом — аудит существующего webhook + function calling (вынести с уровня sender/AIContext на уровень кампании)
 - rotation.py:59,89,122,138 still references DROPPED context_contact_assignments table — 04-04 must rewrite per AUDIT TODO #6 (context_id → campaign_id signature)
+- 14-04 HALTED at Task-4: running prod api image (built 10:59, pre-merge) has ZERO Phase-14 guards (no probe_checker/resolve_phone_with_fallback) and migration 034 NOT applied (prod at 033). Activating the 2 checkers fed them to the OLD uncapped/no-probe worker which re-poisoned 74 rows at 0% mobile-live. Activation rolled back, data restored to pre-activation baseline. MUST deploy (docker compose up -d --build api → applies mig 034 + Phase-14 code), verify container has probe_checker + tg_probe_state, THEN re-run Task-2 activation + Task-4 live probe.
 
 ### Quick Tasks Completed
 
