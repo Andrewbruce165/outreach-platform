@@ -182,3 +182,268 @@ async def test_suspect_rollback_keeps_registered(
     ).fetchone()
     assert notreg_row.tg_status == "pending", "suspect not_registered must roll back, not finalize"
     assert notreg_row.tg_checked_at is None, "claim timestamp must be cleared for re-check"
+
+
+# ─── Inline flood/throttle-aware finalization (Plan 14-05, Gap A) ────────────
+#
+# The 14-04 live-smoke gap: a freshly-throttled checker (FloodWait, or an
+# anomalous all-empty resolve batch — checked=20..30 reg=0) finalized its empty
+# resolves as not_registered/high/clean BEFORE the decoupled ≥2-miss control-probe
+# (which runs in the _run loop, NOT in _tick) ever flagged it. These tests drive
+# _tick() DIRECTLY (so _probe_cycle never populates _degraded_this_tick) and prove
+# the INLINE trigger fires from the resolve tick itself: a flood/throttle batch is
+# treated as suspect (rollback to pending, no high-confidence) AND the checker is
+# degraded inline (spam_limited + event row + paused + cooldown), leaving rotation
+# on the next tick. "Unknown" (pending) always beats a false "not_registered".
+#
+# ANOMALY_MIN_BATCH threshold for the all-empty branch is 8 (Task 2 matches this);
+# the anomalous-batch test seeds 10 contacts (> 8) so the all-empty signal fires.
+
+
+def _flood_summary(phones: list[str]) -> dict:
+    """A FloodWait summary: flood_wait_hit=True, all results not_registered."""
+    return {
+        "checked": len(phones),
+        "registered": 0,
+        "not_registered": len(phones),
+        "flood_wait_hit": True,
+        "results": [{"phone": p, "is_registered": False} for p in phones],
+    }
+
+
+def _anomalous_empty_summary(phones: list[str]) -> dict:
+    """The 14-04 signature: flood_wait_hit=False but checked=N, reg=0, all empty.
+    Live (non-cache) results so the all-empty anomaly branch counts them."""
+    return {
+        "checked": len(phones),
+        "registered": 0,
+        "not_registered": len(phones),
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": p, "is_registered": False, "from_cache": False} for p in phones
+        ],
+    }
+
+
+async def test_flood_batch_rolls_back_to_pending(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """A FloodWait resolve batch NEVER finalizes not_registered — every seeded
+    contact rolls back to tg_status='pending' (tg_checked_at NULL), none carries
+    tg_confidence='high', and the rolled-back rows are tg_probe_state='suspect'."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=3, tg_status="pending")
+    phones = [c.phone for c in contacts]
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=_flood_summary(phones)),
+    ):
+        await worker._tick()
+
+    rows = (
+        await async_db_session.execute(
+            text(
+                "SELECT tg_status, tg_checked_at, tg_confidence, tg_probe_state "
+                "FROM contacts WHERE id = ANY(:ids)"
+            ),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchall()
+    assert len(rows) == 3
+    assert all(r.tg_status == "pending" for r in rows), "flood batch must roll back, not finalize"
+    assert all(r.tg_checked_at is None for r in rows), "claim timestamp cleared for re-check"
+    assert all(r.tg_confidence != "high" for r in rows), "flood batch must never carry high confidence"
+    assert all(r.tg_probe_state == "suspect" for r in rows)
+
+
+async def test_flood_batch_writes_no_high_confidence(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """Over the seeded rows, COUNT(tg_confidence='high') is 0 after a flood batch."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=4, tg_status="pending")
+    phones = [c.phone for c in contacts]
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=_flood_summary(phones)),
+    ):
+        await worker._tick()
+
+    high = (
+        await async_db_session.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM contacts "
+                "WHERE id = ANY(:ids) AND tg_confidence = 'high'"
+            ),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchone()
+    assert high.n == 0
+
+
+async def test_flood_batch_degrades_checker_inline(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """After a flood tick the checker is degraded INLINE — without a prior ≥2-miss
+    control-probe: restriction_status='spam_limited', lifecycle_status='paused',
+    restricted_until in the future, AND a sender_restriction_events row exists with
+    event_type='spam_limited'. auth_status is UNCHANGED ('ok' — Pitfall 2)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=3, tg_status="pending")
+    phones = [c.phone for c in contacts]
+    checker_id = str(test_checker.id)
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=_flood_summary(phones)),
+    ):
+        await worker._tick()
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, lifecycle_status, restricted_until, "
+                "auth_status FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.restriction_status == "spam_limited"
+    assert row.lifecycle_status == "paused"
+    assert row.restricted_until is not None
+    assert row.auth_status == "ok", "Pitfall 2 — degrade must NOT touch auth_status"
+
+    events = (
+        await async_db_session.execute(
+            text(
+                "SELECT event_type FROM sender_restriction_events "
+                "WHERE sender_id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchall()
+    assert any(e.event_type == "spam_limited" for e in events), (
+        "inline degrade must emit a sender_restriction_events row"
+    )
+
+
+async def test_flood_checker_left_out_of_next_selection(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """After the flood tick degrades the checker, a re-run of _tick() (contacts are
+    still pending) does NOT await check_phones for the now-flagged checker — the
+    RESV-05 JOIN-LATERAL gate excludes it; contacts stay pending."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=3, tg_status="pending")
+    phones = [c.phone for c in contacts]
+
+    worker = ContactCheckWorker()
+    # First tick: flood → rollback + inline degrade.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=_flood_summary(phones)),
+    ):
+        await worker._tick()
+
+    # Second tick: the only checker is now spam_limited/paused → gate excludes it.
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=_flood_summary(phones)),
+    ) as mock2:
+        await worker._tick()
+        mock2.assert_not_awaited()
+
+    rows = (
+        await async_db_session.execute(
+            text("SELECT tg_status FROM contacts WHERE id = ANY(:ids)"),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchall()
+    assert all(r.tg_status == "pending" for r in rows)
+
+
+async def test_no_healthy_checker_leaves_pending(
+    async_db_session, test_workspace, test_sender_factory, test_contacts_factory
+):
+    """D-04 safe-stop at N=0 healthy: with the only checker already flagged/paused,
+    _tick() leaves the seeded contacts pending and awaits check_phones 0 times.
+    'Unknown' (pending) beats a false 'not_registered'."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    # The only checker is already degraded (spam_limited + paused).
+    await test_sender_factory(
+        role="checker",
+        slug="paused-checker",
+        restriction_status="spam_limited",
+        lifecycle_status="paused",
+    )
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(),
+    ) as mock:
+        await worker._tick()
+        mock.assert_not_awaited()
+
+    rows = (
+        await async_db_session.execute(
+            text("SELECT tg_status FROM contacts WHERE id = ANY(:ids)"),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchall()
+    assert all(r.tg_status == "pending" for r in rows)
+
+
+async def test_anomalous_all_empty_batch_treated_as_throttle(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """The 14-04 signature — flood_wait_hit=False but checked=N (>= ANOMALY_MIN_BATCH=8),
+    registered=0, not_registered=N (all live, non-cache) — must ALSO roll back to
+    pending and degrade the checker inline (the trigger covers flood AND all-empty).
+    Batch size 10 > the threshold 8 so the all-empty signal fires."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    contacts = await test_contacts_factory(count=10, tg_status="pending")
+    phones = [c.phone for c in contacts]
+    checker_id = str(test_checker.id)
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(return_value=_anomalous_empty_summary(phones)),
+    ):
+        await worker._tick()
+
+    rows = (
+        await async_db_session.execute(
+            text(
+                "SELECT tg_status, tg_confidence FROM contacts WHERE id = ANY(:ids)"
+            ),
+            {"ids": [str(c.id) for c in contacts]},
+        )
+    ).fetchall()
+    assert len(rows) == 10
+    assert all(r.tg_status == "pending" for r in rows), "anomalous all-empty batch must roll back"
+    assert all(r.tg_confidence != "high" for r in rows)
+
+    checker = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, lifecycle_status FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert checker.restriction_status == "spam_limited"
+    assert checker.lifecycle_status == "paused"
