@@ -24,6 +24,22 @@ from app.services.contact_check_worker import ContactCheckWorker
 pytestmark = pytest.mark.asyncio
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _cleanup_resolution_state(async_db_session):
+    """Delete committed pending contacts / cache rows after each test.
+
+    The session-scoped test DB is NOT rolled back for committed rows. _tick()
+    resolves ANY workspace's pending contacts globally, so leftover pending rows
+    (e.g. the Phase 14 selection-skip / mobile-first tests, or a partial batch)
+    would leak into a later worker test and break its assertions. Clean up
+    post-test to keep the worker tests isolated.
+    """
+    yield
+    await async_db_session.execute(text("DELETE FROM contacts_cache"))
+    await async_db_session.execute(text("DELETE FROM contacts WHERE tg_status = 'pending'"))
+    await async_db_session.commit()
+
+
 # ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 

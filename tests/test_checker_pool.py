@@ -14,9 +14,19 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _cleanup_resolution_state(async_db_session):
+    """Delete committed pending contacts / cache rows after each test (see test_checker_cap)."""
+    yield
+    await async_db_session.execute(text("DELETE FROM contacts_cache"))
+    await async_db_session.execute(text("DELETE FROM contacts WHERE tg_status = 'pending'"))
+    await async_db_session.commit()
 
 
 async def test_rotation_picks_eligible(
