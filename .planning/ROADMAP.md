@@ -359,7 +359,7 @@ Plans:
 **Goal:** Сделать проверку контактов (phone → есть ли в Telegram) надёжной и масштабируемой, чтобы кампании доставали всех достижимых лидов, а не сливали их молча из-за деградировавшего чекера.
 **Requirements**: RESV-01..RESV-07 (см. REQUIREMENTS.md)
 **Depends on:** Phase 2 (checker / contacts_cache / contact_check_worker). Связано с Phase 10 (sender_restriction_events, restriction_status).
-**Plans:** 4 plans (waves 1→4)
+**Plans:** 1/4 plans executed
 
 **Контекст (расследование 2026-06-26 — `.planning/notes/checker-false-negatives.md`):**
 
@@ -381,7 +381,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 14-01-PLAN.md — migration 034 (confidence/source на contacts) + ORM mirror + CONTACT_CHECK_* env-knobs + Wave-0 RED test scaffold [RESV-02, RESV-06]
+- [x] 14-01-PLAN.md — migration 034 (confidence/source на contacts) + ORM mirror + CONTACT_CHECK_* env-knobs + Wave-0 RED test scaffold [RESV-02, RESV-06]
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 14-02-PLAN.md — RESV-05 selection fix (restriction/lifecycle gate) + RESV-04 mobile-first ordering + RESV-02 burst-cap + durable daily-cap + cooldown в contact_check_worker [RESV-05, RESV-04, RESV-02] [depends_on: 14-01]
@@ -409,7 +409,7 @@ Plans:
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
-| 14. Reliable Contact Resolution | 0/4 | Planned (4 plans, waves 1→4) | - |
+| 14. Reliable Contact Resolution | 1/4 | In Progress|  |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
