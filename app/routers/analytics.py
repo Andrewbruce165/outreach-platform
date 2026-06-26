@@ -124,6 +124,21 @@ _FUNNEL_SCOPE_TABLE = {
     "sender": "senders",
 }
 
+# Исключение internal/warmup трафика из ВСЕХ метрик.
+# Диалог, где contact_telegram_id == один из НАШИХ sender-аккаунтов того же
+# workspace, — это не реальный аутрич, а warmup-переписка между своими аккаунтами
+# (или артефакт listener'а, поймавшего warmup-трафик чужого воркера, инцидент
+# 2026-06-23/24 — см. .planning/debug/dashboard-analytics-warmup-pollution.md).
+# Такие диалоги задваивают sent/replied и раздувают воронку.
+# NOT EXISTS — null-safe (senders.telegram_id может быть NULL у неонбордженных).
+# senders — крошечная таблица (десятки строк), seq-scan дешёв.
+_EXCLUDE_INTERNAL_CLAUSE = """
+          AND NOT EXISTS (
+              SELECT 1 FROM senders s_int
+              WHERE s_int.workspace_id = c.workspace_id
+                AND s_int.telegram_id = c.contact_telegram_id
+          )"""
+
 
 async def _compute_cards(
     db: AsyncSession,
@@ -155,6 +170,11 @@ async def _compute_cards(
             raise ValueError(f"Invalid scope column: {col}")
         scope_clause = f" AND c.{col} = :scope_val"
         params["scope_val"] = str(val)
+
+    # Исключаем internal/warmup диалоги из всех 5 метрик ниже (sent/replied/
+    # leads/finishes/contacts_messaged). registered_contacts (знаменатель) считает
+    # contacts в папке — warmup его не касается, поэтому туда clause не добавляем.
+    scope_clause += _EXCLUDE_INTERNAL_CLAUSE
 
     # 1. Sent — source = messages (C-01: единственный источник, содержащий
     # outbound от queue worker + listener self-checks + UI manager-send D-04).
@@ -357,6 +377,10 @@ async def funnel(
     else:
         scope_clause = ""
         params = {"wid": str(ctx.workspace_id)}
+
+    # Исключаем internal/warmup диалоги из всех 5 стадий воронки (тот же фильтр,
+    # что в _compute_cards) — иначе warmup-трафик двоит sent/replied/engaged.
+    scope_clause += _EXCLUDE_INTERNAL_CLAUSE
 
     # 1. sent — outbound messages joined to conversations
     # (Phase 5 C-01: messages is the source-of-truth — covers queue worker +

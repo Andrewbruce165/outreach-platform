@@ -680,6 +680,16 @@ class TelegramListener:
 
             # Пропускаем warmup-сообщения от наших аккаунтов в пуле прогрева.
             # Они обрабатываются WarmupWorker'ом, AI не нужен.
+            #
+            # Фильтр по telegram_id — primary (симметрично outgoing-фильтру на
+            # handle_outgoing_message). Phone-ветка часто промахивается: Telegram
+            # скрывает телефон по приватности → phone == "unknown" → warmup-трафик
+            # протекал в conversations/messages и раздувал аналитику (инцидент
+            # 2026-06-23/24, см. debug/dashboard-analytics-warmup-pollution.md).
+            warmup_tg_ids = await self._get_warmup_telegram_ids()
+            if sender.id in warmup_tg_ids:
+                logger.debug(f"🔥 Пропускаем warmup сообщение от {name} (tg_id={sender.id})")
+                return
             if phone != "unknown":
                 warmup_phones = await self._get_warmup_phones()
                 if phone in warmup_phones:

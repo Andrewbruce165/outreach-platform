@@ -380,3 +380,69 @@ async def test_workspace_isolation_in_all_4_counts(
     assert data["replied"]["message_count"] == 1
     assert data["leads"] == 1
     assert data["finishes"] == 0
+
+
+# ── 9. internal/warmup exclusion: contact == own sender НЕ считается ──────────
+
+
+async def test_internal_warmup_conversation_excluded(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_sender_factory, test_conversation_factory, test_message_factory,
+):
+    """Диалог, где contact_telegram_id == telegram_id НАШЕГО sender'а — это
+    warmup/internal трафик между своими аккаунтами, НЕ реальный аутрич.
+
+    Регрессия на инцидент 2026-06-23/24: warmup-переписка между нашими
+    аккаунтами протекла в conversations/messages и раздула sent/replied вдвое
+    (см. .planning/debug/dashboard-analytics-warmup-pollution.md). Фильтр
+    _EXCLUDE_INTERNAL_CLAUSE в analytics.py обязан её отсекать во всех метриках.
+    """
+    # Наш собственный sender с известным telegram_id (он же — "контакт" warmup).
+    own_sender = await test_sender_factory(
+        slug="warmup-peer", telegram_id=555_111_222,
+    )
+
+    # Реальный внешний диалог: 4 outbound + 2 inbound (учитывается).
+    real_conv = await test_conversation_factory(
+        status="active", contact_telegram_id=999_888_777,
+    )
+    await test_message_factory(
+        real_conv["id"], count=4, direction="outbound", sent_by="ai",
+        workspace_id=test_workspace.id,
+    )
+    await test_message_factory(
+        real_conv["id"], count=2, direction="inbound", sent_by="contact",
+        workspace_id=test_workspace.id,
+    )
+
+    # Internal/warmup диалог: contact_telegram_id == own_sender.telegram_id.
+    # 30 outbound + 30 inbound — НЕ должны попасть ни в одну метрику.
+    warmup_conv = await test_conversation_factory(
+        status="active", contact_telegram_id=own_sender.telegram_id,
+    )
+    await test_message_factory(
+        warmup_conv["id"], count=30, direction="outbound", sent_by="human",
+        workspace_id=test_workspace.id,
+    )
+    await test_message_factory(
+        warmup_conv["id"], count=30, direction="inbound", sent_by="contact",
+        workspace_id=test_workspace.id,
+    )
+
+    await _bind(async_db_session, test_workspace.id, "u-warmup-excl")
+    h = _auth_headers(valid_supabase_jwt, "u-warmup-excl")
+
+    # Cards: только реальный диалог (warmup отфильтрован).
+    r = await async_client.get("/api/v1/analytics/workspace", headers=h)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["sent"] == 4, "warmup outbound must be excluded"
+    assert data["replied"]["conversation_count"] == 1
+    assert data["replied"]["message_count"] == 2
+
+    # Funnel: те же стадии тоже исключают warmup.
+    rf = await async_client.get("/api/v1/analytics/funnel", headers=h)
+    assert rf.status_code == 200, rf.text
+    funnel = rf.json()
+    assert funnel["sent"] == 4
+    assert funnel["replied"] == 1
