@@ -969,6 +969,42 @@ function FolderDetail({
             </tbody>
           </table>
         )}
+
+        {total > PAGE_SIZE && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderTop: "1px solid var(--border)",
+              background: "var(--bg)",
+            }}
+          >
+            <span className="muted text-xs">
+              Page {page + 1} of {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={page === 0 || contactsQ.isFetching}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              <ChevronLeft size={13} /> Prev
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={
+                contactsQ.isFetching ||
+                contacts.length < PAGE_SIZE ||
+                (page + 1) * PAGE_SIZE >= total
+              }
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next <ChevronRight size={13} />
+            </button>
+          </div>
+        )}
       </div>
       {addOpen && (
         <AddContactModal
