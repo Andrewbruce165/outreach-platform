@@ -401,18 +401,27 @@ function FolderDetail({
   const [addOpen, setAddOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [moveOpen, setMoveOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const [tgFilter, setTgFilter] = useState<TgFilter>("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Reset selection whenever the active folder changes — ids from one folder
-  // must never carry over to another.
+  // Reset selection / pagination whenever folder or filters change
   useEffect(() => {
     setSelected(new Set());
     setMoveOpen(false);
+    setPage(0);
   }, [folder?.id]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [tgFilter, search]);
+
   const contactsQ = useQuery({
-    queryKey: ["contacts", folder?.id],
+    queryKey: ["contacts", folder?.id, page],
     queryFn: () =>
-      api<Contact[]>("/api/v1/contacts", { query: { folder_id: folder!.id, limit: 200 } }),
+      api<Contact[]>("/api/v1/contacts", {
+        query: { folder_id: folder!.id, limit: PAGE_SIZE, offset: page * PAGE_SIZE },
+      }),
     enabled: !!folder,
   });
 
