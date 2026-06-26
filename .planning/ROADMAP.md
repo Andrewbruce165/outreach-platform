@@ -342,12 +342,12 @@ Plans:
 
 **Requirements**: PACE-01, PACE-02, PACE-03, PACE-04, PACE-05, PACE-06, PACE-07 (derived during /gsd:plan-phase 13, see REQUIREMENTS.md §Even Pacing Across Sending Window)
 **Depends on:** Phase 12
-**Plans:** 2 plans (waves 1→2)
+**Plans:** 1/2 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 13-01-PLAN.md — Wave 0 RED test scaffold: tests/test_queue_even_pacing.py (PACE-01..07 stubs, deferred-import RED, Phase 12 helpers reused) [Wave 1, no deps]
+- [x] 13-01-PLAN.md — Wave 0 RED test scaffold: tests/test_queue_even_pacing.py (PACE-01..07 stubs, deferred-import RED, Phase 12 helpers reused) [Wave 1, no deps]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

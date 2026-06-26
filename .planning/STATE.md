@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 13 context gathered
-last_updated: "2026-06-26T09:41:53.880Z"
-last_activity: 2026-06-26 -- Phase 13 planning complete
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-06-26T09:56:14.804Z"
+last_activity: 2026-06-26
 progress:
   total_phases: 15
   completed_phases: 13
   total_plans: 48
-  completed_plans: 46
-  percent: 87
+  completed_plans: 47
+  percent: 67
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 12 — per-campaign-daily-new-dialog-limit-max-new-dialogs-per-day
+**Current focus:** Phase 13 — even-pacing-across-sending-window-smooth-new-dialog-distribu
 
 ## Current Position
 
-Phase: 12 (per-campaign-daily-new-dialog-limit-max-new-dialogs-per-day) — EXECUTING
-Plan: 1 of 4
+Phase: 13 (even-pacing-across-sending-window-smooth-new-dialog-distribu) — EXECUTING
+Plan: 2 of 2
 Status: Ready to execute
-Last activity: 2026-06-26 -- Phase 13 planning complete
+Last activity: 2026-06-26
 
 Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — plan 04 partial, UAT pending)
 
@@ -79,6 +79,7 @@ Progress: [████░░░░░░] 67% (4/6 plans done in phase 11 — p
 | Phase 11 P01 | 16min | 3 tasks | 5 files |
 | Phase 11 P02 | 34min | 3 tasks | 17 files |
 | Phase 11 P03 | 25min | 3 tasks | 2 files |
+| Phase 13 P01 | 6min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 11 P02]: D-01 tone_preset replaces voice_baseline/tone/tone_of_voice; D-11 response_speed/response_delay_seconds added; D-04/D-12/D-14 dialogue_flow/arguments_facts/campaign_rules on campaigns; D-13 success_criteria merged into lead_trigger_hint before DROP; migration 032 idempotent; tests 651 passing (up from 456 pre-Phase-11)
 - [Phase 11 P03]: D-03 _TONE_LINES single-source tone; D-06 dialogue_flow numbered stages replace static _PROMPT_DIALOGUE_GOAL; D-12 _PROMPT_FACTS_GUARD anti-hallucination in arguments_facts block; D-14 _dedup_rules(agent_rules, campaign_rules) exact-duplicate suppression; D-11/RT-01 response_speed instant/human/slow/manual → listener debounce delay branch; PMT-01..07 + RT-01 all GREEN (660 passing)
 - [Phase 11 P04]: openapi.json+types regenerated via export-handoff (rebuilt API container first — was stale pre-P11); frontend Agent form: tone_preset select (4 opts) replaces voice_baseline+sliders+tone_of_voice (all deleted); response_speed select + conditional delay input; Campaign wizard: StageEditor (add/remove/up-down, no dnd lib, aria-labels, empty-state copy), arguments_facts+campaign_rules textareas, audience_hints→Кому пишем relabel, success_criteria field removed→merged into leadHint (Сигнал Лид), autoFillMut→lead_trigger_hint; EditCampaignModal updated with InlineStageEditor+new fields; tsc clean; awaiting human UAT (Task 4)
+- [Phase 13]: 13-01: Wave-0 RED scaffold tests/test_queue_even_pacing.py (7 tests, PACE-01..07) reuses Phase 12 helpers verbatim; deferred in-body imports keep --collect-only clean; _assert_pacing_predicate_wired() introspection guard (binds :expected_now/:window_start_utc) makes the four behavioural integration tests genuinely RED instead of coincidentally passing on the Phase 12 cap. All 7 RED, 16 pre-existing queue tests stay GREEN.
 
 ### Roadmap Evolution
 
@@ -182,6 +184,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-26T09:14:41.274Z
-Stopped at: Phase 13 context gathered
-Resume file: .planning/phases/13-even-pacing-across-sending-window-smooth-new-dialog-distribu/13-CONTEXT.md
+Last session: 2026-06-26T09:56:05.360Z
+Stopped at: Completed 13-01-PLAN.md
+Resume file: None
