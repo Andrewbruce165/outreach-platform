@@ -242,3 +242,385 @@ async def test_window_elapsed_fraction():
         campaign_tz=MSK, work_hour_start=12, work_hour_end=12, now=now_f,
     )
     assert 0.0 <= frac_f <= 1.0
+
+
+# ── Pace numerator helper (mirrors _count_in_window_sent but window-start floor) ─
+
+
+async def _count_since_window_start_sent(db, *, sender_id, campaign_id, since) -> int:
+    """COUNT(DISTINCT recipient_phone) of status='sent' rows for this
+    (sender,campaign) with finished_at >= ``since`` — mirrors the Phase 13
+    pacing numerator (D-06: counted from TODAY's window start, NOT trailing-24h).
+    Used to assert divergence from the Phase 12 24h cap counter."""
+    return (await db.execute(text("""
+        SELECT COUNT(DISTINCT recipient_phone) FROM message_queue
+        WHERE sender_id = :sid
+          AND campaign_id = :cid
+          AND status = 'sent'
+          AND finished_at >= :since
+    """), {"sid": str(sender_id), "cid": str(campaign_id), "since": since})).scalar()
+
+
+def _assert_pacing_predicate_wired():
+    """Guard that the expected-by-now pacing predicate is actually wired into the
+    candidate SELECT (RESEARCH Pattern 2 / threat-model: the implementation must
+    bind ``:expected_now`` / ``:window_start_utc`` rather than interpolate).
+
+    This makes the behavioural integration tests genuinely RED against the
+    current (pre-13-02) code instead of passing for the wrong reason (e.g. the
+    Phase 12 cap coincidentally blocking, or the no-predicate path coincidentally
+    picking). 13-02 adds the bound predicate → these turn GREEN for the right
+    reason.
+    """
+    src = inspect.getsource(QueueWorker._process_next_for_sender)
+    assert "expected_now" in src, (
+        "pacing predicate not wired yet — _process_next_for_sender must bind "
+        ":expected_now (the expected-by-now count, D-05)"
+    )
+    assert "window_start_utc" in src, (
+        "pacing predicate not wired yet — _process_next_for_sender must bind "
+        ":window_start_utc (today's window-start floor, D-06)"
+    )
+
+
+# ── PACE-03: expected-by-now pacing predicate in the candidate SELECT ──────────
+
+
+async def test_pacing_gate(async_db_session, test_running_campaign_factory):
+    """PACE-03 (D-05, D-06, D-07, D-09, D-10): a new-dialog item is eligible iff
+    new dialogs opened since TODAY's window start are below the expected-by-now
+    count. Cap (Phase 12) is NOT the binding constraint here.
+
+    Fraction-robust setup (RESEARCH determinism recipe): work_hour_start=0,
+    work_hour_end=24 so the wall-clock fraction lands in (0,1] deterministically.
+    """
+    # RED now: the pacing predicate does not exist in the SELECT yet. Without
+    # this guard the behavioural assertions below would pass for the WRONG reason
+    # (the Phase 12 cap, not pacing). 13-02 wires the predicate → GREEN.
+    _assert_pacing_predicate_wired()
+
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp["workspace_id"]
+    cid = camp["id"]
+
+    # ── Case 1: OVER expected ⇒ blocked.
+    # High cap so Phase 12 cap can't be what blocks; tiny daily limit so
+    # expected_now = limit × frac ≤ 1 at essentially any time of day.
+    await _set_cap(async_db_session, campaign_id=cid, cap=1)
+
+    # One new dialog already opened since window start → count_opened (1) >=
+    # expected_now (≤1) at virtually any fraction → a fresh new dialog is blocked.
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid, recipient_phone="+79991110001")
+
+    blocked_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid, recipient_phone="+79991110002",
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert blocked_qid not in captured["picked"], (
+        "new dialog over expected-by-now must NOT be selected (D-05)"
+    )
+    assert await _item_status(async_db_session, blocked_qid) == "pending", (
+        "paced-out new-dialog item must stay pending"
+    )
+
+    # ── Case 2: UNDER expected ⇒ allowed (fresh campaign, count_opened == 0).
+    camp2, senders2 = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid2 = senders2[0].id
+    wid2 = camp2["workspace_id"]
+    cid2 = camp2["id"]
+    # Large limit → expected_now = limit × frac ≫ 1 except in the first seconds
+    # of the UTC day; count_opened == 0 ⇒ 0 < expected ⇒ allowed.
+    await _set_cap(async_db_session, campaign_id=cid2, cap=1000)
+
+    allowed_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid2, sender_id=sid2,
+        campaign_id=cid2, recipient_phone="+79992220001",
+    )
+
+    worker2 = QueueWorker()
+    captured2, cm_rate2, cm_pause2, cm_send2 = _run_worker_capturing_picked(worker2)
+    with cm_rate2, cm_pause2, cm_send2:
+        await worker2._process_next_for_sender(sid2)
+
+    assert allowed_qid in captured2["picked"], (
+        "new dialog under expected-by-now must be selected (D-05)"
+    )
+    assert await _item_status(async_db_session, allowed_qid) == "processing"
+
+    # ── Pitfall 5 guard: the candidate SELECT keeps its Phase 4/12 invariants.
+    src = inspect.getsource(QueueWorker._process_next_for_sender)
+    assert "FOR UPDATE OF mq SKIP LOCKED" in src, (
+        "pacing predicate must not drop FOR UPDATE OF mq SKIP LOCKED"
+    )
+    assert "LIMIT 8" in src, "pacing predicate must not drop LIMIT 8"
+
+
+# ── PACE-04: pace numerator = today's window start, NOT trailing-24h ───────────
+
+
+async def test_pace_counter_window_start(
+    async_db_session, test_running_campaign_factory
+):
+    """PACE-04 (D-06): the pacing numerator counts new dialogs opened since
+    TODAY's window start, a DISTINCT counter from the Phase 12 trailing-24h cap.
+
+    Setup so the two counters diverge: a narrow window whose start is only
+    minutes ago (work_hour_start = current UTC hour, end = +1h), plus a row
+    finished 2h ago — that row is inside the trailing-24h cap window but BEFORE
+    today's window start, so it counts toward the cap counter but NOT toward the
+    pace numerator. The fresh never-contacted new dialog therefore stays eligible
+    by pace (pace count == 0) and IS picked.
+    """
+    _assert_pacing_predicate_wired()  # RED until 13-02 wires the predicate.
+
+    now = datetime.now(timezone.utc)
+    cur_hour = now.hour
+    # Window: [cur_hour, cur_hour+1) UTC. timezone defaults to UTC in the factory
+    # so window-start ≈ top of this hour (minutes ago). Avoid the 23→0 wrap edge.
+    if cur_hour == 23:
+        cur_hour = 22
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=cur_hour, work_hour_end=cur_hour + 1, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp["workspace_id"]
+    cid = camp["id"]
+    # Force UTC so "window start ≈ top of the current UTC hour" holds regardless
+    # of the factory's default timezone.
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET timezone = 'UTC' WHERE id = :cid"
+    ), {"cid": str(cid)})
+    await async_db_session.commit()
+    await _set_cap(async_db_session, campaign_id=cid, cap=50)
+
+    # A prior 'sent' finished 2h ago: inside trailing-24h, but BEFORE today's
+    # window start (which is < 1h ago) → counts for the cap, NOT for the pace.
+    old_phone = "+79993330001"
+    old_qid = str(uuid.uuid4())
+    await async_db_session.execute(text("""
+        INSERT INTO message_queue (
+            id, workspace_id, sender_id, campaign_id,
+            item_type, status, recipient_phone, message_text,
+            scheduled_at, finished_at
+        ) VALUES (
+            :qid, :wid, :sid, :cid,
+            'message', 'sent', :rp, 'older', NOW() - INTERVAL '2 hours',
+            NOW() - INTERVAL '2 hours'
+        )
+    """), {
+        "qid": old_qid, "wid": str(wid), "sid": str(sid),
+        "cid": str(cid), "rp": old_phone,
+    })
+    await async_db_session.commit()
+
+    # Divergence guard: the cap counter sees the 2h-old row; the pace numerator
+    # (floor = top of the current hour) does not.
+    window_start_approx = now.replace(minute=0, second=0, microsecond=0)
+    cap_count = (await async_db_session.execute(text("""
+        SELECT COUNT(DISTINCT recipient_phone) FROM message_queue
+        WHERE sender_id = :sid AND campaign_id = :cid AND status = 'sent'
+          AND finished_at >= NOW() - INTERVAL '24 hours'
+    """), {"sid": str(sid), "cid": str(cid)})).scalar()
+    pace_count = await _count_since_window_start_sent(
+        async_db_session, sender_id=sid, campaign_id=cid, since=window_start_approx,
+    )
+    assert cap_count == 1, "trailing-24h cap counter must include the 2h-old row"
+    assert pace_count == 0, (
+        "pace numerator (today's window start) must EXCLUDE the pre-window row (D-06)"
+    )
+
+    # A fresh never-contacted new dialog: pace count is 0 ⇒ eligible by pace.
+    fresh_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid, recipient_phone="+79993330002",
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert fresh_qid in captured["picked"], (
+        "new dialog must be eligible — the pre-window row counts only for the "
+        "24h cap, not the window-start pace numerator (D-06)"
+    )
+    assert await _item_status(async_db_session, fresh_qid) == "processing"
+
+
+# ── PACE-05: structural interval floor (narrow window + high limit) ────────────
+
+
+async def test_interval_floor(async_db_session, test_running_campaign_factory):
+    """PACE-05 (D-03, D-10): with a narrow window and a high
+    max_new_dialogs_per_day, the limit physically cannot fit at the base 20–55s
+    floor. There is NO numeric max(target, base) to assert — the clamp emerges
+    structurally: the base interval gate (untouched) is the binding floor and the
+    expected-by-now predicate simply lets at most the already-allowed quantity
+    through. We assert the run does not crash and at most one item leaves.
+    """
+    _assert_pacing_predicate_wired()  # RED until 13-02 wires the predicate.
+
+    now = datetime.now(timezone.utc)
+    cur_hour = now.hour
+    if cur_hour == 23:
+        cur_hour = 22
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=cur_hour, work_hour_end=cur_hour + 1, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp["workspace_id"]
+    cid = camp["id"]
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET timezone = 'UTC' WHERE id = :cid"
+    ), {"cid": str(cid)})
+    await async_db_session.commit()
+    # High limit in a 1h window: target interval = 3600s / 500 ≈ 7s < base 20s.
+    # The base 20–55s gate (which _check_rate_limits enforces BEFORE selection,
+    # mocked True here) is the binding floor — the limit is simply not reached
+    # (D-03 "safety over volume"); no special-casing, no max() expression.
+    await _set_cap(async_db_session, campaign_id=cid, cap=500)
+
+    q1 = await _insert_pending_item(async_db_session, workspace_id=wid, sender_id=sid,
+                                    campaign_id=cid, recipient_phone="+79994440001")
+    q2 = await _insert_pending_item(async_db_session, workspace_id=wid, sender_id=sid,
+                                    campaign_id=cid, recipient_phone="+79994440002")
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        # Must not raise (no ZeroDivisionError / no crash on a tight window).
+        await worker._process_next_for_sender(sid)
+
+    # One item per call regardless of how generous the limit is (the worker
+    # sends exactly one item per _process_next_for_sender call). The base floor
+    # is what spaces subsequent opens, not the pacing predicate.
+    assert len(captured["picked"]) <= 1, (
+        "at most one new dialog leaves per call; base interval is the floor (D-03)"
+    )
+    assert {q1, q2} >= set(captured["picked"]), (
+        "any picked item must be one of the two seeded items"
+    )
+
+
+# ── PACE-06: catch-up does not burst; jitter present ───────────────────────────
+
+
+async def test_catchup_no_burst(async_db_session, test_running_campaign_factory):
+    """PACE-06 (D-04, D-08): catch-up scenario (0 opened, large expected so many
+    new dialogs are eligible). Two never-contacted items, ONE worker call → at
+    most one item leaves (LIMIT 8 is a candidate pool, not a multi-fire). Jitter
+    must be present in the SELECT source (random.uniform with the jitter consts).
+    """
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp["workspace_id"]
+    cid = camp["id"]
+    # Large limit, 0 opened → expected_now ≫ 0 ⇒ both items eligible by pace.
+    await _set_cap(async_db_session, campaign_id=cid, cap=1000)
+
+    q1 = await _insert_pending_item(async_db_session, workspace_id=wid, sender_id=sid,
+                                    campaign_id=cid, recipient_phone="+79995550001")
+    q2 = await _insert_pending_item(async_db_session, workspace_id=wid, sender_id=sid,
+                                    campaign_id=cid, recipient_phone="+79995550002")
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert len(captured["picked"]) <= 1, (
+        "catch-up must NOT burst: exactly one item per call even when many are eligible"
+    )
+    assert set(captured["picked"]) <= {q1, q2}
+
+    # Jitter present in source (D-08): the pacing computation applies
+    # random.uniform with the jitter constants so openings don't form a grid.
+    # Deferred name reference inside the body keeps collection clean before 13-02.
+    from app.services.queue import PACE_JITTER_LOW, PACE_JITTER_HIGH  # noqa: F401
+
+    src = inspect.getsource(QueueWorker._process_next_for_sender)
+    assert "random.uniform" in src, (
+        "pacing must jitter the expected-by-now count via random.uniform (D-08)"
+    )
+    assert ("PACE_JITTER_LOW" in src and "PACE_JITTER_HIGH" in src), (
+        "jitter must use the PACE_JITTER_* constants (D-08)"
+    )
+
+
+# ── PACE-07: follow-ups bypass pacing; _check_rate_limits untouched ────────────
+
+
+async def test_followup_bypasses_pacing(
+    async_db_session, test_running_campaign_factory
+):
+    """PACE-07 (D-07, D-10): pacing would block a NEW dialog (over expected), but
+    a follow-up / re-contact item (recipient_phone with a prior status='sent' in
+    THIS campaign) bypasses pacing entirely and IS picked. Plus an introspection
+    guard that pacing does NOT live in the per-tick _check_rate_limits gate.
+    """
+    _assert_pacing_predicate_wired()  # RED until 13-02 wires the predicate.
+
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp["workspace_id"]
+    cid = camp["id"]
+    # Tiny limit + an opened dialog → expected_now ≤ 1, count_opened ≥ 1 ⇒ a NEW
+    # dialog would be blocked by pace (same posture as PACE-03 Case 1).
+    await _set_cap(async_db_session, campaign_id=cid, cap=1)
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid, recipient_phone="+79996660001")
+
+    # A prior sent to +79996660999 makes a pending item to that phone a follow-up.
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid, recipient_phone="+79996660999")
+    followup_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid, recipient_phone="+79996660999",
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert followup_qid in captured["picked"], (
+        "follow-up / re-contact item must bypass pacing entirely (D-07/D-10)"
+    )
+    assert await _item_status(async_db_session, followup_qid) == "processing", (
+        "selected follow-up item must transition out of pending"
+    )
+
+    # Introspection guard (D-07): pacing must NOT live in the per-tick gate, or
+    # it would throttle follow-ups and AI replies too.
+    rate_src = inspect.getsource(QueueWorker._check_rate_limits)
+    assert "window_start" not in rate_src, (
+        "_check_rate_limits must NOT reference the pacing window-start (D-07)"
+    )
+    assert "expected_now" not in rate_src, (
+        "_check_rate_limits must NOT reference the expected-by-now count (D-07)"
+    )
+    assert "PACE_JITTER" not in rate_src, (
+        "_check_rate_limits must NOT reference the pacing jitter constants (D-07)"
+    )
