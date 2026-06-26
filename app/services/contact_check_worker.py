@@ -259,6 +259,13 @@ class ContactCheckWorker:
             items = list(items_iter)
             first = items[0]
 
+            # RESV-01/D-05: live control-probe BEFORE trusting this checker's batch.
+            # A degraded checker (>=2 consecutive control misses) is flagged
+            # spam_limited (paused next tick) and its batch is marked suspect so its
+            # not_registered results roll back to pending instead of finalizing.
+            degraded = await self.probe_checker(str(checker_id))
+            probe_state = "suspect" if degraded else "clean"
+
             # Phone wins when present; username-only contacts resolve via username.
             phone_items = [r for r in items if r.phone]
             username_items = [r for r in items if not r.phone and r.username]
@@ -276,7 +283,10 @@ class ContactCheckWorker:
                     summary = await checker_service.check_phones(
                         phones=[r.phone for r in phone_items], **common
                     )
-                    await self._apply_results(phone_items, summary)
+                    await self._apply_results(
+                        phone_items, summary,
+                        checker_id=str(checker_id), probe_state=probe_state,
+                    )
                     processed += len(phone_items)
                     logger.info(
                         f"📋 ContactCheckWorker: checker={first.checker_slug} (phones) "
@@ -296,7 +306,10 @@ class ContactCheckWorker:
                     summary = await checker_service.check_usernames(
                         usernames=[r.username for r in username_items], **common
                     )
-                    await self._apply_results(username_items, summary)
+                    await self._apply_results(
+                        username_items, summary,
+                        checker_id=str(checker_id), probe_state=probe_state,
+                    )
                     processed += len(username_items)
                     logger.info(
                         f"📋 ContactCheckWorker: checker={first.checker_slug} (usernames) "
@@ -491,14 +504,33 @@ class ContactCheckWorker:
             self._consecutive_misses[str(r.id)] = 0
             logger.info("📋 control-probe recovered checker %s → active", r.id)
 
-    async def _apply_results(self, items: list, summary: dict) -> None:
-        """UPDATE contacts по результатам checker'а.
+    async def _apply_results(
+        self,
+        items: list,
+        summary: dict,
+        checker_id: str | None = None,
+        probe_state: str = "clean",
+    ) -> None:
+        """UPDATE contacts по результатам checker'а (RESV-06/D-07/D-09).
 
         ``summary['results']`` — список ``{phone|username, is_registered,
         telegram_id?, error?, from_cache?}``. Phone-контакты сматчиваем по phone
         (E.164 нормализован при импорте), username-контакты — по bare username.
         Если ключ отсутствует в ``results`` — не трогаем строку: для FloodWait
         partial run эти контакты останутся в ``'pending'`` и попадут в след. tick.
+
+        Finalization rule (the core data-integrity fix):
+        - ``probe_state='suspect'`` (degraded checker, >=2 control misses): a
+          ``not_registered`` result is the prime suspect for a FALSE negative, so it
+          is NOT finalized — it rolls back to ``tg_status='pending'`` with
+          ``tg_checked_at=NULL`` (re-checkable by a healthy checker) and is stamped
+          ``tg_probe_state='suspect'`` / ``tg_resolved_by``, ``tg_confidence`` left
+          NULL. NEVER 'not_registered' (D-07/D-09 — this is the root-bug fix).
+        - ``probe_state='clean'``: a ``not_registered`` result finalizes as today
+          PLUS ``tg_confidence='high'`` / ``tg_resolved_by`` / ``tg_probe_state='clean'``.
+        - ``registered`` is ALWAYS kept as 'registered' regardless of probe state
+          (Pitfall 3 — a throttle yields false negatives only, never false positives),
+          stamped with ``tg_resolved_by`` + ``tg_probe_state`` for provenance.
         """
         results_by_phone = {
             r.get("phone"): r for r in summary.get("results", []) if r.get("phone")
@@ -508,6 +540,7 @@ class ContactCheckWorker:
         }
         if not results_by_phone and not results_by_username:
             return
+        suspect = probe_state == "suspect"
         async with AsyncSessionLocal() as db:
             for item in items:
                 if item.phone:
@@ -535,6 +568,10 @@ class ContactCheckWorker:
                         },
                     )
                 elif res.get("is_registered"):
+                    # True positive — kept regardless of probe state (Pitfall 3),
+                    # stamped with resolver provenance. A clean probe stamps high
+                    # confidence; a suspect probe leaves confidence NULL (kept, but
+                    # not certified) so downstream cannot treat it as fully trusted.
                     await db.execute(
                         text(
                             """
@@ -542,6 +579,9 @@ class ContactCheckWorker:
                             SET tg_status = 'registered',
                                 tg_telegram_id = :tid,
                                 tg_username_resolved = :uname,
+                                tg_confidence = :confidence,
+                                tg_resolved_by = :checker_id,
+                                tg_probe_state = :probe_state,
                                 tg_checked_at = NOW(),
                                 updated_at = NOW()
                             WHERE id = :cid
@@ -550,27 +590,70 @@ class ContactCheckWorker:
                         {
                             "tid": res.get("telegram_id"),
                             "uname": res.get("username"),
+                            "confidence": None if suspect else "high",
+                            "checker_id": checker_id,
+                            "probe_state": probe_state,
                             "cid": str(item.contact_id),
                         },
                     )
+                elif suspect:
+                    # Degraded checker — a not_registered is a likely FALSE negative.
+                    # Roll back to pending (re-checkable); NEVER finalize (D-07/D-09).
+                    await db.execute(
+                        text(
+                            """
+                            UPDATE contacts
+                            SET tg_status = 'pending',
+                                tg_checked_at = NULL,
+                                tg_probe_state = 'suspect',
+                                tg_resolved_by = :checker_id,
+                                tg_confidence = NULL,
+                                updated_at = NOW()
+                            WHERE id = :cid
+                            """
+                        ),
+                        {"checker_id": checker_id, "cid": str(item.contact_id)},
+                    )
                 else:
+                    # Clean checker — finalize not_registered with high-confidence
+                    # provenance (RESV-06/D-09).
                     await db.execute(
                         text(
                             """
                             UPDATE contacts
                             SET tg_status = 'not_registered',
+                                tg_confidence = 'high',
+                                tg_resolved_by = :checker_id,
+                                tg_probe_state = 'clean',
                                 tg_checked_at = NOW(),
                                 updated_at = NOW()
                             WHERE id = :cid
                             """
                         ),
-                        {"cid": str(item.contact_id)},
+                        {"checker_id": checker_id, "cid": str(item.contact_id)},
                     )
             await db.commit()
 
 
 # Module-level singleton — register start/stop in app/main.py lifespan.
 contact_check_worker = ContactCheckWorker()
+
+
+async def apply_results_with_confidence(
+    items: list,
+    summary: dict,
+    checker_id: str,
+    probe_state: str = "clean",
+) -> None:
+    """Module-level entry point for the confidence/suspect-aware results write.
+
+    RESV-06/D-07/D-09. Delegates to the singleton worker's ``_apply_results`` so the
+    finalization rule (suspect → pending rollback, clean → high-confidence finalize,
+    registered always kept) lives in one place.
+    """
+    await contact_check_worker._apply_results(
+        items, summary, checker_id=checker_id, probe_state=probe_state
+    )
 
 
 async def run_control_probe(checker_id: str) -> bool:
