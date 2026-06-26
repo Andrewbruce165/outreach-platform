@@ -335,12 +335,13 @@ Plans:
 - Внутри батча интервал между новыми диалогами 3–5 мин с дрожанием.
 - Follow-ups идут вне этого темпа.
 
-**Requirements**: TBD (derive in /gsd:plan-phase 13)
+**Requirements**: PACE-01, PACE-02, PACE-03, PACE-04, PACE-05, PACE-06, PACE-07 (derived during /gsd:plan-phase 13, see REQUIREMENTS.md §Even Pacing Across Sending Window)
 **Depends on:** Phase 12
-**Plans:** 0 plans
+**Plans:** 2 plans (waves 1→2)
 
 Plans:
-- [ ] TBD (run /gsd:discuss-phase 13 → /gsd:plan-phase 13 to break down)
+- [ ] 13-01-PLAN.md — Wave 0 RED test scaffold: tests/test_queue_even_pacing.py (PACE-01..07 stubs, deferred-import RED, Phase 12 helpers reused) [Wave 1, no deps]
+- [ ] 13-02-PLAN.md — PACE_JITTER constants + _window_elapsed_fraction helper + expected-by-now pacing predicate in _process_next_for_sender (queue.py only, D-09) [Wave 2, depends_on: 13-01]
 
 ---
 

@@ -149,6 +149,16 @@
 - [ ] **NDLG-05**: `lovable-handoff/openapi.json` + generated types regenerated via export-handoff flow (rebuild API container first), no manual spec editing (D-15)
 - [ ] **NDLG-06**: Frontend campaign settings form field `max_new_dialogs_per_day` (default 50) with inline warning when value >50 («рекомендуем не больше 50 новых диалогов в сутки **на аккаунт** — выше растёт риск спам-бана») — sibling repo `aimly-tg-outreach`, human-UAT (D-16)
 
+### Even Pacing Across Sending Window (Phase 13 — derived this phase, see 13-CONTEXT.md decisions)
+
+- [ ] **PACE-01**: New even-pacing config (jitter fraction `PACE_JITTER_LOW`/`PACE_JITTER_HIGH`, any helper bounds) is appended to the rate-config block (`queue.py:39-69`) WITHOUT modifying any PROTECTED constant; a source-introspection guard asserts `MIN_SEND_INTERVAL=20`, `MAX_SEND_INTERVAL=55`, `SEND_INTERVAL_FATIGUE=0.5`, `LONG_PAUSE_*`, `MAX_NEW_CONTACTS_PER_HOUR=15` are unchanged (D-08, discretion)
+- [ ] **PACE-02**: A pure Python helper `_window_elapsed_fraction(now=...)` computes today's `window_start_utc` and `elapsed_fraction` per-campaign timezone from `work_hour_start/end` over the RAW window width (no long-pause subtraction), clamped to `[0,1]` (never negative, never >1), handling the post-midnight tail defensively; injectable `now` makes it unit-testable without freezegun (D-01, D-02, D-05, D-06, discretion)
+- [ ] **PACE-03**: An "expected-by-now" pacing predicate is added beside the Phase 12 cap inside the new-dialog branch of the `_process_next_for_sender` candidate SELECT: a new-dialog item is eligible iff `count_opened_since_window_start < :expected_now`; follow-up / re-contact items bypass it entirely; `LIMIT 8` + `FOR UPDATE OF mq SKIP LOCKED` + Phase 4 D-15 working-window re-check + Phase 12 trailing-24h cap predicate all preserved (D-05, D-07, D-09, D-10)
+- [ ] **PACE-04**: The pacing numerator counts new dialogs opened SINCE the start of today's window (`finished_at >= :window_start_utc`), a distinct counter from the Phase 12 trailing-24h cap; verified by a case where the two counters diverge (a dialog opened before window-start counts toward the 24h cap but NOT toward today's pace) (D-06)
+- [ ] **PACE-05**: The target-interval clamp `max(target, base_20–55s)` is realised STRUCTURALLY (base interval gate untouched as the floor; expected-by-now predicate as the ceiling) with no numeric `max()` and no special-casing — when the window cannot fit the limit at the floor, the limit is simply not reached, no crash (D-03, D-10)
+- [ ] **PACE-06**: Jitter (`random.uniform(PACE_JITTER_LOW, PACE_JITTER_HIGH)`) is applied to `expected_now` per evaluation so new-dialog openings don't form a machine grid; the worker sends exactly ONE item per `_process_next_for_sender` call so the `LIMIT 8` batch never multi-fires; follow-ups unaffected (D-04, D-08)
+- [ ] **PACE-07**: Follow-ups and AI replies are NEVER throttled by pacing (only cold first-touches via the queue are paced); `_check_rate_limits` (4/20/150 + 15/h) stays untouched and pacing-free (verified by introspection) (D-07, D-10, CLAUDE.md guard)
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -273,6 +283,13 @@
 | NDLG-04 | Phase 12 | Pending |
 | NDLG-05 | Phase 12 | Pending |
 | NDLG-06 | Phase 12 | Pending |
+| PACE-01 | Phase 13 | Pending |
+| PACE-02 | Phase 13 | Pending |
+| PACE-03 | Phase 13 | Pending |
+| PACE-04 | Phase 13 | Pending |
+| PACE-05 | Phase 13 | Pending |
+| PACE-06 | Phase 13 | Pending |
+| PACE-07 | Phase 13 | Pending |
 
 **Coverage:**
 
@@ -293,3 +310,4 @@
 *2026-06-24 — added HLTH-01..03 (Account Health & Restriction Audit) to Phase 10*
 *2026-06-24 — derived POOLV-01..04 (Pool Visibility) during Phase 10 planning*
 *2026-06-25 — derived NDLG-01..06 (Per-Campaign Daily New-Dialog Limit) during Phase 12 planning*
+*2026-06-26 — derived PACE-01..07 (Even Pacing Across Sending Window) during Phase 13 planning*
