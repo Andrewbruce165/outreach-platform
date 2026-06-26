@@ -259,6 +259,14 @@ class ContactCheckWorker:
                               -- was cleared early (durable — survives api restart).
                               AND (restricted_until IS NULL
                                    OR restricted_until <= NOW())
+                              -- Plan 14-07 (Q3) benign post-batch REST gate: a checker
+                              -- resting after its last batch is skipped until the rest
+                              -- elapses, so the worker cannot chain batch-after-batch on
+                              -- ONE account past the ~45-50 burst onset. SEPARATE from the
+                              -- restriction cooldown above — keys on checker_rest_until,
+                              -- never restricted_until, and carries NO restriction state.
+                              AND (checker_rest_until IS NULL
+                                   OR checker_rest_until <= NOW())
                               -- RESV-02/D-10 durable daily-cap: count today's
                               -- contacts_cache writes by this checker (NOT an
                               -- in-memory counter, Pitfall 5). Over-quota → excluded.
@@ -334,6 +342,11 @@ class ContactCheckWorker:
                 proxy=first.proxy,
             )
 
+            # Plan 14-07 (Q3): did THIS checker complete a batch without raising? Only
+            # then do we put it on the benign post-batch rest. A raising branch is
+            # handled by its own error/degrade path and must NOT also be rested.
+            batch_applied = False
+
             if phone_items:
                 try:
                     summary = await checker_service.check_phones(
@@ -352,6 +365,7 @@ class ContactCheckWorker:
                         phone_items, summary,
                         checker_id=str(checker_id), probe_state=probe_state,
                     )
+                    batch_applied = True
                     processed += len(phone_items)
                     logger.info(
                         f"📋 ContactCheckWorker: checker={first.checker_slug} (phones) "
@@ -380,6 +394,7 @@ class ContactCheckWorker:
                         username_items, summary,
                         checker_id=str(checker_id), probe_state=probe_state,
                     )
+                    batch_applied = True
                     processed += len(username_items)
                     logger.info(
                         f"📋 ContactCheckWorker: checker={first.checker_slug} (usernames) "
@@ -394,7 +409,43 @@ class ContactCheckWorker:
                         exc_info=True,
                     )
 
+            # Plan 14-07 (Q3): after a non-raising batch, put the checker on a benign
+            # post-batch rest so the worker cannot chain batch-after-batch on this ONE
+            # account past the ~45-50 burst onset. The existing rotation then alternates
+            # to a second healthy checker meanwhile (≈2x throughput, no parallel exec).
+            # A clean empty batch STILL rests; a raising branch is skipped (handled by
+            # its own error/degrade path). This touches ONLY checker_rest_until — never
+            # restriction_status/lifecycle_status/restricted_until — and writes NO
+            # sender_restriction_events row, so a rested checker waking up is just
+            # re-selected (it never goes through the restriction recovery control-probe).
+            if batch_applied:
+                await self._rest_checker(str(checker_id))
+
         return processed
+
+    async def _rest_checker(self, checker_id: str) -> None:
+        """Benign post-batch REST (Plan 14-07, Q3): stamp checker_rest_until = NOW() +
+        contact_check_rest_seconds for one checker, in its own short transaction.
+
+        SEPARATE from the restriction machinery (``_flag_checker_degraded`` /
+        ``_recover_checkers``): this sets ONLY ``checker_rest_until`` and never touches
+        ``restriction_status`` / ``lifecycle_status`` / ``restricted_until``, never
+        writes a ``sender_restriction_events`` row. The LATERAL selection gate excludes
+        the checker while ``checker_rest_until > NOW()``; once it elapses the checker is
+        re-selected directly (no recovery control-probe — that path keys on
+        ``restricted_until``, which this never sets).
+        """
+        rest_seconds = get_settings().contact_check_rest_seconds
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                await db.execute(
+                    text(
+                        "UPDATE senders "
+                        "SET checker_rest_until = NOW() + make_interval(secs => :rest) "
+                        "WHERE id = :id"
+                    ),
+                    {"rest": rest_seconds, "id": checker_id},
+                )
 
     async def _probe_cycle(self) -> None:
         """Run the control-probe over every eligible checker once per loop cycle.

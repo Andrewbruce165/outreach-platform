@@ -1,0 +1,21 @@
+-- 035: checker post-batch REST (Phase 14 — RESV-02 / Plan 14-07, Q3 prevention gap).
+--
+-- Next free migration number is 035 (034_contact_resolution_confidence.sql is the
+-- previous one). Auto-applied at api start by app/database.py::_apply_migrations in
+-- lexical order; this file MUST be idempotent (ADD COLUMN IF NOT EXISTS) — the
+-- applier re-runs it on any schema drift and the api fail-fasts (does not start) if
+-- a migration raises. NO data backfill (the column defaults to NULL = "not resting").
+--
+-- Why a SEPARATE benign column instead of reusing restricted_until:
+--   restricted_until is RESTRICTION machinery (spam_limited / frozen cooldown — a
+--   degraded checker resting until its restriction lifts; the recovery control-probe
+--   in _recover_checkers keys on it). checker_rest_until is a BENIGN throughput knob:
+--   after a HEALTHY checker finishes a clean batch it rests briefly so the worker
+--   cannot chain batch-after-batch on ONE account and cross the ~45-50 burst onset
+--   (the 14-06 Q3 gap). It is NOT a restriction: setting it never writes a
+--   sender_restriction_events row, never touches restriction_status/lifecycle_status/
+--   restricted_until, and a checker waking from rest is just re-selected (no probe).
+--   Conflating the two would make a normal post-batch rest look like a throttle
+--   degrade in the audit log and would route a rested checker through the recovery
+--   probe. They are orthogonal and must not be unified.
+ALTER TABLE senders ADD COLUMN IF NOT EXISTS checker_rest_until TIMESTAMPTZ NULL;

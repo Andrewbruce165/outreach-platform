@@ -97,6 +97,13 @@ class Sender(Base):
     # A spam-limited / frozen account still authenticates → auth_status stays 'ok'.
     restriction_status = Column(String(20), nullable=False, server_default='none')  # 'none' | 'spam_limited' | 'frozen'
     restricted_until = Column(DateTime(timezone=True), nullable=True)  # when reconcile re-checks via SpamBot
+    # Migration 035 (Phase 14 / Plan 14-07, Q3): BENIGN post-batch rest for a checker.
+    # After a healthy checker finishes a clean resolve batch the worker stamps this so
+    # it cannot chain batch-after-batch on ONE account past the ~45-50 burst onset
+    # (existing rotation then alternates ≥2 checkers). NOT a restriction — setting it
+    # never touches restriction_status/lifecycle_status/restricted_until and writes no
+    # sender_restriction_events row; a checker waking from rest is just re-selected.
+    checker_rest_until = Column(DateTime(timezone=True), nullable=True)  # benign post-batch rest (NOT a restriction)
     rate_per_min = Column(Integer, nullable=False, server_default='4')
     rate_per_hour = Column(Integer, nullable=False, server_default='20')
     rate_per_day = Column(Integer, nullable=False, server_default='150')

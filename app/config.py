@@ -123,6 +123,16 @@ class Settings(BaseSettings):
         description="Per-checker resolves/day ceiling (durable-counted from "
                     "contacts_cache writes today in Plan 02).",
     )
+    contact_check_rest_seconds: int = Field(
+        default=300,
+        validation_alias="CONTACT_CHECK_REST_SECONDS",
+        description="Benign post-batch REST (Plan 14-07, Q3): after a checker finishes "
+                    "a non-raising resolve batch it rests this many seconds before being "
+                    "re-selected, so the worker cannot chain batch-after-batch on ONE "
+                    "account past the ~45-50 burst onset (the existing rotation alternates "
+                    "≥2 checkers meanwhile). 300s = 5 min start value (tune later). This is "
+                    "NOT a restriction cooldown — it touches only senders.checker_rest_until.",
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:
