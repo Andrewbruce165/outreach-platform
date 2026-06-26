@@ -69,6 +69,17 @@ FLOOD_HARD_THRESHOLD = 300        # seconds
 QUEUE_TICK_BATCH = 500
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ── Even-pacing config (Phase 13) ───────────────────────────────────────────────
+# Jitter on the derived expected-by-now new-dialog count so cold openings don't
+# form a machine grid across the day (D-08). ±25% spread applied via
+# random.uniform on `expected_now` per evaluation — the eligibility boundary
+# floats instead of landing on exact window/limit ticks. This is an ADDITIONAL
+# upper gate on top of the PROTECTED base 20–55s interval (D-10); the base
+# interval / fatigue / long-pause logic above is untouched.
+PACE_JITTER_LOW = 0.75
+PACE_JITTER_HIGH = 1.25
+# ──────────────────────────────────────────────────────────────────────────────
+
 
 def _campaign_in_working_window(
     *,
@@ -109,6 +120,70 @@ def _campaign_in_working_window(
     if not (work_hour_start <= local_now.hour < work_hour_end):
         return False
     return True
+
+
+def _window_elapsed_fraction(
+    *,
+    campaign_tz: str,
+    work_hour_start: int,
+    work_hour_end: int,
+    now: Optional[datetime] = None,
+) -> tuple[datetime, float]:
+    """Even-pacing helper (Phase 13, D-01/D-05/D-06): how far through TODAY's
+    campaign sending window we are.
+
+    Returns ``(window_start_utc, elapsed_fraction)`` where:
+      * ``window_start_utc`` — the UTC instant of today's ``work_hour_start`` in
+        the campaign timezone (the floor for the pacing numerator, D-06: counted
+        from the start of TODAY's window, NOT trailing-24h).
+      * ``elapsed_fraction`` — ``(now − window_start) / raw_window_width``,
+        clamped to ``[0.0, 1.0]``.
+
+    D-01: the denominator is the RAW window width
+    ``(work_hour_end − work_hour_start)`` — NO long-pause subtraction. The caller
+    multiplies ``max_new_dialogs_per_day × elapsed_fraction × jitter`` to get the
+    "expected-by-now" count.
+
+    Clamp rationale (Pitfall 2): ``(now − window_start)`` is not guaranteed inside
+    ``[0, width]`` at a boundary instant or a DST spring-forward, so we clamp.
+    Below the window → ``0.0`` (conservative: expected ≈ 0, no new dialogs yet);
+    past the close → ``1.0`` (saturate at the full daily limit). A degenerate
+    zero-width window (``start == end``) falls back to a 24h width via
+    ``width_h or 24`` so we never divide by zero (never crash). On an invalid
+    timezone we return ``(now, 0.0)`` so pacing conservatively blocks — mirroring
+    the WARNING guard in ``_campaign_in_working_window``.
+
+    ``now`` is injectable (defaults to ``datetime.now(timezone.utc)``) so the math
+    is a pure, deterministically-testable function (no freezegun in the project).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        tz = zoneinfo.ZoneInfo(campaign_tz)
+    except zoneinfo.ZoneInfoNotFoundError as exc:
+        logger.warning(f"Invalid campaign timezone '{campaign_tz}': {exc}")
+        return now, 0.0
+    except Exception as exc:  # safety net — any unexpected tz error
+        logger.warning(f"Failed to resolve campaign timezone '{campaign_tz}': {exc}")
+        return now, 0.0
+
+    local = now.astimezone(tz)
+    # Raw window width in hours (D-01, no long-pause subtraction); `or 24` guards
+    # a degenerate zero-width window so we never divide by zero.
+    width_h = (work_hour_end - work_hour_start) % 24 or 24
+    start_local = local.replace(
+        hour=work_hour_start, minute=0, second=0, microsecond=0
+    )
+    # Defensive post-midnight branch: if the window wraps past midnight and we are
+    # in the post-midnight tail, today's window actually started yesterday. The
+    # supported case is non-wrap (RESEARCH Open Question 1 — `_campaign_in_working
+    # _window` uses a half-open `start <= hour < end` that does not support wrap),
+    # so this branch is defensive only.
+    if work_hour_end <= work_hour_start and local.hour < work_hour_end:
+        start_local -= timedelta(days=1)
+    window_start_utc = start_local.astimezone(timezone.utc)
+    frac = (now - window_start_utc).total_seconds() / (width_h * 3600)
+    return window_start_utc, max(0.0, min(1.0, frac))
 
 
 class QueueWorker:
