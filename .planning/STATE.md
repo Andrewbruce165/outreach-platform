@@ -9,8 +9,8 @@ last_activity: 2026-06-26 -- Phase 14 gap-closure (14-05 + 14-06) executed & mer
 progress:
   total_phases: 16
   completed_phases: 14
-  total_plans: 54
-  completed_plans: 53
+  total_plans: 55
+  completed_plans: 54
   percent: 91
 ---
 
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 14 (reliable-contact-resolution) — gap-closure DONE; live re-activation deferred to follow-up
-Plan: 14-01/02/03 merged+deployed; 14-05 (inline flood-aware finalization) merged dbc7190 (774 tests GREEN); 14-06 (read-only pool-throttle spike) merged f210a5b, human-verify gate resolved = GO. 14-04 (live re-activation) superseded/deferred — NOT executed.
-Status: Awaiting guarded re-activation follow-up plan (see gate verdict below)
+Phase: 14 (reliable-contact-resolution) — all resolution-reliability CODE done; remaining = OPS (deploy + re-activate + landline-filter + drain)
+Plan: 14-01/02/03 merged+deployed; 14-05 (inline flood-aware finalization) merged dbc7190; 14-06 (read-only pool-throttle spike) merged f210a5b, gate=GO; 14-07 (benign per-checker post-batch rest, Q3 prevention gap) merged 716f10c (778 tests GREEN). 14-04 (blind live re-activation) superseded/deferred — NOT executed.
+Status: 14-07 NOT YET DEPLOYED to prod (container runs old code, migration 035 unapplied). Next = user-gated OPS sequence: (1) deploy api (docker compose up -d --build api → applies mig 035 + rest mechanism); (2) set CONTACT_CHECK_REST_SECONDS (default 300); (3) re-activate the 2 parked checkers (sender-7979031303/8364639216); (4) re-upload base pre-filtered of landline numbers to cut volume; (5) staged drain of the ~14.5k pending, watching for degrade/recover thrash. 14-06 GO verdict was CONDITIONAL — for an UNCONDITIONAL pool-wide GO a fresh non-checker account probe was recommended (deferred). Note: post-14-04-rollback prod baseline = pending 14484 / registered 53 / not_registered 5.
 Last activity: 2026-06-26 -- Phase 14 planning complete
 
 Progress: [████████░░] 3/4 plans (14-04 blocked at human-verify smoke)
