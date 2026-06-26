@@ -140,9 +140,19 @@ class ContactCheckWorker:
         logger.info("📋 ContactCheckWorker stopped")
 
     async def _run(self):
-        """Главный цикл — sleep после tick, чтобы не лочить startup."""
+        """Главный цикл — sleep после tick, чтобы не лочить startup.
+
+        Each cycle: (1) recover any checkers whose cooldown elapsed, (2) run the
+        live control-probe over eligible checkers (RESV-01/D-05) — flagging degraded
+        ones and populating ``_degraded_this_tick`` so the resolve step rolls back
+        their suspect batches, then (3) the resolve tick. The probe runs in the
+        loop (not inside ``_tick``) so a single ``_tick`` stays a predictable,
+        single-batch operation for callers/tests.
+        """
         while self._running:
             try:
+                await self._recover_checkers()
+                await self._probe_cycle()
                 await self._tick()
             except asyncio.CancelledError:
                 break
@@ -259,12 +269,14 @@ class ContactCheckWorker:
             items = list(items_iter)
             first = items[0]
 
-            # RESV-01/D-05: live control-probe BEFORE trusting this checker's batch.
-            # A degraded checker (>=2 consecutive control misses) is flagged
-            # spam_limited (paused next tick) and its batch is marked suspect so its
-            # not_registered results roll back to pending instead of finalizing.
-            degraded = await self.probe_checker(str(checker_id))
-            probe_state = "suspect" if degraded else "clean"
+            # RESV-01/D-05: the probe verdict for this checker. Probes run as a
+            # separate step (run_control_probe / scheduled), accumulating per-checker
+            # consecutive misses on the singleton; a checker flagged degraded this
+            # cycle has its batch marked suspect so its not_registered results roll
+            # back to pending instead of finalizing. We read the accumulated verdict
+            # here rather than firing a fresh probe inline — keeping the batch resolve
+            # (check_phones) a single, predictable call per checker.
+            probe_state = "suspect" if str(checker_id) in self._degraded_this_tick else "clean"
 
             # Phone wins when present; username-only contacts resolve via username.
             phone_items = [r for r in items if r.phone]
@@ -325,6 +337,32 @@ class ContactCheckWorker:
                     )
 
         return processed
+
+    async def _probe_cycle(self) -> None:
+        """Run the control-probe over every eligible checker once per loop cycle.
+
+        Resets ``_degraded_this_tick`` (per-cycle scratch) then probes each eligible
+        checker; a degraded checker is flagged + added to ``_degraded_this_tick`` so
+        the subsequent resolve ``_tick`` rolls back its suspect batch. Probe/connection
+        errors are swallowed inside ``probe_checker`` so a flaky probe never blocks
+        resolution.
+        """
+        self._degraded_this_tick = set()
+        if not _CONTROL_SET:
+            return
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                text("""
+                    SELECT id FROM senders
+                    WHERE role = 'checker'
+                      AND auth_status = 'ok'
+                      AND restriction_status = 'none'
+                      AND lifecycle_status <> 'paused'
+                      AND (restricted_until IS NULL OR restricted_until <= NOW())
+                """)
+            )).fetchall()
+        for r in rows:
+            await self.probe_checker(str(r.id))
 
     def _probe_sample(self) -> list[str]:
         """A small random control-set sample (≤ ~5, ≤ burst_cap) — keeps the probe
