@@ -32,6 +32,9 @@ Lifecycle: ``start()`` / ``stop()`` — registered in ``app/main.py`` lifespan.
 import asyncio
 import logging
 import os
+import pathlib
+import random
+from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from typing import Optional
 
@@ -40,8 +43,37 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.checker import checker_service
+from app.services.restriction_audit import record_restriction_event
 
 logger = logging.getLogger(__name__)
+
+
+# RESV-01/D-05: control-set of known-live numbers used by the throttle-detector
+# probe. Loaded ONCE from an app-readable file (NOT inline — the 49 numbers live
+# in app/data/control_set_known_live.txt, shipped via `COPY app/ ./app/`). A probe
+# resolves a small sample LIVE (bypassing cache); a control number coming back
+# not_registered is a MISS.
+_CONTROL_SET_PATH = pathlib.Path(__file__).resolve().parent.parent / "data" / "control_set_known_live.txt"
+
+
+def _load_control_set() -> list[str]:
+    """Parse the control-set file into a list of phone numbers (skip comments)."""
+    try:
+        phones: list[str] = []
+        for line in _CONTROL_SET_PATH.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            phone = line.split(",", 1)[0].strip()
+            if phone:
+                phones.append(phone)
+        return phones
+    except FileNotFoundError:
+        logger.warning("control-set file missing at %s — probe disabled", _CONTROL_SET_PATH)
+        return []
+
+
+_CONTROL_SET: list[str] = _load_control_set()
 
 
 # Env-overridable knobs (RESEARCH §"ContactCheckWorker — стратегия rate-limit"
@@ -77,6 +109,14 @@ class ContactCheckWorker:
         else:
             self.batch_size = burst_cap
         self.poll_interval = CONTACT_CHECK_POLL_INTERVAL
+        # RESV-01/D-05: per-checker CONSECUTIVE control-miss counter. In-memory on
+        # the singleton (mirrors CheckerService._locks singleton-state). A clean
+        # probe RESETS to 0; >= 2 consecutive misses flag the checker spam_limited.
+        # A single miss is stochastic noise (privacy false-negative) and never flags.
+        self._consecutive_misses: dict[str, int] = {}
+        # Checkers found DEGRADED by the probe this tick → their just-resolved
+        # not_registered results roll back to pending in _apply_results (Task 3).
+        self._degraded_this_tick: set[str] = set()
 
     def start(self):
         """Запустить background task. Идемпотентно (повторный start — no-op)."""
@@ -100,9 +140,19 @@ class ContactCheckWorker:
         logger.info("📋 ContactCheckWorker stopped")
 
     async def _run(self):
-        """Главный цикл — sleep после tick, чтобы не лочить startup."""
+        """Главный цикл — sleep после tick, чтобы не лочить startup.
+
+        Each cycle: (1) recover any checkers whose cooldown elapsed, (2) run the
+        live control-probe over eligible checkers (RESV-01/D-05) — flagging degraded
+        ones and populating ``_degraded_this_tick`` so the resolve step rolls back
+        their suspect batches, then (3) the resolve tick. The probe runs in the
+        loop (not inside ``_tick``) so a single ``_tick`` stays a predictable,
+        single-batch operation for callers/tests.
+        """
         while self._running:
             try:
+                await self._recover_checkers()
+                await self._probe_cycle()
                 await self._tick()
             except asyncio.CancelledError:
                 break
@@ -219,6 +269,15 @@ class ContactCheckWorker:
             items = list(items_iter)
             first = items[0]
 
+            # RESV-01/D-05: the probe verdict for this checker. Probes run as a
+            # separate step (run_control_probe / scheduled), accumulating per-checker
+            # consecutive misses on the singleton; a checker flagged degraded this
+            # cycle has its batch marked suspect so its not_registered results roll
+            # back to pending instead of finalizing. We read the accumulated verdict
+            # here rather than firing a fresh probe inline — keeping the batch resolve
+            # (check_phones) a single, predictable call per checker.
+            probe_state = "suspect" if str(checker_id) in self._degraded_this_tick else "clean"
+
             # Phone wins when present; username-only contacts resolve via username.
             phone_items = [r for r in items if r.phone]
             username_items = [r for r in items if not r.phone and r.username]
@@ -236,7 +295,10 @@ class ContactCheckWorker:
                     summary = await checker_service.check_phones(
                         phones=[r.phone for r in phone_items], **common
                     )
-                    await self._apply_results(phone_items, summary)
+                    await self._apply_results(
+                        phone_items, summary,
+                        checker_id=str(checker_id), probe_state=probe_state,
+                    )
                     processed += len(phone_items)
                     logger.info(
                         f"📋 ContactCheckWorker: checker={first.checker_slug} (phones) "
@@ -256,7 +318,10 @@ class ContactCheckWorker:
                     summary = await checker_service.check_usernames(
                         usernames=[r.username for r in username_items], **common
                     )
-                    await self._apply_results(username_items, summary)
+                    await self._apply_results(
+                        username_items, summary,
+                        checker_id=str(checker_id), probe_state=probe_state,
+                    )
                     processed += len(username_items)
                     logger.info(
                         f"📋 ContactCheckWorker: checker={first.checker_slug} (usernames) "
@@ -273,14 +338,237 @@ class ContactCheckWorker:
 
         return processed
 
-    async def _apply_results(self, items: list, summary: dict) -> None:
-        """UPDATE contacts по результатам checker'а.
+    async def _probe_cycle(self) -> None:
+        """Run the control-probe over every eligible checker once per loop cycle.
+
+        Resets ``_degraded_this_tick`` (per-cycle scratch) then probes each eligible
+        checker; a degraded checker is flagged + added to ``_degraded_this_tick`` so
+        the subsequent resolve ``_tick`` rolls back its suspect batch. Probe/connection
+        errors are swallowed inside ``probe_checker`` so a flaky probe never blocks
+        resolution.
+        """
+        self._degraded_this_tick = set()
+        if not _CONTROL_SET:
+            return
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                text("""
+                    SELECT id FROM senders
+                    WHERE role = 'checker'
+                      AND auth_status = 'ok'
+                      AND restriction_status = 'none'
+                      AND lifecycle_status <> 'paused'
+                      AND (restricted_until IS NULL OR restricted_until <= NOW())
+                """)
+            )).fetchall()
+        for r in rows:
+            await self.probe_checker(str(r.id))
+
+    def _probe_sample(self) -> list[str]:
+        """A small random control-set sample (≤ ~5, ≤ burst_cap) — keeps the probe
+        from eating the per-tick budget (RESV-02/D-10). Random so a stale-cache or
+        targeted-number attack can't dodge the detector."""
+        if not _CONTROL_SET:
+            return []
+        size = min(3, get_settings().contact_check_burst_cap, len(_CONTROL_SET))
+        # Use a 3-5 window; 3 is enough for the consecutive-miss signal and is the
+        # smallest burst the probe needs.
+        return random.sample(_CONTROL_SET, size)
+
+    async def probe_checker(self, checker_id: str) -> bool:
+        """Run a live control-probe for one checker; track consecutive misses.
+
+        RESV-01/D-05. Resolves a small control sample via
+        ``checker_service.check_phones`` (which, post-Task-1, hits Telegram live for
+        cache-miss control numbers). A control number resolving ``not_registered``
+        is a MISS. Misses are counted PER checker, CONSECUTIVE, on the singleton's
+        ``_consecutive_misses`` dict; a clean probe RESETS the counter to 0.
+
+        On ``>= 2`` consecutive misses (D-05 — a single miss is noise) the checker
+        is flagged ``spam_limited`` via the Phase-10 restriction infra (event row +
+        senders UPDATE in ONE transaction), paused, and put on a cooldown; the
+        Plan-02 selection gate then excludes it on the next tick (Pitfall 2 — never
+        via ``auth_status``).
+
+        Returns ``True`` if the checker is degraded (flagged this call), else
+        ``False``. The caller marks a degraded checker's batch suspect (Task 3).
+        """
+        sample = self._probe_sample()
+        if not sample:
+            return False
+
+        # Read the checker's resolve credentials. A missing/ineligible row → no probe.
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(
+                text("""
+                    SELECT workspace_id, slug, session_string, proxy
+                    FROM senders WHERE id = :id
+                """),
+                {"id": checker_id},
+            )).fetchone()
+        if row is None:
+            return False
+
+        try:
+            summary = await checker_service.check_phones(
+                workspace_id=str(row.workspace_id),
+                checker_id=checker_id,
+                checker_slug=row.slug,
+                encrypted_session=row.session_string,
+                phones=sample,
+                proxy=row.proxy,
+            )
+        except Exception as exc:  # noqa: BLE001 — a probe error must not kill the tick
+            logger.warning("control-probe for checker %s raised: %s", checker_id, exc)
+            return False
+
+        results = summary.get("results", [])
+        # MISS if ANY control number (known-live) comes back not_registered. The
+        # control set is verified-live, so a healthy checker resolves them all.
+        miss = any(not r.get("is_registered") for r in results) if results else False
+
+        if not miss:
+            self._consecutive_misses[checker_id] = 0
+            return False
+
+        self._consecutive_misses[checker_id] = self._consecutive_misses.get(checker_id, 0) + 1
+        n = self._consecutive_misses[checker_id]
+        if n < 2:
+            # Single miss — stochastic noise (privacy false-negative). Do NOT flag.
+            return False
+
+        # >= 2 consecutive misses → degrade via Phase-10 infra.
+        await self._flag_checker_degraded(checker_id, n)
+        self._degraded_this_tick.add(checker_id)
+        return True
+
+    async def _flag_checker_degraded(self, checker_id: str, miss_count: int) -> None:
+        """Mark a checker spam_limited + audit row in ONE transaction (D-06).
+
+        Reuses the Phase-10 ``record_restriction_event`` (db= → caller commits) so
+        the event row and the ``senders`` status UPDATE land atomically. Marks via
+        ``restriction_status`` (NOT ``auth_status`` — Pitfall 2). Cooldown =
+        ``settings.contact_check_cooldown_seconds``.
+        """
+        cooldown = get_settings().contact_check_cooldown_seconds
+        cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                await record_restriction_event(
+                    sender_id=checker_id,
+                    event_type="spam_limited",
+                    source="antispam_signal",
+                    restricted_until=cooldown_until,
+                    raw_text=f"control-probe: {miss_count} consecutive misses",
+                    db=db,  # same TX as the UPDATE below
+                )
+                await db.execute(
+                    text("""
+                        UPDATE senders
+                        SET restriction_status = 'spam_limited',
+                            restricted_until = :until,
+                            lifecycle_status = 'paused'
+                        WHERE id = :id
+                    """),
+                    {"until": cooldown_until, "id": checker_id},
+                )
+        logger.warning(
+            "📋 control-probe flagged checker %s spam_limited (%d consecutive misses), "
+            "cooldown %ss", checker_id, miss_count, cooldown,
+        )
+
+    async def _recover_checkers(self) -> None:
+        """D-04 recovery: re-probe checkers whose cooldown elapsed; clear if clean.
+
+        On a tick, any checker previously flagged ``spam_limited`` whose
+        ``restricted_until <= NOW()`` gets a fresh live control-probe. If clean
+        (no miss), write a ``cleared`` event + restore ``restriction_status='none'`` /
+        ``lifecycle_status='active'`` / ``restricted_until=NULL`` and reset its miss
+        counter — the Plan-02 selection gate then returns it to rotation. We do NOT
+        reuse the sender SpamBot reconcile (it can't see a contacts-API throttle).
+        """
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                text("""
+                    SELECT id, workspace_id, slug, session_string, proxy
+                    FROM senders
+                    WHERE role = 'checker'
+                      AND restriction_status = 'spam_limited'
+                      AND restricted_until IS NOT NULL
+                      AND restricted_until <= NOW()
+                """)
+            )).fetchall()
+
+        for r in rows:
+            sample = self._probe_sample()
+            if not sample:
+                return
+            try:
+                summary = await checker_service.check_phones(
+                    workspace_id=str(r.workspace_id),
+                    checker_id=str(r.id),
+                    checker_slug=r.slug,
+                    encrypted_session=r.session_string,
+                    phones=sample,
+                    proxy=r.proxy,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("recovery probe for checker %s raised: %s", r.id, exc)
+                continue
+            results = summary.get("results", [])
+            clean = bool(results) and all(res.get("is_registered") for res in results)
+            if not clean:
+                continue
+            async with AsyncSessionLocal() as db:
+                async with db.begin():
+                    await record_restriction_event(
+                        sender_id=str(r.id),
+                        event_type="cleared",
+                        source="antispam_signal",
+                        restricted_until=None,
+                        raw_text="control-probe recovery: clean after cooldown",
+                        db=db,
+                    )
+                    await db.execute(
+                        text("""
+                            UPDATE senders
+                            SET restriction_status = 'none',
+                                restricted_until = NULL,
+                                lifecycle_status = 'active'
+                            WHERE id = :id
+                        """),
+                        {"id": str(r.id)},
+                    )
+            self._consecutive_misses[str(r.id)] = 0
+            logger.info("📋 control-probe recovered checker %s → active", r.id)
+
+    async def _apply_results(
+        self,
+        items: list,
+        summary: dict,
+        checker_id: str | None = None,
+        probe_state: str = "clean",
+    ) -> None:
+        """UPDATE contacts по результатам checker'а (RESV-06/D-07/D-09).
 
         ``summary['results']`` — список ``{phone|username, is_registered,
         telegram_id?, error?, from_cache?}``. Phone-контакты сматчиваем по phone
         (E.164 нормализован при импорте), username-контакты — по bare username.
         Если ключ отсутствует в ``results`` — не трогаем строку: для FloodWait
         partial run эти контакты останутся в ``'pending'`` и попадут в след. tick.
+
+        Finalization rule (the core data-integrity fix):
+        - ``probe_state='suspect'`` (degraded checker, >=2 control misses): a
+          ``not_registered`` result is the prime suspect for a FALSE negative, so it
+          is NOT finalized — it rolls back to ``tg_status='pending'`` with
+          ``tg_checked_at=NULL`` (re-checkable by a healthy checker) and is stamped
+          ``tg_probe_state='suspect'`` / ``tg_resolved_by``, ``tg_confidence`` left
+          NULL. NEVER 'not_registered' (D-07/D-09 — this is the root-bug fix).
+        - ``probe_state='clean'``: a ``not_registered`` result finalizes as today
+          PLUS ``tg_confidence='high'`` / ``tg_resolved_by`` / ``tg_probe_state='clean'``.
+        - ``registered`` is ALWAYS kept as 'registered' regardless of probe state
+          (Pitfall 3 — a throttle yields false negatives only, never false positives),
+          stamped with ``tg_resolved_by`` + ``tg_probe_state`` for provenance.
         """
         results_by_phone = {
             r.get("phone"): r for r in summary.get("results", []) if r.get("phone")
@@ -290,6 +578,7 @@ class ContactCheckWorker:
         }
         if not results_by_phone and not results_by_username:
             return
+        suspect = probe_state == "suspect"
         async with AsyncSessionLocal() as db:
             for item in items:
                 if item.phone:
@@ -317,6 +606,10 @@ class ContactCheckWorker:
                         },
                     )
                 elif res.get("is_registered"):
+                    # True positive — kept regardless of probe state (Pitfall 3),
+                    # stamped with resolver provenance. A clean probe stamps high
+                    # confidence; a suspect probe leaves confidence NULL (kept, but
+                    # not certified) so downstream cannot treat it as fully trusted.
                     await db.execute(
                         text(
                             """
@@ -324,6 +617,9 @@ class ContactCheckWorker:
                             SET tg_status = 'registered',
                                 tg_telegram_id = :tid,
                                 tg_username_resolved = :uname,
+                                tg_confidence = :confidence,
+                                tg_resolved_by = :checker_id,
+                                tg_probe_state = :probe_state,
                                 tg_checked_at = NOW(),
                                 updated_at = NOW()
                             WHERE id = :cid
@@ -332,24 +628,104 @@ class ContactCheckWorker:
                         {
                             "tid": res.get("telegram_id"),
                             "uname": res.get("username"),
+                            "confidence": None if suspect else "high",
+                            "checker_id": checker_id,
+                            "probe_state": probe_state,
                             "cid": str(item.contact_id),
                         },
                     )
+                elif suspect:
+                    # Degraded checker — a not_registered is a likely FALSE negative.
+                    # Roll back to pending (re-checkable); NEVER finalize (D-07/D-09).
+                    await db.execute(
+                        text(
+                            """
+                            UPDATE contacts
+                            SET tg_status = 'pending',
+                                tg_checked_at = NULL,
+                                tg_probe_state = 'suspect',
+                                tg_resolved_by = :checker_id,
+                                tg_confidence = NULL,
+                                updated_at = NOW()
+                            WHERE id = :cid
+                            """
+                        ),
+                        {"checker_id": checker_id, "cid": str(item.contact_id)},
+                    )
                 else:
+                    # Clean checker — finalize not_registered with high-confidence
+                    # provenance (RESV-06/D-09).
                     await db.execute(
                         text(
                             """
                             UPDATE contacts
                             SET tg_status = 'not_registered',
+                                tg_confidence = 'high',
+                                tg_resolved_by = :checker_id,
+                                tg_probe_state = 'clean',
                                 tg_checked_at = NOW(),
                                 updated_at = NOW()
                             WHERE id = :cid
                             """
                         ),
-                        {"cid": str(item.contact_id)},
+                        {"checker_id": checker_id, "cid": str(item.contact_id)},
                     )
             await db.commit()
 
 
 # Module-level singleton — register start/stop in app/main.py lifespan.
 contact_check_worker = ContactCheckWorker()
+
+
+async def apply_results_with_confidence(
+    items: list,
+    summary: dict,
+    checker_id: str,
+    probe_state: str = "clean",
+) -> None:
+    """Module-level entry point for the confidence/suspect-aware results write.
+
+    RESV-06/D-07/D-09. Delegates to the singleton worker's ``_apply_results`` so the
+    finalization rule (suspect → pending rollback, clean → high-confidence finalize,
+    registered always kept) lives in one place.
+    """
+    await contact_check_worker._apply_results(
+        items, summary, checker_id=checker_id, probe_state=probe_state
+    )
+
+
+async def run_control_probe(checker_id: str) -> bool:
+    """Module-level entry point for a single checker's control-probe (RESV-01/D-05).
+
+    Delegates to the singleton worker so the per-checker consecutive-miss counter
+    is shared with ``_tick``'s probing. Returns True if the checker was flagged
+    degraded by this probe.
+    """
+    return await contact_check_worker.probe_checker(checker_id)
+
+
+async def select_eligible_checkers(workspace_id: str) -> list[str]:
+    """Return the ids of all checkers in a workspace currently eligible to resolve.
+
+    RESV-03/D-04. The pool-aware selection gate: a checker is eligible iff it is an
+    authorized checker that is NOT restricted, NOT paused, and NOT resting on a
+    future cooldown — the same disqualifiers the ``_tick`` JOIN LATERAL applies
+    (Plan 02). With ≥2 eligible checkers the work can spread across them (rotation);
+    at N=1 with the only checker resting, this returns ``[]`` so resolution pauses
+    rather than lying (D-04).
+    """
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            text("""
+                SELECT id
+                FROM senders
+                WHERE workspace_id = :wid
+                  AND role = 'checker'
+                  AND auth_status = 'ok'
+                  AND restriction_status = 'none'
+                  AND lifecycle_status <> 'paused'
+                  AND (restricted_until IS NULL OR restricted_until <= NOW())
+            """),
+            {"wid": workspace_id},
+        )).fetchall()
+    return [str(r.id) for r in rows]
