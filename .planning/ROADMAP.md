@@ -359,7 +359,7 @@ Plans:
 **Goal:** Сделать проверку контактов (phone → есть ли в Telegram) надёжной и масштабируемой, чтобы кампании доставали всех достижимых лидов, а не сливали их молча из-за деградировавшего чекера.
 **Requirements**: RESV-01..RESV-07 (см. REQUIREMENTS.md)
 **Depends on:** Phase 2 (checker / contacts_cache / contact_check_worker). Связано с Phase 10 (sender_restriction_events, restriction_status).
-**Plans:** 3/4 plans executed
+**Plans:** 3/4 executed + 2 gap-closure plans (14-04 smoke FAILED → see 14-05/14-06)
 
 **Контекст (расследование 2026-06-26 — `.planning/notes/checker-false-negatives.md`):**
 
@@ -391,6 +391,14 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 — D-03 activation gate, human-verify)*
 - [ ] 14-04-PLAN.md — pre-activation DB verification + activate 2 parked healthy checkers + RESV-07 docs correction + live control-probe smoke (human-verify) [RESV-04, RESV-07] [depends_on: 14-02, 14-03]
+
+**Wave 5** *(gap-closure — 14-04 live-smoke FAILED; blocked on Wave 3 worker fix)*
+- [ ] 14-05-PLAN.md — Gap A: inline flood/throttle-aware finalization in contact_check_worker (FloodWait or anomalous all-empty batch → roll back to pending, never not_registered/high, degrade checker inline + leave rotation, N=0-healthy safe-stop) + RED-first tests [RESV-01, RESV-02, RESV-06] [depends_on: 14-03]
+
+**Wave 6** *(gap-closure — blocked on Wave 5 fix; human-verify gate)*
+- [ ] 14-06-PLAN.md — Gap B: read-only diagnostic spike (phone-resolve pool-wide? @username viable? our-rate triggers throttle?) → findings note + GO/NO-GO behind a blocking human-verify gate. NO blind re-activation / NO 14k drain (deferred to a verdict-gated follow-up) [RESV-01, RESV-02] [depends_on: 14-05]
+
+> **Gap-closure note (2026-06-26):** 14-04 Task-4 live smoke activated the 2 "healthy" parked checkers and both flooded instantly at 0% mobile (`checked=20..30 reg=0 flood=True`). Root cause: on `flood=True` the worker finalized empty resolves as `not_registered`/high-confidence before the decoupled ≥2-miss probe could flag the checker. Prod rolled back to baseline (0 active checkers). 14-05 fixes the finalization inline; 14-06 diagnoses whether re-activation is even viable. RESV-04 (re-check 14k/2110/699) + full re-activation DEFERRED — not closed by this gap-closure. Evidence: `.planning/notes/checker-false-negatives.md` §"Часть 2".
 
 ---
 
