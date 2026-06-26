@@ -20,7 +20,12 @@ import {
   Clock,
   Shuffle,
   UserPlus,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
+
+type TgFilter = "all" | "in_tg" | "checking" | "not_found";
+const PAGE_SIZE = 200;
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
@@ -396,18 +401,27 @@ function FolderDetail({
   const [addOpen, setAddOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [moveOpen, setMoveOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const [tgFilter, setTgFilter] = useState<TgFilter>("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Reset selection whenever the active folder changes — ids from one folder
-  // must never carry over to another.
+  // Reset selection / pagination whenever folder or filters change
   useEffect(() => {
     setSelected(new Set());
     setMoveOpen(false);
+    setPage(0);
   }, [folder?.id]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [tgFilter, search]);
+
   const contactsQ = useQuery({
-    queryKey: ["contacts", folder?.id],
+    queryKey: ["contacts", folder?.id, page],
     queryFn: () =>
-      api<Contact[]>("/api/v1/contacts", { query: { folder_id: folder!.id, limit: 200 } }),
+      api<Contact[]>("/api/v1/contacts", {
+        query: { folder_id: folder!.id, limit: PAGE_SIZE, offset: page * PAGE_SIZE },
+      }),
     enabled: !!folder,
   });
 
@@ -484,15 +498,19 @@ function FolderDetail({
   const contacts = contactsQ.data ?? [];
   const contactsForStats = contactsStatsQ.data ?? contacts;
   const filtered = useMemo(() => {
-    if (!search.trim()) return contacts;
-    const q = search.toLowerCase();
-    return contacts.filter(
-      (c) =>
-        (c.full_name ?? "").toLowerCase().includes(q) ||
+    const q = search.trim().toLowerCase();
+    return contacts.filter((c) => {
+      if (tgFilter === "in_tg" && !isInTelegram(c.tg_status)) return false;
+      if (tgFilter === "checking" && !isCheckingTelegram(c.tg_status)) return false;
+      if (tgFilter === "not_found" && !isNotInTelegram(c.tg_status)) return false;
+      if (!q) return true;
+      return (
         (c.username ?? "").toLowerCase().includes(q) ||
-        (c.phone ?? "").includes(q),
-    );
-  }, [contacts, search]);
+        (c.phone ?? "").toLowerCase().includes(q) ||
+        (c.full_name ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [contacts, search, tgFilter]);
 
   const stats = useMemo(() => {
     const inTg = contactsForStats.filter((c) => isInTelegram(c.tg_status)).length;
@@ -672,17 +690,100 @@ function FolderDetail({
             <input
               className="input"
               style={{ paddingLeft: 30, height: 32, fontSize: 12.5, width: 240 }}
-              placeholder="Search contacts…"
+              placeholder="Search by phone or @username…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button className="btn btn--ghost btn--sm" type="button">
-            <Filter size={12} /> Filters
-          </button>
+          <div style={{ position: "relative" }}>
+            <button
+              className="btn btn--ghost btn--sm"
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              style={tgFilter !== "all" ? { color: "var(--tg-blue)" } : undefined}
+            >
+              <Filter size={12} /> Filters
+              {tgFilter !== "all" && (
+                <span
+                  style={{
+                    marginLeft: 4,
+                    background: "var(--tg-blue)",
+                    color: "white",
+                    borderRadius: 999,
+                    padding: "0 6px",
+                    fontSize: 10,
+                    fontWeight: 600,
+                  }}
+                >
+                  1
+                </span>
+              )}
+            </button>
+            {filtersOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  left: 0,
+                  zIndex: 20,
+                  minWidth: 200,
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                  padding: 6,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-faint)",
+                    padding: "6px 8px 4px",
+                  }}
+                >
+                  Telegram status
+                </div>
+                {(
+                  [
+                    ["all", "All"],
+                    ["in_tg", "In Telegram"],
+                    ["checking", "Checking"],
+                    ["not_found", "Not found"],
+                  ] as [TgFilter, string][]
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    className="btn btn--ghost btn--sm"
+                    style={{
+                      width: "100%",
+                      justifyContent: "flex-start",
+                      color: tgFilter === key ? "var(--tg-blue)" : undefined,
+                      fontWeight: tgFilter === key ? 600 : 500,
+                    }}
+                    onClick={() => {
+                      setTgFilter(key);
+                      setFiltersOpen(false);
+                    }}
+                  >
+                    {tgFilter === key ? <Check size={12} /> : <span style={{ width: 12 }} />}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <span style={{ flex: 1 }} />
           <span className="muted text-xs">
-            Showing {filtered.length.toLocaleString()} of {total.toLocaleString()}
+            {(() => {
+              const start = page * PAGE_SIZE + 1;
+              const end = page * PAGE_SIZE + contacts.length;
+              return total > 0
+                ? `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`
+                : "0 contacts";
+            })()}
           </span>
         </div>
 
@@ -867,6 +968,42 @@ function FolderDetail({
               )}
             </tbody>
           </table>
+        )}
+
+        {total > PAGE_SIZE && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderTop: "1px solid var(--border)",
+              background: "var(--bg)",
+            }}
+          >
+            <span className="muted text-xs">
+              Page {page + 1} of {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={page === 0 || contactsQ.isFetching}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              <ChevronLeft size={13} /> Prev
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={
+                contactsQ.isFetching ||
+                contacts.length < PAGE_SIZE ||
+                (page + 1) * PAGE_SIZE >= total
+              }
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next <ChevronRight size={13} />
+            </button>
+          </div>
         )}
       </div>
       {addOpen && (
