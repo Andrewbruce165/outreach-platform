@@ -222,7 +222,17 @@ async def test_new_dialog_allowed_under_cap(
     async_db_session, test_running_campaign_factory
 ):
     """cap=2, only 1 new dialog opened (under cap) → a fresh new-dialog item IS
-    selectable."""
+    selectable.
+
+    Isolates the Phase 12 cap as the only variable (per this file's docstring):
+    the 1 prior dialog is seeded with ``finished_at`` 23h ago — inside the
+    trailing-24h cap window (so ``_count_in_window_sent == 1``, under cap=2) but
+    BEFORE today's Phase 13 window start (the full-day window starts at the most
+    recent UTC midnight; 23h-ago always lands in yesterday relative to that
+    midnight), so the expected-by-now pace numerator is 0 and the fresh new dialog
+    is pace-eligible regardless of wall-clock fraction. This keeps the cap
+    assertion intact while decoupling it from the Phase 13 pacing gate (two
+    distinct counters, Phase 13 D-06)."""
     camp, senders = await test_running_campaign_factory(
         sender_count=1,
         work_hour_start=0, work_hour_end=24, work_days_mask=127,
@@ -232,8 +242,25 @@ async def test_new_dialog_allowed_under_cap(
     cid = camp["id"]
     await _set_cap(async_db_session, campaign_id=cid, cap=2)
 
-    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
-                            campaign_id=cid, recipient_phone="+79990000001")
+    # Prior dialog finished 23h ago: counts for the trailing-24h cap, but predates
+    # today's (UTC-midnight) window start at any wall-clock hour, so it does NOT
+    # inflate the Phase 13 pace numerator — keeps this a pure cap test.
+    old_qid = str(uuid.uuid4())
+    await async_db_session.execute(text("""
+        INSERT INTO message_queue (
+            id, workspace_id, sender_id, campaign_id,
+            item_type, status, recipient_phone, message_text,
+            scheduled_at, finished_at
+        ) VALUES (
+            :qid, :wid, :sid, :cid,
+            'message', 'sent', :rp, 'older',
+            NOW() - INTERVAL '23 hours', NOW() - INTERVAL '23 hours'
+        )
+    """), {
+        "qid": old_qid, "wid": str(wid), "sid": str(sid),
+        "cid": str(cid), "rp": "+79990000001",
+    })
+    await async_db_session.commit()
     assert await _count_in_window_sent(async_db_session, sender_id=sid, campaign_id=cid) == 1
 
     qid = await _insert_pending_item(async_db_session, workspace_id=wid, sender_id=sid,

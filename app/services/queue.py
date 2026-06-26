@@ -360,6 +360,59 @@ class QueueWorker:
             )
             await asyncio.sleep(long_pause)
 
+        # ── Phase 13 (PACE-03..07, D-05/D-06/D-08/D-10): even-pacing pre-query ──
+        # Compute the "expected-by-now" new-dialog count for THIS sender's active
+        # campaign BEFORE the candidate SELECT, because the elapsed-fraction math
+        # (zoneinfo / DST / midnight) lives in tested Python (mirrors Phase 4 D-15
+        # which kept the working-window decision Python-side), and `expected_now`
+        # is a per-(sender,campaign) Python-computed bind.
+        #
+        # We target the campaign of the NEXT eligible pending item (priority DESC,
+        # created_at ASC) with the same base WHERE as the main SELECT minus the
+        # new-dialog/follow-up predicate. In practice a sender's queued items
+        # belong to its attached campaign; if a sender ever spans multiple running
+        # campaigns the pace uses that item's campaign window — acceptable, since
+        # per-(sender,campaign) isolation already holds from Phase 12.
+        now_utc = datetime.now(timezone.utc)
+        window_start_utc = now_utc          # conservative defaults (no campaign
+        expected_now = 0.0                  # → expected 0 → no new dialog picked)
+        async with AsyncSessionLocal() as db:
+            camp_row = (await db.execute(
+                text("""
+                    SELECT c.timezone AS c_tz,
+                           c.work_hour_start AS c_whs,
+                           c.work_hour_end AS c_whe,
+                           c.max_new_dialogs_per_day AS c_cap
+                    FROM message_queue mq
+                    JOIN campaigns c ON c.id = mq.campaign_id
+                    WHERE mq.sender_id = :sid
+                      AND mq.status = 'pending'
+                      AND mq.scheduled_at <= NOW()
+                      AND mq.campaign_id IS NOT NULL
+                      AND c.status = 'running'
+                      AND (c.start_date IS NULL OR NOW() >= c.start_date)
+                    ORDER BY mq.priority DESC, mq.created_at ASC
+                    LIMIT 1
+                """),
+                {"sid": str(sender_id)}
+            )).fetchone()
+
+        if camp_row is None:
+            return  # nothing eligible to pace/pick
+
+        window_start_utc, frac = _window_elapsed_fraction(
+            campaign_tz=camp_row.c_tz,
+            work_hour_start=camp_row.c_whs,
+            work_hour_end=camp_row.c_whe,
+            now=now_utc,
+        )
+        # Expected-by-now = daily limit × elapsed fraction × jitter (D-08, fresh
+        # each call so openings don't form a machine grid). No floor/ceil — the
+        # jitter already blurs the boundary, and PG compares int < numeric fine.
+        expected_now = (
+            camp_row.c_cap * frac * random.uniform(PACE_JITTER_LOW, PACE_JITTER_HIGH)
+        )
+
         async with AsyncSessionLocal() as db:
             # Pick the next pending item (SKIP LOCKED prevents double-processing).
             # Phase 4 (D-08..D-11, D-15): per-campaign JOIN + working-window
@@ -372,6 +425,18 @@ class QueueWorker:
             # once max_new_dialogs_per_day unique new dialogs were opened in the
             # trailing 24h; follow-ups stay eligible. _check_rate_limits
             # (4/20/150 + 15/h) untouched (D-09).
+            # Phase 13 (PACE-03..07): the expected-by-now pacing subquery is ANDed
+            # BESIDE the Phase 12 cap inside the new-dialog branch. Two DISTINCT
+            # counters (Pitfall 1): the cap counts the trailing-24h window
+            # (NOW() - INTERVAL '24 hours'), the pace counts from TODAY's window
+            # start (:window_start_utc, D-06). :expected_now / :window_start_utc are
+            # passed STRICTLY as binds (never f-string interpolated). Structural
+            # interval floor (D-03/D-10): there is NO numeric max(target, base) —
+            # the PROTECTED base 20–55s gate in _check_rate_limits stays the floor;
+            # this predicate is only the ceiling. Benign double-open race
+            # (READ COMMITTED, same posture as Phase 12): two parallel workers may
+            # both see count < expected → at worst ~1 extra new dialog per tick,
+            # self-correcting next tick. Follow-ups bypass pacing entirely (D-07/D-10).
             rows = await db.execute(
                 text("""
                     SELECT
@@ -390,7 +455,7 @@ class QueueWorker:
                       AND c.status = 'running'
                       AND (c.start_date IS NULL OR NOW() >= c.start_date)
                       AND (
-                        /* follow-up to an existing contact — never blocked by the new-dialog cap (D-06/D-08) */
+                        /* follow-up to an existing contact — never blocked by the new-dialog cap OR pacing (D-06/D-07/D-08/D-10) */
                         EXISTS (
                           SELECT 1 FROM message_queue prior
                           WHERE prior.campaign_id = mq.campaign_id
@@ -398,19 +463,30 @@ class QueueWorker:
                             AND prior.status = 'sent'
                         )
                         OR
-                        /* new dialog — only if this (sender,campaign) is still under the cap (D-01/D-02/D-05) */
-                        (SELECT COUNT(DISTINCT opened.recipient_phone)
+                        /* new dialog — only if under BOTH the Phase 12 trailing-24h cap (D-01/D-02/D-05) … */
+                        ((SELECT COUNT(DISTINCT opened.recipient_phone)
                            FROM message_queue opened
                           WHERE opened.sender_id = mq.sender_id
                             AND opened.campaign_id = mq.campaign_id
                             AND opened.status = 'sent'
                             AND opened.finished_at >= NOW() - INTERVAL '24 hours') < c.max_new_dialogs_per_day
+                         /* … AND the Phase 13 expected-by-now pace, counted from TODAY's window start (D-05/D-06) */
+                         AND (SELECT COUNT(DISTINCT paced.recipient_phone)
+                                FROM message_queue paced
+                               WHERE paced.sender_id = mq.sender_id
+                                 AND paced.campaign_id = mq.campaign_id
+                                 AND paced.status = 'sent'
+                                 AND paced.finished_at >= :window_start_utc) < :expected_now)
                       )
                     ORDER BY mq.priority DESC, mq.created_at ASC
                     LIMIT 8
                     FOR UPDATE OF mq SKIP LOCKED
                 """),
-                {"sid": str(sender_id)}
+                {
+                    "sid": str(sender_id),
+                    "window_start_utc": window_start_utc,
+                    "expected_now": expected_now,
+                }
             )
 
             now_utc = datetime.now(timezone.utc)
