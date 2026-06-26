@@ -297,6 +297,7 @@ Plans:
 **Goal:** Ввести явный настраиваемый дневной лимит **новых холодных диалогов** на уровне кампании. Сейчас такого лимита нет вообще — только захардкоженный `MAX_NEW_CONTACTS_PER_HOUR = 15` ([services/queue.py:52](app/services/queue.py#L52)) и общий потолок 150 сообщений/день per-sender, что позволяет одному аккаунту написать до ~150 незнакомцам в сутки при индустриальном пороге опасности 50+/сутки.
 
 **Scope:**
+
 - **Модель + миграция:** `campaigns.max_new_dialogs_per_day INT NOT NULL DEFAULT 50`. Миграция `NNN_*.sql`, идемпотентная (`ADD COLUMN IF NOT EXISTS`), авто-применяется через `_apply_migrations`.
 - **Enforcement в queue-воркере:** per-item фильтр в выборке кандидатов `_process_next_for_sender` (НЕ в `_check_rate_limits` — D-07/D-09): подсчёт уникальных новых диалогов (нет предыдущего `status='sent'` к этому `recipient_phone` в рамках ЭТОЙ кампании), открытых этим sender'ом за trailing-24h, против `max_new_dialogs_per_day`. При достижении — из кандидатов LIMIT 8 / `FOR UPDATE OF mq SKIP LOCKED` **исключаются новые-диалоговые элементы** этой кампании, follow-up/re-contact элементы остаются eligible. Per-sender лимиты 4/20/150 + `MAX_NEW_CONTACTS_PER_HOUR=15` в `_check_rate_limits` нетронуты. Фоллоу-апы существующим контактам **не блокируются**.
 - **Soft-cap warning (как D-14):** значение >50 → не блокировать, вернуть `warnings[]` (паттерн `RATE_SOFT_CAP` / `WarningItem` из [senders.py:135-168](app/routers/senders.py#L135-L168)). Выше hard cap (**100** — верх «прогретого» диапазона из индустрии) → 422. Зелёный коридор: ≤50.
@@ -304,6 +305,7 @@ Plans:
 - **UI-контракт (UI-SPEC):** поле в форме настроек кампании, дефолт 50, inline-предупреждение при значении выше 50 («рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана»).
 
 **Acceptance:**
+
 - Аккаунт в кампании с `max_new_dialogs_per_day=50` после 50 новых диалогов за 24ч встаёт на паузу по этому лимиту; фоллоу-апы существующим контактам не блокируются.
 - Создание кампании со значением >50 → 200 + `warnings[]`; >100 → 422.
 - Дефолт новой кампании = 50.
@@ -313,6 +315,7 @@ Plans:
 **Plans:** 3/4 plans executed
 
 Plans:
+
 - [x] 12-01-PLAN.md — migration 033 + ORM column max_new_dialogs_per_day (DEFAULT 50) [NDLG-01]
 - [x] 12-02-PLAN.md — queue per-(sender,campaign) new-dialog cap filter + integration test [NDLG-02]
 - [x] 12-03-PLAN.md — API schemas + soft/hard-cap validation + warnings[] write-response + API tests [NDLG-03, NDLG-04]
@@ -325,12 +328,14 @@ Plans:
 **Goal:** Распределять открытие **новых диалогов** равномерно по активному окну рассылки кампании, а не выпаливать дневной лимит в начале окна. Сейчас движок очереди шлёт с интервалом 20–55 сек ([queue.py:41-44](app/services/queue.py#L41-L44)) + длинные паузы каждые 12–25 отправок — это сглаживает темп, но не привязано к дневному лимиту и ширине окна, поэтому весь дневной объём может уйти за первые часы. Цель — производный темп: `max_new_dialogs_per_day / активные_часы → целевой интервал`, с плавающими интервалами и батчингом пула.
 
 **Scope (предварительно — уточнить в /gsd:discuss-phase 13):**
+
 - **Производный темп:** активное окно = `work_hour_end − work_hour_start` за вычетом длинных пауз (≈ «7 активных часов»). Целевой интервал между новыми диалогами = окно / `max_new_dialogs_per_day` (вход из Phase 12).
 - **Батчинг пула:** пул аккаунтов кампании делится на батчи; внутри батча — 1 новый диалог каждые 3–5 мин с плавающими интервалами.
 - **Эмпирические константы под защитой** (CLAUDE.md): `MIN/MAX_SEND_INTERVAL`, `LONG_PAUSE_*`, `MAX_NEW_CONTACTS_PER_HOUR` — менять только в рамках этой фазы и с явным обсуждением. Возможен per-campaign override вместо правки глобалей.
 - **Применяется только к новым диалогам** — follow-ups (как и в Phase 12) не троттлятся этим механизмом.
 
 **Acceptance (предварительно):**
+
 - При `max_new_dialogs_per_day=50` и окне 9–20 новые диалоги открываются размазанно по окну (≈ целевой интервал), а не пачкой в первый час.
 - Внутри батча интервал между новыми диалогами 3–5 мин с дрожанием.
 - Follow-ups идут вне этого темпа.
@@ -340,7 +345,12 @@ Plans:
 **Plans:** 2 plans (waves 1→2)
 
 Plans:
+**Wave 1**
+
 - [ ] 13-01-PLAN.md — Wave 0 RED test scaffold: tests/test_queue_even_pacing.py (PACE-01..07 stubs, deferred-import RED, Phase 12 helpers reused) [Wave 1, no deps]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 13-02-PLAN.md — PACE_JITTER constants + _window_elapsed_fraction helper + expected-by-now pacing predicate in _process_next_for_sender (queue.py only, D-09) [Wave 2, depends_on: 13-01]
 
 ---
