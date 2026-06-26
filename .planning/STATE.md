@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 14 context gathered
-last_updated: "2026-06-26T13:58:29.489Z"
-last_activity: 2026-06-26 -- Phase 14 execution started
+last_updated: "2026-06-26T14:30:24.372Z"
+last_activity: 2026-06-26 -- Phase 14 planning complete
 progress:
   total_phases: 16
   completed_phases: 14
-  total_plans: 52
+  total_plans: 54
   completed_plans: 51
-  percent: 67
+  percent: 88
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 14 (reliable-contact-resolution) — BLOCKED at 14-04 live smoke (gap-closure needed)
 Plan: 3 of 4 complete (14-01/02/03 merged + deployed, 768 tests GREEN); 14-04 Tasks 1-3 done, Task-4 smoke FAILED
-Status: Phase 14 NOT complete — live activation reproduced 0% mobile throttle; prod rolled back to baseline
-Last activity: 2026-06-26 -- 14-04 live-smoke failure, prod restored
+Status: Ready to execute
+Last activity: 2026-06-26 -- Phase 14 planning complete
 
 Progress: [████████░░] 3/4 plans (14-04 blocked at human-verify smoke)
 
@@ -148,6 +148,8 @@ None yet.
 - Phase 4 первым планом — аудит существующего webhook + function calling (вынести с уровня sender/AIContext на уровень кампании)
 - rotation.py:59,89,122,138 still references DROPPED context_contact_assignments table — 04-04 must rewrite per AUDIT TODO #6 (context_id → campaign_id signature)
 - **14-04 live smoke FAILED → Phase 14 needs gap-closure (2026-06-26).** Waves 1-3 merged + DEPLOYED (mig 034 applied, probe_checker/resolve_phone_with_fallback/tg_probe_state confirmed in running container; 768 tests GREEN). Re-activated the 2 "healthy" checkers (sender-7979031303/8364639216) under the deployed guards — they STILL produced the throttle signature: `checked=20..30 reg=0 flood=True` = 0% mobile-registered (calibration expects ~50%). **Code gap:** on `flood=True` the worker finalized empty results as `tg_status='not_registered'` with `tg_confidence='high'`/`tg_probe_state='clean'`; control-probe fired NO `sender_restriction_events`, suspect-rollback never engaged. Prod fully rolled back (UPDATE 50 → pending, DELETE 50 false cache; 49 control intact; baseline not_registered=5/pending=14484/registered=53; 0 provenance). All 3 checkers parked, api restarted, worker idle. Gap-closure scope in `.planning/notes/checker-false-negatives.md` §"Часть 2": (1) flood/throttle-aware finalization (never trust flood resolve as not_registered; mark checker restricted + pull from rotation); (2) investigate whether throttle is pool-wide (long cooldown? @username-only resolve?). Docs RESV-07 done (CLAUDE.md commit 9669e7c).
+  - **GAP-CLOSURE PLANNED (2026-06-26, commit c7ff169):** 2 new plans, plan-checker VERIFICATION PASSED (no blockers/warnings). **14-05** (Wave 5, autonomous) — Gap A: inline flood/throttle-aware finalization (flood OR anomalous all-empty batch → roll to `pending`, never `not_registered`/`high`/`clean`; degrade checker inline via `_flag_checker_degraded` + `sender_restriction_events` + cooldown; N=0-healthy safe-stop; RED-first tests; no new migration). **14-06** (Wave 6, autonomous:false, blocking human-verify) — Gap B: read-only diagnostic spike → findings note `.planning/notes/checker-pool-throttle-spike.md` answering phone-resolve-dead-pool-wide? / @username-viable? / our-rate-triggers-throttle?, with GO/NO-GO at the gate. **DEFERRED:** RESV-04 full re-check + re-activation of the 14k drain → follow-up only after the spike's GO verdict. Next: `/gsd:execute-phase 14`.
+  - **GATE OVERRIDE (2026-06-26):** decision-coverage-plan gate reported 2/11 (D-01/02/03/05/06/08/09/10/11 "uncovered") — known false-positive (gate matches only verbatim `D-NN:` in must_haves/truths, can't soft-match Russian; see memory gsd-decision-coverage-gate-cyrillic). Substantively covered: D-01/02/03/05/06/09 by EXECUTED 14-01..14-04; D-08 = RESV-04 deliberately deferred. User chose "Proceed anyway". Re-surface at verify-phase if relevant.
 
 ### Quick Tasks Completed
 
