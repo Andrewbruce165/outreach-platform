@@ -66,6 +66,86 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dict:
+    """Resolve a single phone LIVE: ResolvePhone first, importContacts fallback.
+
+    RESV-01/D-02. ``ResolvePhoneRequest`` is the primary resolve, but it returns
+    nothing for a registered-but-private number (find-by-phone = Contacts/Nobody).
+    When it comes back empty (or raises ``PhoneNotOccupiedError`` / ``PHONE_NOT_OCCUPIED``)
+    we fall back to ``ImportContactsRequest`` — adding the number to the checker's
+    address book forces Telegram to surface the user if one exists.
+
+    CRITICAL (Pitfall 4 — this is how the original checker died): an imported
+    contact MUST be removed from the address book immediately via
+    ``DeleteContactsRequest``. Uncleaned imports leak the recipient's PII into the
+    checker's contact list and shift its behavioural profile toward "mass contact
+    importer", which accelerates the shadow-ban. Cleanup runs in a ``finally`` so a
+    crash between import and delete still attempts removal.
+
+    The import call's own failure never crashes the batch — it falls through to
+    ``is_registered=False`` (the conservative, re-checkable verdict). No decrypted
+    session string or full imported-contact PII is logged.
+
+    Returns ``{"is_registered": bool, "telegram_id": int | None}``.
+    """
+    from telethon.tl.functions.contacts import (
+        DeleteContactsRequest,
+        ImportContactsRequest,
+        ResolvePhoneRequest,
+    )
+    from telethon.tl.types import InputPhoneContact
+
+    # 1. Primary: ResolvePhoneRequest (live).
+    resolve_empty = False
+    try:
+        result = await client(ResolvePhoneRequest(phone=phone))
+        if result and result.users:
+            return {"is_registered": True, "telegram_id": result.users[0].id}
+        resolve_empty = True
+    except FloodWaitError:
+        raise  # caller handles FloodWait — never mask it
+    except PhoneNumberInvalidError:
+        return {"is_registered": False, "telegram_id": None}
+    except PhoneNotOccupiedError:
+        resolve_empty = True
+    except Exception as exc:  # noqa: BLE001
+        err = str(exc)
+        if "PHONE_NOT_OCCUPIED" in err or "phone_not_occupied" in err.lower():
+            resolve_empty = True
+        else:
+            raise  # unexpected (frozen/network) — let the caller stop the batch
+
+    if not resolve_empty:
+        return {"is_registered": False, "telegram_id": None}
+
+    # 2. Fallback: importContacts — surfaces a private/registered user that
+    #    ResolvePhone could not see. Its own failure is non-fatal (→ not registered).
+    imported_user = None
+    try:
+        res = await client(ImportContactsRequest(contacts=[
+            InputPhoneContact(client_id=0, phone=phone, first_name="Check", last_name="")
+        ]))
+        if res and getattr(res, "users", None):
+            imported_user = res.users[0]
+    except FloodWaitError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — import fallback must not crash the batch
+        logger.warning("importContacts fallback failed for a phone: %s", exc)
+        return {"is_registered": False, "telegram_id": None}
+
+    if imported_user is None:
+        return {"is_registered": False, "telegram_id": None}
+
+    # 3. MANDATORY cleanup (D-02 / Pitfall 4): remove the imported contact so the
+    #    checker's address book / behavioural profile stays clean.
+    try:
+        await client(DeleteContactsRequest(id=[imported_user]))
+    except Exception as exc:  # noqa: BLE001 — cleanup failure is logged, not fatal
+        logger.warning("DeleteContacts cleanup after import failed: %s", exc)
+
+    return {"is_registered": True, "telegram_id": imported_user.id}
+
+
 class CheckerService:
     """Service for bulk phone-number verification using checker Telegram accounts."""
 
@@ -171,6 +251,75 @@ class CheckerService:
         async with self._get_lock(checker_slug):
             return await self._check_phones_locked(workspace_id, checker_id, checker_slug, encrypted_session, phones, proxy)
 
+    async def probe_control(
+        self,
+        checker_slug: str,
+        encrypted_session: str,
+        phones: list[str],
+        proxy: dict | None = None,
+    ) -> dict:
+        """LIVE-only control probe — resolve known-live numbers, bypassing cache.
+
+        RESV-01/D-05 (Pitfall 1): the throttle-detector MUST hit Telegram on every
+        control number. A probe that consults ``contacts_cache`` tests nothing — a
+        silently-throttled checker would "pass" on stale cached hits. So this path
+        deliberately:
+          - NEVER reads ``_lookup_cache`` (live ``ResolvePhoneRequest`` every time),
+          - NEVER writes ``_save_cache`` (the probe must not pollute the resolve cache),
+          - NEVER mutates ``contacts`` rows (the control numbers are real ``registered``
+            Barter rows — they must not be touched).
+
+        Returns ``{"results": [{"phone", "is_registered"}...], "checked": int}``.
+        A control number that comes back ``is_registered=False`` is a MISS (the
+        caller counts consecutive misses per checker). Does not log session strings.
+        """
+        async with self._get_lock(checker_slug):
+            results: list[dict] = []
+            client: Optional[TelegramClient] = None
+            try:
+                client = await self._get_client(encrypted_session, proxy=proxy)
+                from telethon.tl.functions.contacts import ResolvePhoneRequest
+
+                for i, phone in enumerate(phones):
+                    try:
+                        result = await client(ResolvePhoneRequest(phone=phone))
+                        is_registered = bool(result and result.users)
+                    except FloodWaitError:
+                        raise
+                    except (PhoneNumberInvalidError, PhoneNotOccupiedError):
+                        is_registered = False
+                    except Exception as exc:  # noqa: BLE001
+                        err = str(exc)
+                        if "PHONE_NOT_OCCUPIED" in err or "phone_not_occupied" in err.lower():
+                            is_registered = False
+                        else:
+                            logger.error(
+                                f"[checker:{checker_slug}] probe_control error for a control number: {exc}",
+                                exc_info=True,
+                            )
+                            raise
+                    results.append({"phone": phone, "is_registered": is_registered})
+                    if i < len(phones) - 1:
+                        await asyncio.sleep(random.uniform(
+                            settings.contact_check_pace_low,
+                            settings.contact_check_pace_high,
+                        ))
+            except FloodWaitError as exc:
+                logger.warning(
+                    f"[checker:{checker_slug}] probe_control FloodWait after "
+                    f"{len(results)}/{len(phones)} — sleeping {exc.seconds}s"
+                )
+                await asyncio.sleep(exc.seconds)
+            finally:
+                if client:
+                    try:
+                        if client.is_connected():
+                            await client.disconnect()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(f"[checker:{checker_slug}] probe_control disconnect error: {exc}")
+
+            return {"checked": len(results), "results": results}
+
     async def _check_phones_locked(
         self,
         workspace_id: str,
@@ -203,45 +352,23 @@ class CheckerService:
                     logger.debug(f"[checker:{checker_slug}] {phone} → from cache (registered={cached['is_registered']})")
                     continue
 
-                # 2. Cache miss — call Telegram
+                # 2. Cache miss — call Telegram. ResolvePhone first, then the
+                #    importContacts fallback (with mandatory address-book cleanup,
+                #    RESV-01/D-02) for registered-but-private numbers ResolvePhone
+                #    cannot see.
                 try:
-                    from telethon.tl.functions.contacts import ResolvePhoneRequest
-                    result = await client(ResolvePhoneRequest(phone=phone))
-
-                    if result and result.users:
-                        user = result.users[0]
-                        is_registered = True
-                        telegram_id = user.id
-                    else:
-                        is_registered = False
-                        telegram_id = None
-
+                    resolved = await resolve_phone_with_fallback(client, phone)
+                    is_registered = resolved["is_registered"]
+                    telegram_id = resolved["telegram_id"]
                 except FloodWaitError:
                     raise  # propagate to outer except FloodWaitError handler
-                except PhoneNumberInvalidError:
-                    is_registered = False
-                    telegram_id = None
-                except PhoneNotOccupiedError:
-                    # NOTE: is_registered=False here means "not resolvable by phone by this
-                    # stranger checker account", NOT "no Telegram account". Also fires on
-                    # privacy-hidden (find-by-phone = Contacts/Nobody) registered numbers — a
-                    # false negative. See module docstring caveat.
-                    is_registered = False
-                    telegram_id = None
                 except Exception as exc:
-                    err = str(exc)
-                    if "PHONE_NOT_OCCUPIED" in err or "phone_not_occupied" in err.lower():
-                        # NOTE: same false-negative semantics as the PhoneNotOccupiedError branch
-                        # above — "not resolvable by phone by this stranger account", NOT "no
-                        # Telegram account" (privacy-hidden numbers land here too). See module
-                        # docstring caveat.
-                        is_registered = False
-                        telegram_id = None
-                    else:
-                        # Unexpected error (frozen account, network, etc.) — do NOT mask as
-                        # "not registered"; re-raise so the batch stops and logs the real cause
-                        logger.error(f"[checker:{checker_slug}] Unexpected ResolvePhone error for {phone}: {exc}", exc_info=True)
-                        raise
+                    # Unexpected error (frozen account, network, etc.) — do NOT mask as
+                    # "not registered"; re-raise so the batch stops and logs the real cause.
+                    # (PHONE_NOT_OCCUPIED / invalid-number are handled inside the helper
+                    # as a clean not-registered, not re-raised — see its docstring caveat.)
+                    logger.error(f"[checker:{checker_slug}] Unexpected ResolvePhone error for {phone}: {exc}", exc_info=True)
+                    raise
 
                 # 3. Save to cache
                 await self._save_cache(workspace_id, checker_id, phone, is_registered, telegram_id)
@@ -254,9 +381,14 @@ class CheckerService:
                 })
                 logger.debug(f"[checker:{checker_slug}] {phone} → registered={is_registered}")
 
-                # 4. Polite delay between Telegram requests (skip after last item)
+                # 4. Polite delay between Telegram requests (skip after last item).
+                # Pace is the authoritative knob (RESV-02/D-10); defaults 2.0/3.5
+                # match the historical random.uniform so behaviour is unchanged.
                 if i < len(phones) - 1:
-                    delay = random.uniform(2.0, 3.5)
+                    delay = random.uniform(
+                        settings.contact_check_pace_low,
+                        settings.contact_check_pace_high,
+                    )
                     await asyncio.sleep(delay)
 
         except FloodWaitError as exc:
