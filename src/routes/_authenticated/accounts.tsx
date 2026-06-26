@@ -19,6 +19,12 @@ import {
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
 import { api, ApiError } from "@/lib/api";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { components } from "@/types/api";
 
 type Sender = components["schemas"]["SenderResponse"];
@@ -199,6 +205,7 @@ function FleetTable({
   }
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="card">
       <table className="tbl">
         <thead>
@@ -220,6 +227,7 @@ function FleetTable({
         </tbody>
       </table>
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -339,17 +347,27 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
         </span>
       </td>
       <td>
-        <div
-          style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}
-          title={
-            isChecker
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                minWidth: 120,
+                cursor: "help",
+              }}
+            >
+              <span className="num text-xs muted">{sender.sent_today ?? 0} / {dailyLimit}</span>
+              <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[260px] text-left leading-relaxed">
+            {isChecker
               ? `Overall message limit — ${dailyLimit}/day (incl. follow-ups).`
-              : `Overall message limit — ${dailyLimit}/day (incl. follow-ups). New-contact outreach is capped separately at 50 new dialogs/day per account.`
-          }
-        >
-          <span className="num text-xs muted">{sender.sent_today ?? 0} / {dailyLimit}</span>
-          <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
-        </div>
+              : `Overall message limit — ${dailyLimit}/day (incl. follow-ups). New-contact outreach is capped separately at 50 new dialogs/day per account.`}
+          </TooltipContent>
+        </Tooltip>
       </td>
       <td className="num mono text-sm">
         {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} · {sender.rate_limits.per_day}
