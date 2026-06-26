@@ -4,7 +4,13 @@ Background asyncio task в lifespan API-контейнера:
 
 - SELECT pending contacts вместе с workspace's active checker через JOIN LATERAL
   (workspace-isolated: ``s.workspace_id = c.workspace_id`` AND ``role='checker'``
-  AND ``auth_status='ok'``).
+  AND ``auth_status='ok'``). Phase 14 (RESV-05/D-11) добавляет
+  ``restriction_status='none'`` AND ``lifecycle_status <> 'paused'`` AND
+  ``(restricted_until IS NULL OR restricted_until <= NOW())`` — degraded/paused/
+  cooling-down checker НЕ выбирается, поэтому ``spam_limited``-флаг реально
+  останавливает worker (закрытая дыра «checker keeps lying»). Mobiles (+79…)
+  дренируются первыми (RESV-04/D-08), а per-checker daily-cap считается из
+  durable источника (``contacts_cache`` writes today, RESV-02/D-10).
 - Группируем по checker_id, батчем зовём
   ``checker_service.check_phones(...)`` — он уже умеет lock per checker_slug,
   FloodWait handling и polite delay 2–3.5s.
@@ -135,13 +141,20 @@ class ContactCheckWorker:
                             WHERE workspace_id = c.workspace_id
                               AND role = 'checker'
                               AND auth_status = 'ok'
+                              -- RESV-05/D-11: a degraded/paused checker is NEVER
+                              -- selected, so the spam_limited flag actually stops
+                              -- the worker (the hole that let the broken checker lie).
+                              AND restriction_status = 'none'
+                              AND lifecycle_status <> 'paused'
                             LIMIT 1
                         ) s ON TRUE
                         WHERE c.tg_status = 'pending'
                           AND (c.phone IS NOT NULL OR c.username IS NOT NULL)
                           AND (c.tg_checked_at IS NULL
                                OR c.tg_checked_at < NOW() - INTERVAL '5 minutes')
-                        ORDER BY c.created_at ASC
+                        -- RESV-04/D-08: mobiles (+79…) ~50% live → drain first.
+                        ORDER BY (c.phone LIKE '+79%') DESC,
+                                 c.created_at ASC
                         LIMIT :n
                         FOR UPDATE OF c SKIP LOCKED
                         """
