@@ -88,6 +88,50 @@ CONTACT_CHECK_BATCH_SIZE = int(_BATCH_SIZE_OVERRIDE) if _BATCH_SIZE_OVERRIDE els
 CONTACT_CHECK_POLL_INTERVAL = int(os.environ.get("CONTACT_CHECK_POLL_INTERVAL", "5"))
 
 
+# RESV-01/RESV-02/RESV-06 (Plan 14-05, Gap A): the minimum LIVE (non-cache) batch
+# size for the all-empty anomaly branch of the inline throttle signal. The 14-04
+# live-smoke observed the poisoned batches at checked=20..30 reg=0; we pick 8 —
+# comfortably below that yet above stochastic noise (a healthy checker resolving a
+# handful of genuinely-unregistered numbers in a row). Below this size an all-empty
+# batch is treated as a normal (clean) result, NOT a throttle signal, to avoid
+# false-positive degradation on small legitimately-empty batches. The flood branch
+# (summary['flood_wait_hit']) fires regardless of batch size.
+ANOMALY_MIN_BATCH = 8
+
+
+def _is_throttle_signal(summary: dict) -> bool:
+    """Inline flood/throttle detector for a resolve batch (Plan 14-05, Gap A).
+
+    Returns True iff this batch must be treated as a throttled checker's poisoned
+    output — so its not_registered results roll back to pending (suspect) and the
+    checker is degraded INLINE, WITHOUT waiting for the decoupled ≥2-miss control
+    probe (the 14-04 gap: the probe flagged a checker only AFTER an entire poisoned
+    batch had already been finalized).
+
+    Two signals, EITHER fires:
+      1. FloodWait — ``summary['flood_wait_hit']`` is True (the checker hit a
+         contacts-API FloodWait mid-batch; its partial results are untrustworthy).
+      2. Anomalous all-empty — a LIVE (non-``from_cache``) batch of meaningful size
+         (``>= ANOMALY_MIN_BATCH``) where EVERY live result came back not_registered
+         (``registered == 0`` and ``not_registered == live count``). This is the
+         14-04 signature (checked=20..30 reg=0). Only live results count toward the
+         anomaly — an all-cache batch tests nothing about the checker's current
+         health (Pitfall 1), and a tiny batch is plausibly legitimately empty.
+    """
+    if summary.get("flood_wait_hit"):
+        return True
+    results = summary.get("results", []) or []
+    live = [r for r in results if not r.get("from_cache")]
+    if len(live) < ANOMALY_MIN_BATCH:
+        return False
+    # All live results negative and none registered → anomalous empty rate.
+    if summary.get("registered", 0) == 0 and all(
+        not r.get("is_registered") for r in live
+    ):
+        return True
+    return False
+
+
 class ContactCheckWorker:
     """Background worker: poll pending contacts → batch resolve via checker.
 
@@ -295,6 +339,15 @@ class ContactCheckWorker:
                     summary = await checker_service.check_phones(
                         phones=[r.phone for r in phone_items], **common
                     )
+                    # Plan 14-05 (Gap A): an INLINE flood/throttle signal at the
+                    # resolve tick degrades the checker immediately and marks this
+                    # batch suspect — without waiting for the decoupled ≥2-miss probe.
+                    # Recompute probe_state AFTER the signal so the just-flagged
+                    # checker's own batch is finalized as suspect (rollback, no
+                    # high-confidence). Reuses the D-07 suspect path + D-06 degrade.
+                    probe_state = await self._maybe_degrade_on_signal(
+                        str(checker_id), summary, probe_state
+                    )
                     await self._apply_results(
                         phone_items, summary,
                         checker_id=str(checker_id), probe_state=probe_state,
@@ -317,6 +370,11 @@ class ContactCheckWorker:
                 try:
                     summary = await checker_service.check_usernames(
                         usernames=[r.username for r in username_items], **common
+                    )
+                    # Plan 14-05 (Gap A): same inline flood/throttle degrade on the
+                    # username path.
+                    probe_state = await self._maybe_degrade_on_signal(
+                        str(checker_id), summary, probe_state
                     )
                     await self._apply_results(
                         username_items, summary,
@@ -442,16 +500,25 @@ class ContactCheckWorker:
         self._degraded_this_tick.add(checker_id)
         return True
 
-    async def _flag_checker_degraded(self, checker_id: str, miss_count: int) -> None:
+    async def _flag_checker_degraded(
+        self, checker_id: str, miss_count: int, raw_text: str | None = None
+    ) -> None:
         """Mark a checker spam_limited + audit row in ONE transaction (D-06).
 
         Reuses the Phase-10 ``record_restriction_event`` (db= → caller commits) so
         the event row and the ``senders`` status UPDATE land atomically. Marks via
         ``restriction_status`` (NOT ``auth_status`` — Pitfall 2). Cooldown =
         ``settings.contact_check_cooldown_seconds``.
+
+        ``raw_text`` lets the caller record the cause: the control-probe path passes
+        ``None`` and gets the default "{miss_count} consecutive misses"; the inline
+        resolve-tick path (Plan 14-05) passes "resolve-tick: FloodWait" /
+        "resolve-tick: anomalous empty-rate N/N" so the audit row distinguishes the
+        inline flood/throttle degrade from the decoupled ≥2-miss probe.
         """
         cooldown = get_settings().contact_check_cooldown_seconds
         cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+        audit_text = raw_text or f"control-probe: {miss_count} consecutive misses"
         async with AsyncSessionLocal() as db:
             async with db.begin():
                 await record_restriction_event(
@@ -459,7 +526,7 @@ class ContactCheckWorker:
                     event_type="spam_limited",
                     source="antispam_signal",
                     restricted_until=cooldown_until,
-                    raw_text=f"control-probe: {miss_count} consecutive misses",
+                    raw_text=audit_text,
                     db=db,  # same TX as the UPDATE below
                 )
                 await db.execute(
@@ -476,6 +543,39 @@ class ContactCheckWorker:
             "📋 control-probe flagged checker %s spam_limited (%d consecutive misses), "
             "cooldown %ss", checker_id, miss_count, cooldown,
         )
+
+    async def _maybe_degrade_on_signal(
+        self, checker_id: str, summary: dict, probe_state: str
+    ) -> str:
+        """Inline flood/throttle degrade at the resolve tick (Plan 14-05, Gap A).
+
+        If ``summary`` carries an inline throttle signal (``flood_wait_hit`` or the
+        anomalous all-empty rate, see ``_is_throttle_signal``), the checker is
+        degraded INLINE — ``_flag_checker_degraded`` writes the
+        ``sender_restriction_events`` row + sets ``restriction_status='spam_limited'``
+        / ``lifecycle_status='paused'`` / cooldown (Pitfall 2 — never ``auth_status``),
+        and the checker is added to ``_degraded_this_tick`` so the RESV-05 selection
+        gate excludes it next tick. Returns ``'suspect'`` so THIS batch is finalized
+        via the existing D-07 suspect rollback (not_registered → pending, no
+        high-confidence). Without a signal, returns the incoming ``probe_state``
+        unchanged (the decoupled ≥2-miss probe verdict still applies).
+
+        Idempotent within a tick: if the checker was already flagged this tick
+        (e.g. the phone batch already tripped it before the username batch), the
+        degrade is not re-emitted but the suspect verdict is still returned.
+        """
+        if not _is_throttle_signal(summary):
+            return probe_state
+        if checker_id not in self._degraded_this_tick:
+            checked = summary.get("checked", 0)
+            raw_text = (
+                "resolve-tick: FloodWait"
+                if summary.get("flood_wait_hit")
+                else f"resolve-tick: anomalous empty-rate {checked}/{checked}"
+            )
+            await self._flag_checker_degraded(checker_id, miss_count=0, raw_text=raw_text)
+            self._degraded_this_tick.add(checker_id)
+        return "suspect"
 
     async def _recover_checkers(self) -> None:
         """D-04 recovery: re-probe checkers whose cooldown elapsed; clear if clean.
