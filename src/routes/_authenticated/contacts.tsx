@@ -498,15 +498,19 @@ function FolderDetail({
   const contacts = contactsQ.data ?? [];
   const contactsForStats = contactsStatsQ.data ?? contacts;
   const filtered = useMemo(() => {
-    if (!search.trim()) return contacts;
-    const q = search.toLowerCase();
-    return contacts.filter(
-      (c) =>
-        (c.full_name ?? "").toLowerCase().includes(q) ||
+    const q = search.trim().toLowerCase();
+    return contacts.filter((c) => {
+      if (tgFilter === "in_tg" && !isInTelegram(c.tg_status)) return false;
+      if (tgFilter === "checking" && !isCheckingTelegram(c.tg_status)) return false;
+      if (tgFilter === "not_found" && !isNotInTelegram(c.tg_status)) return false;
+      if (!q) return true;
+      return (
         (c.username ?? "").toLowerCase().includes(q) ||
-        (c.phone ?? "").includes(q),
-    );
-  }, [contacts, search]);
+        (c.phone ?? "").toLowerCase().includes(q) ||
+        (c.full_name ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [contacts, search, tgFilter]);
 
   const stats = useMemo(() => {
     const inTg = contactsForStats.filter((c) => isInTelegram(c.tg_status)).length;
