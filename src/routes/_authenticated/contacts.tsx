@@ -20,7 +20,12 @@ import {
   Clock,
   Shuffle,
   UserPlus,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
+
+type TgFilter = "all" | "in_tg" | "checking" | "not_found";
+const PAGE_SIZE = 200;
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
