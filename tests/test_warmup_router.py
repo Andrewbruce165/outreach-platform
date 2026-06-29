@@ -123,3 +123,57 @@ async def test_response_shapes_preserved(async_client, valid_supabase_jwt, async
     assert "is_active" not in required, (
         "is_active must NOT be a required key — column dropped in migration 013"
     )
+
+
+# ── WARM-06 / WARM-10: settings (master toggle + content) ────────────────────
+
+
+async def test_settings_get_resolves_defaults(async_client, valid_supabase_jwt, async_db_session):
+    """GET /settings with no row → resolved code-defaults (24 topics, default prompt),
+    enabled=false (explicit opt-in, D-06/D-10)."""
+    from app.services.warmup import WARMUP_SYSTEM_PROMPT, WARMUP_TOPICS
+
+    db = async_db_session
+    wid = await _make_workspace(db)
+    uid = f"user-{_uuid.uuid4()}"
+    await _bind(db, wid, uid)
+
+    resp = await async_client.get(
+        "/api/v1/warmup/settings", headers=_auth_headers(valid_supabase_jwt, uid),
+    )
+    assert resp.status_code == 200, f"settings GET unavailable (got {resp.status_code})"
+    body = resp.json()
+    assert body["enabled"] is False, "no row → master toggle OFF (explicit opt-in, D-06)"
+    assert body["topics"] == list(WARMUP_TOPICS), "empty topics → 24 default RU topics (D-10)"
+    assert body["system_prompt"] == WARMUP_SYSTEM_PROMPT, "NULL prompt → default prompt (D-10)"
+
+
+async def test_settings_put_persists_master_toggle(async_client, valid_supabase_jwt, async_db_session):
+    """PUT /settings enabled=true persists; GET reflects it (idempotent upsert, D-06)."""
+    db = async_db_session
+    wid = await _make_workspace(db)
+    uid = f"user-{_uuid.uuid4()}"
+    await _bind(db, wid, uid)
+    headers = _auth_headers(valid_supabase_jwt, uid)
+
+    put = await async_client.put(
+        "/api/v1/warmup/settings",
+        headers=headers,
+        json={"enabled": True, "topics": ["погода"], "language": "ru"},
+    )
+    assert put.status_code == 200, f"settings PUT failed (got {put.status_code})"
+    assert put.json()["status"] == "saved"
+
+    get = await async_client.get("/api/v1/warmup/settings", headers=headers)
+    assert get.status_code == 200
+    body = get.json()
+    assert body["enabled"] is True, "PUT enabled=true must persist (master toggle, D-06)"
+    assert body["topics"] == ["погода"], "configured topics must round-trip (D-10)"
+
+    # Idempotent upsert: second PUT updates the same row (no duplicate-PK error).
+    put2 = await async_client.put(
+        "/api/v1/warmup/settings", headers=headers, json={"enabled": False},
+    )
+    assert put2.status_code == 200
+    get2 = await async_client.get("/api/v1/warmup/settings", headers=headers)
+    assert get2.json()["enabled"] is False, "second PUT must update existing row (ON CONFLICT)"
