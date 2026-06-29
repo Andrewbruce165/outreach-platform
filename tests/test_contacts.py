@@ -365,6 +365,54 @@ async def test_import_with_checker_sets_pending(
     assert found[0]["tg_status"] == "pending"
 
 
+# ─── username ⇒ registered (260629-kn4) ──────────────────────────────────────
+
+
+async def test_push_username_only_sets_registered(
+    async_client, valid_supabase_jwt
+):
+    """Контакт с username (без телефона) → tg_status='registered' сразу.
+
+    По username можно написать напрямую — checker (phone-resolve) лишний, поэтому
+    контакт минует pending и не идёт в ContactCheckWorker.
+    """
+    headers, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "uname-only"
+    )
+    await async_client.post(
+        "/api/v1/contacts",
+        headers=headers,
+        json={"username": "@cooluser", "folder_name": "Uname"},
+    )
+    contacts = await async_client.get("/api/v1/contacts", headers=headers)
+    found = [c for c in contacts.json() if c["username"] == "cooluser"]
+    assert len(found) == 1
+    assert found[0]["tg_status"] == "registered"
+
+
+async def test_push_phone_and_username_sets_registered(
+    async_client, valid_supabase_jwt
+):
+    """username побеждает: контакт с И телефоном И username → 'registered',
+    а не 'pending'/'unchecked' (наличие username — достаточный сигнал)."""
+    headers, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "uname-and-phone"
+    )
+    await async_client.post(
+        "/api/v1/contacts",
+        headers=headers,
+        json={
+            "phone": "+79002220001",
+            "username": "bothuser",
+            "folder_name": "Both",
+        },
+    )
+    contacts = await async_client.get("/api/v1/contacts", headers=headers)
+    found = [c for c in contacts.json() if c["phone"] == "+79002220001"]
+    assert len(found) == 1
+    assert found[0]["tg_status"] == "registered"
+
+
 # ─── Move (D-04) ─────────────────────────────────────────────────────────────
 
 

@@ -126,6 +126,13 @@ async def _insert_contacts_with_dedup(
 
     D-19: tg_status='pending' если checker есть, иначе 'unchecked' (D-20).
 
+    Username-shortcut: если у записи есть username — считаем контакт заведомо
+    зарегистрированным и ставим tg_status='registered' сразу (независимо от
+    наличия телефона и checker'а). По username мы можем написать напрямую, а
+    checker (phone-resolve) для таких контактов лишний и только жжёт лимиты;
+    ContactCheckWorker выбирает только tg_status='pending', так что
+    registered-контакты автоматически минуют чекер.
+
     Returns {imported, skipped_duplicates, skipped_phones}.
     """
     default_tg_status = "pending" if has_checker else "unchecked"
@@ -134,6 +141,7 @@ async def _insert_contacts_with_dedup(
     skipped_phones: list[str] = []
 
     for rec in records:
+        tg_status = "registered" if rec.get("username") else default_tg_status
         stmt = (
             pg_insert(Contact)
             .values(
@@ -144,7 +152,7 @@ async def _insert_contacts_with_dedup(
                 full_name=rec.get("full_name"),
                 source=rec.get("source"),
                 custom=rec.get("custom") or {},
-                tg_status=default_tg_status,
+                tg_status=tg_status,
             )
             .on_conflict_do_nothing()
             .returning(Contact.id)
