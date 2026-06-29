@@ -24,7 +24,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [x] **Phase 10: Pool Visibility & Restriction Audit** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж; durable аудит всех предупреждений/блокировок аккаунтов с привязкой к предшествующей активности (completed 2026-06-24)
 - [ ] **Phase 11: Agent/Campaign Field Split & Prompt Assembly** — развести слои Агент(КТО)/Кампания(ЧТО), убрать дубли в системном промпте (один источник на блок), новые поля (скорость ответа, ход разговора, аргументы и факты, базы знаний) + перестройка UI визарда
 - [ ] **Phase 14: Reliable Contact Resolution** — надёжная и масштабируемая проверка контактов в TG: health-probe на заведомо-живых, burst-кап + cooldown, пул чекеров с ротацией, перепроверка контаминированных данных (диагноз: единственный чекер занижал живых в ~15–20 раз)
-- [ ] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича
+- [x] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича (completed 2026-06-29)
 
 ## Phase Details
 
@@ -411,13 +411,13 @@ Plans:
 
 **Requirements**: WARM-01..15 (derived this phase, see 15-CONTEXT.md decisions)
 **Depends on:** Phase 14
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 
 Plans:
-- [ ] 15-01-PLAN.md — Wave-0 foundation: migration 037 warmup_settings + ORM, RED isolation/router/worker test stubs, WARM-01..15 in REQUIREMENTS.md
-- [ ] 15-02-PLAN.md — deterministic per-workspace internal short-circuit in listener (isolation: WARM-01/02/04/15)
-- [ ] 15-03-PLAN.md — engine: enabled-gate + restriction-skip + per-workspace content defaults (WARM-03/06/10/12/13/14)
-- [ ] 15-04-PLAN.md — workspace-scoped router rewrite + is_active fix + settings/master-toggle + enriched status (WARM-05/07/08/09/11)
+- [x] 15-01-PLAN.md — Wave-0 foundation: migration 037 warmup_settings + ORM, RED isolation/router/worker test stubs, WARM-01..15 in REQUIREMENTS.md
+- [x] 15-02-PLAN.md — deterministic per-workspace internal short-circuit in listener (isolation: WARM-01/02/04/15)
+- [x] 15-03-PLAN.md — engine: enabled-gate + restriction-skip + per-workspace content defaults (WARM-03/06/10/12/13/14)
+- [x] 15-04-PLAN.md — workspace-scoped router rewrite + is_active fix + settings/master-toggle + enriched status (WARM-05/07/08/09/11)
 
 ---
 
@@ -437,7 +437,7 @@ Plans:
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 | 14. Reliable Contact Resolution | 3/4 | In Progress|  |
-| 15. Account Warmup via Inter-Account AI Chat | 0/4 | Planned (4 plans, waves 1→3) | - |
+| 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
