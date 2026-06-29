@@ -6,6 +6,7 @@ import {
   Bot,
   Users,
   Smartphone,
+  Flame,
   Settings,
   HelpCircle,
   ChevronDown,
@@ -29,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/contacts", label: "Contacts", icon: Users },
   { to: "/accounts", label: "TG accounts", icon: Smartphone },
+  { to: "/warmup", label: "Прогрев", icon: Flame },
 ];
 
 const SECONDARY: NavItem[] = [
