@@ -171,6 +171,24 @@
 
 **Открытая развилка (решить в discuss/plan Phase 14):** отдельный управляемый пул чекеров (probe + кап + ротация + отдых) vs ленивый резолв при отправке самим сендером.
 
+### Account Warmup via Inter-Account AI Chat (Phase 15 — derived this phase, see 15-CONTEXT.md decisions)
+
+- [ ] **WARM-01**: Internal-детекция «свой со своим» по `telegram_id ∈ senders` workspace; листенер дропает до AI, не зависит от phone/членства в пуле (D-01).
+- [ ] **WARM-02**: Internal-трафик не создаёт строк в `conversations`/`messages`; warmup только в `warmup_*` (D-02). Аналитика остаётся чистой (`_EXCLUDE_INTERNAL_CLAUSE` сохранить).
+- [ ] **WARM-03**: Warmup-лимиты независимы от rate-limits кампаний; отправка минует `message_queue` (D-03).
+- [ ] **WARM-04**: Регресс-тест-гард: internal не триггерит AI и не попадает в метрики (D-04).
+- [ ] **WARM-05**: Все `/api/v1/warmup` под `AuthDep` + workspace scope (D-05).
+- [ ] **WARM-06**: `warmup_enabled` per-workspace; глобальный воркер honors флаг (D-06).
+- [ ] **WARM-07**: UI master toggle + per-account enroll/toggle (D-07).
+- [ ] **WARM-08**: Расписание 09–20 МСК без UI-настройки (D-08).
+- [ ] **WARM-09**: Интенсивность авто по дням; UI read-only уровень/прогресс (D-09).
+- [ ] **WARM-10**: Per-workspace настройки контента прогрева (темы/язык/тон) с дефолтом = текущие 24 RU-темы + промпт (D-10).
+- [ ] **WARM-11**: Расширенный per-account статус (+`restriction_status`, +последняя ошибка/активность) (D-11).
+- [ ] **WARM-12**: Совмещение прогрева с активной кампанией разрешено (D-12).
+- [ ] **WARM-13**: Новые аккаунты не авто-зачисляются в пул (D-13).
+- [ ] **WARM-14**: Выборка пула пропускает аккаунты с `restriction_status != 'none'`/`restricted_until` в будущем (D-14).
+- [ ] **WARM-15**: Изучить старую `telegram-api` warmup как референс и зафиксировать, почему она конфликтовала (изоляция) (D-15).
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -302,6 +320,21 @@
 | PACE-05 | Phase 13 | Complete |
 | PACE-06 | Phase 13 | Complete |
 | PACE-07 | Phase 13 | Complete |
+| WARM-01 | Phase 15 | Pending |
+| WARM-02 | Phase 15 | Pending |
+| WARM-03 | Phase 15 | Pending |
+| WARM-04 | Phase 15 | Pending |
+| WARM-05 | Phase 15 | Pending |
+| WARM-06 | Phase 15 | Pending |
+| WARM-07 | Phase 15 | Pending |
+| WARM-08 | Phase 15 | Pending |
+| WARM-09 | Phase 15 | Pending |
+| WARM-10 | Phase 15 | Pending |
+| WARM-11 | Phase 15 | Pending |
+| WARM-12 | Phase 15 | Pending |
+| WARM-13 | Phase 15 | Pending |
+| WARM-14 | Phase 15 | Pending |
+| WARM-15 | Phase 15 | Pending |
 
 **Coverage:**
 
@@ -323,3 +356,4 @@
 *2026-06-24 — derived POOLV-01..04 (Pool Visibility) during Phase 10 planning*
 *2026-06-25 — derived NDLG-01..06 (Per-Campaign Daily New-Dialog Limit) during Phase 12 planning*
 *2026-06-26 — derived PACE-01..07 (Even Pacing Across Sending Window) during Phase 13 planning*
+*2026-06-29 — derived WARM-01..15 (Account Warmup via Inter-Account AI Chat) during Phase 15 planning*
