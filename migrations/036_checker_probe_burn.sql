@@ -1,0 +1,27 @@
+-- 036: checker probe-burn fix (quick-260629-b7j — escalating per-checker backoff).
+--
+-- Next free migration number is 036 (035_checker_post_batch_rest.sql is the
+-- previous one). Auto-applied at api start by app/database.py::_apply_migrations in
+-- lexical order; this file MUST be idempotent (ADD COLUMN IF NOT EXISTS) — the
+-- applier re-runs it on any schema drift and the api fail-fasts (does not start) if
+-- a migration raises. NO data backfill (the column defaults to 0).
+--
+-- What this column is:
+--   checker_trip_count is the per-checker CONSECUTIVE contacts-API trip counter used
+--   to compute an ESCALATING cooldown. Each time a checker is degraded
+--   (spam_limited) by the inline throttle signal or the ≥2-miss control-probe, the
+--   counter increments; the next cooldown is base * 2^(trip_count-1) capped at
+--   contact_check_max_backoff_seconds, so a checker that keeps tripping backs off for
+--   hours instead of auto-recovering every fixed ~15min only to re-trip and burn the
+--   contacts-API. A CLEAN recovery in _recover_checkers resets it to 0, so a checker
+--   that genuinely recovers starts its next backoff ladder from the base again.
+--
+-- What this column is NOT:
+--   This is NOT a restriction in itself and is DISTINCT from restriction_status /
+--   restricted_until (which hold the CURRENT restriction state). checker_trip_count
+--   persists the trip HISTORY across api restarts so the escalating backoff survives
+--   a redeploy (the in-memory _consecutive_misses dict does not). It carries no
+--   restriction semantics on its own — the selection gate never reads it; only the
+--   cooldown computation in _flag_checker_degraded and the reset in _recover_checkers
+--   touch it.
+ALTER TABLE senders ADD COLUMN IF NOT EXISTS checker_trip_count INTEGER NOT NULL DEFAULT 0;
