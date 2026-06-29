@@ -717,6 +717,22 @@ class TelegramListener:
                 logger.info(f"📨 Пропускаем своё сообщение от {name}")
                 return
 
+            # === Phase 15 D-01/D-02: детерминированный internal short-circuit ===
+            # «Свой со своим» — если sender.id ∈ senders этого workspace, это
+            # internal warmup-трафик. Дропаем ДО bot/antispam-веток, ДО AI и ДО
+            # любой записи в conversations/messages. Признак НЕ зависит от phone
+            # (закрывает leak при phone="unknown") и НЕ от членства в warmup_pool /
+            # restriction-статуса (изоляция держится даже для остановленного
+            # прогрева и ограниченных аккаунтов). Always-on — не gated warmup_enabled.
+            internal_ids = await self._get_workspace_sender_tg_ids(
+                sender_info["workspace_id"]
+            )
+            if sender.id in internal_ids or await self._is_internal_counterparty(
+                sender_info["workspace_id"], sender.id
+            ):
+                logger.debug(f"🔥 internal warmup traffic dropped (tg_id={sender.id})")
+                return
+
             # Пропускаем системные сообщения Telegram (+42777, id=777000)
             TELEGRAM_SERVICE_PHONES = {"+42777", "42777"}
             if phone in TELEGRAM_SERVICE_PHONES or sender.id == 777000:
@@ -771,23 +787,12 @@ class TelegramListener:
                 await self._handle_antispam_signal(sender_info, name, sender.id, event.text or "")
                 return
 
-            # Пропускаем warmup-сообщения от наших аккаунтов в пуле прогрева.
-            # Они обрабатываются WarmupWorker'ом, AI не нужен.
-            #
-            # Фильтр по telegram_id — primary (симметрично outgoing-фильтру на
-            # handle_outgoing_message). Phone-ветка часто промахивается: Telegram
-            # скрывает телефон по приватности → phone == "unknown" → warmup-трафик
-            # протекал в conversations/messages и раздувал аналитику (инцидент
-            # 2026-06-23/24, см. debug/dashboard-analytics-warmup-pollution.md).
-            warmup_tg_ids = await self._get_warmup_telegram_ids()
-            if sender.id in warmup_tg_ids:
-                logger.debug(f"🔥 Пропускаем warmup сообщение от {name} (tg_id={sender.id})")
-                return
-            if phone != "unknown":
-                warmup_phones = await self._get_warmup_phones()
-                if phone in warmup_phones:
-                    logger.debug(f"🔥 Пропускаем warmup сообщение от {name} ({phone})")
-                    return
+            # Phase 15 D-01: warmup/internal-трафик уже дропнут детерминированным
+            # internal short-circuit выше (по telegram_id ∈ senders workspace).
+            # Старый pool/phone-scoped фильтр удалён — он течёт при phone="unknown"
+            # и при non-enrolled аккаунтах (корневая причина pollution-инцидента
+            # 2026-06-23/24, debug/dashboard-analytics-warmup-pollution.md).
+            # Детерминированный telegram_id-признак — единственный источник истины.
 
             logger.info(f"📨 Обрабатываем сообщение от {name} ({phone}), типы: photo={event.message.photo}, video={event.message.video}, document={event.message.document}, voice={event.message.voice}, text={bool(event.text)}")
             
@@ -1228,13 +1233,20 @@ class TelegramListener:
             phone = chat.phone if hasattr(chat, 'phone') and chat.phone else "unknown"
             name = f"{chat.first_name or ''} {chat.last_name or ''}".strip() or "Unknown"
 
-            # Пропускаем warmup-сообщения: исходящее от warmup-аккаунта к другому warmup-аккаунту.
-            # Эти диалоги не должны попадать в основной дашборд.
-            if sender_info["id"] in self._warmup_sender_ids:
-                warmup_tg_ids = await self._get_warmup_telegram_ids()
-                if chat.id in warmup_tg_ids:
-                    logger.debug(f"🔥 Пропускаем warmup исходящее от {sender_info['slug']} к {name}")
-                    return
+            # === Phase 15 D-01/D-02: симметричный internal short-circuit ===
+            # Исходящее от нашего аккаунта к другому sender'у ТОГО ЖЕ workspace —
+            # internal warmup-трафик. Дропаем ДО conversation lookup и любой записи
+            # в conversations/messages. Признак — chat.id ∈ senders этого workspace,
+            # детерминированный, не зависит от phone / warmup_pool / restriction
+            # (заменяет прежний pool-scoped блок, который течёт при phone="unknown").
+            internal_ids = await self._get_workspace_sender_tg_ids(
+                sender_info["workspace_id"]
+            )
+            if chat.id in internal_ids or await self._is_internal_counterparty(
+                sender_info["workspace_id"], chat.id
+            ):
+                logger.debug(f"🔥 internal warmup outgoing dropped (tg_id={chat.id})")
+                return
 
             logger.info(f"📤 Исходящее к {name}: {event.text[:50]}...")
 
