@@ -3,15 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: "14-07 NOT YET DEPLOYED to prod (container runs old code, migration 035 unapplied). Next = user-gated OPS sequence: (1) deploy api (docker compose up -d --build api → applies mig 035 + rest mechanism); (2) set CONTACT_CHECK_REST_SECONDS (default 300); (3) re-activate the 2 parked checkers (sender-7979031303/8364639216); (4) re-upload base pre-filtered of landline numbers to cut volume; (5) staged drain of the ~14.5k pending, watching for degrade/recover thrash. 14-06 GO verdict was CONDITIONAL — for an UNCONDITIONAL pool-wide GO a fresh non-checker account probe was recommended (deferred). Note: post-14-04-rollback prod baseline = pending 14484 / registered 53 / not_registered 5."
-stopped_at: Phase 15 context gathered
-last_updated: "2026-06-29T11:13:04.269Z"
+stopped_at: Phase 15 UI-SPEC approved
+last_updated: "2026-06-29T11:27:51.931Z"
 last_activity: "2026-06-29 -- Completed quick task 260629-b7j: checker probe-burn fix (probe rest/budget/interval-gated + escalating cooldown; mig 036; 786 tests GREEN; NOT yet deployed)"
 progress:
   total_phases: 17
   completed_phases: 14
   total_plans: 55
   completed_plans: 54
-  percent: 82
 ---
 
 # Project State
@@ -165,6 +164,8 @@ None yet.
 | 260622-j52 | Requeue 37 antispam-auto-cancelled контактов в кампании b7cc7d06 (ops, без кода): все 37 отменены одним antispam-событием 2026-06-19 13:07:55 (attempts=NULL). Бэкап → транзакция с count-guard (target_rows=37) → `UPDATE 37` обратно в pending. Аккаунт здоров (restriction_status=none). Итог: pending=37/sent=9/failed=2 (PEER_FLOOD+PRIVACY не тронуты). Воркер подхватил очередь за ~15с, темп ≤4/мин | 2026-06-22 | _ops_ | [260622-j52-requeue-37-antispam-auto-cancelled-conta](./quick/260622-j52-requeue-37-antispam-auto-cancelled-conta/) |
 | 260623-ff1 | Документация семантики checker'а: `is_registered=false` = «не резолвится по телефону сторонним аккаунтом», НЕ «нет Telegram-аккаунта» (приватность find-by-phone даёт ложноотрицания). Проверено 2026-06-23 (checker `sender-8428118140` здоров: бросил PhoneNotOccupied на наши собственные приватные senders, при этом 83 номера is_registered=true). Caveat в docstring/inline-комментах `checker.py` + рус. подсекция в `CLAUDE.md`. Только docs — AST без изменений, без rename/миграции | 2026-06-23 | 2050f59..732d8da | [260623-ff1-document-checker-semantics-phonenotoccup](./quick/260623-ff1-document-checker-semantics-phonenotoccup/) |
 | 260629-b7j | Фикс probe-burn чекер-пула: health-probe (`_probe_cycle`) жёг аккаунты ~4267 батчей/сутки. Теперь probe чтит `checker_rest_until` (PROBE-01), гейтится `daily_cap` (PROBE-03), троттлится ≤1 раз / `contact_check_probe_interval_seconds` (PROBE-02, деф. 15мин), деградация — эскалирующий cooldown `base*2^(trip-1)` cap 6ч + сброс на чистом recovery (PROBE-04). Миграция 036 `checker_trip_count` + 2 config-knob. §8-инварианты целы (suspect→pending, 49 контролей). 786 passed. NB: НЕ задеплоено — входит в отложенный user-gated OPS | 2026-06-29 | 13f19b4..865b880 | [260629-b7j-checker-probe-burn-fix](./quick/260629-b7j-checker-probe-burn-fix/) |
+| 260629-ig7 | Переотрисовка pending-очереди при смене шаблона кампании: правка `message_template` раньше не доходила до уже стоящих в очереди элементов (очередь хранит снапшот отрендеренного текста на момент enqueue). Helper `rerender_pending_queue` (матч по identity к контакту в папке → `{{vars}}`, фолбэк на `recipient_name`; пустой шаблон = no-op; `WHERE status='pending'` пер-строчно). Авто-вызов в PATCH при реальной смене message_template + эндпоинт `POST /campaigns/{id}/rerender-pending`. 8 тестов + 44 регресс зелёные. Задеплоено (api). Фронт-кнопка — отдельно | 2026-06-29 | 37182f7 | [260629-ig7-rerender-pending-queue](./quick/260629-ig7-rerender-pending-queue/) |
+| 260629-g2z | Prompt template v2 (multi-tenant): `<core_directive>` стал универсальным, цель/раскрытие/полномочия вынесены в блоки `<objective>`/`<disclosure_policy>`/`<agent_authority>`, резолвятся из пресет-библиотек (`_OBJECTIVE_LINES`/`_DISCLOSURE_LINES`/`_AUTHORITY_LINES`) по 4 новым nullable-колонкам кампании (mig 037). NULL→дефолты (reveal_nothing/handoff_only/primary_goal) воспроизводят прежний звонковый текст. `<role>`→`<identity>`, переписан `<message_style>` (одно сообщение за ход, курир. бан-лист, before-you-send чек-лист, few-shot RU+EN с override через `style_examples`), снят противоречивый «split into two». API-проводка (Literal-энумы Create/Update/Response). 20 + 54 теста зелёные. NB: НЕ задеплоено; фронт ещё не шлёт поля | 2026-06-29 | 4022984..929c293 | [260629-g2z-prompt-template-v2](./quick/260629-g2z-prompt-template-v2/) |
 
 ### Hotfix Log — 2026-05-26 (ui-data-missing incident)
 
@@ -193,6 +194,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-29T11:13:04.225Z
-Stopped at: Phase 15 context gathered
-Resume file: .planning/phases/15-account-warmup-via-inter-account-ai-chat/15-CONTEXT.md
+Last session: 2026-06-29T11:27:51.917Z
+Stopped at: Phase 15 UI-SPEC approved
+Resume file: .planning/phases/15-account-warmup-via-inter-account-ai-chat/15-UI-SPEC.md
