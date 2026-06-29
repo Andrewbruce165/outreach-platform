@@ -577,6 +577,17 @@ class Campaign(Base):
     arguments_facts = Column(Text, nullable=True)
     # campaign_rules: free-text rules specific to this campaign (de-duped with agent rules in 11-03).
     campaign_rules = Column(Text, nullable=True)
+    # ── Prompt template v2 (migration 037): preset-driven core_directive. ──
+    # objective/disclosure/authority resolve to preset lines in ai_engine
+    # (_OBJECTIVE_LINES / _DISCLOSURE_LINES / _AUTHORITY_LINES). NULL → engine
+    # defaults (disclosure→reveal_nothing, authority→handoff_only,
+    # objective→primary_goal). Allowed values enforced at API layer (Literal
+    # enums), no DB CHECK — mirrors primary_goal. style_examples is an optional
+    # per-campaign few-shot override; NULL → static both-language fallback.
+    objective_preset = Column(Text, nullable=True)
+    disclosure_preset = Column(Text, nullable=True)
+    authority_preset = Column(Text, nullable=True)
+    style_examples = Column(Text, nullable=True)
     # 026: per-campaign re-contact policy. allow_recontact=false (default) keeps
     # the strict cross-campaign dedup — never re-touch anyone with an existing
     # conversation. When true, only "protected" (active & fresh) dialogs block;
