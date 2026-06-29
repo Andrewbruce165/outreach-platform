@@ -395,6 +395,31 @@ class WarmupMessage(Base):
     session = relationship("WarmupSession")
 
 
+class WarmupSettings(Base):
+    """Per-workspace warmup control + content settings (Phase 15, WARM-06/WARM-10).
+
+    One row per workspace. `enabled` is the master on/off toggle (D-06); it
+    DEFAULTS to FALSE — warmup is explicit opt-in and migration 038 seeds no
+    live workspace. `topics`/`system_prompt`/`language`/`tone` are the
+    configurable content object (D-10); empty `topics` or NULL `system_prompt`
+    resolve in code to the hard-coded WARMUP_TOPICS / WARMUP_SYSTEM_PROMPT
+    defaults so existing behaviour is unchanged when nothing is configured.
+    """
+    __tablename__ = "warmup_settings"
+
+    workspace_id  = Column(UUID(as_uuid=True),
+                           ForeignKey("workspaces.id", ondelete="CASCADE"),
+                           primary_key=True)
+    enabled       = Column(Boolean, nullable=False, server_default=text("false"))
+    topics        = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    system_prompt = Column(Text, nullable=True)
+    language      = Column(Text, nullable=False, server_default=text("'ru'"))
+    tone          = Column(Text, nullable=True)
+    created_at    = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at    = Column(DateTime(timezone=True), server_default=func.now(),
+                           onupdate=func.now(), nullable=False)
+
+
 # ─── Rotation ─────────────────────────────────────────────────────────────────
 
 class ProxyPool(Base):
