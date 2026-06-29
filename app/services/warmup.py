@@ -241,6 +241,23 @@ class WarmupWorker:
         )
         return result.scalar()
 
+    async def _get_warmup_content(
+        self, db: AsyncSession, workspace_id: str
+    ) -> tuple[list[str], str]:
+        """Per-workspace warmup content with safe code-default fallback (D-10).
+
+        Empty topics ([]) / NULL system_prompt / missing row all resolve to the
+        24 RU WARMUP_TOPICS + WARMUP_SYSTEM_PROMPT — behaviour byte-identical to
+        today when a workspace is unconfigured.
+        """
+        row = (await db.execute(
+            text("SELECT topics, system_prompt FROM warmup_settings WHERE workspace_id = :wid"),
+            {"wid": workspace_id},
+        )).fetchone()
+        topics = (row[0] if row and row[0] else None) or WARMUP_TOPICS
+        prompt = (row[1] if row and row[1] else None) or WARMUP_SYSTEM_PROMPT
+        return topics, prompt
+
     # ─── Session processing ───────────────────────────────────────────────────
 
     async def _process_due_sessions(self, db: AsyncSession):
@@ -398,10 +415,16 @@ class WarmupWorker:
         history = [{"from_id": str(r[0]), "text": r[1]} for r in hist_result.fetchall()]
 
         # Генерируем сообщение
+        # Phase 15 (D-10): system-prompt берём из per-workspace warmup_settings
+        # (код-дефолт WARMUP_SYSTEM_PROMPT). Резолвим по workspace отправителя.
+        _ws_topics, ws_prompt = await self._get_warmup_content(
+            db, from_sender["workspace_id"]
+        )
         message_text = await self._generate_message(
             topic=session["topic"],
             history=history,
             from_sender_id=from_id,
+            system_prompt=ws_prompt,
         )
         if not message_text:
             logger.warning(f"🔥 GPT вернул None для сессии {session['id'][:8]}, пропускаем")
@@ -511,27 +534,32 @@ class WarmupWorker:
 
         # ── Полный меш, партиционированный по workspace_id ────────────────────
         # groupby требует отсортированного входа.
+        #
+        # Phase 15 (D-10): темы берём из per-workspace warmup_settings (с
+        # код-дефолтом WARMUP_TOPICS). Резолвим контент ОДИН раз на workspace-
+        # группу и таскаем resolved-topics рядом с парой.
         pool_sorted = sorted(pool, key=lambda s: s["workspace_id"])
-        pairs: list[tuple[dict, dict]] = []
-        for _wsid, group_iter in groupby(pool_sorted, key=lambda s: s["workspace_id"]):
+        pairs: list[tuple[dict, dict, list[str]]] = []
+        for wsid, group_iter in groupby(pool_sorted, key=lambda s: s["workspace_id"]):
             ws_group = list(group_iter)
             if len(ws_group) < 2:
                 continue
+            ws_topics, _ws_prompt = await self._get_warmup_content(db, wsid)
             for sender_a, sender_b in combinations(ws_group, 2):
                 pair = frozenset({sender_a["sender_id"], sender_b["sender_id"]})
                 if pair in active_pairs:
                     continue
-                pairs.append((sender_a, sender_b))
+                pairs.append((sender_a, sender_b, ws_topics))
 
         if not pairs:
             return
 
-        for sender_a, sender_b in pairs:
+        for sender_a, sender_b, ws_topics in pairs:
             # Защита-в-глубину: после partitioning оба sender'а из одного workspace.
             assert sender_a["workspace_id"] == sender_b["workspace_id"], \
                 "Cross-tenant warmup pair attempted — partitioning bug!"
 
-            topic  = random.choice(WARMUP_TOPICS)
+            topic  = random.choice(ws_topics)
             target = random.randint(4, 10)
             # Первое сообщение через 1–5 минут
             first_at = datetime.now(timezone.utc) + timedelta(minutes=random.randint(1, 5))
@@ -567,11 +595,18 @@ class WarmupWorker:
         topic: str,
         history: list[dict],
         from_sender_id: str,
+        system_prompt: Optional[str] = None,
     ) -> Optional[str]:
-        """Сгенерировать следующее warmup-сообщение через GPT."""
+        """Сгенерировать следующее warmup-сообщение через GPT.
+
+        Phase 15 (D-10): system_prompt передаётся per-workspace (резолвится в
+        _process_session через _get_warmup_content). При отсутствии — дефолт
+        WARMUP_SYSTEM_PROMPT, поведение без настроек неизменно.
+        """
+        prompt_template = system_prompt or WARMUP_SYSTEM_PROMPT
         try:
             messages = [
-                {"role": "system", "content": WARMUP_SYSTEM_PROMPT.format(topic=topic)}
+                {"role": "system", "content": prompt_template.format(topic=topic)}
             ]
 
             # Строим историю: с точки зрения from_sender_id
