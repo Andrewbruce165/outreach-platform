@@ -7,7 +7,7 @@ Covers:
 - PATCH partial-update
 - DELETE 409 on running, 204 on draft/paused/done (Q1 SET NULL on queue history)
 - Lifecycle: draft→running, running→paused, paused→running, →done, terminal done
-- POST /duplicate: row + senders, NOT queue/cca (Q2)
+- POST /duplicate: row only, NOT senders/queue/cca (Q2)
 - TODO(phase-4) closures: agent/folder/sender DELETE blocks, agent campaign_count
 - Sender PATCH lifecycle_status block when sender in running campaign
 """
@@ -433,11 +433,15 @@ async def test_start_requires_at_least_one_sender_422(
     assert r.json()["detail"]["code"] == "NO_SENDERS_ATTACHED"
 
 
-async def test_duplicate_endpoint_copies_row_and_senders_not_queue_assignments(
+async def test_duplicate_endpoint_copies_row_not_senders_queue_assignments(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder, test_sender_factory,
 ):
-    """Q2: /duplicate copies row + senders, NOT queue items nor cca."""
+    """Q2: /duplicate copies the row only — NOT senders, queue items, nor cca.
+
+    Sender pool is intentionally empty in the duplicate so accounts held by the
+    source's running campaign don't appear locked/undeletable in the copy.
+    """
     import uuid as _uuid
 
     agent = await test_agent_factory()
@@ -464,9 +468,12 @@ async def test_duplicate_endpoint_copies_row_and_senders_not_queue_assignments(
     new_c = r.json()
     assert new_c["status"] == "draft"
     assert new_c["name"].startswith("DupBase (copy")
-    # Senders copied
-    assert len(new_c["attached_senders"]) == 1
-    assert new_c["attached_senders"][0]["sender_id"] == str(sender.id)
+    # Senders NOT copied — duplicate starts with an empty pool
+    assert new_c["attached_senders"] == []
+    cs_for_new = (await async_db_session.execute(text(
+        "SELECT COUNT(*) FROM campaign_senders WHERE campaign_id = :cid"
+    ), {"cid": new_c["id"]})).scalar()
+    assert cs_for_new == 0
 
     # NO queue items NOR cca for the new campaign
     queue_for_new = (await async_db_session.execute(text(

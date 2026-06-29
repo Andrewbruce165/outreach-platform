@@ -12,7 +12,7 @@ Endpoints:
     POST   /api/v1/campaigns/{id}/pause            — running → paused
     POST   /api/v1/campaigns/{id}/resume           — paused → running (sender lock re-check)
     POST   /api/v1/campaigns/{id}/finish           — running|paused → done (terminal)
-    POST   /api/v1/campaigns/{id}/duplicate        — copy row + campaign_senders, status='draft'
+    POST   /api/v1/campaigns/{id}/duplicate        — copy row only (empty sender pool), status='draft'
 
 Все endpoint'ы под Depends(auth_dep) + .where(Campaign.workspace_id == ctx.workspace_id).
 """
@@ -846,10 +846,13 @@ async def duplicate_campaign(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """Q2 / C-11: copy campaigns row + campaign_senders. status='draft'.
+    """Q2: copy campaigns row only. status='draft'.
 
-    NOT copied: message_queue items, campaign_contact_assignments — these are
-    runtime rotation state, not template.
+    NOT copied: campaign_senders (the sender pool), message_queue items,
+    campaign_contact_assignments. The duplicate is created with an EMPTY sender
+    pool — the user attaches accounts explicitly. Carrying senders over caused
+    accounts to appear locked inside the duplicate (held by the source's running
+    campaign) and undeletable from its card.
 
     Name: '{name} (copy)' or '{name} (copy N)' if conflict.
     """
@@ -907,17 +910,8 @@ async def duplicate_campaign(
     db.add(new_c)
     await db.flush()
 
-    # Copy campaign_senders rows (do NOT copy queue items / cca per C-11)
-    src_senders = (await db.execute(
-        select(CampaignSender).where(CampaignSender.campaign_id == src.id)
-    )).scalars().all()
-    for s in src_senders:
-        db.add(CampaignSender(
-            campaign_id=new_c.id,
-            sender_id=s.sender_id,
-            workspace_id=ctx.workspace_id,
-        ))
-
+    # Sender pool is NOT copied: the duplicate starts empty so accounts held by
+    # the source's running campaign don't appear locked/undeletable in the copy.
     await db.commit()
     await db.refresh(new_c)
     logger.info(
