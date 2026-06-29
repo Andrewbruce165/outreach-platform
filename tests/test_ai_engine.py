@@ -179,7 +179,7 @@ async def test_prompt_block_order():
         assert pos >= 0, f"PMT-01: tag '{tag}' not found in prompt"
         return pos
 
-    assert idx("<role>") < idx("<company>"), "PMT-01: <role> must precede <company>"
+    assert idx("<identity>") < idx("<company>"), "PMT-01: <identity> must precede <company>"
     assert idx("<company>") < idx("<product>"), "PMT-01: <company> must precede <product>"
     assert idx("<product>") < idx("<tone>"), "PMT-01: <product> must precede <tone>"
     assert idx("<tone>") < idx("<task_audience>"), "PMT-01: <tone> must precede <task_audience>"
@@ -352,14 +352,14 @@ async def test_task_source_campaign():
     assert "southern Russia" in prompt, \
         "PMT-06: audience_hints text not rendered in <task_audience>"
 
-    # who_is_agent (system_prompt) text should be in <role>, not carry the task description
-    # The goal text should NOT be duplicated inside <role>
-    role_start = prompt.find("<role>")
-    role_end = prompt.find("</role>")
+    # who_is_agent (system_prompt) text should be in <identity>, not carry the task.
+    # The goal text should NOT be duplicated inside <identity>.
+    role_start = prompt.find("<identity>")
+    role_end = prompt.find("</identity>")
     if role_start >= 0 and role_end > role_start:
         role_block = prompt[role_start:role_end]
         assert "Qualify grain sellers" not in role_block, \
-            "PMT-06: primary_goal text leaked into <role> block (should be in <task_audience> only)"
+            "PMT-06: primary_goal text leaked into <identity> block (should be in <task_audience> only)"
 
 
 # ── PMT-07: brief excluded (structural/contract) ─────────────────────────────
@@ -389,3 +389,151 @@ async def test_brief_excluded():
         "PMT-07: build_system_prompt must accept a 'context' dict parameter"
     assert "contact_name" in param_names, \
         "PMT-07: build_system_prompt must accept 'contact_name' parameter"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Prompt template v2 — preset-driven core_directive (migration 037)
+# Behavioral assertions; v2 is implemented so these run normally (no xfail).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _ctx_with_campaign(**campaign_overrides) -> dict:
+    """Full context with campaign sub-dict overrides applied (None drops the key)."""
+    ctx = _make_full_context()
+    ctx["campaign"].update(campaign_overrides)
+    return ctx
+
+
+async def test_v2_identity_and_core_directive():
+    """<role> renamed to <identity>; universal <core_directive> always present."""
+    from app.services.ai_engine import ai_engine
+
+    prompt = ai_engine.build_system_prompt(_make_full_context(), "Иван")
+
+    assert "<identity>" in prompt and "<role>" not in prompt
+    assert "<core_directive>" in prompt
+    # real-person camouflage + no self-disclosure
+    assert "Never explain how you work" in prompt
+    # core_directive is campaign-agnostic — no baked-in "call the manager" goal in it
+    cd = prompt[prompt.find("<core_directive>"):prompt.find("</core_directive>")]
+    assert "manager" not in cd.lower()
+    assert "<disclosure_policy>" in cd or "disclosure policy" in cd  # points at the block
+
+
+async def test_v2_block_order_new_blocks():
+    """<identity> < <core_directive> < <objective> < <disclosure_policy> < <agent_authority> < <company>."""
+    from app.services.ai_engine import ai_engine
+
+    prompt = ai_engine.build_system_prompt(
+        _ctx_with_campaign(objective_preset="book_call"), "Иван"
+    )
+    order = ["<identity>", "<core_directive>", "<objective>",
+             "<disclosure_policy>", "<agent_authority>", "<company>"]
+    positions = [prompt.find(t) for t in order]
+    assert all(p >= 0 for p in positions), f"missing block: {list(zip(order, positions))}"
+    assert positions == sorted(positions), f"block order wrong: {list(zip(order, positions))}"
+
+
+async def test_v2_preset_lines_render():
+    """Explicit presets render their library lines."""
+    from app.services.ai_engine import ai_engine
+
+    prompt = ai_engine.build_system_prompt(
+        _ctx_with_campaign(
+            objective_preset="book_call",
+            disclosure_preset="reveal_nothing",
+            authority_preset="handoff_only",
+        ),
+        "Иван",
+    )
+    assert "get the contact onto a short call" in prompt          # _OBJECTIVE_LINES[book_call]
+    assert "Never state rates" in prompt                          # _DISCLOSURE_LINES[reveal_nothing]
+    assert "You don't close deals" in prompt                      # _AUTHORITY_LINES[handoff_only]
+
+
+async def test_v2_defaults_when_presets_null():
+    """NULL presets fall back to reveal_nothing / handoff_only / primary_goal."""
+    from app.services.ai_engine import ai_engine
+
+    # _make_full_context has no *_preset keys and primary_goal="Qualify grain sellers"
+    prompt = ai_engine.build_system_prompt(_make_full_context(), "Иван")
+
+    assert "<disclosure_policy>" in prompt and "Never state rates" in prompt
+    assert "<agent_authority>" in prompt and "You don't close deals" in prompt
+    # objective falls back to the free-text primary_goal
+    assert "<objective>" in prompt and "Your goal: Qualify grain sellers" in prompt
+
+
+async def test_v2_objective_custom_falls_back_to_primary_goal():
+    """objective_preset='custom' is intentionally absent from _OBJECTIVE_LINES → primary_goal."""
+    from app.services.ai_engine import ai_engine
+
+    prompt = ai_engine.build_system_prompt(
+        _ctx_with_campaign(objective_preset="custom"), "Иван"
+    )
+    assert "Your goal: Qualify grain sellers" in prompt
+
+
+async def test_v2_message_style_one_message_rule():
+    """One-message-per-turn replaces the old 'two short messages' / split tail."""
+    from app.services.ai_engine import ai_engine
+
+    ctx = _make_full_context()
+    ctx["max_message_length"] = 200
+    prompt = ai_engine.build_system_prompt(ctx, "Иван")
+
+    assert "One reply = one self-contained message" in prompt
+    assert "Two short messages beat one long one" not in prompt
+    assert "split it into a couple of short messages" not in prompt
+    # length line present but without the contradictory split suffix
+    assert "Keep each message under 200 characters." in prompt
+
+
+async def test_v2_fewshot_both_languages_default():
+    """No style_examples → both Russian and English few-shot pairs render."""
+    from app.services.ai_engine import ai_engine
+
+    prompt = ai_engine.build_system_prompt(_make_full_context(), "Иван")
+    assert "Examples (bad → good):" in prompt
+    assert "Плохо:" in prompt   # Russian few-shot
+    assert "Bad:" in prompt     # English few-shot
+
+
+async def test_v2_style_examples_override():
+    """campaign.style_examples replaces the static few-shot fallback."""
+    from app.services.ai_engine import ai_engine
+
+    prompt = ai_engine.build_system_prompt(
+        _ctx_with_campaign(style_examples="МОЙ КАСТОМНЫЙ ПРИМЕР"), "Иван"
+    )
+    assert "МОЙ КАСТОМНЫЙ ПРИМЕР" in prompt
+    assert "Examples (bad → good):" not in prompt  # static fallback header suppressed
+
+
+async def test_v2_leak_check_gated_by_disclosure():
+    """Leak self-check + disclosure few-shot only for strict disclosure presets."""
+    from app.services.ai_engine import ai_engine
+
+    strict = ai_engine.build_system_prompt(
+        _ctx_with_campaign(disclosure_preset="reveal_nothing"), "Иван"
+    )
+    assert "did anything leak that <disclosure_policy> forbids" in strict
+    assert "Слив условий" in strict  # disclosure few-shot pair
+
+    loose = ai_engine.build_system_prompt(
+        _ctx_with_campaign(disclosure_preset="full_disclosure"), "Иван"
+    )
+    assert "did anything leak that <disclosure_policy> forbids" not in loose
+    assert "Слив условий" not in loose
+
+
+async def test_v2_banlist_adds_to_base():
+    """Agent banlist renders as an additive block, not a replacement."""
+    from app.services.ai_engine import ai_engine
+
+    ctx = _make_full_context()
+    ctx["banlist"] = ["вкусняшка"]
+    prompt = ai_engine.build_system_prompt(ctx, "Иван")
+    assert "<banlist>" in prompt
+    assert "In addition, never use the following words or phrases:" in prompt
+    assert "вкусняшка" in prompt
