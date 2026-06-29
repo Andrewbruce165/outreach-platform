@@ -161,6 +161,13 @@ class ContactCheckWorker:
         # Checkers found DEGRADED by the probe this tick → their just-resolved
         # not_registered results roll back to pending in _apply_results (Task 3).
         self._degraded_this_tick: set[str] = set()
+        # quick-260629-b7j (PROBE-02): per-checker last active-probe timestamp.
+        # In-memory on the singleton (mirrors _consecutive_misses). The probe used
+        # to fire every ~5s poll tick (~4267 probe-batches/account/day — the dominant
+        # contacts-API burn); this throttles it to at most one probe per
+        # contact_check_probe_interval_seconds per checker. A redeploy clears it →
+        # one harmless re-probe, no state to persist.
+        self._last_probe_at: dict[str, datetime] = {}
 
     def start(self):
         """Запустить background task. Идемпотентно (повторный start — no-op)."""
@@ -459,6 +466,7 @@ class ContactCheckWorker:
         self._degraded_this_tick = set()
         if not _CONTROL_SET:
             return
+        settings = get_settings()
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(
                 text("""
@@ -468,10 +476,40 @@ class ContactCheckWorker:
                       AND restriction_status = 'none'
                       AND lifecycle_status <> 'paused'
                       AND (restricted_until IS NULL OR restricted_until <= NOW())
-                """)
+                      -- quick-260629-b7j (PROBE-01): honor the Plan-14-07 post-batch
+                      -- rest in the PROBE path too. The 14-07 rest only excluded the
+                      -- resolve _tick LATERAL; the probe ignored checker_rest_until and
+                      -- hammered a "resting" checker every ~5s, defeating the rest and
+                      -- burning the account. Mirror the _tick gate so a resting checker
+                      -- is fully idle (probe AND resolve).
+                      AND (checker_rest_until IS NULL OR checker_rest_until <= NOW())
+                      -- quick-260629-b7j (PROBE-03): gate the probe on the same durable
+                      -- daily_cap the resolve _tick uses (today's contacts_cache writes
+                      -- by this checker). A probe DOES write contacts_cache, so an
+                      -- ungated probe silently blew the per-account budget. Gating BEFORE
+                      -- firing keeps probe + resolve load under one shared ceiling.
+                      AND (
+                          SELECT COUNT(*)
+                          FROM contacts_cache cc
+                          WHERE cc.sender_id = senders.id
+                            AND cc.updated_at >= date_trunc('day', now())
+                      ) < :daily_cap
+                """),
+                {"daily_cap": settings.contact_check_daily_cap},
             )).fetchall()
+        # quick-260629-b7j (PROBE-02): probe each eligible checker at most once per
+        # contact_check_probe_interval_seconds. The inline 14-05 anomaly detector
+        # already catches throttle for free on every real batch, so the active probe
+        # is a rare backstop — it does NOT need to run every poll tick.
+        now = datetime.now(timezone.utc)
+        interval = timedelta(seconds=settings.contact_check_probe_interval_seconds)
         for r in rows:
-            await self.probe_checker(str(r.id))
+            cid = str(r.id)
+            last = self._last_probe_at.get(cid)
+            if last is not None and (now - last) < interval:
+                continue  # probed recently — skip this cycle
+            self._last_probe_at[cid] = now
+            await self.probe_checker(cid)
 
     def _probe_sample(self) -> list[str]:
         """A small random control-set sample (≤ ~5, ≤ burst_cap) — keeps the probe
@@ -567,11 +605,31 @@ class ContactCheckWorker:
         "resolve-tick: anomalous empty-rate N/N" so the audit row distinguishes the
         inline flood/throttle degrade from the decoupled ≥2-miss probe.
         """
-        cooldown = get_settings().contact_check_cooldown_seconds
-        cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+        settings = get_settings()
+        base_cooldown = settings.contact_check_cooldown_seconds
+        max_backoff = settings.contact_check_max_backoff_seconds
         audit_text = raw_text or f"control-probe: {miss_count} consecutive misses"
         async with AsyncSessionLocal() as db:
             async with db.begin():
+                # quick-260629-b7j (PROBE-04): escalating per-checker backoff. Bump the
+                # persisted consecutive-trip counter and compute an exponential cooldown
+                # base * 2^(trip-1) capped at max_backoff, so a checker that keeps
+                # tripping rests for HOURS instead of auto-recovering every fixed ~15min
+                # only to re-trip and burn the contacts-API. checker_trip_count is durable
+                # (survives api restart) and is reset to 0 on a clean recovery
+                # (_recover_checkers). RETURNING keeps the bump + cooldown computation in
+                # ONE transaction with the event row and status UPDATE (atomic).
+                new_trip = (await db.execute(
+                    text("""
+                        UPDATE senders
+                        SET checker_trip_count = checker_trip_count + 1
+                        WHERE id = :id
+                        RETURNING checker_trip_count
+                    """),
+                    {"id": checker_id},
+                )).scalar_one()
+                cooldown = min(base_cooldown * (2 ** (new_trip - 1)), max_backoff)
+                cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
                 await record_restriction_event(
                     sender_id=checker_id,
                     event_type="spam_limited",
@@ -592,7 +650,8 @@ class ContactCheckWorker:
                 )
         logger.warning(
             "📋 control-probe flagged checker %s spam_limited (%d consecutive misses), "
-            "cooldown %ss", checker_id, miss_count, cooldown,
+            "trip #%d → cooldown %ss (base %ss, cap %ss)",
+            checker_id, miss_count, new_trip, cooldown, base_cooldown, max_backoff,
         )
 
     async def _maybe_degrade_on_signal(
@@ -685,7 +744,12 @@ class ContactCheckWorker:
                             UPDATE senders
                             SET restriction_status = 'none',
                                 restricted_until = NULL,
-                                lifecycle_status = 'active'
+                                lifecycle_status = 'active',
+                                -- quick-260629-b7j (PROBE-04): a clean recovery resets the
+                                -- escalating-backoff ladder so a genuinely-recovered checker
+                                -- starts its next cooldown from the base again (not from the
+                                -- accumulated trip history).
+                                checker_trip_count = 0
                             WHERE id = :id
                         """),
                         {"id": str(r.id)},

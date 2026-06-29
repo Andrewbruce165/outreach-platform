@@ -104,6 +104,13 @@ class Sender(Base):
     # never touches restriction_status/lifecycle_status/restricted_until and writes no
     # sender_restriction_events row; a checker waking from rest is just re-selected.
     checker_rest_until = Column(DateTime(timezone=True), nullable=True)  # benign post-batch rest (NOT a restriction)
+    # Migration 036 (quick-260629-b7j): per-checker CONSECUTIVE contacts-API trip
+    # counter for the ESCALATING backoff. Each spam_limited trip increments it; the
+    # cooldown is base * 2^(trip-1) capped at contact_check_max_backoff_seconds; a
+    # clean recovery resets it to 0. Durable (survives api restart) so backoff is not
+    # lost on redeploy. NOT a restriction itself — distinct from restriction_status/
+    # restricted_until (the current state); only the cooldown computation reads it.
+    checker_trip_count = Column(Integer, nullable=False, server_default='0')  # escalating-backoff trip counter
     rate_per_min = Column(Integer, nullable=False, server_default='4')
     rate_per_hour = Column(Integer, nullable=False, server_default='20')
     rate_per_day = Column(Integer, nullable=False, server_default='150')

@@ -133,6 +133,24 @@ class Settings(BaseSettings):
                     "≥2 checkers meanwhile). 300s = 5 min start value (tune later). This is "
                     "NOT a restriction cooldown — it touches only senders.checker_rest_until.",
     )
+    contact_check_probe_interval_seconds: int = Field(
+        default=900,  # 15 min — see justification below
+        validation_alias="CONTACT_CHECK_PROBE_INTERVAL_SECONDS",
+        description="Minimum seconds between active control-probes of the SAME checker. The "
+                    "probe ran every ~5s poll tick (~4267 probe-batches/account/day — the "
+                    "dominant burn). The inline 14-05 anomaly detector already catches throttle "
+                    "for FREE on every real batch, so the active probe is a rare backstop. 900s "
+                    "(15min) is well under the >5min onset window (fresh tripped ~76 resolves, "
+                    "rested controls ~47-49) — the probe verifies health periodically without "
+                    "contributing meaningful load.",
+    )
+    contact_check_max_backoff_seconds: int = Field(
+        default=6 * 60 * 60,  # 6h ceiling
+        validation_alias="CONTACT_CHECK_MAX_BACKOFF_SECONDS",
+        description="Ceiling for the escalating per-checker cooldown. A repeatedly-tripping "
+                    "checker backs off cooldown_seconds * 2^(trip_count-1), capped here, so a "
+                    "cycling account rests for hours not a fixed 15min and stops re-tripping.",
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:
