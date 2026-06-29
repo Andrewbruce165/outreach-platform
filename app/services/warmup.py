@@ -175,6 +175,14 @@ class WarmupWorker:
         """
         # Phase 2 (D-11/D-12): senders.is_active dropped → lifecycle_status + auth_status.
         # warmup_pool.is_active — отдельная колонка (другая модель), остаётся.
+        #
+        # Phase 15 (D-06): enabled-gate — LEFT JOIN warmup_settings и требуем
+        # COALESCE(ws.enabled, false) = true. «Нет строки» = прогрев ВЫКЛЮЧЕН
+        # (default-OFF, explicit opt-in) → workspace выпадает из выборки.
+        #
+        # Phase 15 (D-14): restriction-skip (RESV-05 модель из contact_check_worker)
+        # — аккаунт с restriction_status != 'none' ИЛИ будущим restricted_until
+        # НЕ греется. lifecycle уже ограничен 'active' (исключает 'paused').
         result = await db.execute(text("""
             SELECT wp.sender_id, wp.workspace_id, wp.enrolled_at,
                    s.slug, s.phone, s.session_string
@@ -182,10 +190,15 @@ class WarmupWorker:
             JOIN senders s
               ON s.id = wp.sender_id
              AND s.workspace_id = wp.workspace_id
+            LEFT JOIN warmup_settings ws
+              ON ws.workspace_id = wp.workspace_id
             WHERE wp.is_active = true
               AND s.lifecycle_status = 'active'
               AND s.auth_status = 'ok'
               AND s.role = 'sender'
+              AND COALESCE(ws.enabled, false) = true
+              AND s.restriction_status = 'none'
+              AND (s.restricted_until IS NULL OR s.restricted_until <= NOW())
         """))
         rows = result.fetchall()
         now = datetime.now(timezone.utc)
@@ -274,20 +287,41 @@ class WarmupWorker:
         # Загружаем данные обоих аккаунтов
         # Phase 2 (D-11/D-12): "eligible" = lifecycle_status='active' AND auth_status='ok'.
         # Phase 02.1 (CR-04 issue 1): workspace_id из senders для INSERT warmup_messages.
+        # Phase 15 (D-14): also fetch restriction_status / restricted_until so an
+        # account restricted MID-session stops too — is_eligible mirrors the
+        # _get_active_pool clause (RESV-05): restriction_status='none' AND no
+        # future restricted_until.
+        now = datetime.now(timezone.utc)
         result = await db.execute(
             text("""
-                SELECT id, slug, phone, session_string, lifecycle_status, auth_status, workspace_id
+                SELECT id, slug, phone, session_string, lifecycle_status, auth_status,
+                       workspace_id, restriction_status, restricted_until
                 FROM senders WHERE id = ANY(:ids)
             """),
             {"ids": [from_id, to_id]}
         )
+
+        def _not_restricted(restriction_status, restricted_until) -> bool:
+            if restriction_status != "none":
+                return False
+            if restricted_until is None:
+                return True
+            if restricted_until.tzinfo is None:
+                restricted_until = restricted_until.replace(tzinfo=timezone.utc)
+            return restricted_until <= now
+
         senders_map = {
             str(r[0]): {
                 "id": str(r[0]), "slug": r[1],
                 "phone": r[2], "session_string": r[3],
                 "lifecycle_status": r[4], "auth_status": r[5],
                 "workspace_id": str(r[6]),
-                "is_eligible": (r[4] == "active" and r[5] == "ok"),
+                "restriction_status": r[7],
+                "restricted_until": r[8],
+                "is_eligible": (
+                    r[4] == "active" and r[5] == "ok"
+                    and _not_restricted(r[7], r[8])
+                ),
             }
             for r in result.fetchall()
         }
