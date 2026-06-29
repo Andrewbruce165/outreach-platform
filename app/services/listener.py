@@ -152,6 +152,13 @@ class TelegramListener:
         self._warmup_telegram_ids: set[int] = set()
         self._warmup_sender_ids: set[str] = set()
         self._warmup_cache_ts: float = 0.0
+        # Phase 15 D-01/D-02: deterministic per-workspace internal-sender tg_id set.
+        # «Свой со своим» — любой traffic между двумя senders ОДНОГО workspace
+        # (по telegram_id ∈ senders) считается internal. НЕ зависит от phone
+        # (закрывает leak при phone="unknown") и НЕ зависит от членства в warmup_pool
+        # и НЕ restriction-gated (изоляция держится для restricted/non-enrolled).
+        self._workspace_sender_tg_ids: dict[str, set[int]] = {}
+        self._workspace_sender_tg_ids_ts: float = 0.0
 
         # Phase 2 (D-18): periodic reconcile loop replaces docker-restart.
         # Diff'аем desired senders в БД с currently_connected каждые N секунд.
@@ -404,7 +411,7 @@ class TelegramListener:
             # senders no longer carry agent linkage — see _send_to_ai above.
             result = await session.execute(
                 text("""
-                    SELECT id, slug, phone, session_string, proxy
+                    SELECT id, slug, phone, session_string, proxy, workspace_id
                     FROM senders
                     WHERE role = 'sender'
                       AND lifecycle_status = 'active'
@@ -420,7 +427,10 @@ class TelegramListener:
                     "session_string": r[3],
                     # Phase 3 D-04: ai_context_id больше не на sender'е — agent_id придёт
                     # через conversation.campaign_id JOIN в Phase 4.
-                    "proxy": r[4]
+                    "proxy": r[4],
+                    # Phase 15 D-01: workspace_id для детерминированного internal-short-circuit
+                    # («свой со своим» по telegram_id ∈ senders этого workspace).
+                    "workspace_id": str(r[5]),
                 }
                 for r in rows
             ]
@@ -601,6 +611,89 @@ class TelegramListener:
         """Кэшированные telegram_id warmup-аккаунтов (для фильтрации исходящих)."""
         await self._refresh_warmup_cache()
         return self._warmup_telegram_ids
+
+    async def _get_workspace_sender_tg_ids(self, workspace_id: str) -> set[int]:
+        """Phase 15 D-01: детерминированный internal-sender set для workspace.
+
+        Возвращает множество telegram_id ВСЕХ senders данного workspace —
+        источник истины для признака «свой со своим» (internal). Любой трафик,
+        чей counterparty telegram_id попадает в это множество, считается internal
+        и дропается листенером до AI и до любой записи в conversations/messages
+        (D-02).
+
+        Ключевые свойства (закрывают корневую причину pollution-инцидента
+        2026-06-23/24, debug/dashboard-analytics-warmup-pollution.md):
+          - НЕ joined к warmup_pool — изоляция держится для non-enrolled аккаунтов.
+          - НЕ restriction-gated (нет фильтра по restriction_status/restricted_until)
+            — изоляция держится для spam_limited/frozen аккаунтов.
+          - НЕ зависит от phone — работает при phone="unknown".
+
+        Кэш: TTL-словарь {str(workspace_id) -> set(telegram_id)}, перестраивается
+        целиком одним запросом при истечении WARMUP_CACHE_TTL.
+
+        Cache-miss tradeoff (research Pitfall 2): если внутри TTL-окна появился
+        совсем новый sender (ещё не в кэше) и его tg_id запрошен как unknown для
+        своего workspace_id, делаем single-row EXISTS fallback и, при нахождении,
+        дописываем его в кэшированное множество. Это держит изоляцию строгой
+        (новый sender не «протекает» как внешний контакт на время TTL) ценой
+        максимум одного дешёвого индексного запроса на cold tg_id.
+        """
+        now = time.time()
+        if now - self._workspace_sender_tg_ids_ts > self.WARMUP_CACHE_TTL:
+            try:
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(text("""
+                        SELECT workspace_id, telegram_id
+                        FROM senders
+                        WHERE role = 'sender' AND telegram_id IS NOT NULL
+                    """))
+                    rebuilt: dict[str, set[int]] = {}
+                    for r in result.fetchall():
+                        rebuilt.setdefault(str(r[0]), set()).add(r[1])
+                    self._workspace_sender_tg_ids = rebuilt
+                    self._workspace_sender_tg_ids_ts = now
+                    logger.debug(
+                        f"🔥 Workspace internal-sender кэш: {len(rebuilt)} workspace(s)"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ Не удалось обновить internal-sender кэш: {e}"
+                )
+
+        return self._workspace_sender_tg_ids.get(str(workspace_id), set())
+
+    async def _is_internal_counterparty(
+        self, workspace_id: str, counterparty_tg_id: int
+    ) -> bool:
+        """True если counterparty telegram_id принадлежит другому sender'у этого
+        workspace (internal «свой со своим»). Включает single-row EXISTS fallback
+        для cold tg_id внутри TTL-окна (Pitfall 2)."""
+        internal_ids = await self._get_workspace_sender_tg_ids(workspace_id)
+        if counterparty_tg_id in internal_ids:
+            return True
+        # Cache-miss fallback: brand-new sender may not be in the TTL snapshot yet.
+        try:
+            async with AsyncSessionLocal() as session:
+                exists = (await session.execute(
+                    text("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM senders
+                            WHERE workspace_id = :wid
+                              AND telegram_id = :cid
+                              AND role = 'sender'
+                        )
+                    """),
+                    {"wid": str(workspace_id), "cid": counterparty_tg_id},
+                )).scalar()
+            if exists:
+                # Patch the live cache so subsequent hits skip the fallback.
+                self._workspace_sender_tg_ids.setdefault(
+                    str(workspace_id), set()
+                ).add(counterparty_tg_id)
+                return True
+        except Exception as e:
+            logger.warning(f"⚠️ internal-sender EXISTS fallback failed: {e}")
+        return False
 
     async def handle_incoming_message(self, event, sender_info: dict):
         """Обработка входящего сообщения с debounce и поддержкой медиа"""
