@@ -135,6 +135,12 @@ None. This plan is Wave-0 scaffolding by design: the migration + ORM are product
 - 8 RED tests pin the exact behaviours; Plans 02/03/04 turn them green.
 - Plan 04 must also mount the warmup router in `app/main.py` and fix the broken `app.routers.auth` import as part of the D-05 AuthDep rewrite.
 
+## Self-Check: PASSED
+
+- All 5 created files exist on disk (migration, 3 test files, SUMMARY).
+- WarmupSettings ORM, conftest `038_warmup_settings` wiring, and WARM-15 marker present.
+- All 5 commits exist in git history: 1e84f18, 7e7510d, 410ceac, f69f9f7, 3fa8b5e.
+
 ---
 *Phase: 15-account-warmup-via-inter-account-ai-chat*
 *Completed: 2026-06-29*
