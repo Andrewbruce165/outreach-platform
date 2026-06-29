@@ -24,7 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Contact, Folder
-from app.schemas import FolderCreate, FolderResponse, FolderUpdate
+from app.schemas import (
+    FolderCreate,
+    FolderResponse,
+    FolderStatsResponse,
+    FolderUpdate,
+)
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -152,6 +157,63 @@ async def get_folder(
             detail={"code": "FOLDER_NOT_FOUND", "message": "Folder not found"},
         )
     return await _folder_to_response(db, folder)
+
+
+# tg_status → stat-card bucket. Mirrors the frontend classifiers in contacts.tsx.
+_IN_TELEGRAM_STATUSES = ("registered", "ok", "found", "in_telegram")
+_CHECKING_STATUSES = ("pending", "checking", "unknown", "unchecked", "")
+_NOT_FOUND_STATUSES = ("not_registered", "not_found", "privacy", "missing", "error")
+
+
+@router.get("/{folder_id}/stats", response_model=FolderStatsResponse)
+async def folder_stats(
+    folder_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Folder-wide Telegram-status breakdown for the /contacts stat cards.
+
+    Single GROUP BY over the folder — returns correct totals immediately, so the UI
+    no longer derives counts from the first paginated page (the cause of the
+    flash-then-correct bug). 404 if folder is cross-tenant / missing.
+    """
+    folder_row = await db.execute(
+        select(Folder.id).where(
+            Folder.id == folder_id,
+            Folder.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy
+        )
+    )
+    if folder_row.scalar() is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "FOLDER_NOT_FOUND", "message": "Folder not found"},
+        )
+
+    rows = await db.execute(
+        select(Contact.tg_status, sql_func.count(Contact.id))
+        .where(Contact.folder_id == folder_id)
+        .group_by(Contact.tg_status)
+    )
+
+    total = in_telegram = checking = not_found = 0
+    for status, count in rows.all():
+        normalized = (status or "").strip().lower()
+        total += count
+        if normalized in _IN_TELEGRAM_STATUSES:
+            in_telegram += count
+        elif normalized in _NOT_FOUND_STATUSES:
+            not_found += count
+        else:
+            # Default bucket = "checking" (matches frontend: pending/unknown/'' + anything else)
+            checking += count
+
+    return FolderStatsResponse(
+        total=total,
+        in_telegram=in_telegram,
+        checking=checking,
+        not_found=not_found,
+    )
 
 
 @router.patch("/{folder_id}", response_model=FolderResponse)

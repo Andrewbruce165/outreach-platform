@@ -177,6 +177,108 @@ async def test_delete_folder_force_cascades_contacts(
     assert rows.scalar() == 0
 
 
+async def test_folder_stats_breakdown(
+    async_client, valid_supabase_jwt, async_db_session
+):
+    """Server-side stat breakdown buckets tg_status into in_telegram/checking/not_found.
+
+    Fixes the /contacts flash-then-correct bug: cards now read a single GROUP BY
+    aggregate instead of deriving counts from the first paginated page.
+    """
+    from sqlalchemy import text
+
+    token = valid_supabase_jwt(
+        sub=f"folders-stats-{uuid4()}", email=f"st-{uuid4()}@x.com"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    create = await async_client.post(
+        "/api/v1/folders", headers=headers, json={"name": "StatsFolder"}
+    )
+    fid = create.json()["id"]
+    ws = await async_client.get("/api/v1/workspace", headers=headers)
+    wid = ws.json()["id"]
+
+    # 2 registered (in_telegram), 3 pending (checking), 1 not_registered (not_found)
+    await async_db_session.execute(
+        text(
+            """
+            INSERT INTO contacts (workspace_id, folder_id, phone, tg_status) VALUES
+              (:wid, :fid, :p1, 'registered'),
+              (:wid, :fid, :p2, 'registered'),
+              (:wid, :fid, :p3, 'pending'),
+              (:wid, :fid, :p4, 'pending'),
+              (:wid, :fid, :p5, 'pending'),
+              (:wid, :fid, :p6, 'not_registered')
+            """
+        ),
+        {
+            "wid": wid,
+            "fid": fid,
+            "p1": "+79003330001",
+            "p2": "+79003330002",
+            "p3": "+79003330003",
+            "p4": "+79003330004",
+            "p5": "+79003330005",
+            "p6": "+79003330006",
+        },
+    )
+    await async_db_session.commit()
+
+    response = await async_client.get(
+        f"/api/v1/folders/{fid}/stats", headers=headers
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 6
+    assert body["in_telegram"] == 2
+    assert body["checking"] == 3
+    assert body["not_found"] == 1
+    # Buckets partition the total exactly.
+    assert body["in_telegram"] + body["checking"] + body["not_found"] == body["total"]
+
+
+async def test_folder_stats_empty_folder_all_zero(async_client, valid_supabase_jwt):
+    token = valid_supabase_jwt(
+        sub=f"folders-stats-empty-{uuid4()}", email=f"se-{uuid4()}@x.com"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    create = await async_client.post(
+        "/api/v1/folders", headers=headers, json={"name": "EmptyStats"}
+    )
+    fid = create.json()["id"]
+    response = await async_client.get(
+        f"/api/v1/folders/{fid}/stats", headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "total": 0,
+        "in_telegram": 0,
+        "checking": 0,
+        "not_found": 0,
+    }
+
+
+async def test_folder_stats_cross_tenant_returns_404(
+    async_client, valid_supabase_jwt
+):
+    token_a = valid_supabase_jwt(
+        sub=f"folders-stats-a-{uuid4()}", email=f"sa-{uuid4()}@x.com"
+    )
+    ha = {"Authorization": f"Bearer {token_a}"}
+    create = await async_client.post(
+        "/api/v1/folders", headers=ha, json={"name": "PrivateStats"}
+    )
+    fid = create.json()["id"]
+
+    token_b = valid_supabase_jwt(
+        sub=f"folders-stats-b-{uuid4()}", email=f"sb-{uuid4()}@x.com"
+    )
+    hb = {"Authorization": f"Bearer {token_b}"}
+    response = await async_client.get(f"/api/v1/folders/{fid}/stats", headers=hb)
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "FOLDER_NOT_FOUND"
+
+
 async def test_cross_tenant_folder_returns_404(async_client, valid_supabase_jwt):
     # Workspace A creates a folder
     token_a = valid_supabase_jwt(

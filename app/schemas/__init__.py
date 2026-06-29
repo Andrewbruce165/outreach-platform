@@ -227,6 +227,24 @@ class FolderListResponse(BaseModel):
     total: int
 
 
+class FolderStatsResponse(BaseModel):
+    """Per-folder Telegram-status breakdown.
+
+    Computed server-side via a single GROUP BY so the /contacts stat cards render
+    correct folder-wide numbers immediately, instead of the frontend deriving them
+    from the first paginated page of contacts.
+
+    Buckets mirror the frontend classifiers (contacts.tsx):
+      in_telegram  ← tg_status in (registered, ok, found, in_telegram)
+      checking     ← tg_status in (pending, checking, unknown, unchecked, '')
+      not_found    ← tg_status in (not_registered, not_found, privacy, missing, error)
+    """
+    total: int = 0
+    in_telegram: int = 0
+    checking: int = 0
+    not_found: int = 0
+
+
 # === Phase 2: Contacts ===
 
 class ContactBase(BaseModel):
