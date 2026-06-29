@@ -48,6 +48,7 @@ from app.schemas import (
     WarningItem,
 )
 from app.services.rebalance import rebalance_on_attach
+from app.services.campaign_enqueue import rerender_pending_queue
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -651,8 +652,28 @@ async def patch_campaign(
             for s in update_data["dialogue_flow"]
         ]
 
+    # Detect a real message_template change BEFORE setattr overwrites the old value.
+    # Editing the template must propagate to already-pending queue rows (they snapshot
+    # the rendered opener at enqueue time — see project memory). Compared against the
+    # stored value so an unchanged or unrelated PATCH does no queue work.
+    template_changed = (
+        "message_template" in update_data
+        and update_data["message_template"] is not None
+        and update_data["message_template"] != c.message_template
+    )
+
     for k, v in update_data.items():
         setattr(c, k, v)
+
+    # Re-render pending queue items in the SAME transaction as the template change,
+    # so persistence is atomic. Reads c.message_template (already the new value).
+    if template_changed:
+        rerendered = await rerender_pending_queue(db, c)
+        if rerendered:
+            logger.info(
+                "[campaigns] template changed id=%s — re-rendered %d pending queue item(s)",
+                campaign_id, rerendered,
+            )
 
     try:
         await db.commit()
@@ -668,6 +689,32 @@ async def patch_campaign(
     await db.refresh(c)
     resp = await _campaign_to_response(db, ctx, c)
     return CampaignWriteResponse(campaign=resp, warnings=warnings)
+
+
+class _RerenderResponse(BaseModel):
+    """POST /campaigns/{id}/rerender-pending result."""
+    rerendered: int
+
+
+@router.post("/{campaign_id}/rerender-pending", response_model=_RerenderResponse)
+async def rerender_pending(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-render the message_text of all pending queue items for this campaign with
+    the current message_template. On-demand counterpart to the automatic re-render
+    in PATCH — lets the UI add a "refresh queue" button or recover after a template
+    edit made through another path. Already-sent rows are not touched.
+    """
+    c = await _load_campaign(db, ctx, campaign_id)
+    rerendered = await rerender_pending_queue(db, c)
+    await db.commit()
+    logger.info(
+        "[campaigns] rerender-pending workspace=%s id=%s — %d item(s)",
+        ctx.workspace_id, campaign_id, rerendered,
+    )
+    return _RerenderResponse(rerendered=rerendered)
 
 
 @router.delete("/{campaign_id}", status_code=204)

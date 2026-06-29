@@ -344,5 +344,99 @@ class CampaignEnqueueWorker:
         return enqueued
 
 
+async def rerender_pending_queue(db: AsyncSession, campaign) -> int:
+    """Re-render message_text of all pending queue items for `campaign`.
+
+    The queue snapshots the rendered opener at enqueue time, so editing
+    `campaign.message_template` afterwards does NOT reach rows already sitting in
+    the queue. This re-renders every `status='pending'`, `item_type='message'` row
+    for the campaign with the CURRENT template, using the same render path the
+    enqueue worker uses (render_template + the contact's fields).
+
+    Each pending row is matched back to its contact by identity key
+    (`recipient_phone == COALESCE(phone,'@'||username)`) within the campaign's
+    folder, so `{{variables}}` render with the same data. When the contact is no
+    longer in the folder (moved / deleted), it falls back to a minimal contact
+    built from the queue row (`recipient_name` + phone) so `{{имя}}`/`{{name}}`
+    still resolve from the stored name.
+
+    Safety:
+      - Empty / blank template → no-op (returns 0); never blanks a message.
+      - `UPDATE … WHERE id=:id AND status='pending'` re-checks status per row, so a
+        row the send worker grabbed meanwhile is skipped (no clobber of in-flight).
+      - Does NOT commit — the caller owns the transaction.
+
+    Returns: number of pending rows actually re-rendered.
+    """
+    template = (campaign.message_template or "").strip()
+    if not template:
+        return 0
+
+    pending = (await db.execute(
+        text("""
+            SELECT id, recipient_phone, recipient_name
+            FROM message_queue
+            WHERE campaign_id = :cid
+              AND status = 'pending'
+              AND item_type = 'message'
+        """),
+        {"cid": str(campaign.id)},
+    )).fetchall()
+    if not pending:
+        return 0
+
+    # Build identity → contact_dict map from the campaign's folder (for {{vars}}).
+    contacts_by_identity: dict[str, dict] = {}
+    if campaign.folder_id is not None:
+        crows = (await db.execute(
+            text("""
+                SELECT phone, username, full_name, source, custom
+                FROM contacts
+                WHERE folder_id = :fid AND workspace_id = :wid
+            """),
+            {"fid": str(campaign.folder_id), "wid": str(campaign.workspace_id)},
+        )).fetchall()
+        for r in crows:
+            identity = contact_identity_key(r.phone, r.username)
+            if identity is None:
+                continue
+            contacts_by_identity[identity] = {
+                "full_name": r.full_name,
+                "username": r.username,
+                "phone": r.phone,
+                "source": r.source,
+                "custom": r.custom or {},
+            }
+
+    updated = 0
+    for row in pending:
+        contact_dict = contacts_by_identity.get(row.recipient_phone) or {
+            # Contact gone from the folder — fall back to the stored snapshot fields
+            # so {{имя}}/{{name}} still render; other vars smart-trim to empty.
+            "full_name": row.recipient_name or "",
+            "username": None,
+            "phone": row.recipient_phone,
+            "source": None,
+            "custom": {},
+        }
+        rendered = render_template(
+            template,
+            contact_dict,
+            campaign_id=str(campaign.id),
+            phone=row.recipient_phone,
+        )
+        res = await db.execute(
+            text("""
+                UPDATE message_queue
+                SET message_text = :txt
+                WHERE id = :id AND status = 'pending'
+            """),
+            {"txt": rendered, "id": str(row.id)},
+        )
+        updated += res.rowcount or 0
+
+    return updated
+
+
 # Module-level singleton — registered in app/main.py lifespan.
 campaign_enqueue_worker = CampaignEnqueueWorker()
