@@ -87,6 +87,31 @@ def _derive_status(sender: Sender) -> str:
     return sender.lifecycle_status
 
 
+def _derive_checker_status(sender: Sender) -> Optional[str]:
+    """Checker-specific UI status (role='checker' only; None for senders).
+
+    Distinct from _derive_status (sender-oriented). Splits the generic
+    'error'/'limited' into action-vs-auto buckets so the UI can show
+    'Re-auth needed'/'Banned' (red, needs the user) separately from
+    'Cooling down' (amber, auto-recovering contacts-API throttle — no action).
+
+    Precedence: banned > reauth_needed > frozen > cooling_down > paused > active.
+    """
+    if sender.role != "checker":
+        return None
+    if sender.auth_status == "banned":
+        return "banned"
+    if sender.auth_status != "ok":
+        return "reauth_needed"
+    if sender.restriction_status == "frozen":
+        return "frozen"
+    if sender.restriction_status == "spam_limited":
+        return "cooling_down"
+    if sender.lifecycle_status == "paused":
+        return "paused"
+    return "active"
+
+
 def _sender_to_response(
     sender: Sender,
     sent_today: int = 0,
@@ -113,6 +138,8 @@ def _sender_to_response(
         name=sender.name,
         phone=sender.phone,
         status=_derive_status(sender),
+        checker_status=_derive_checker_status(sender),
+        checker_trip_count=getattr(sender, "checker_trip_count", 0) or 0,
         auth_status=sender.auth_status,
         lifecycle_status=sender.lifecycle_status,
         restriction_status=sender.restriction_status,

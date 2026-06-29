@@ -43,6 +43,40 @@ def test_derive_status_matrix():
     assert _derive_status(_sender(lifecycle="paused")) == "paused"
 
 
+def _checker(auth="ok", restriction="none", lifecycle="active"):
+    return SimpleNamespace(
+        role="checker",
+        auth_status=auth,
+        restriction_status=restriction,
+        lifecycle_status=lifecycle,
+    )
+
+
+def test_derive_checker_status_matrix():
+    from app.routers.senders import _derive_checker_status
+
+    # senders (role != 'checker') get no checker_status.
+    sender_role = SimpleNamespace(
+        role="sender", auth_status="ok", restriction_status="none",
+        lifecycle_status="active",
+    )
+    assert _derive_checker_status(sender_role) is None
+
+    # Precedence: banned > reauth_needed > frozen > cooling_down > paused > active.
+    assert _derive_checker_status(_checker(auth="banned")) == "banned"
+    # banned wins even with a restriction set.
+    assert _derive_checker_status(_checker(auth="banned", restriction="frozen")) == "banned"
+    # any non-ok / non-banned auth → action needed.
+    assert _derive_checker_status(_checker(auth="session_expired")) == "reauth_needed"
+    assert _derive_checker_status(_checker(auth="restricted")) == "reauth_needed"
+    # auth ok: restriction buckets.
+    assert _derive_checker_status(_checker(restriction="frozen")) == "frozen"
+    assert _derive_checker_status(_checker(restriction="spam_limited")) == "cooling_down"
+    # auth ok, no restriction: manual pause vs active.
+    assert _derive_checker_status(_checker(lifecycle="paused")) == "paused"
+    assert _derive_checker_status(_checker(lifecycle="active")) == "active"
+
+
 # ─── 2. is_frozen_error ──────────────────────────────────────────────────────
 
 

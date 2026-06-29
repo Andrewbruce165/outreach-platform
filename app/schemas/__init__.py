@@ -132,6 +132,16 @@ class SenderResponse(BaseModel):
     # Migration 028: write-restriction state, orthogonal to auth_status.
     restriction_status: Literal["none", "spam_limited", "frozen"] = "none"
     restricted_until: Optional[datetime] = None
+    # Checker-specific UI status (role='checker' only; None for senders). Splits the
+    # generic derived `status` into action-vs-auto buckets so the UI can show a
+    # self-healing throttle ('cooling_down', amber, no action) separately from a
+    # problem that needs the user ('reauth_needed' / 'banned', red).
+    checker_status: Optional[
+        Literal["active", "cooling_down", "frozen", "paused", "reauth_needed", "banned"]
+    ] = None
+    # Consecutive contacts-API trip counter (migration 036) — drives the escalating
+    # cooldown; surfaced so the UI can hint "attempt N, longer rest".
+    checker_trip_count: int = 0
     rate_limits: RateLimits
     role: str = "sender"
     proxy: Optional[ProxyConfig] = None
