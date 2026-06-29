@@ -81,7 +81,10 @@ async def test_probe_skips_resting_checker(
         worker, "probe_checker", new=AsyncMock(return_value=False)
     ) as probe_mock:
         await worker._probe_cycle()
-        probe_mock.assert_not_awaited()
+        # Scoped to THIS checker — _probe_cycle selects across all workspaces, so a
+        # leaked-but-eligible checker from another test must not flip this assertion.
+        probed_ids = {str(c.args[0]) for c in probe_mock.await_args_list}
+        assert checker_id not in probed_ids, "a resting checker must not be probed"
 
 
 async def test_probe_runs_for_non_resting_checker(
