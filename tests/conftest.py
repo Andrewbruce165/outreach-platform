@@ -183,6 +183,13 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_032.exists():
             await asyncpg_conn.execute(_mig_032.read_text())
 
+        # 038: Phase 15 warmup_settings table — applied via an exists-guard so the
+        # ephemeral test DB gets `warmup_settings` (raw-SQL warmup tests need it).
+        # (Slot 037 is taken by 037_campaign_prompt_presets.sql; warmup is 038.)
+        _mig_038 = PROJECT_ROOT / "migrations" / "038_warmup_settings.sql"
+        if _mig_038.exists():
+            await asyncpg_conn.execute(_mig_038.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
