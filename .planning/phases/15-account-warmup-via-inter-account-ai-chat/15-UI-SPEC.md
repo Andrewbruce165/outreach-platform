@@ -37,37 +37,36 @@ created: 2026-06-29
 
 ## Spacing Scale
 
-The live system is on an effective 4px grid but with a few established non-grid values (`14px` card padding, `18px` card body, `7px` small-button radius). **Reuse the existing values — do not "correct" them to a pure 8-point scale.** Declared (multiples of 4 where the system uses them):
+This tab introduces **no new spacing values** — it lays out on the system's 4px grid using only the multiples-of-4 below.
 
 | Token | Value | Usage (as used in the live app) |
 |-------|-------|---------|
 | xs | 4px | Icon-to-label micro gaps, badge inner padding |
-| sm | 8px | Compact element spacing, mini-metric grid is `gap: 12` (see exception) |
-| md | 16px | Card header padding (`16px 18px`), section bottom margins (`marginBottom: 16`) |
+| sm | 8px | Compact element spacing |
+| md | 16px | Card header padding, section bottom margins (`marginBottom: 16`) |
 | lg | 24px | Page body padding (`.scroll { padding: 24 }` — matches `accounts.tsx`) |
 | xl | 32px | Major vertical section breaks within the tab |
 | 2xl | 48px | Empty-state vertical centering block |
 | 3xl | 64px | Reserved — not expected on this tab |
 
-Exceptions (all pre-existing in `aimly.css`, reuse verbatim, do NOT invent new ones):
-- Mini-metric grid gap `12px`, card body padding `18px`, card header `16px 18px`.
-- Button heights `36px` (default) / `30px` (`--sm`); sidebar item height `36px`.
-- Border radii from `--r-*`: `6 / 10 / 14 / 20 / 999`; button radius `9px` (default) / `7px` (`--sm`).
+Exception (multiple of 4): the mini-metric grid gap is `12px` (matches `accounts.tsx` `MiniMetric` grid `gap:12`).
+
+Pre-existing `aimly.css` geometry tokens (`--r-*` border radii, button heights, card inner padding) are inherited verbatim from the live design system and are outside this tab's spacing contract — this tab introduces no new spacing values.
 
 ---
 
 ## Typography
 
-Base is `14px / line-height 1.45` on `body` (set in `aimly.css`). The 4 roles below are the only ones used on this tab; weights are limited to **2** (400 regular, 600 semibold) — `500` appears on `.btn`/active nav but treat 600 as the heading weight and 400 as body for the checker's 2-weight rule; **500 is the single permitted intermediate already baked into `.btn`/`.sb__item.is-active` — reuse those classes, do not add new 500 usages.**
+Base is `14px / line-height 1.45` on `body` (set in `aimly.css`). The 4 roles below are the only ones used on this tab. **Declared weight set is exactly {400 regular, 600 semibold}** — body text is 400, all headings/emphasis are 600. The pre-existing `.btn` and `.sb__item.is-active` classes are reused verbatim (inherited as-is, no weight declaration required); this tab declares no intermediate weight.
 
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px | 400 | 1.45 |
-| Label / meta | 12px | 500 (in `.metric__head`/`.card__sub` — pre-existing) | 1.3 |
+| Label / meta | 12px | 400 | 1.3 |
 | Heading (card/section title) | 14px | 600 | 1.3 (`.card__title`) |
 | Display (page/Topbar title, big metric value) | 17–20px | 600 | 1.2 |
 
-Notes: section eyebrow labels use the pre-existing `.sb__section` pattern (11px, uppercase, `letter-spacing 0.06em`, weight 600, `--text-faint`). Numeric metric values use `--mono` is **not** required — the live `MiniMetric` uses the body font; match it.
+Notes: section eyebrow labels use the pre-existing `.sb__section` pattern (11px, uppercase, `letter-spacing 0.06em`, weight 600, `--text-faint`). Numeric metric values use the body font (not `--mono`) — match the live `MiniMetric`.
 
 ---
 
@@ -95,6 +94,8 @@ Light theme only (no dark mode on this tab). The 60/30/10 split maps onto the ex
 
 **Restriction visibility (D-11/D-14) color rule:** an account that cannot warm up because of `restriction_status != 'none'` or a future `restricted_until` MUST render its status with `--danger`/`--danger-soft` (or `--warning` for soft `spam_limited`) plus a textual reason — never silently grey. This is the user's explicit "видно, ПОЧЕМУ аккаунт не греется" requirement.
 
+**Focal point / visual hierarchy:** the master "Включить прогрев" CTA + its ON/OFF state is the single dominant focal point of the tab (top-right of the Topbar, the only `--tg-blue` `.btn--primary`); the mini-metrics row reads second, the pool table third — everything else stays neutral so the master control is unambiguous at a glance.
+
 ---
 
 ## Copywriting Contract
@@ -120,8 +121,8 @@ All copy in **Russian**. Reuse the existing toast/empty/error patterns from `acc
 | Schedule note (D-08, read-only) | `Прогрев работает 09:00–20:00 МСК` |
 | Combine-with-campaign note (D-12) | `Аккаунт может одновременно греться и работать в кампании` (informational, no action) |
 | Soft-cap / safety note (intensity) | `Интенсивность растёт автоматически по дням — ручная настройка отключена для безопасности` |
-| Destructive confirmation — stop warmup (master) | Title `Выключить прогрев?` · Body `Все аккаунты перестанут набирать активность, пока вы снова не включите прогрев.` · Confirm `Выключить` (`--danger`) · Cancel `Отмена` |
-| Destructive confirmation — remove account from pool | Title `Убрать аккаунт из прогрева?` · Body `Аккаунт перестанет переписываться с другими. Его историю прогрева это не удалит.` · Confirm `Убрать` (`--danger`) · Cancel `Отмена` |
+| Destructive confirmation — stop warmup (master) | Title `Выключить прогрев?` · Body `Все аккаунты перестанут набирать активность, пока вы снова не включите прогрев.` · Confirm `Выключить прогрев` (`--danger`) · Cancel `Отмена` |
+| Destructive confirmation — remove account from pool | Title `Убрать аккаунт из прогрева?` · Body `Аккаунт перестанет переписываться с другими. Его историю прогрева это не удалит.` · Confirm `Убрать аккаунт` (`--danger`) · Cancel `Отмена` |
 | Settings save (content D-10) | CTA `Сохранить настройки` · success toast `Настройки прогрева сохранены` · reset hint `По умолчанию используются 24 русскоязычные темы` |
 
 **Destructive actions in this phase (each needs the confirm pattern above):**
