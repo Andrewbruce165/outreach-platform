@@ -81,6 +81,38 @@ def parse_spambot_limit_until(text: str) -> Optional[datetime]:
     return dt.replace(tzinfo=timezone.utc)
 
 
+# Phrase tables for classifying a @SpamBot reply body. Single source of truth shared
+# by check_spambot (the solicited /start poll) AND the listener's unsolicited-SpamBot
+# safety net, so both classify identically. A "free"/"unknown" body must NOT be
+# treated as a restriction (the 2026-06-29 false-positive: a clean "Good news, no
+# limits … free as a bird!" reply was flagged spam_limited for 6h — see
+# .planning/debug/checker-false-spam-limited.md).
+_SPAMBOT_FREE_PHRASES = ("good news", "no limits", "нет ограничений", "всё хорошо", "free as a bird")
+_SPAMBOT_LIMITED_PHRASES = ("limited", "restrict", "ограничен")
+_SPAMBOT_SUSPENDED_PHRASES = (
+    "suspended", "blocked", "banned",
+    "заблокирован", "приостановлен", "забанен",
+)
+
+
+def classify_spambot_text(text: str) -> str:
+    """Classify a @SpamBot reply body → 'free' | 'limited' | 'suspended' | 'unknown'.
+
+    'free' is checked FIRST: a "good news, no limits" reply must win even though it
+    can incidentally contain a restriction keyword in boilerplate. 'unknown' (no
+    recognised phrase) is NOT a restriction — callers must only act restrictively on
+    'limited'/'suspended'.
+    """
+    text_lower = (text or "").lower()
+    if any(p in text_lower for p in _SPAMBOT_FREE_PHRASES):
+        return "free"
+    if any(p in text_lower for p in _SPAMBOT_LIMITED_PHRASES):
+        return "limited"
+    if any(p in text_lower for p in _SPAMBOT_SUSPENDED_PHRASES):
+        return "suspended"
+    return "unknown"
+
+
 class SessionAuthError(Exception):
     """Raised when Telegram session is invalid and needs re-authorization."""
     def __init__(self, slug: str, auth_status: str, detail: str):
@@ -335,23 +367,14 @@ class TelegramService:
             text = messages[0].text or ""
             result = {"raw_text": text}
 
-            text_lower = text.lower()
-            if any(phrase in text_lower for phrase in ["good news", "no limits", "нет ограничений", "всё хорошо"]):
-                result["status"] = "free"
-            elif any(phrase in text_lower for phrase in ["limited", "restrict", "ограничен"]):
-                result["status"] = "limited"
+            status = classify_spambot_text(text)
+            result["status"] = status
+            if status == "limited":
                 # Absolute release time SpamBot quotes (English only); None → caller
                 # falls back to a fixed recheck interval.
                 limit_until = parse_spambot_limit_until(text)
                 if limit_until:
                     result["limit_until"] = limit_until.isoformat()
-            elif any(phrase in text_lower for phrase in [
-                "suspended", "blocked", "banned",
-                "заблокирован", "приостановлен", "забанен"
-            ]):
-                result["status"] = "suspended"
-            else:
-                result["status"] = "unknown"
 
             return result
 

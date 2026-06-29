@@ -954,6 +954,23 @@ class TelegramListener:
             )
             return
 
+        # Body classification (fix 2026-06-29): a SpamBot ID match alone is NOT proof
+        # of a restriction — @SpamBot also sends CLEAN replies ("Good news, no limits …
+        # free as a bird!"). Flagging spam_limited on a clean body was the false-positive
+        # that pinned checker sender-8364639216 for 6h (see
+        # .planning/debug/checker-false-spam-limited.md). Only a 'limited'/'suspended'
+        # verdict is restrictive; a 'free' or 'unknown' body must never flag the sender.
+        # Telegram-service messages (id 777000) carry no SpamBot verdict text → treated
+        # as 'unknown' and likewise skipped here (they are not antispam warnings).
+        from app.services.telegram import classify_spambot_text
+        verdict = classify_spambot_text(message_text)
+        if verdict not in ("limited", "suspended"):
+            logger.info(
+                f"🔕 [{sender_slug}] SpamBot message classified '{verdict}' "
+                f"(not a restriction) — skip auto-cancel/flag"
+            )
+            return
+
         try:
             # Mirror of the PEER_FLOOD soft-restriction write (queue.py:739-754).
             # pause_until: empirical 24h queue pause — DO NOT change (CLAUDE.md hard rule).

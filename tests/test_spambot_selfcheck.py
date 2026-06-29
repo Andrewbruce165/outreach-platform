@@ -169,3 +169,46 @@ async def test_antispam_guard_pauses_and_flags_when_no_selfcheck(
     assert scheduled_future is True       # scheduled_at pushed into the future (+24h)
     assert ai_enabled is True             # AI left on — replies keep flowing (FRZ-03)
     assert restriction == "spam_limited"  # sender flagged (FRZ-01)
+
+
+# ── 4: unsolicited CLEAN SpamBot reply → must NOT flag (regression 2026-06-29) ──
+
+
+async def test_antispam_guard_skips_clean_spambot_body_even_without_marker(
+    async_db_session, test_sender_factory, test_workspace,
+):
+    """A @SpamBot reply that says the account is CLEAN ("Good news, no limits …
+    free as a bird!") must NOT flag spam_limited, even with no self-check marker.
+
+    Regression for the 2026-06-29 false-positive: _handle_antispam_signal flagged
+    on SpamBot *sender id* alone and ignored the body, so a clean reply pinned a
+    checker spam_limited for 6h while @SpamBot reported no restriction. The body is
+    now classified (classify_spambot_text) and only 'limited'/'suspended' flags.
+    See .planning/debug/checker-false-spam-limited.md.
+    """
+    from app.services.listener import TelegramListener
+    from app.services.telegram import telegram_service
+
+    sender = await test_sender_factory()
+    qid, cid = await _seed_queue_and_conversation(async_db_session, sender, test_workspace)
+
+    # No self-check marker — exercise the body classifier, not the solicited guard.
+    telegram_service._spambot_selfcheck.pop(sender.slug, None)
+
+    listener_obj = TelegramListener()
+    await listener_obj._handle_antispam_signal(
+        _sender_info(sender), "SpamBot", 178220800,
+        "Good news, no limits are currently applied to your account. "
+        "You’re free as a bird!",
+    )
+
+    q_status = (await async_db_session.execute(
+        text("SELECT status FROM message_queue WHERE id = :id"), {"id": str(qid)}
+    )).scalar()
+    restriction = (await async_db_session.execute(
+        text("SELECT restriction_status FROM senders WHERE id = :id"),
+        {"id": str(sender.id)},
+    )).scalar()
+
+    assert q_status == "pending"     # clean reply → queue untouched (not paused)
+    assert restriction == "none"     # sender NOT flagged (the bug fix)
