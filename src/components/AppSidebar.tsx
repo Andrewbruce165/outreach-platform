@@ -30,7 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/contacts", label: "Contacts", icon: Users },
   { to: "/accounts", label: "TG accounts", icon: Smartphone },
-  { to: "/warmup", label: "Прогрев", icon: Flame },
+  { to: "/warmup", label: "Warmup", icon: Flame },
 ];
 
 const SECONDARY: NavItem[] = [

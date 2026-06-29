@@ -119,7 +119,7 @@ function WarmupPage() {
       qc.setQueryData(["warmup-settings"], res.settings);
     },
     onError: (e) =>
-      toast.error(e instanceof ApiError ? e.message : "Не удалось сохранить настройки"),
+      toast.error(e instanceof ApiError ? e.message : "Couldn't save settings"),
   });
 
   const toggleMaster = (next: boolean) => {
@@ -130,7 +130,7 @@ function WarmupPage() {
     saveSettingsMut.mutate(
       { enabled: true },
       {
-        onSuccess: () => toast.success("Прогрев включён"),
+        onSuccess: () => toast.success("Warmup enabled"),
       },
     );
   };
@@ -140,7 +140,7 @@ function WarmupPage() {
       { enabled: false },
       {
         onSuccess: () => {
-          toast.success("Прогрев выключен");
+          toast.success("Warmup disabled");
           setConfirmDisable(false);
         },
       },
@@ -154,11 +154,11 @@ function WarmupPage() {
   return (
     <>
       <Topbar
-        title="Прогрев аккаунтов"
+        title="Account Warmup"
         crumbs={[
           {
             label:
-              "Аккаунты переписываются между собой через AI — набирают активность без риска бана",
+              "Accounts chat with each other via AI — building activity without ban risk",
           },
         ]}
         right={
@@ -178,13 +178,13 @@ function WarmupPage() {
                 checked={enabled}
                 onCheckedChange={toggleMaster}
                 disabled={saveSettingsMut.isPending || settingsQ.isLoading}
-                aria-label="Master toggle прогрева"
+                aria-label="Warmup master toggle"
               />
               <span
                 className="text-sm fw5"
                 style={{ color: enabled ? "var(--success)" : "var(--text-muted)" }}
               >
-                {enabled ? "Прогрев включён" : "Прогрев выключен"}
+                {enabled ? "Warmup on" : "Warmup off"}
               </span>
             </div>
             {!enabled && (
@@ -193,7 +193,7 @@ function WarmupPage() {
                 onClick={() => toggleMaster(true)}
                 disabled={saveSettingsMut.isPending}
               >
-                <Power size={14} /> Включить прогрев
+                <Power size={14} /> Enable warmup
               </button>
             )}
           </>
@@ -210,7 +210,7 @@ function WarmupPage() {
             style={{ marginBottom: 16, padding: 14, color: "var(--danger)" }}
           >
             <AlertCircle size={14} style={{ display: "inline", marginRight: 6 }} />
-            Не удалось загрузить прогрев. Обновите страницу или попробуйте позже.
+            Couldn't load warmup. Refresh the page or try again later.
             <div className="muted text-xs" style={{ marginTop: 4 }}>
               {errorMsg}
             </div>
@@ -227,27 +227,27 @@ function WarmupPage() {
           }}
         >
           <MiniMetric
-            label="В прогреве"
+            label="In warmup"
             value={stats?.active_accounts ?? 0}
-            sub="Аккаунтов в пуле"
+            sub="Accounts in pool"
             color="var(--tg-blue)"
           />
           <MiniMetric
-            label="Активные сессии"
+            label="Active sessions"
             value={stats?.active_sessions ?? 0}
-            sub="Идут прямо сейчас"
+            sub="Running right now"
             color="var(--success)"
           />
           <MiniMetric
-            label="Сообщений сегодня"
+            label="Messages today"
             value={stats?.messages_today ?? 0}
-            sub="За последние 24 ч"
+            sub="In the last 24h"
             color="var(--text)"
           />
           <MiniMetric
-            label="Сессий завершено сегодня"
+            label="Sessions completed today"
             value={stats?.sessions_completed_today ?? 0}
-            sub="Закрытых диалогов"
+            sub="Closed dialogs"
             color="var(--text-muted)"
           />
         </div>
@@ -265,16 +265,16 @@ function WarmupPage() {
             }}
           >
             <div>
-              <h3 style={{ fontSize: 14, fontWeight: 600 }}>Пул прогрева</h3>
+              <h3 style={{ fontSize: 14, fontWeight: 600 }}>Warmup pool</h3>
               <div className="muted text-xs" style={{ marginTop: 2 }}>
-                Прогрев работает 09:00–20:00 МСК · Аккаунт может одновременно греться и
-                работать в кампании
+                Warmup runs 09:00–20:00 MSK · An account can warm up and run in a
+                campaign at the same time
               </div>
             </div>
           </div>
 
           {loading && inPool.length === 0 ? (
-            <div className="card__body muted">Загружаем пул…</div>
+            <div className="card__body muted">Loading pool…</div>
           ) : inPool.length === 0 ? (
             <EmptyPool
               hasAccounts={senders.length > 0}
@@ -293,18 +293,17 @@ function WarmupPage() {
                     borderBottom: "1px solid var(--border)",
                   }}
                 >
-                  Прогрев выключен. Включите его, чтобы аккаунты начали набирать
-                  активность.
+                  Warmup is off. Turn it on for accounts to start building activity.
                 </div>
               )}
               <TooltipProvider delayDuration={150}>
                 <table className="tbl">
                   <thead>
                     <tr>
-                      <th>Аккаунт</th>
-                      <th>Статус</th>
-                      <th>Уровень</th>
-                      <th>Сегодня</th>
+                      <th>Account</th>
+                      <th>Status</th>
+                      <th>Level</th>
+                      <th>Today</th>
                       <th style={{ width: 60 }} aria-label="actions" />
                     </tr>
                   </thead>
@@ -326,7 +325,7 @@ function WarmupPage() {
               }}
             >
               <div className="text-sm fw5" style={{ marginBottom: 8 }}>
-                Не в прогреве ({outOfPool.length})
+                Not in warmup ({outOfPool.length})
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {outOfPool.map((s) => (
@@ -344,19 +343,18 @@ function WarmupPage() {
       <AlertDialog open={confirmDisable} onOpenChange={setConfirmDisable}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Выключить прогрев?</AlertDialogTitle>
+            <AlertDialogTitle>Disable warmup?</AlertDialogTitle>
             <AlertDialogDescription>
-              Все аккаунты перестанут набирать активность, пока вы снова не включите
-              прогрев.
+              All accounts will stop building activity until you enable warmup again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDisableMaster}
               style={{ background: "var(--danger)", color: "white" }}
             >
-              Выключить прогрев
+              Disable warmup
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -421,24 +419,24 @@ function EmptyPool({
       >
         <Flame size={24} />
       </div>
-      <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Пул прогрева пуст</h3>
+      <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>
+        Warmup pool is empty
+      </h3>
       <p
         className="muted"
         style={{ fontSize: 13, maxWidth: 420, margin: "0 auto 8px" }}
       >
-        Добавьте Telegram-аккаунты в прогрев — они начнут безопасно переписываться между
-        собой через AI. Прогрев изолирован от рассылок: он не трогает ваши кампании и не
-        жжёт лимиты.
+        Add Telegram accounts to warmup — they'll safely chat with each other via AI.
+        Warmup is isolated from outreach: it won't touch your campaigns or burn limits.
       </p>
       {!enabled && hasAccounts && outOfPool.length > 0 && (
         <p className="muted text-xs" style={{ marginTop: 8 }}>
-          Подсказка: включите мастер-переключатель сверху и добавьте аккаунты из списка
-          ниже.
+          Tip: turn on the master toggle above and add accounts from the list below.
         </p>
       )}
       {!hasAccounts && (
         <a className="btn btn--primary" href="/accounts">
-          <Plus size={14} /> Добавить аккаунт
+          <Plus size={14} /> Add account
         </a>
       )}
     </div>
@@ -451,12 +449,12 @@ function AddRow({ sender }: { sender: PoolSender }) {
     mutationFn: () =>
       api(`/api/v1/warmup/pool/${sender.id}`, { method: "POST" }),
     onSuccess: () => {
-      toast.success("Аккаунт добавлен в прогрев");
+      toast.success("Account added to warmup");
       qc.invalidateQueries({ queryKey: ["warmup-pool"] });
       qc.invalidateQueries({ queryKey: ["warmup-stats"] });
     },
     onError: (e) =>
-      toast.error(e instanceof ApiError ? e.message : "Не удалось добавить"),
+      toast.error(e instanceof ApiError ? e.message : "Couldn't add account"),
   });
   return (
     <div
@@ -487,7 +485,7 @@ function AddRow({ sender }: { sender: PoolSender }) {
         onClick={() => addMut.mutate()}
         disabled={addMut.isPending}
       >
-        <Plus size={14} /> Добавить в прогрев
+        <Plus size={14} /> Add to warmup
       </button>
     </div>
   );
@@ -505,23 +503,23 @@ function PoolRow({ sender }: { sender: PoolSender }) {
         { method: "PATCH" },
       ),
     onSuccess: (res) => {
-      toast.success(res.warmup_active ? "Прогрев возобновлён" : "Прогрев на паузе");
+      toast.success(res.warmup_active ? "Warmup resumed" : "Warmup paused");
       qc.invalidateQueries({ queryKey: ["warmup-pool"] });
       qc.invalidateQueries({ queryKey: ["warmup-stats"] });
     },
     onError: (e) =>
-      toast.error(e instanceof ApiError ? e.message : "Не удалось изменить"),
+      toast.error(e instanceof ApiError ? e.message : "Couldn't update"),
   });
 
   const removeMut = useMutation({
     mutationFn: () => api(`/api/v1/warmup/pool/${sender.id}`, { method: "DELETE" }),
     onSuccess: () => {
-      toast.success("Аккаунт убран из прогрева");
+      toast.success("Account removed from warmup");
       qc.invalidateQueries({ queryKey: ["warmup-pool"] });
       qc.invalidateQueries({ queryKey: ["warmup-stats"] });
       setConfirmRemove(false);
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось убрать"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't remove account"),
   });
 
   const cap = capForLevel(sender.level);
@@ -566,7 +564,7 @@ function PoolRow({ sender }: { sender: PoolSender }) {
               <span
                 className="pill pill--purple"
                 style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px" }}
-                title="Контент генерируется AI"
+                title="Content is AI-generated"
               >
                 <Sparkles size={10} /> AI
               </span>
@@ -579,7 +577,7 @@ function PoolRow({ sender }: { sender: PoolSender }) {
         {restricted ? (
           <>
             <span className={`pill ${restrictionTone.pill}`}>
-              <ShieldAlert size={11} /> Ограничен
+              <ShieldAlert size={11} /> Restricted
             </span>
             <div
               className="text-xs"
@@ -590,11 +588,11 @@ function PoolRow({ sender }: { sender: PoolSender }) {
           </>
         ) : sender.warmup_active ? (
           <span className="pill pill--green">
-            <span className="pill__dot" /> Активен
+            <span className="pill__dot" /> Active
           </span>
         ) : (
           <span className="pill pill--ghost">
-            <span className="pill__dot" /> На паузе
+            <span className="pill__dot" /> Paused
           </span>
         )}
       </td>
@@ -602,8 +600,8 @@ function PoolRow({ sender }: { sender: PoolSender }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 200 }}>
           <Progress value={(sender.level / 5) * 100} className="h-1.5" />
           <span className="muted text-xs">
-            Уровень {sender.level} из 5 · {sender.sent_today}/{cap} сообщений сегодня · в
-            прогреве {sender.enrolled_days} дн.
+            Level {sender.level} of 5 · {sender.sent_today}/{cap} messages today ·{" "}
+            {sender.enrolled_days}d in warmup
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -611,12 +609,12 @@ function PoolRow({ sender }: { sender: PoolSender }) {
                 className="muted text-xs"
                 style={{ display: "inline-flex", alignItems: "center", gap: 4, cursor: "help" }}
               >
-                <Info size={10} /> авто-интенсивность
+                <Info size={10} /> auto intensity
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-[280px] text-left leading-relaxed">
-              Интенсивность растёт автоматически по дням — ручная настройка отключена для
-              безопасности.
+              Intensity ramps up automatically over days — manual tuning is disabled for
+              safety.
             </TooltipContent>
           </Tooltip>
         </div>
@@ -627,7 +625,7 @@ function PoolRow({ sender }: { sender: PoolSender }) {
       <td style={{ textAlign: "right", position: "relative" }}>
         <button
           className="tb__icon-btn"
-          aria-label="Действия"
+          aria-label="Actions"
           onClick={() => setMenuOpen((v) => !v)}
         >
           <MoreHorizontal size={16} />
@@ -644,11 +642,11 @@ function PoolRow({ sender }: { sender: PoolSender }) {
               >
                 {sender.warmup_active ? (
                   <>
-                    <Pause size={14} /> Поставить на паузу
+                    <Pause size={14} /> Pause
                   </>
                 ) : (
                   <>
-                    <Play size={14} /> Возобновить
+                    <Play size={14} /> Resume
                   </>
                 )}
               </button>
@@ -659,7 +657,7 @@ function PoolRow({ sender }: { sender: PoolSender }) {
                   setConfirmRemove(true);
                 }}
               >
-                <Trash2 size={14} /> Убрать из прогрева
+                <Trash2 size={14} /> Remove from warmup
               </button>
             </div>
           </>
@@ -668,19 +666,19 @@ function PoolRow({ sender }: { sender: PoolSender }) {
         <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Убрать аккаунт из прогрева?</AlertDialogTitle>
+              <AlertDialogTitle>Remove account from warmup?</AlertDialogTitle>
               <AlertDialogDescription>
-                Аккаунт перестанет переписываться с другими. Его историю прогрева это не
-                удалит.
+                The account will stop chatting with others. This won't delete its warmup
+                history.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Отмена</AlertDialogCancel>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => removeMut.mutate()}
                 style={{ background: "var(--danger)", color: "white" }}
               >
-                Убрать аккаунт
+                Remove account
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -722,10 +720,10 @@ function SettingsCard({ settings }: { settings: WarmupSettings }) {
     },
     onSuccess: (res) => {
       qc.setQueryData(["warmup-settings"], res.settings);
-      toast.success("Настройки прогрева сохранены");
+      toast.success("Warmup settings saved");
     },
     onError: (e) =>
-      toast.error(e instanceof ApiError ? e.message : "Не удалось сохранить настройки"),
+      toast.error(e instanceof ApiError ? e.message : "Couldn't save settings"),
   });
 
   return (
@@ -737,9 +735,9 @@ function SettingsCard({ settings }: { settings: WarmupSettings }) {
           borderBottom: "1px solid var(--border)",
         }}
       >
-        <h3 style={{ fontSize: 14, fontWeight: 600 }}>Настройки прогрева</h3>
+        <h3 style={{ fontSize: 14, fontWeight: 600 }}>Warmup settings</h3>
         <div className="muted text-xs" style={{ marginTop: 2 }}>
-          По умолчанию используются 24 русскоязычные темы
+          Defaults to 24 built-in Russian-language topics
         </div>
       </div>
       <div
@@ -747,19 +745,19 @@ function SettingsCard({ settings }: { settings: WarmupSettings }) {
         style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <label className="text-sm fw5">Темы для переписок (по одной на строке)</label>
+          <label className="text-sm fw5">Conversation topics (one per line)</label>
           <Textarea
             value={topicsText}
             onChange={(e) => setTopicsText(e.target.value)}
             rows={8}
-            placeholder="планы на выходные&#10;любимый сериал&#10;..."
+            placeholder="weekend plans&#10;favorite TV show&#10;..."
           />
           <span className="muted text-xs">
-            Оставьте поле пустым — вернутся 24 русскоязычные темы по умолчанию.
+            Leave empty to restore the 24 default Russian-language topics.
           </span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <label className="text-sm fw5">System prompt для AI</label>
+          <label className="text-sm fw5">AI system prompt</label>
           <Textarea
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
@@ -772,7 +770,7 @@ function SettingsCard({ settings }: { settings: WarmupSettings }) {
             onClick={() => saveMut.mutate()}
             disabled={saveMut.isPending}
           >
-            {saveMut.isPending ? "Сохраняем…" : "Сохранить настройки"}
+            {saveMut.isPending ? "Saving…" : "Save settings"}
           </button>
         </div>
       </div>
