@@ -275,6 +275,25 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
     limited: "Spam-limited",
     frozen: "Frozen",
   };
+  // Checker-specific statuses (role='checker'). Amber = auto-recovering, no action.
+  // Red = needs the user (re-auth / banned). Distinct from the sender-oriented
+  // `status` above so a self-healing throttle never reads as a hard error.
+  const checkerStatusStyle: Record<string, { pill: string; dot: string }> = {
+    active: { pill: "pill--green", dot: "var(--success)" },
+    cooling_down: { pill: "pill--orange", dot: "var(--warning)" },
+    frozen: { pill: "pill--orange", dot: "var(--warning)" },
+    paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
+    reauth_needed: { pill: "pill--red", dot: "var(--danger)" },
+    banned: { pill: "pill--red", dot: "var(--danger)" },
+  };
+  const checkerStatusLabel: Record<string, string> = {
+    active: "Active",
+    cooling_down: "Cooling down",
+    frozen: "Frozen",
+    paused: "Paused",
+    reauth_needed: "Re-auth needed",
+    banned: "Banned",
+  };
   const sty = statusStyle[sender.status] ?? statusStyle.paused;
   const isRestricted = sender.status === "limited" || sender.status === "frozen";
   const restrictedUntil =
@@ -290,6 +309,24 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
   const lastUsed = sender.last_used_at ? relativeTime(sender.last_used_at) : "—";
   const isChecker = sender.role === "checker";
   const dailyLimit = sender.rate_limits.per_day;
+
+  // Checker status presentation (only when the backend supplied checker_status).
+  const checkerStatus = isChecker ? sender.checker_status ?? null : null;
+  const cSty = checkerStatus ? checkerStatusStyle[checkerStatus] ?? statusStyle.paused : null;
+  const checkerRetry =
+    checkerStatus === "cooling_down" || checkerStatus === "frozen"
+      ? relativeRetry(sender.restricted_until)
+      : null;
+  const checkerTrip = sender.checker_trip_count ?? 0;
+  const checkerSubtitle =
+    checkerStatus === "cooling_down" || checkerStatus === "frozen"
+      ? `Auto · no action needed${checkerTrip > 1 ? ` · attempt ${checkerTrip}, longer rest` : ""}`
+      : checkerStatus === "reauth_needed"
+        ? "Action required · session expired"
+        : checkerStatus === "banned"
+          ? "Action required · banned"
+          : null;
+  const dotColor = cSty ? cSty.dot : sty.dot;
 
   return (
     <tr>
@@ -311,7 +348,7 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
                 width: 11,
                 height: 11,
                 borderRadius: 50,
-                background: sty.dot,
+                background: dotColor,
                 border: "2px solid var(--bg)",
               }}
             />
@@ -323,18 +360,40 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
         </div>
       </td>
       <td>
-        <span className={`pill ${sty.pill}`}>
-          <span className="pill__dot" /> {statusLabel[sender.status] ?? sender.status}
-        </span>
-        {sender.auth_status !== "ok" && (
-          <button className="ob__link" style={{ marginLeft: 8 }} onClick={onReauth}>
-            re-auth
-          </button>
-        )}
-        {isRestricted && (
-          <div className="muted text-xs" style={{ marginTop: 4 }}>
-            {restrictedUntil ? `Not sending · rechecks ${restrictedUntil}` : "Not sending until cleared"}
-          </div>
+        {checkerStatus && cSty ? (
+          <>
+            <span className={`pill ${cSty.pill}`}>
+              <span className="pill__dot" />{" "}
+              {checkerStatusLabel[checkerStatus] ?? checkerStatus}
+              {checkerRetry ? ` · retry in ${checkerRetry}` : ""}
+            </span>
+            {checkerStatus === "reauth_needed" && (
+              <button className="ob__link" style={{ marginLeft: 8 }} onClick={onReauth}>
+                re-auth
+              </button>
+            )}
+            {checkerSubtitle && (
+              <div className="muted text-xs" style={{ marginTop: 4 }}>
+                {checkerSubtitle}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <span className={`pill ${sty.pill}`}>
+              <span className="pill__dot" /> {statusLabel[sender.status] ?? sender.status}
+            </span>
+            {sender.auth_status !== "ok" && (
+              <button className="ob__link" style={{ marginLeft: 8 }} onClick={onReauth}>
+                re-auth
+              </button>
+            )}
+            {isRestricted && (
+              <div className="muted text-xs" style={{ marginTop: 4 }}>
+                {restrictedUntil ? `Not sending · rechecks ${restrictedUntil}` : "Not sending until cleared"}
+              </div>
+            )}
+          </>
         )}
       </td>
       <td>
@@ -759,4 +818,19 @@ function relativeTime(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+// Future-facing relative time for a checker's auto-retry (restricted_until).
+// "Cooling down · retry in ~3 min" reads far clearer than an absolute timestamp.
+function relativeRetry(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(ms)) return null;
+  if (ms <= 0) return "any moment";
+  const min = Math.round(ms / 60000);
+  if (min < 1) return "<1 min";
+  if (min < 60) return `~${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `~${h}h ${m}m` : `~${h}h`;
 }

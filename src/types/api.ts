@@ -2953,6 +2953,17 @@ export interface components {
             restriction_status: "none" | "spam_limited" | "frozen";
             /** Restricted Until */
             restricted_until?: string | null;
+            /**
+             * Checker Status
+             * @description Checker-specific UI status (role='checker' only; null for senders).
+             * @enum {string|null}
+             */
+            checker_status?: "active" | "cooling_down" | "frozen" | "paused" | "reauth_needed" | "banned" | null;
+            /**
+             * Checker Trip Count
+             * @default 0
+             */
+            checker_trip_count?: number;
             rate_limits: components["schemas"]["RateLimits"];
             /**
              * Role
