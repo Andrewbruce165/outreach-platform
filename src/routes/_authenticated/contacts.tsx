@@ -175,21 +175,14 @@ function isNotInTelegram(status: string | null | undefined): boolean {
   );
 }
 
-async function fetchAllFolderContacts(folderId: string, total: number): Promise<Contact[]> {
-  const pageSize = 200;
-  const expected = Math.max(total, pageSize);
-  const all: Contact[] = [];
-
-  for (let offset = 0; offset < expected; offset += pageSize) {
-    const page = await api<Contact[]>("/api/v1/contacts", {
-      query: { folder_id: folderId, limit: pageSize, offset },
-    });
-    all.push(...page);
-    if (page.length < pageSize || all.length >= total) break;
-  }
-
-  return all;
-}
+// Folder-wide Telegram-status breakdown, computed server-side (single GROUP BY).
+// Not yet in the generated openapi types — declared inline to match the backend shape.
+type FolderStats = {
+  total: number;
+  in_telegram: number;
+  checking: number;
+  not_found: number;
+};
 
 /* ---------------- Folder sidebar ---------------- */
 function FolderSidebar({
@@ -426,8 +419,8 @@ function FolderDetail({
   });
 
   const contactsStatsQ = useQuery({
-    queryKey: ["contacts-stats", folder?.id, folder?.contact_count],
-    queryFn: () => fetchAllFolderContacts(folder!.id, folder!.contact_count),
+    queryKey: ["contacts-stats", folder?.id],
+    queryFn: () => api<FolderStats>(`/api/v1/folders/${folder!.id}/stats`),
     enabled: !!folder,
   });
 
@@ -496,7 +489,6 @@ function FolderDetail({
   });
 
   const contacts = contactsQ.data ?? [];
-  const contactsForStats = contactsStatsQ.data ?? contacts;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return contacts.filter((c) => {
@@ -512,12 +504,16 @@ function FolderDetail({
     });
   }, [contacts, search, tgFilter]);
 
-  const stats = useMemo(() => {
-    const inTg = contactsForStats.filter((c) => isInTelegram(c.tg_status)).length;
-    const checking = contactsForStats.filter((c) => isCheckingTelegram(c.tg_status)).length;
-    const notFound = contactsForStats.filter((c) => isNotInTelegram(c.tg_status)).length;
-    return { inTg, checking, notFound };
-  }, [contactsForStats]);
+  // Stats come from a server-side folder aggregate (single GROUP BY), not from the
+  // paginated `contacts` list. `null` until loaded → cards show a placeholder instead
+  // of briefly rendering page-1-only counts (the flash-then-correct bug).
+  const stats = contactsStatsQ.data
+    ? {
+        inTg: contactsStatsQ.data.in_telegram,
+        checking: contactsStatsQ.data.checking,
+        notFound: contactsStatsQ.data.not_found,
+      }
+    : null;
 
   // ── Selection ──────────────────────────────────────────────────────────────
   const toggleOne = (id: string) =>
@@ -658,19 +654,21 @@ function FolderDetail({
         <MiniMetric label="Total" value={total} sub="All sources" color="var(--tg-blue)" />
         <MiniMetric
           label="In Telegram"
-          value={stats.inTg}
-          sub={total > 0 ? `${Math.round((stats.inTg / total) * 100)}% match` : "—"}
+          value={stats?.inTg ?? null}
+          sub={
+            stats && total > 0 ? `${Math.round((stats.inTg / total) * 100)}% match` : "—"
+          }
           color="var(--success)"
         />
         <MiniMetric
           label="Checking"
-          value={stats.checking}
+          value={stats?.checking ?? null}
           sub="Awaiting resolve"
           color="var(--ai-purple)"
         />
         <MiniMetric
           label="Not found"
-          value={stats.notFound}
+          value={stats?.notFound ?? null}
           sub="Privacy or missing"
           color="var(--warning)"
         />
@@ -1028,7 +1026,8 @@ function MiniMetric({
   color,
 }: {
   label: string;
-  value: number;
+  // null → stats still loading; render a placeholder instead of a wrong number.
+  value: number | null;
   sub: string;
   color: string;
 }) {
@@ -1044,7 +1043,11 @@ function MiniMetric({
         className="num"
         style={{ fontSize: 24, fontWeight: 600, color, lineHeight: 1.1 }}
       >
-        {value.toLocaleString()}
+        {value === null ? (
+          <span style={{ color: "var(--text-faint)" }}>…</span>
+        ) : (
+          value.toLocaleString()
+        )}
       </span>
       <span className="muted text-xs">{sub}</span>
     </div>
