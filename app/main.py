@@ -29,6 +29,7 @@ from app.routers import (
     send,
     senders,
     telemetry,  # Phase 05.1 — UI-SPEC §9 Core Value KPI ingest
+    warmup,  # Phase 15 — workspace-scoped warmup tab (D-05)
     workspace,
 )
 
@@ -188,6 +189,7 @@ app.include_router(campaigns.router)  # Phase 4
 app.include_router(conversations.router)  # Phase 5 — inbox + manager mode
 app.include_router(analytics.router)  # Phase 5 — analytics (4 endpoints) + 05.1 funnel + llm
 app.include_router(telemetry.router)  # Phase 05.1 — UI-SPEC §9 telemetry + core-value KPI
+app.include_router(warmup.router)  # Phase 15 — warmup tab (workspace-scoped, D-05)
 
 
 @app.get("/")
