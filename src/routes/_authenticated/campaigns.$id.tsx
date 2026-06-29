@@ -621,10 +621,10 @@ function SendersPanel({
                   aria-label={`Remove ${label}`}
                   title={
                     locked
-                      ? "Locked by another running campaign"
+                      ? `Also in running campaign "${s.locked_by_campaign_name}". Detaching here only removes it from this campaign — the running one is untouched.`
                       : "Remove from pool"
                   }
-                  disabled={locked || busy}
+                  disabled={busy}
                   onClick={() => onDetach(s.sender_id)}
                   style={{ color: "var(--danger)", flexShrink: 0 }}
                 >
