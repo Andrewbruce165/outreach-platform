@@ -85,6 +85,24 @@ async def _add_to_pool(db, sender_id, workspace_id, days_ago: int = 5):
     await db.commit()
 
 
+async def _enable_warmup(db, workspace_id):
+    """Phase 15 (D-06): _get_active_pool now requires an enabled warmup_settings
+    row (default-OFF, explicit opt-in). These pre-Phase-15 isolation tests pre-date
+    the enabled gate, so enable warmup for their workspaces to keep exercising the
+    pool/pairing invariants they pin."""
+    await db.execute(
+        text(
+            """
+            INSERT INTO warmup_settings (workspace_id, enabled)
+            VALUES (:wid, true)
+            ON CONFLICT (workspace_id) DO UPDATE SET enabled = true
+            """
+        ),
+        {"wid": str(workspace_id)},
+    )
+    await db.commit()
+
+
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
 
@@ -93,6 +111,7 @@ async def test_get_active_pool_returns_workspace_id(
 ):
     """_get_active_pool must return workspace_id for each pool entry (CR-04 issue 3)."""
     ws_a = await workspace_factory()
+    await _enable_warmup(async_db_session, ws_a.id)
     s_a = await _add_sender(async_db_session, ws_a.id, "warm-pool-a-1", "+79150000001")
     await _add_to_pool(async_db_session, s_a, ws_a.id)
 
@@ -109,6 +128,7 @@ async def test_warmup_sessions_insert_writes_workspace_id(
 ):
     """_create_new_sessions writes warmup_sessions.workspace_id (CR-04 issue 1)."""
     ws = await workspace_factory()
+    await _enable_warmup(async_db_session, ws.id)
     s1 = await _add_sender(async_db_session, ws.id, "warm-sess-1", "+79150000010")
     s2 = await _add_sender(async_db_session, ws.id, "warm-sess-2", "+79150000011")
     await _add_to_pool(async_db_session, s1, ws.id)
@@ -138,6 +158,8 @@ async def test_warmup_pool_no_cross_tenant_pairs(
     """CRITICAL CR-04 issue 3: sender from workspace A never pairs with sender from B."""
     ws_a = await workspace_factory()
     ws_b = await workspace_factory()
+    await _enable_warmup(async_db_session, ws_a.id)
+    await _enable_warmup(async_db_session, ws_b.id)
     a1 = await _add_sender(async_db_session, ws_a.id, "warm-iso-a1", "+79150000020")
     a2 = await _add_sender(async_db_session, ws_a.id, "warm-iso-a2", "+79150000021")
     b1 = await _add_sender(async_db_session, ws_b.id, "warm-iso-b1", "+79150000022")
