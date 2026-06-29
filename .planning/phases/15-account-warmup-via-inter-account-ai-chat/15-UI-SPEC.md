@@ -1,10 +1,11 @@
 ---
 phase: 15
 slug: account-warmup-via-inter-account-ai-chat
-status: draft
+status: approved
 shadcn_initialized: true
 preset: "new-york / slate / lucide (existing — components.json in sibling repo aimly-tg-outreach)"
 created: 2026-06-29
+reviewed_at: 2026-06-29
 ---
 
 # Phase 15 — UI Design Contract
