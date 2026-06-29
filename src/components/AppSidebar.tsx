@@ -6,6 +6,7 @@ import {
   Bot,
   Users,
   Smartphone,
+  Flame,
   Settings,
   HelpCircle,
   ChevronDown,
