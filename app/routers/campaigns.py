@@ -349,6 +349,11 @@ async def _campaign_to_response(
         dialogue_flow=campaign.dialogue_flow or [],
         arguments_facts=campaign.arguments_facts,
         campaign_rules=campaign.campaign_rules,
+        # Prompt template v2 (migration 037): preset-driven core_directive.
+        objective_preset=campaign.objective_preset,
+        disclosure_preset=campaign.disclosure_preset,
+        authority_preset=campaign.authority_preset,
+        style_examples=campaign.style_examples,
         # 029: auto-pause visibility.
         pause_reason=campaign.pause_reason,
         paused_at=campaign.paused_at,
@@ -465,6 +470,11 @@ async def create_campaign(
         dialogue_flow=[s.model_dump() for s in payload.dialogue_flow] if payload.dialogue_flow else [],
         arguments_facts=payload.arguments_facts,
         campaign_rules=payload.campaign_rules,
+        # Prompt template v2 (migration 037): preset-driven core_directive.
+        objective_preset=payload.objective_preset,
+        disclosure_preset=payload.disclosure_preset,
+        authority_preset=payload.authority_preset,
+        style_examples=payload.style_examples,
         status="draft",
     )
     db.add(camp)
@@ -905,6 +915,11 @@ async def duplicate_campaign(
         dialogue_flow=src.dialogue_flow or [],
         arguments_facts=src.arguments_facts,
         campaign_rules=src.campaign_rules,
+        # Prompt template v2 (migration 037) — copy for parity with src.
+        objective_preset=src.objective_preset,
+        disclosure_preset=src.disclosure_preset,
+        authority_preset=src.authority_preset,
+        style_examples=src.style_examples,
         status="draft",
     )
     db.add(new_c)

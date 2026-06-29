@@ -685,6 +685,22 @@ class CampaignCreate(BaseModel):
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
     arguments_facts: Optional[str] = None
     campaign_rules: Optional[str] = None
+    # ── Prompt template v2 (migration 037): preset-driven core_directive. ──
+    # Resolve to preset lines in ai_engine. NULL → engine defaults
+    # (disclosure→reveal_nothing, authority→handoff_only, objective→primary_goal).
+    objective_preset: Optional[
+        Literal["book_call", "book_demo", "collect_contact", "qualify",
+                "direct_sale", "support", "custom"]
+    ] = None
+    disclosure_preset: Optional[
+        Literal["reveal_nothing", "list_price_ok", "quote_from_pricelist",
+                "full_disclosure"]
+    ] = None
+    authority_preset: Optional[
+        Literal["handoff_only", "can_schedule", "can_send_materials", "can_offer"]
+    ] = None
+    # Optional per-campaign few-shot override; NULL → static both-language fallback.
+    style_examples: Optional[str] = None
 
     @model_validator(mode="after")
     def _check_work_hours(self) -> "CampaignCreate":
@@ -733,6 +749,19 @@ class CampaignUpdate(BaseModel):
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
     arguments_facts: Optional[str] = None
     campaign_rules: Optional[str] = None
+    # ── Prompt template v2 (migration 037) — partial PATCH. ──
+    objective_preset: Optional[
+        Literal["book_call", "book_demo", "collect_contact", "qualify",
+                "direct_sale", "support", "custom"]
+    ] = None
+    disclosure_preset: Optional[
+        Literal["reveal_nothing", "list_price_ok", "quote_from_pricelist",
+                "full_disclosure"]
+    ] = None
+    authority_preset: Optional[
+        Literal["handoff_only", "can_schedule", "can_send_materials", "can_offer"]
+    ] = None
+    style_examples: Optional[str] = None
 
 
 class CampaignResponse(BaseModel):
@@ -777,6 +806,11 @@ class CampaignResponse(BaseModel):
     dialogue_flow: List[dict] = Field(default_factory=list)
     arguments_facts: Optional[str] = None
     campaign_rules: Optional[str] = None
+    # ── Prompt template v2 (migration 037). Plain str passthrough on the response. ──
+    objective_preset: Optional[str] = None
+    disclosure_preset: Optional[str] = None
+    authority_preset: Optional[str] = None
+    style_examples: Optional[str] = None
     # 029: auto-pause visibility. pause_reason is NULL for a manual / never-paused
     # campaign; 'no_senders_attached' | 'senders_unavailable' when the worker
     # auto-paused it because it could no longer send.
