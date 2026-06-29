@@ -14,6 +14,9 @@ venv/
 *.log
 .DS_Store
 
+# GSD agent worktree scratch (per-agent isolated checkouts — never commit)
+.claude/worktrees/
+
 # Local scratch / data imports (never commit — may contain contact PII)
 scratchpad/
 barter_roma_registered.csv
