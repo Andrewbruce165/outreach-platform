@@ -1043,10 +1043,13 @@ export interface paths {
         put?: never;
         /**
          * Duplicate Campaign
-         * @description Q2 / C-11: copy campaigns row + campaign_senders. status='draft'.
+         * @description Q2: copy campaigns row only. status='draft'.
          *
-         *     NOT copied: message_queue items, campaign_contact_assignments — these are
-         *     runtime rotation state, not template.
+         *     NOT copied: campaign_senders (the sender pool), message_queue items,
+         *     campaign_contact_assignments. The duplicate is created with an EMPTY sender
+         *     pool — the user attaches accounts explicitly. Carrying senders over caused
+         *     accounts to appear locked inside the duplicate (held by the source's running
+         *     campaign) and undeletable from its card.
          *
          *     Name: '{name} (copy)' or '{name} (copy N)' if conflict.
          */
@@ -1493,6 +1496,183 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/warmup/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Pool
+         * @description Все sender'ы workspace с их статусом в пуле прогрева.
+         *     Возвращает как участников пула, так и тех, кто в него не добавлен.
+         *
+         *     D-11: каждый аккаунт несёт restriction_status / restricted_until +
+         *     derived warmup_reason (почему аккаунт не греется).
+         */
+        get: operations["list_pool_api_v1_warmup_pool_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warmup/pool/{sender_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add To Pool
+         * @description Добавить аккаунт в пул прогрева (только аккаунт текущего workspace).
+         */
+        post: operations["add_to_pool_api_v1_warmup_pool__sender_id__post"];
+        /**
+         * Remove From Pool
+         * @description Удалить аккаунт из пула прогрева и завершить его активные сессии.
+         */
+        delete: operations["remove_from_pool_api_v1_warmup_pool__sender_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warmup/pool/{sender_id}/toggle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Toggle Pool Member
+         * @description Включить / выключить участие аккаунта в прогреве (без удаления из пула).
+         */
+        patch: operations["toggle_pool_member_api_v1_warmup_pool__sender_id__toggle_patch"];
+        trace?: never;
+    };
+    "/api/v1/warmup/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stats
+         * @description Сводная статистика прогрева workspace: сообщения сегодня, активные сессии, аккаунты в пуле.
+         */
+        get: operations["get_stats_api_v1_warmup_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warmup/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sessions
+         * @description Warmup-сессии workspace с прогрессом. По умолчанию — активные.
+         */
+        get: operations["list_sessions_api_v1_warmup_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warmup/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session
+         * @description Детали одной warmup-сессии (только текущего workspace).
+         */
+        get: operations["get_session_api_v1_warmup_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warmup/sessions/{session_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Messages
+         * @description История сообщений warmup-сессии workspace (для отображения диалога).
+         */
+        get: operations["get_session_messages_api_v1_warmup_sessions__session_id__messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warmup/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings Endpoint
+         * @description Настройки прогрева workspace: master toggle + контент с resolved defaults (D-06/D-10).
+         *
+         *     Нет строки → дефолты с enabled=false (explicit opt-in, D-06).
+         */
+        get: operations["get_settings_endpoint_api_v1_warmup_settings_get"];
+        /**
+         * Update Settings Endpoint
+         * @description Upsert настроек прогрева workspace (master toggle + контент, D-06/D-10).
+         *
+         *     Идемпотентный INSERT ... ON CONFLICT (workspace_id) DO UPDATE. Возвращает
+         *     {status, settings} с resolved defaults (что реально в действии).
+         */
+        put: operations["update_settings_endpoint_api_v1_warmup_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -1917,6 +2097,14 @@ export interface components {
             arguments_facts?: string | null;
             /** Campaign Rules */
             campaign_rules?: string | null;
+            /** Objective Preset */
+            objective_preset?: ("book_call" | "book_demo" | "collect_contact" | "qualify" | "direct_sale" | "support" | "custom") | null;
+            /** Disclosure Preset */
+            disclosure_preset?: ("reveal_nothing" | "list_price_ok" | "quote_from_pricelist" | "full_disclosure") | null;
+            /** Authority Preset */
+            authority_preset?: ("handoff_only" | "can_schedule" | "can_send_materials" | "can_offer") | null;
+            /** Style Examples */
+            style_examples?: string | null;
         };
         /** CampaignListResponse */
         CampaignListResponse: {
@@ -2009,6 +2197,14 @@ export interface components {
             arguments_facts?: string | null;
             /** Campaign Rules */
             campaign_rules?: string | null;
+            /** Objective Preset */
+            objective_preset?: string | null;
+            /** Disclosure Preset */
+            disclosure_preset?: string | null;
+            /** Authority Preset */
+            authority_preset?: string | null;
+            /** Style Examples */
+            style_examples?: string | null;
             /** Pause Reason */
             pause_reason?: string | null;
             /** Paused At */
@@ -2146,6 +2342,14 @@ export interface components {
             arguments_facts?: string | null;
             /** Campaign Rules */
             campaign_rules?: string | null;
+            /** Objective Preset */
+            objective_preset?: ("book_call" | "book_demo" | "collect_contact" | "qualify" | "direct_sale" | "support" | "custom") | null;
+            /** Disclosure Preset */
+            disclosure_preset?: ("reveal_nothing" | "list_price_ok" | "quote_from_pricelist" | "full_disclosure") | null;
+            /** Authority Preset */
+            authority_preset?: ("handoff_only" | "can_schedule" | "can_send_materials" | "can_offer") | null;
+            /** Style Examples */
+            style_examples?: string | null;
         };
         /**
          * CampaignWriteResponse
@@ -2953,6 +3157,13 @@ export interface components {
             restriction_status: "none" | "spam_limited" | "frozen";
             /** Restricted Until */
             restricted_until?: string | null;
+            /** Checker Status */
+            checker_status?: ("active" | "cooling_down" | "frozen" | "paused" | "reauth_needed" | "banned") | null;
+            /**
+             * Checker Trip Count
+             * @default 0
+             */
+            checker_trip_count: number;
             rate_limits: components["schemas"]["RateLimits"];
             /**
              * Role
@@ -3137,6 +3348,31 @@ export interface components {
             role?: string | null;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * WarmupSettingsUpdate
+         * @description PUT /settings body — все поля опциональны; отсутствующие сбрасываются в дефолт.
+         *
+         *     `enabled` — master toggle прогрева workspace (D-06/D-07). `topics` / `system_prompt`
+         *     / `tone` — per-workspace контент (D-10); пустые → resolved code-defaults в GET.
+         */
+        WarmupSettingsUpdate: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Topics */
+            topics?: string[];
+            /** System Prompt */
+            system_prompt?: string | null;
+            /**
+             * Language
+             * @default ru
+             */
+            language: string;
+            /** Tone */
+            tone?: string | null;
         };
         /**
          * WarningItem
@@ -5987,6 +6223,344 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CoreValueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pool_api_v1_warmup_pool_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_to_pool_api_v1_warmup_pool__sender_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                sender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_from_pool_api_v1_warmup_pool__sender_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                sender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    toggle_pool_member_api_v1_warmup_pool__sender_id__toggle_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                sender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stats_api_v1_warmup_stats_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_api_v1_warmup_sessions_get: {
+        parameters: {
+            query?: {
+                /** @description Filter: active | completed | all */
+                status?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_api_v1_warmup_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_messages_api_v1_warmup_sessions__session_id__messages_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_endpoint_api_v1_warmup_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_settings_endpoint_api_v1_warmup_settings_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarmupSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

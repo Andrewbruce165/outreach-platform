@@ -4475,7 +4475,7 @@
           "campaigns"
         ],
         "summary": "Duplicate Campaign",
-        "description": "Q2 / C-11: copy campaigns row + campaign_senders. status='draft'.\n\nNOT copied: message_queue items, campaign_contact_assignments — these are\nruntime rotation state, not template.\n\nName: '{name} (copy)' or '{name} (copy N)' if conflict.",
+        "description": "Q2: copy campaigns row only. status='draft'.\n\nNOT copied: campaign_senders (the sender pool), message_queue items,\ncampaign_contact_assignments. The duplicate is created with an EMPTY sender\npool — the user attaches accounts explicitly. Carrying senders over caused\naccounts to appear locked inside the duplicate (held by the source's running\ncampaign) and undeletable from its card.\n\nName: '{name} (copy)' or '{name} (copy N)' if conflict.",
         "operationId": "duplicate_campaign_api_v1_campaigns__campaign_id__duplicate_post",
         "parameters": [
           {
@@ -6218,6 +6218,732 @@
         }
       }
     },
+    "/api/v1/warmup/pool": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "List Pool",
+        "description": "Все sender'ы workspace с их статусом в пуле прогрева.\nВозвращает как участников пула, так и тех, кто в него не добавлен.\n\nD-11: каждый аккаунт несёт restriction_status / restricted_until +\nderived warmup_reason (почему аккаунт не греется).",
+        "operationId": "list_pool_api_v1_warmup_pool_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/pool/{sender_id}": {
+      "post": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Add To Pool",
+        "description": "Добавить аккаунт в пул прогрева (только аккаунт текущего workspace).",
+        "operationId": "add_to_pool_api_v1_warmup_pool__sender_id__post",
+        "parameters": [
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Remove From Pool",
+        "description": "Удалить аккаунт из пула прогрева и завершить его активные сессии.",
+        "operationId": "remove_from_pool_api_v1_warmup_pool__sender_id__delete",
+        "parameters": [
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/pool/{sender_id}/toggle": {
+      "patch": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Toggle Pool Member",
+        "description": "Включить / выключить участие аккаунта в прогреве (без удаления из пула).",
+        "operationId": "toggle_pool_member_api_v1_warmup_pool__sender_id__toggle_patch",
+        "parameters": [
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/stats": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Stats",
+        "description": "Сводная статистика прогрева workspace: сообщения сегодня, активные сессии, аккаунты в пуле.",
+        "operationId": "get_stats_api_v1_warmup_stats_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/sessions": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "List Sessions",
+        "description": "Warmup-сессии workspace с прогрессом. По умолчанию — активные.",
+        "operationId": "list_sessions_api_v1_warmup_sessions_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter: active | completed | all",
+              "default": "active",
+              "title": "Status"
+            },
+            "description": "Filter: active | completed | all"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Session",
+        "description": "Детали одной warmup-сессии (только текущего workspace).",
+        "operationId": "get_session_api_v1_warmup_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/sessions/{session_id}/messages": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Session Messages",
+        "description": "История сообщений warmup-сессии workspace (для отображения диалога).",
+        "operationId": "get_session_messages_api_v1_warmup_sessions__session_id__messages_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/settings": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Settings Endpoint",
+        "description": "Настройки прогрева workspace: master toggle + контент с resolved defaults (D-06/D-10).\n\nНет строки → дефолты с enabled=false (explicit opt-in, D-06).",
+        "operationId": "get_settings_endpoint_api_v1_warmup_settings_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Update Settings Endpoint",
+        "description": "Upsert настроек прогрева workspace (master toggle + контент, D-06/D-10).\n\nИдемпотентный INSERT ... ON CONFLICT (workspace_id) DO UPDATE. Возвращает\n{status, settings} с resolved defaults (что реально в действии).",
+        "operationId": "update_settings_endpoint_api_v1_warmup_settings_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarmupSettingsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Root",
@@ -7552,6 +8278,71 @@
               }
             ],
             "title": "Campaign Rules"
+          },
+          "objective_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "book_call",
+                  "book_demo",
+                  "collect_contact",
+                  "qualify",
+                  "direct_sale",
+                  "support",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Preset"
+          },
+          "disclosure_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "reveal_nothing",
+                  "list_price_ok",
+                  "quote_from_pricelist",
+                  "full_disclosure"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disclosure Preset"
+          },
+          "authority_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "handoff_only",
+                  "can_schedule",
+                  "can_send_materials",
+                  "can_offer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Preset"
+          },
+          "style_examples": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Examples"
           }
         },
         "type": "object",
@@ -7832,6 +8623,50 @@
               }
             ],
             "title": "Campaign Rules"
+          },
+          "objective_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Preset"
+          },
+          "disclosure_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disclosure Preset"
+          },
+          "authority_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Preset"
+          },
+          "style_examples": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Examples"
           },
           "pause_reason": {
             "anyOf": [
@@ -8322,6 +9157,71 @@
               }
             ],
             "title": "Campaign Rules"
+          },
+          "objective_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "book_call",
+                  "book_demo",
+                  "collect_contact",
+                  "qualify",
+                  "direct_sale",
+                  "support",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Preset"
+          },
+          "disclosure_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "reveal_nothing",
+                  "list_price_ok",
+                  "quote_from_pricelist",
+                  "full_disclosure"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disclosure Preset"
+          },
+          "authority_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "handoff_only",
+                  "can_schedule",
+                  "can_send_materials",
+                  "can_offer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Preset"
+          },
+          "style_examples": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Examples"
           }
         },
         "type": "object",
@@ -10245,6 +11145,30 @@
             ],
             "title": "Restricted Until"
           },
+          "checker_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "cooling_down",
+                  "frozen",
+                  "paused",
+                  "reauth_needed",
+                  "banned"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checker Status"
+          },
+          "checker_trip_count": {
+            "type": "integer",
+            "title": "Checker Trip Count",
+            "default": 0
+          },
           "rate_limits": {
             "$ref": "#/components/schemas/RateLimits"
           },
@@ -10779,6 +11703,52 @@
           "code"
         ],
         "title": "VerifyCodeRequest"
+      },
+      "WarmupSettingsUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Topics"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "ru"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tone"
+          }
+        },
+        "type": "object",
+        "title": "WarmupSettingsUpdate",
+        "description": "PUT /settings body — все поля опциональны; отсутствующие сбрасываются в дефолт.\n\n`enabled` — master toggle прогрева workspace (D-06/D-07). `topics` / `system_prompt`\n/ `tone` — per-workspace контент (D-10); пустые → resolved code-defaults в GET."
       },
       "WarningItem": {
         "properties": {
