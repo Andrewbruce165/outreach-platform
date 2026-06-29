@@ -24,6 +24,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [x] **Phase 10: Pool Visibility & Restriction Audit** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж; durable аудит всех предупреждений/блокировок аккаунтов с привязкой к предшествующей активности (completed 2026-06-24)
 - [ ] **Phase 11: Agent/Campaign Field Split & Prompt Assembly** — развести слои Агент(КТО)/Кампания(ЧТО), убрать дубли в системном промпте (один источник на блок), новые поля (скорость ответа, ход разговора, аргументы и факты, базы знаний) + перестройка UI визарда
 - [ ] **Phase 14: Reliable Contact Resolution** — надёжная и масштабируемая проверка контактов в TG: health-probe на заведомо-живых, burst-кап + cooldown, пул чекеров с ротацией, перепроверка контаминированных данных (диагноз: единственный чекер занижал живых в ~15–20 раз)
+- [ ] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича
 
 ## Phase Details
 
@@ -400,6 +401,24 @@ Plans:
 
 > **Gap-closure note (2026-06-26):** 14-04 Task-4 live smoke activated the 2 "healthy" parked checkers and both flooded instantly at 0% mobile (`checked=20..30 reg=0 flood=True`). Root cause: on `flood=True` the worker finalized empty resolves as `not_registered`/high-confidence before the decoupled ≥2-miss probe could flag the checker. Prod rolled back to baseline (0 active checkers). 14-05 fixes the finalization inline; 14-06 diagnoses whether re-activation is even viable. RESV-04 (re-check 14k/2110/699) + full re-activation DEFERRED — not closed by this gap-closure. Evidence: `.planning/notes/checker-false-negatives.md` §"Часть 2".
 
+### Phase 15: Account Warmup via Inter-Account AI Chat
+
+**Goal:** Продуктизировать взаимный AI-прогрев: аккаунты workspace переписываются между собой через AI, чтобы безопасно набирать «возраст»/активность без риска бана. Отдельная вкладка в UI (старт/стоп, расписание, интенсивность, статус каждого аккаунта). **Ключевое требование — изоляция от основного флоу аутрича:** прогрев не должен перехватывать входящие/исходящие реальных кампаний, не садить лимиты sender'ов, не триггерить AI-ответчик (именно это убило похожую фичу в старой `telegram-api` — её пришлось остановить).
+
+**Контекст (что уже есть в коде):**
+- Текущий проект: [`app/services/warmup.py`](app/services/warmup.py) — background-воркер взаимного AI-прогрева (тик 30с, окно 09–20 МСК, уровень по дням в пуле) + [`app/routers/warmup.py`](app/routers/warmup.py). Базовый движок есть, нет продуктовой UI-вкладки и явной изоляции от кампаний.
+- Старая остановленная `telegram-api`: [`/root/apps/telegram-api/app/services/warmup.py`](/root/apps/telegram-api/app/services/warmup.py), [`/root/apps/telegram-api/app/routers/warmup.py`](/root/apps/telegram-api/app/routers/warmup.py) (398 строк), `bot_chat.py` — прототип; **остановлен т.к. влиял на основной флоу** (см. CLAUDE.md). Изучить как референс + понять, почему конфликтовал.
+
+**Requirements**: WARM-01..15 (derived this phase, see 15-CONTEXT.md decisions)
+**Depends on:** Phase 14
+**Plans:** 4 plans
+
+Plans:
+- [ ] 15-01-PLAN.md — Wave-0 foundation: migration 037 warmup_settings + ORM, RED isolation/router/worker test stubs, WARM-01..15 in REQUIREMENTS.md
+- [ ] 15-02-PLAN.md — deterministic per-workspace internal short-circuit in listener (isolation: WARM-01/02/04/15)
+- [ ] 15-03-PLAN.md — engine: enabled-gate + restriction-skip + per-workspace content defaults (WARM-03/06/10/12/13/14)
+- [ ] 15-04-PLAN.md — workspace-scoped router rewrite + is_active fix + settings/master-toggle + enriched status (WARM-05/07/08/09/11)
+
 ---
 
 ## Progress
@@ -418,6 +437,7 @@ Plans:
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 | 14. Reliable Contact Resolution | 3/4 | In Progress|  |
+| 15. Account Warmup via Inter-Account AI Chat | 0/4 | Planned (4 plans, waves 1→3) | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
