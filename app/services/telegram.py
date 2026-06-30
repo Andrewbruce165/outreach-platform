@@ -25,6 +25,7 @@ from telethon.errors import (
     SessionPasswordNeededError,
     PhoneNumberInvalidError,
     UserNotMutualContactError,
+    UserIsBlockedError,
     UsernameNotOccupiedError,
     UsernameInvalidError,
     AuthKeyError,
@@ -822,6 +823,18 @@ class TelegramService:
                     "message": "Спам-ограничение аккаунта. Требуется пауза и ручная проверка."
                 }
             }
+        except UserIsBlockedError:
+            # SRLD-08 (D-15): the recipient has blocked THIS sender. This is the
+            # dominant cold-outreach account-killer proxy (blocks/reports → PeerFlood
+            # → freeze). Surface a distinct code so the queue can durably record the
+            # block and fail ONLY this item — it is NOT an account restriction (D-16).
+            return {
+                "success": False,
+                "error": {
+                    "code": "USER_IS_BLOCKED",
+                    "message": "Получатель заблокировал отправителя"
+                }
+            }
         except UserNotMutualContactError:
             return {
                 "success": False,
@@ -838,6 +851,16 @@ class TelegramService:
                     "error": {
                         "code": "ACCOUNT_FROZEN",
                         "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            # Defence-in-depth (mirrors is_frozen_error): Telethon may surface a
+            # block as a generic RPC error. Match the string the same way (D-15).
+            if "USER_IS_BLOCKED" in str(e):
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "USER_IS_BLOCKED",
+                        "message": "Получатель заблокировал отправителя"
                     }
                 }
             logger.error(f"Error sending message: {e}")
@@ -979,6 +1002,15 @@ class TelegramService:
                     "message": "Спам-ограничение аккаунта. Требуется пауза и ручная проверка."
                 }
             }
+        except UserIsBlockedError:
+            # SRLD-08 (D-15): recipient blocked THIS sender — parity with send_message.
+            return {
+                "success": False,
+                "error": {
+                    "code": "USER_IS_BLOCKED",
+                    "message": "Получатель заблокировал отправителя"
+                }
+            }
         except UserNotMutualContactError:
             return {
                 "success": False,
@@ -995,6 +1027,14 @@ class TelegramService:
                     "error": {
                         "code": "ACCOUNT_FROZEN",
                         "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            if "USER_IS_BLOCKED" in str(e):
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "USER_IS_BLOCKED",
+                        "message": "Получатель заблокировал отправителя"
                     }
                 }
             logger.error(f"Error sending file: {e}")

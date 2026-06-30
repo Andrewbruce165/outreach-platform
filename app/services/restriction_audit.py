@@ -86,6 +86,45 @@ async def record_restriction_event(
     )
 
 
+async def sender_block_rate(
+    db: AsyncSession,
+    sender_id: UUID,
+    window_days: int = 7,
+) -> dict:
+    """Read-only per-sender block-rate aggregate (SRLD-08, D-15/D-16).
+
+    Counts durable ``event_type='blocked'`` restriction events against the
+    sender's ``message_type='sent'`` messages_log rows over a trailing window,
+    and returns ``{blocks_<N>d, sends_<N>d, block_rate}`` (rate = blocks/sends,
+    0.0 when no sends). This is the design-doc "metric that actually matters" —
+    blocks/reports → PeerFlood → freeze is the dominant cold-outreach
+    account-killer, independent of the resolve mechanism.
+
+    NO control-loop (D-16): this helper is strictly read-only. It NEVER mutates
+    sender state, NEVER auto-pauses, and NEVER writes events. The two counts run
+    over the SAME passed-in session (transaction-neutral); the keys are suffixed
+    with the window in days (``blocks_7d``/``sends_7d`` for the default).
+    """
+    row = (await db.execute(text("""
+        SELECT
+          (SELECT COUNT(*) FROM sender_restriction_events e
+            WHERE e.sender_id = :sid
+              AND e.event_type = 'blocked'
+              AND e.created_at > now() - (:days || ' days')::interval) AS blocks,
+          (SELECT COUNT(*) FROM messages_log m
+            WHERE m.sender_id = :sid
+              AND m.message_type = 'sent'
+              AND m.created_at > now() - (:days || ' days')::interval) AS sends
+    """), {"sid": str(sender_id), "days": str(window_days)})).one()
+    blocks = int(row.blocks)
+    sends = int(row.sends)
+    return {
+        f"blocks_{window_days}d": blocks,
+        f"sends_{window_days}d": sends,
+        "block_rate": (blocks / sends) if sends else 0.0,
+    }
+
+
 async def _record(
     db: AsyncSession,
     sender_id: UUID,

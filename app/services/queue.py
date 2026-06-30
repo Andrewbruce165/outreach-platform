@@ -1046,6 +1046,34 @@ class QueueWorker:
                         await self._fail_item(db, item, error_msg)
                         return
 
+                    elif error_code == "USER_IS_BLOCKED":
+                        # SRLD-08 (D-15): durable per-sender block capture. A block by
+                        # ONE recipient is NOT an account restriction (D-16 — no
+                        # auto-pause); record it on the EXISTING send-loop session (db)
+                        # for the read-only block-rate metric and fail ONLY this item.
+                        # category='restriction' so it sits with account-audit events
+                        # (the design-doc proxy for accumulated reports → PeerFlood);
+                        # event_type='blocked' is free-form (no CHECK migration).
+                        # Deliberately does NOT touch senders.restriction_status, does
+                        # NOT pause the pending backlog, and does NOT call failover —
+                        # those are PEER_FLOOD-only.
+                        await record_restriction_event(
+                            sender.id, "blocked", "queue_error",
+                            None, error_msg, db=db,
+                        )
+                        if item.callback_url:
+                            asyncio.create_task(self._fire_callback(
+                                url=item.callback_url,
+                                queue_id=str(item.id),
+                                status="failed",
+                                sender_slug=sender.slug,
+                                recipient_phone=item.recipient_phone,
+                                error=error_msg,
+                                extra_data=item.extra_data,
+                            ))
+                        await self._fail_item(db, item, error_msg)
+                        return
+
                     # Fire failure callback before failing the item
                     if item.callback_url:
                         asyncio.create_task(self._fire_callback(
