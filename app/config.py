@@ -71,9 +71,14 @@ class Settings(BaseSettings):
         description="Polling interval (seconds) for the KnowledgeIngestWorker loop.",
     )
     kb_search_max_distance: float = Field(
-        default=0.55,
+        default=0.8,
         validation_alias="KB_SEARCH_MAX_DISTANCE",
-        description="Max cosine distance for a KB search hit (Pitfall 4 — distance, not similarity; lower = closer).",
+        # Calibrated against text-embedding-3-small on a real upload: relevant
+        # matches (incl. VERBATIM keyword queries like "Radisson Marriott") land
+        # at cosine distance ~0.6-0.7, and a natural-language question ~0.37. The
+        # original 0.55 silently filtered verbatim hits ("finds nothing"). 0.8
+        # keeps real matches while still dropping clearly-unrelated chunks (>0.85).
+        description="Max cosine distance for a KB search hit (Pitfall 4 — distance, not similarity; lower = closer). Tuned for text-embedding-3-small.",
     )
     kb_search_top_k: int = Field(
         default=5,
