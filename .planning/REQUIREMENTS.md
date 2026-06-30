@@ -191,10 +191,10 @@
 
 ### RAG Knowledge Bases for Agents (Phase 16 — derived this phase, see 16-CONTEXT.md / 16-RESEARCH.md / 16-VALIDATION.md)
 
-- [ ] **KB-01**: Пользователь создаёт workspace-изолированную KB (`knowledge_bases` table, workspace_id FK ON DELETE CASCADE); другой workspace её не видит и не трогает (D-05).
+- [x] **KB-01**: Пользователь создаёт workspace-изолированную KB (`knowledge_bases` table, workspace_id FK ON DELETE CASCADE); другой workspace её не видит и не трогает (D-05).
 - [x] **KB-02**: Пользователь загружает файлы (PDF/DOCX/TXT/MD/CSV через multipart) или вставляет текст — создаётся `kb_documents` строка `status='pending'` + `size_bytes`, 202 Accepted, воркер индексирует асинхронно (D-01/D-02).
 - [x] **KB-03**: Ingest-воркер ведёт документ pending→processing→indexed/failed (`chunk_count`, `error`), re-index идемпотентен (delete-then-insert чанков); KB detail даёт D-09 агрегат (DOCUMENTS/INDEXED/PROCESSING/FAILED/STORAGE) + D-10 per-document статус/размер/дату (D-02/D-09/D-10).
-- [ ] **KB-04**: KB вешается на агента (M:N `agent_knowledge_bases`, mirror `CampaignSender`); attach/detach + обратный список агентов для KB (Agents tab); KB переиспользуемы между агентами (D-07).
+- [x] **KB-04**: KB вешается на агента (M:N `agent_knowledge_bases`, mirror `CampaignSender`); attach/detach + обратный список агентов для KB (Agents tab); KB переиспользуемы между агентами (D-07).
 - [ ] **KB-05**: Retrieval через data-tool `search_knowledge_base` — регистрируется только когда у агента ≥1 KB (D-04), ищет по объединению подключённых KB, возвращает чанки `role:"tool"` сообщением, модель продолжает (two-pass), НЕ меняет `conversation.status`; пустой результат → off-topic fallback (D-03/D-04).
 - [ ] **KB-06**: Поиск и все KB-эндпоинты строго workspace-scoped — `kb_search` фильтрует по `workspace_id` + подключённым `kb_id`, утечки между workspace нет (D-05).
 - Статическое поле `ai_contexts.knowledge_base` (Phase 11) остаётся рядом, не трогается (D-08).
@@ -345,10 +345,10 @@
 | WARM-13 | Phase 15 | Pending |
 | WARM-14 | Phase 15 | Pending |
 | WARM-15 | Phase 15 | Pending |
-| KB-01 | Phase 16 | Pending |
+| KB-01 | Phase 16 | Complete |
 | KB-02 | Phase 16 | Complete |
 | KB-03 | Phase 16 | Complete |
-| KB-04 | Phase 16 | Pending |
+| KB-04 | Phase 16 | Complete |
 | KB-05 | Phase 16 | Pending |
 | KB-06 | Phase 16 | Pending |
 
