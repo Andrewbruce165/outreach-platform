@@ -2,6 +2,7 @@ from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Inte
 from sqlalchemy.dialects.postgresql import ARRAY, UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func, text
+from pgvector.sqlalchemy import Vector  # Phase 16 — RAG KB chunk embeddings (D-06)
 from app.database import Base
 import uuid
 import enum
@@ -681,6 +682,93 @@ class CampaignContactAssignment(Base):
 
     campaign = relationship("Campaign")
     sender = relationship("Sender")
+
+
+# ─── Phase 16: RAG knowledge bases (KB-01..KB-06) ────────────────────────────
+# ORM mirror of migration 041. The test-overlay builds schema from
+# Base.metadata.create_all (NOT migrations), so these classes MUST mirror the
+# four KB tables — incl. the Vector(1536) column — or the test schema diverges
+# from prod. The static AIContext.knowledge_base Text field stays untouched
+# (D-08): it is a separate always-in-prompt facts slot, NOT this RAG mechanism.
+
+
+class KnowledgeBase(Base):
+    """Workspace-scoped knowledge base (D-05). Container for documents + chunks."""
+    __tablename__ = "knowledge_bases"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    name = Column(String(150), nullable=False)
+    description = Column(Text, nullable=True)
+    source_kind = Column(String(20), nullable=False, server_default="files")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class KbDocument(Base):
+    """Uploaded/pasted source document in a KB (D-01/D-02). Ingest-worker target."""
+    __tablename__ = "kb_documents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    kb_id = Column(UUID(as_uuid=True),
+                   ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+                   nullable=False)
+    name = Column(String(255), nullable=False)
+    # 'pdf'|'docx'|'txt'|'md'|'csv'|'text' (text = pasted, raw_content holds utf-8).
+    source_kind = Column(String(20), nullable=False)
+    size_bytes = Column(BigInteger, nullable=False, server_default="0")
+    # pending|processing|indexed|failed — worker claim WHERE status='pending'.
+    status = Column(String(20), nullable=False, server_default="pending")
+    error = Column(Text, nullable=True)
+    chunk_count = Column(Integer, nullable=False, server_default="0")
+    raw_content = Column(LargeBinary, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class KbChunk(Base):
+    """Embedded text chunk of a document (D-06 text-embedding-3-small, 1536 dims)."""
+    __tablename__ = "kb_chunks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    kb_id = Column(UUID(as_uuid=True),
+                   ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+                   nullable=False)
+    document_id = Column(UUID(as_uuid=True),
+                         ForeignKey("kb_documents.id", ondelete="CASCADE"),
+                         nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(1536), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentKnowledgeBase(Base):
+    """Through-table agent ↔ KB (D-07, M:N). PK (agent_id, kb_id).
+
+    Mirrors the CampaignSender composite-PK pattern. agent_id FKs ai_contexts(id)
+    (agent table is ai_contexts — see Terminology in PROJECT.md).
+    """
+    __tablename__ = "agent_knowledge_bases"
+
+    agent_id = Column(UUID(as_uuid=True),
+                      ForeignKey("ai_contexts.id", ondelete="CASCADE"),
+                      primary_key=True)
+    kb_id = Column(UUID(as_uuid=True),
+                   ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+                   primary_key=True)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    added_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 # ─── Phase 5: LLM audit log ──────────────────────────────────────────────────

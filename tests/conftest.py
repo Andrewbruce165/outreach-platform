@@ -91,9 +91,15 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
     PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
     # 1. Wipe + create base tables from ORM
+    #    Phase 16 (Pitfall 1): CREATE EXTENSION vector MUST run before create_all —
+    #    the ORM KbChunk.embedding column emits VECTOR(1536), and create_all raises
+    #    `type "vector" does not exist` if the extension isn't present yet.
     conn = await asyncpg.connect(dsn=raw_dsn)
     try:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await conn.execute(
+            "DROP SCHEMA public CASCADE; CREATE SCHEMA public; "
+            "CREATE EXTENSION IF NOT EXISTS vector;"
+        )
     finally:
         await conn.close()
 
@@ -127,6 +133,9 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
             "workspaces", "user_workspaces", "workspace_api_keys",
             "onboarding_sessions", "csv_imports", "proxy_pool",
             "warmup_pool", "warmup_sessions", "warmup_messages",
+            # Phase 16 KB tables (single-id PK). agent_knowledge_bases has a
+            # composite PK / no `id` column — the try/except below swallows it.
+            "knowledge_bases", "kb_documents", "kb_chunks",
         ):
             try:
                 await asyncpg_conn.execute(
@@ -189,6 +198,17 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         _mig_038 = PROJECT_ROOT / "migrations" / "038_warmup_settings.sql"
         if _mig_038.exists():
             await asyncpg_conn.execute(_mig_038.read_text())
+
+        # 041: Phase 16 RAG knowledge bases. The four KB tables come from ORM
+        # create_all (the IF NOT EXISTS CREATE TABLEs in the migration are no-ops
+        # here), but the HNSW vector index (idx_kbchunk_embedding_hnsw) is SQL-only
+        # — apply the migration so the test DB exercises the same index path as prod.
+        # Exists-guard so this conftest change is green now and auto-activates once
+        # migrations/041_knowledge_bases.sql lands. (Slot 040 is taken by
+        # 040_warmup_sessions_defaults_drift.sql; KB is 041.)
+        _mig_041 = PROJECT_ROOT / "migrations" / "041_knowledge_bases.sql"
+        if _mig_041.exists():
+            await asyncpg_conn.execute(_mig_041.read_text())
 
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
