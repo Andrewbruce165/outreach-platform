@@ -170,6 +170,14 @@ async def get_db():
 
 async def init_db():
     async with engine.begin() as conn:
+        # pgvector: the `vector` type must exist BEFORE create_all, because
+        # KbChunk.embedding is declared Vector(1536). Migration 041 also creates
+        # the extension (idempotently), but migrations run AFTER create_all — so
+        # on a fresh DB / post-DROP-SCHEMA recovery (`docker compose up -d --build api`)
+        # create_all would fail with `type "vector" does not exist` before any
+        # migration could run. Creating it up-front here keeps the documented
+        # recovery path working. IF NOT EXISTS makes it idempotent.
+        await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
         await conn.run_sync(Base.metadata.create_all)
     # Auto-apply raw-SQL migrations after the ORM baseline is in place.
     # See module docstring for rationale.
