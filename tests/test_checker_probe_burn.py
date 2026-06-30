@@ -12,8 +12,12 @@ longevity, NOT a finalization change):
                            contact_check_probe_interval_seconds, not every tick.
   PROBE-03  budget gate   — a checker at/over the daily_cap is NOT probed.
   PROBE-04  escalating    — _flag_checker_degraded escalates cooldown by
-                           checker_trip_count (capped at max_backoff); a clean
-                           recovery resets checker_trip_count to 0.
+                           checker_trip_count (capped at max_backoff).
+  PROBE-04b 2026-06-30 fix — the escalating ladder must NOT reset on the weak
+                           ≤5-sample recovery probe (that let the pool flap forever
+                           at the base cooldown, trip_count stuck at 0). Recovery
+                           returns the checker to rotation with trip history intact;
+                           the ladder resets ONLY after a clean REAL resolve batch.
   INVARIANT (regression)  — a suspect/throttled batch still rolls not_registered
                            → pending (14-05), proving the probe changes did not
                            alter finalization.
@@ -271,12 +275,15 @@ async def test_escalating_cooldown_capped_at_max_backoff(
     )
 
 
-async def test_clean_recovery_resets_trip_count(
+async def test_clean_recovery_preserves_trip_count(
     async_db_session, test_workspace, test_checker
 ):
-    """_recover_checkers on a clean probe resets checker_trip_count back to 0 (and
-    restores restriction_status='none'), so a checker that genuinely recovers starts
-    its next backoff ladder from the base again."""
+    """2026-06-30 fix: _recover_checkers on a clean ≤5-sample probe restores the
+    checker to rotation (restriction_status='none', restricted_until NULL) but does
+    NOT reset checker_trip_count. The weak burst probe cannot prove genuine health,
+    so the escalating-backoff ladder must persist — otherwise a still-throttled
+    checker flaps forever at the base cooldown. The ladder resets only after a clean
+    REAL batch (see test_clean_real_batch_resets_trip_count)."""
     from app.services.contact_check_worker import ContactCheckWorker
 
     checker_id = str(test_checker.id)
@@ -302,13 +309,159 @@ async def test_clean_recovery_resets_trip_count(
     row = (
         await async_db_session.execute(
             text(
-                "SELECT restriction_status, checker_trip_count FROM senders WHERE id = :id"
+                "SELECT restriction_status, restricted_until, checker_trip_count "
+                "FROM senders WHERE id = :id"
             ),
             {"id": checker_id},
         )
     ).fetchone()
     assert row.restriction_status == "none", "clean recovery restores the checker"
-    assert row.checker_trip_count == 0, "clean recovery resets the trip ladder"
+    assert row.restricted_until is None, "clean recovery clears the cooldown"
+    assert row.checker_trip_count == 3, (
+        "recovery must PRESERVE the trip ladder — the ≤5-sample probe is too weak to "
+        "reset it; only a clean real batch may"
+    )
+
+
+async def test_reset_checker_trip_helper_zeroes_and_guards(
+    async_db_session, test_workspace, test_checker
+):
+    """_reset_checker_trip sets checker_trip_count → 0 for a tripped checker, and is
+    a guarded no-op when the checker is already at 0 (the WHERE clause skips the
+    write — no error, no row churn)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    worker = ContactCheckWorker()
+
+    await async_db_session.execute(
+        text("UPDATE senders SET checker_trip_count = 5 WHERE id = :id"),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    await worker._reset_checker_trip(checker_id)
+    row = (
+        await async_db_session.execute(
+            text("SELECT checker_trip_count FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.checker_trip_count == 0, "a clean real batch resets the trip ladder"
+
+    # Already 0 → guarded no-op, must not raise.
+    await worker._reset_checker_trip(checker_id)
+    row = (
+        await async_db_session.execute(
+            text("SELECT checker_trip_count FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.checker_trip_count == 0
+
+
+def _clean_batch_summary(phones, **kw):
+    """A clean REAL resolve batch — every phone registered, no flood (NOT a throttle
+    signal: registered > 0)."""
+    return {
+        "checked": len(phones),
+        "registered": len(phones),
+        "not_registered": 0,
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": p, "is_registered": True, "telegram_id": 6000 + i, "from_cache": False}
+            for i, p in enumerate(phones)
+        ],
+    }
+
+
+def _throttle_batch_summary(phones, **kw):
+    """An anomalous all-empty live batch (≥ ANOMALY_MIN_BATCH, registered=0) — the
+    14-05 inline throttle signature."""
+    return {
+        "checked": len(phones),
+        "registered": 0,
+        "not_registered": len(phones),
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": p, "is_registered": False, "from_cache": False} for p in phones
+        ],
+    }
+
+
+async def test_clean_real_batch_resets_trip_count(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """A clean REAL resolve batch (probe_state stays 'clean') resets the escalating-
+    backoff ladder to 0 — the genuine health proof that the weak recovery probe is
+    not. Drives the full _tick resolve path with a tripped checker (trip_count=3)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    await async_db_session.execute(
+        text("UPDATE senders SET checker_trip_count = 3 WHERE id = :id"),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    await test_contacts_factory(count=1, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=_clean_batch_summary),
+    ):
+        await worker._tick()
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, checker_trip_count FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.restriction_status == "none", "clean batch leaves the checker active"
+    assert row.checker_trip_count == 0, "a clean real batch resets the trip ladder"
+
+
+async def test_throttle_real_batch_keeps_trip_count(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """A throttled REAL batch (14-05 anomalous all-empty signal) degrades the checker
+    inline and must NOT reset the ladder — instead _flag_checker_degraded bumps it
+    (3 → 4). Proves the reset is gated on a genuinely clean batch only."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    await async_db_session.execute(
+        text("UPDATE senders SET checker_trip_count = 3 WHERE id = :id"),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    # ≥ ANOMALY_MIN_BATCH (8) pending contacts so the all-empty batch trips the signal.
+    await test_contacts_factory(count=10, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=_throttle_batch_summary),
+    ):
+        await worker._tick()
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, checker_trip_count FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.restriction_status == "spam_limited", "throttled batch degrades the checker"
+    assert row.checker_trip_count == 4, (
+        "a throttled batch must escalate (3 → 4), never reset the ladder"
+    )
 
 
 # ─── INVARIANT: 14-05 suspect rollback preserved ─────────────────────────────

@@ -427,6 +427,15 @@ class ContactCheckWorker:
             # re-selected (it never goes through the restriction recovery control-probe).
             if batch_applied:
                 await self._rest_checker(str(checker_id))
+                # 2026-06-30 fix (companion to the _recover_checkers change): a clean
+                # REAL batch is the genuine proof of health that resets the escalating-
+                # backoff ladder. probe_state == 'clean' means the checker resolved a
+                # full live batch without tripping the 14-05 throttle signal AND was not
+                # flagged degraded by the decoupled ≥2-miss probe this cycle. The weak
+                # ≤5-sample recovery probe must NOT reset the ladder (it falsely
+                # "recovers" a still-throttled checker), so the reset lives here.
+                if probe_state == "clean":
+                    await self._reset_checker_trip(str(checker_id))
 
         return processed
 
@@ -452,6 +461,29 @@ class ContactCheckWorker:
                         "WHERE id = :id"
                     ),
                     {"rest": rest_seconds, "id": checker_id},
+                )
+
+    async def _reset_checker_trip(self, checker_id: str) -> None:
+        """Reset the escalating-backoff ladder (checker_trip_count → 0) after a clean
+        REAL resolve batch — the genuine proof of health.
+
+        Companion to the 2026-06-30 ``_recover_checkers`` change: the ≤5-sample
+        recovery probe is too weak to prove a checker is no longer throttled (it
+        passes in a fresh burst window while real 30-resolve batches still trip), so
+        resetting the ladder there let the pool flap forever at the base cooldown.
+        The ladder is reset here instead — only when the checker completed a full
+        live batch without a throttle signal (caller passes ``probe_state == 'clean'``).
+        Touches ONLY ``checker_trip_count`` — no restriction/rest fields, no event row.
+        Guarded (``checker_trip_count <> 0``) so an already-zero checker skips the write.
+        """
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                await db.execute(
+                    text(
+                        "UPDATE senders SET checker_trip_count = 0 "
+                        "WHERE id = :id AND checker_trip_count <> 0"
+                    ),
+                    {"id": checker_id},
                 )
 
     async def _probe_cycle(self) -> None:
@@ -744,12 +776,21 @@ class ContactCheckWorker:
                             UPDATE senders
                             SET restriction_status = 'none',
                                 restricted_until = NULL,
-                                lifecycle_status = 'active',
-                                -- quick-260629-b7j (PROBE-04): a clean recovery resets the
-                                -- escalating-backoff ladder so a genuinely-recovered checker
-                                -- starts its next cooldown from the base again (not from the
-                                -- accumulated trip history).
-                                checker_trip_count = 0
+                                lifecycle_status = 'active'
+                                -- 2026-06-30 fix: do NOT reset checker_trip_count here.
+                                -- The recovery probe is only a ≤5-sample control burst
+                                -- (_probe_sample) — far too weak to prove genuine health:
+                                -- a soft-throttled checker passes 5 resolves in a fresh
+                                -- burst window while real 30-resolve batches still trip.
+                                -- Resetting the escalating-backoff ladder on every such
+                                -- clear made the pool flap forever at the base 15min
+                                -- cooldown (trip_count stuck at 0, ladder 30m/1h/…/6h
+                                -- never reached). The ladder is now reset ONLY after a
+                                -- clean REAL resolve batch (_reset_checker_trip in the
+                                -- resolve tick). Recovery just returns the checker to
+                                -- rotation with its trip history intact, so a checker that
+                                -- keeps re-tripping climbs to hours of rest and stops
+                                -- burning the contacts-API.
                             WHERE id = :id
                         """),
                         {"id": str(r.id)},
