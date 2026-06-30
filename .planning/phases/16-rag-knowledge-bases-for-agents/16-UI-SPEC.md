@@ -41,12 +41,12 @@ Do not introduce dark surfaces, oklch hex, or shadcn-default neutrals. Mirror th
 - **New sidebar tab:** add `{ to: "/knowledge-bases", label: "Knowledge bases", icon: <Library or Database from lucide> }` to `NAV_ITEMS` in `src/components/AppSidebar.tsx`, placed after `Agents`. Active state uses `.sb__item.is-active` (Telegram-blue soft bg).
 - **New route files (TanStack file-based):** `src/routes/_authenticated/knowledge-bases.index.tsx` (list) + `src/routes/_authenticated/knowledge-bases.$id.tsx` (detail). Mirror `campaigns.index.tsx` / `campaigns.$id.tsx`.
 - **Detail-with-tabs:** mirror `campaigns.$id.tsx` structure. Tab bar uses the existing `.tabs` / `.tab` / `.tab.is-active` / `.tab .count` classes (Telegram-blue underline on active).
-- **Stat row:** mirror the `Metric` helper in `campaigns.$id.tsx` (label in `.muted .text-xs`, value in `.num` at 22px/600). Per D-09 each metric carries a colored status dot — reuse `.pill__dot` styling (`width:6px; border-radius:50%`) colored by token.
+- **Stat row:** mirror the `Metric` helper in `campaigns.$id.tsx` (label in `.muted .text-xs`, value in the `.metric__value` display tier at 26px/600). Per D-09 each metric carries a colored status dot — reuse `.pill__dot` styling (`width:6px; border-radius:50%`) colored by token.
 - **Table / per-document list:** existing `<table>`+`th`/`td` inline-style pattern from `agents.tsx`, or `.tbl` class from `aimly.css`. Use `.tbl` for the Documents tab.
 - **File upload:** reuse the **exact** `.ct__dropzone` pattern + hidden `<input type="file">` from `contacts.tsx` (~line 1248) — click-to-pick + drag-drop + `Loader2.ob__spin` while parsing.
 - **Modal / dialog:** `.modal__scrim` + `.modal` (+ `.modal--wide` for the create/upload modal). Header `.modal__head`, body `.modal__body`, footer with `btn--ghost` (cancel) + `btn--primary` (confirm).
 - **Status pills:** `StatusPill` / `STATUS_PILL` record pattern from `campaigns.$id.tsx` (`.pill .pill--green/orange/red/ghost` + `.pill__dot`).
-- **Empty state:** centered block, `64px 24px` padding, emoji/icon + h3 (16/600) + muted body + `.btn--primary` CTA (pattern in `agents.tsx::EmptyState` and `contacts.tsx::EmptyState`).
+- **Empty state:** centered block, `64px 24px` padding, emoji/icon + h3 (heading tier, 14px/600) + muted body + `.btn--primary` CTA (pattern in `agents.tsx::EmptyState` and `contacts.tsx::EmptyState`).
 - **Toasts:** `sonner` (already wired) for success/error after mutations; invalidate the relevant React Query keys.
 - **Error envelope:** `ApiError` → human message via `errMsg()`; inline `.card` alert banner with `color: var(--danger)` + Dismiss (pattern in `campaigns.$id.tsx`).
 
@@ -61,8 +61,8 @@ Three surfaces, all in the existing light theme:
 3. **Agent form integration** (surface 3) — KB multi-select on the agent editor modal (`agents.tsx::AgentEditor`). M:N attach/detach (D-07). The agent's existing static `knowledge_base` Text field stays separate (D-08).
 
 ### Surface 2 — KB detail header (D-09) — light-theme mapping of the screenshot
-- **Row 1 (meta):** `Type:` + `.pill .pill--blue` reading `Files` · `Status:` + status pill with `.pill__dot` (Ready=`--success`/green, Indexing=`--warning`/amber, Failed=`--danger`/red, Empty=`--text-faint`/neutral) · clock icon (`lucide Clock`) + `Updated <Mon DD, YYYY, HH:MM>` in `.muted`. Top-right icon buttons (`.tb__icon-btn` or `.btn--ghost .btn--icon`): **Re-index** (`RefreshCw`), **Edit** (`Edit3`), **Settings** (`Settings`), **Delete** (`Trash2`, danger color).
-- **Row 2 (stat row, D-09):** 5 metrics in a `repeat(5,1fr)` grid of `Metric`-style cells; each = big `.num` value (22–26px/600) + small uppercase muted label + a colored `.pill__dot`:
+- **Row 1 (meta):** `Type:` + `.pill .pill--blue` reading `Files` · `Status:` + status pill with `.pill__dot` (Ready=`--success`/green, Indexing=`--warning`/amber, Failed=`--danger`/red, Empty=`--text-faint`/neutral) · clock icon (`lucide Clock`) + `Updated <Mon DD, YYYY, HH:MM>` in `.muted`. Top-right icon-only buttons (`.tb__icon-btn` or `.btn--ghost .btn--icon`), each with an explicit `aria-label` (see Copywriting): **Re-index** (`RefreshCw`), **Edit** (`Edit3`), **Settings** (`Settings`), **Delete** (`Trash2`, danger color).
+- **Row 2 (stat row, D-09):** 5 metrics in a `repeat(5,1fr)` grid of `Metric`-style cells; each = big display-tier value (`.metric__value`, 26px/600) + small uppercase muted label (label tier, 11.5px) + a colored `.pill__dot`:
   - `DOCUMENTS` — dot `--text-faint` (neutral)
   - `INDEXED` — dot `--success` (green)
   - `PROCESSING` — dot `--warning` (amber)
@@ -72,7 +72,7 @@ Three surfaces, all in the existing light theme:
 ### Surface 2 — tabs (D-11)
 - `.tabs` bar with four `.tab` items, lucide icon + label, active = `.tab.is-active` (Telegram-blue underline). Optional `.tab .count` badge on **Documents** (doc count) and **Agents** (attached-agent count).
   1. **Documents** (`FileText` icon, active by default) — D-10 list (`.tbl`): per-doc name, source kind (file type badge / "Pasted text"), per-doc indexing status pill (Indexed/Processing/Failed), size, uploaded date, per-row actions (re-index on Failed, delete). Header actions: **Upload files** (opens dropzone modal) + **Paste text** (opens textarea modal). Empty state (0 docs) → upload prompt. **Async reflection (D-02):** poll the KB while any doc is `processing` (React Query `refetchInterval`); pill transitions processing→indexed/failed; show a subtle "Indexing…" affordance (`Loader2.ob__spin`).
-  2. **Search** (`Search` icon) — D-03/D-04 human-facing manual `search_knowledge_base`. Single query `.input` + Search button; results list shows retrieved chunks (snippet text + source-document name + optional relevance score). Empty-query idle hint; empty-result state ("Ничего не найдено по этому запросу"); disabled/hint if KB has 0 indexed docs.
+  2. **Search** (`Search` icon) — D-03/D-04 human-facing manual `search_knowledge_base`. Single query `.input` + `Search knowledge base` button; results list shows retrieved chunks (snippet text + source-document name + optional relevance score). Empty-query idle hint; empty-result state ("Ничего не найдено по этому запросу"); disabled/hint if KB has 0 indexed docs.
   3. **Agents** (`Users` icon) — D-07 reverse side. List of agents this KB is attached to (name → link to agent). Read-only here is acceptable for v1 (attach/detach happens on the agent form, surface 3); if detach is offered here, mirror the campaign-pool `X` remove control.
   4. **Settings** (`Settings` icon) — KB name (`.input`), `Type` (read-only `Files` in v1, D-01), optional description. Save = `btn--primary`. Delete-KB lives here too (danger).
 
@@ -92,28 +92,31 @@ Declared values (multiples of 4) — these are the values the existing `aimly.cs
 |-------|-------|-------|
 | xs | 4px | icon gaps, chip dot offset, tight inline gaps |
 | sm | 8px | compact element spacing, chip gaps, list-item gaps |
-| md | 12px | row padding, metric cell padding, modal footer padding |
 | lg | 16px | card gaps, section gaps, table cell horizontal padding |
 | xl | 24px | page padding (`.scroll padding:24`), main-head padding |
 | 2xl | 32px | major section breaks |
 | 3xl | 64px | empty-state vertical padding (`64px 24px`) |
 
-Exceptions: tab height `44px` (`.tab`, locked by existing `aimly.css`); button height `36px` / `--sm` `30px`; input height `38px`; pill height `22px` (`16px` for inline mini-pills). These are component-intrinsic dimensions inherited from the design system, not free spacing. Border-radius from `--r-sm 6 / --r-md 10 / --r-lg 14` (cards use `--r-lg`).
+**Explicit exception — `12px` (md):** `12px (md)` is a system-level spacing value **inherited from the established `aimly.css` design system** (already in live use for row/cell/footer padding — verified at `aimly.css` lines 151, 182, 219, 416, 523, 533, 769, 777: input/field padding `0 12px`, card/metric cell padding `12px`, textarea & dropzone `10px 12px`, modal-footer padding). It is **retained verbatim per the directive to align with the existing system rather than invent tokens**; it is a multiple of 4 and sits between the 8px and 16px steps. Treated the same way as the component-intrinsic exceptions below — a justified inherited value, not a free scale invention.
+
+Exceptions (component-intrinsic dimensions inherited from the design system, not free spacing): tab height `44px` (`.tab`, locked by existing `aimly.css`); button height `36px` / `--sm` `30px`; input height `38px`; pill height `22px` (`16px` for inline mini-pills). Border-radius from `--r-sm 6 / --r-md 10 / --r-lg 14` (cards use `--r-lg`).
 
 ---
 
 ## Typography
 
-Inherited from `aimly.css`. Two weights in practice: regular (400) + semibold (600); medium (500) appears for labels/active-nav and is treated as part of the semibold family for the 2-weight rule.
+Inherited from `aimly.css`. **Exactly 4 distinct font sizes** are in the contract — the **page-title and label tiers are differentiated by WEIGHT + LETTER-SPACING + UPPERCASE, NOT by an additional size.** Two weights in practice: regular (400) + semibold (600); medium (500) appears for labels/active-nav and is treated as part of the semibold family for the 2-weight rule.
 
-| Role | Size | Weight | Line Height |
-|------|------|--------|-------------|
-| Body | 13px | 400 | 1.45 |
-| Label (uppercase metric/section/table-head) | 11.5px | 500–600 | 1.3 (uppercase, letter-spacing 0.05–0.06em) |
-| Heading (card/section title, modal title, tab) | 14px | 600 | 1.2 |
-| Display (metric value / page title) | 22px (metric) / 18px (page title via `.tb__title`) | 600 | 1.1 |
+| Role | Size | Weight | Line Height | Differentiation |
+|------|------|--------|-------------|-----------------|
+| Label (uppercase metric/section/table-head) | 11.5px | 500–600 | 1.3 | uppercase + letter-spacing `0.05–0.06em` — distinguished from Body by **letter-spacing + uppercase + weight**, not a separate size near 13px |
+| Body | 13px | 400 | 1.45 | default text, field/input values, table cells, muted hints |
+| Heading (card/section title, modal title, tab label, empty-state h3, **and page title**) | 14px | 600 | 1.2 | page title (`.tb__title`) renders at this size with weight **600** — distinguished from card titles by **weight context + position in the Topbar**, not a 5th size |
+| Display (metric value) | 26px | 600 | 1.1 | `.metric__value` only — the single large numeric/stat tier; `letter-spacing -0.02em` |
 
-Base document size 14px / 1.45 (set on `html, body`). Numeric values use `.num` (`tabular-nums`).
+**Page-title / label differentiation is achieved via weight + letter-spacing rather than an additional size.** The page title formerly noted at 18px (`.tb__title`) folds into the **Heading** tier (14px/600); the `.tb__title` class is a **component-intrinsic Topbar style owned by the existing shared `<Topbar>` component** (not something Phase 16 re-declares) — Phase 16 surfaces consume `<Topbar>` as-is, so its internal 18px is out of this phase's type contract the same way the 44px tab height is out of the spacing contract. New Phase 16 markup uses only the 4 sizes above. The metric display tier is the live `.metric__value` 26px value (the screenshot's large stat numbers); there is **no separate 18px or 22px tier** in this contract.
+
+Base document size 14px / 1.45 (set on `html, body`). Numeric values use `.num` / `.metric__value` (`tabular-nums`).
 
 ---
 
@@ -128,7 +131,7 @@ Existing light-theme Telegram-blue palette (`aimly.css` `:root`). Use **token va
 | Accent (10%) | `--tg-blue #3390ec` (+ `--tg-blue-soft #e8f3fe`) | see reserved-for list |
 | Destructive | `--danger #e13b30` (+ `--danger-soft`) | delete-KB / delete-document, Failed status |
 
-**Accent (`--tg-blue`) reserved for:** primary CTA buttons (`btn--primary`: "New knowledge base", "Upload files", "Search", "Save"); active sidebar tab; active detail tab underline (`.tab.is-active`); KB-name links to detail (Telegram-blue link buttons); the STORAGE metric dot (info); input focus ring. **Never** apply accent to all interactive elements — secondary actions use `btn--ghost` (bordered neutral).
+**Accent (`--tg-blue`) reserved for:** primary CTA buttons (`btn--primary`: "New knowledge base", "Upload files", "Search knowledge base", "Save"); active sidebar tab; active detail tab underline (`.tab.is-active`); KB-name links to detail (Telegram-blue link buttons); the STORAGE metric dot (info); input focus ring. **Never** apply accent to all interactive elements — secondary actions use `btn--ghost` (bordered neutral).
 
 **Semantic status colors (status dots & pills, not part of the 10% accent budget — they encode meaning):**
 - `--success #4dcd5e` (+ `--success-soft`) → INDEXED count, `Ready` status, indexed per-doc pill, live/healthy dot.
@@ -146,7 +149,7 @@ App copy is mixed RU/EN matching existing screens: nav labels & object nouns in 
 |---------|------|
 | Primary CTA (index page) | `+ New knowledge base` |
 | Primary CTA (Documents tab) | `Upload files` (primary) · `Paste text` (ghost, secondary path — D-01) |
-| Primary CTA (Search tab) | `Search` |
+| Primary CTA (Search tab) | `Search knowledge base` |
 | Empty state heading (index, 0 KBs) | `No knowledge bases yet` |
 | Empty state body (index) | `Knowledge bases give your agents searchable reference material. Create one and upload documents — agents you attach it to will pull from it on demand.` + `Create your first knowledge base` button |
 | Empty state heading (Documents tab, 0 docs) | `No documents yet` |
@@ -161,6 +164,15 @@ App copy is mixed RU/EN matching existing screens: nav labels & object nouns in 
 | Agent-form field label / hint (D-07) | label `Базы знаний` · hint `Агент обращается к этим базам по необходимости во время ответа.` · empty `Базы знаний не подключены.` |
 | Destructive confirmation — Delete KB | AlertDialog/confirm: `Удалить базу знаний «{name}»? Все документы и индекс будут удалены безвозвратно.` — confirm `Удалить` (danger), cancel `Отмена`. |
 | Destructive confirmation — Delete document | `Удалить документ «{name}» из базы? Его чанки будут удалены из индекса.` — confirm `Удалить`, cancel `Отмена`. |
+
+**Icon-only header button `aria-label` text (D-09 header, 4 buttons — executor uses these verbatim):**
+
+| Button | Icon | `aria-label` |
+|--------|------|--------------|
+| Re-index | `RefreshCw` | `aria-label="Re-index knowledge base"` |
+| Edit | `Edit3` | `aria-label="Edit knowledge base"` |
+| Settings | `Settings` | `aria-label="Knowledge base settings"` |
+| Delete | `Trash2` | `aria-label="Delete knowledge base"` |
 
 Destructive actions in this phase: **Delete KB** (Settings tab + header trash icon), **Delete document** (Documents tab per-row), **Re-index** (non-destructive but re-runs ingest — no confirm needed). Confirmation approach: reuse the existing `confirm()`/AlertDialog pattern from `agents.tsx` (delete agent) / `inbox.tsx` (delete chats); danger-colored confirm button.
 
