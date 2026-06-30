@@ -1033,8 +1033,19 @@ function Thread({
             {conv.sender_slug && (
               <KV
                 label="Sender"
-                value={`@${conv.sender_slug}`}
-                icon={<Send size={13} />}
+                value={
+                  sender
+                    ? `${sender.name} · ${sender.phone}`
+                    : `@${conv.sender_slug}`
+                }
+                icon={<Phone size={13} />}
+              />
+            )}
+            {agent && (
+              <KV
+                label="Agent"
+                value={agent.name}
+                icon={<Bot size={13} />}
               />
             )}
             {campaign && (
