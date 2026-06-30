@@ -93,9 +93,14 @@ SEARCH_KB_TOOL = {
     "function": {
         "name": SEARCH_KB_TOOL_NAME,
         "description": (
-            "Search the agent's attached knowledge bases for relevant reference "
-            "material. Call this when the contact asks something that may be answered "
-            "by stored documents/facts. Returns relevant passages; use them to answer."
+            "Search the agent's attached knowledge base(s) for reference material "
+            "about the subject, company, product, or any facts. ALWAYS call this "
+            "BEFORE answering a factual question (a person's background/work/education, "
+            "product facts, numbers, dates) — do NOT answer 'I don't know' to a factual "
+            "question until you have searched it THIS turn. If the first query returns "
+            "nothing, try again with different keywords/phrasing; an empty result for "
+            "one query does NOT mean the knowledge base lacks other facts. Returns "
+            "relevant passages — answer from them."
         ),
         "parameters": {
             "type": "object",
@@ -1233,6 +1238,28 @@ class AIEngine:
 
             # Собираем системный промпт
             system_prompt = self.build_system_prompt(context, contact_name)
+
+            # Phase 16: when the agent has an attached KB, make it RAG-AWARE. The
+            # tool alone isn't enough — without an explicit directive the model
+            # searches inconsistently and, once an empty result lands in history,
+            # stops searching and just answers "I don't know". This block tells it
+            # to search first for factual questions and to never infer the base is
+            # empty from a prior empty search. Injected only when has_kb (no-op
+            # otherwise). Kept inside the no-meta-disclosure contract (<identity>).
+            if has_kb:
+                system_prompt += (
+                    "\n\n<knowledge_base>\n"
+                    "You have a searchable knowledge base attached (the search_knowledge_base "
+                    "tool); it holds the facts you are allowed to state. For ANY factual "
+                    "question the contact asks, call search_knowledge_base FIRST with focused "
+                    "keywords and answer from the returned passages. Never say you don't know "
+                    "a factual question before searching for it THIS turn. Do NOT assume the "
+                    "knowledge base is empty because an earlier search in this conversation "
+                    "returned nothing — a different question needs a different query, so search "
+                    "again with new terms. Never mention the knowledge base, the search, or "
+                    "that you looked anything up.\n"
+                    "</knowledge_base>"
+                )
 
             # Формируем сообщения для GPT
             messages = [
