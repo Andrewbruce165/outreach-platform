@@ -125,12 +125,18 @@ def extract_text(blob: bytes, source_kind: str) -> str:
     CPU-bound — call ``extract_text_async`` from async code (Pitfall 3).
     """
     if source_kind == "pdf":
-        return _extract_pdf(blob)
-    if source_kind == "docx":
-        return _extract_docx(blob)
-    if source_kind in ("txt", "md", "csv", "text"):
-        return _extract_plaintext(blob)
-    raise ValueError(f"unsupported source_kind: {source_kind}")
+        raw = _extract_pdf(blob)
+    elif source_kind == "docx":
+        raw = _extract_docx(blob)
+    elif source_kind in ("txt", "md", "csv", "text"):
+        raw = _extract_plaintext(blob)
+    else:
+        raise ValueError(f"unsupported source_kind: {source_kind}")
+    # PostgreSQL text columns cannot store NUL (0x00) — pypdf and some encoders
+    # emit it from certain PDFs/files. Without this, the kb_chunks INSERT fails
+    # with 'invalid byte sequence for encoding "UTF8": 0x00' and the whole
+    # document goes to status='failed' (observed on a real PDF upload).
+    return raw.replace("\x00", "")
 
 
 async def extract_text_async(blob: bytes, source_kind: str) -> str:

@@ -87,3 +87,15 @@ async def test_upload_creates_pending_doc(
     assert int(size_bytes) == len(blob)
     assert str(row_kb_id) == kb_id
     assert source_kind in ("txt", "text")
+
+
+async def test_extract_text_strips_nul_bytes():
+    """Regression: PostgreSQL text columns reject NUL (0x00); pypdf emits it from
+    some real PDFs. extract_text must strip it so the kb_chunks INSERT can't fail
+    with 'invalid byte sequence for encoding "UTF8": 0x00' (observed on a live
+    PDF upload — the document went to status='failed')."""
+    from app.services.kb_ingest import extract_text
+
+    out = extract_text(b"hello\x00world\x00", "text")
+    assert "\x00" not in out
+    assert out == "helloworld"
