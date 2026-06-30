@@ -1,308 +1,283 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-06-18
+**Analysis Date:** 2026-06-30
 
-## Repository Overview
+## Repository Layout
 
-This product spans **two sibling repositories** on the same host:
-
-| Repo | Path | Role |
-|---|---|---|
-| Backend | `/root/apps/aimly/tg-outreach` | Python 3.11 / FastAPI / PostgreSQL / Telethon |
-| Frontend | `/root/apps/aimly/aimly-tg-outreach` | TypeScript / TanStack Start / Vite / Bun |
-
-They are independent git repositories. The frontend consumes the backend via HTTP (`VITE_BACKEND_URL`). They are not a monorepo.
+This is a two-repo system. Backend commits go to `Andrewbruce165/outreach-platform`; frontend commits go to `AGS-Venture-Lab/aimly-tg-outreach`. They share no git history but form one product.
 
 ---
 
-## Backend Directory Layout
+## Backend: `/root/apps/aimly/tg-outreach/`
 
 ```
-/root/apps/aimly/tg-outreach/
-├── app/                        # Application package
-│   ├── __init__.py
-│   ├── config.py               # Pydantic Settings, get_settings() factory
-│   ├── database.py             # Engine, AsyncSessionLocal, init_db, _apply_migrations
-│   ├── main.py                 # FastAPI app, lifespan, router registration, exception handlers
+tg-outreach/
+├── app/                        # All Python application code
+│   ├── main.py                 # FastAPI app factory, lifespan, CORS, router registration
+│   ├── config.py               # Pydantic Settings (env vars, @lru_cache singleton)
+│   ├── database.py             # Engine, session factory, init_db(), _apply_migrations()
 │   ├── models/
-│   │   └── __init__.py         # All SQLAlchemy ORM models (single file)
+│   │   └── __init__.py         # ALL SQLAlchemy ORM models (single file, ~860 lines)
+│   ├── routers/                # One file per feature area (FastAPI APIRouter)
+│   │   ├── agents.py           # AI context (agent) CRUD
+│   │   ├── analytics.py        # Read-only analytics + LLM call log endpoints
+│   │   ├── campaigns.py        # Campaign CRUD + lifecycle (start/pause/resume/finish)
+│   │   ├── check_contacts.py   # Manual recheck trigger
+│   │   ├── contacts.py         # Contact CRUD + CSV import + folder management
+│   │   ├── conversations.py    # Inbox list, send from UI, manager-mode toggle
+│   │   ├── folders.py          # Folder CRUD
+│   │   ├── health.py           # GET /api/v1/health
+│   │   ├── knowledge_bases.py  # KB CRUD, document upload, search endpoint
+│   │   ├── onboarding.py       # Telegram account onboarding (phone/SMS/2FA/QR)
+│   │   ├── proxy_pool.py       # Proxy pool CRUD + assignment
+│   │   ├── queue.py            # Queue inspection endpoints
+│   │   ├── send.py             # POST /api/v1/send (ad-hoc send, not campaign)
+│   │   ├── senders.py          # Sender CRUD + restriction-events endpoint
+│   │   ├── telemetry.py        # UI telemetry event ingest (whitelist-gated)
+│   │   ├── warmup.py           # Warmup pool + settings CRUD
+│   │   └── workspace.py        # Workspace info + API key management
 │   ├── schemas/
-│   │   └── __init__.py         # All Pydantic request/response schemas (single file)
-│   ├── routers/                # FastAPI APIRouter modules
-│   │   ├── agents.py           # /api/v1/agents — AI agent (AIContext) CRUD
-│   │   ├── analytics.py        # /api/v1/analytics — funnel, LLM, cards
-│   │   ├── campaigns.py        # /api/v1/campaigns — CRUD + lifecycle
-│   │   ├── check_contacts.py   # /api/v1/check-contacts — phone/username registration check
-│   │   ├── contacts.py         # /api/v1/contacts — contact list + CSV import
-│   │   ├── conversations.py    # /api/v1/conversations — inbox + manager mode
-│   │   ├── folders.py          # /api/v1/folders — folder CRUD
-│   │   ├── health.py           # /api/v1/health — public healthcheck
-│   │   ├── onboarding.py       # /api/v1/onboarding — Telegram account onboarding FSM
-│   │   ├── proxy_pool.py       # /api/v1/proxy-pool — proxy management (not wired in main)
-│   │   ├── queue.py            # /api/v1/queue — queue status inspection
-│   │   ├── send.py             # /api/v1/send — direct message enqueue
-│   │   ├── senders.py          # /api/v1/senders — sender account CRUD
-│   │   ├── telemetry.py        # /api/v1/telemetry/events — UI event ingest
-│   │   ├── warmup.py           # /api/v1/warmup — warmup schedule management
-│   │   └── workspace.py        # /api/v1/workspace — workspace info + API key CRUD
-│   ├── services/               # Domain logic and background workers
-│   │   ├── ai_engine.py        # OpenAI GPT completion + signal tools
-│   │   ├── campaign_enqueue.py # CampaignEnqueueWorker
-│   │   ├── checker.py          # Phone/username Telegram registration checker
-│   │   ├── contact_check_worker.py # ContactCheckWorker background loop
-│   │   ├── csv_import.py       # CSV parsing + batch contact upsert
-│   │   ├── encryption.py       # Fernet session encrypt/decrypt
-│   │   ├── listener.py         # Listener container entry point (Telethon + AI reply)
-│   │   ├── llm_logger.py       # LLM call audit log writer
-│   │   ├── onboarding_state.py # In-memory FSM for Telegram onboarding
-│   │   ├── queue.py            # QueueWorker + enqueue_message/enqueue_file helpers
-│   │   ├── recontact.py        # protected_conversation_sql predicate
-│   │   ├── rotation.py         # get_or_assign_sender (sender load balancing)
-│   │   ├── telegram.py         # TelegramService singleton (Telethon client pool)
-│   │   ├── template.py         # {{variable}} template rendering
-│   │   ├── warmup.py           # WarmupWorker
-│   │   └── webhook_notify.py   # notify_signal fire-and-forget HTTP POST
-│   └── utils/
-│       ├── auth.py             # auth_dep FastAPI dependency + AuthCtx + JWKS cache
-│       ├── names.py            # Name formatting helpers
-│       └── phone.py            # Phone normalization + contact_identity_key
-├── migrations/                 # Raw SQL migration files (auto-applied at startup)
+│   │   ├── __init__.py         # Pydantic request/response schemas (Campaign, Sender, etc.)
+│   │   └── knowledge_bases.py  # KB-specific Pydantic schemas
+│   ├── services/               # Business logic + background workers
+│   │   ├── ai_engine.py        # OpenAI chat.completions wrapper + built-in signal tools
+│   │   ├── campaign_enqueue.py # CampaignEnqueueWorker (folder → message_queue)
+│   │   ├── checker.py          # CheckerService — batch phone resolve via checker accounts
+│   │   ├── contact_check_worker.py  # ContactCheckWorker — drives checker pool
+│   │   ├── csv_import.py       # CSV parse, column mapping, contact insert
+│   │   ├── encryption.py       # AES encrypt/decrypt for Telegram session strings
+│   │   ├── failover.py         # Cold-backlog failover (stuck jobs recovery)
+│   │   ├── kb_ingest.py        # Text extract, chunk, embed (used by worker)
+│   │   ├── kb_ingest_worker.py # KnowledgeIngestWorker (claims pending kb_documents)
+│   │   ├── kb_search.py        # pgvector cosine-distance search over kb_chunks
+│   │   ├── listener.py         # Telegram listener (runs as __main__ in listener container)
+│   │   ├── llm_logger.py       # Writes LLMCall audit rows
+│   │   ├── onboarding_state.py # OnboardingCleanupWorker (expires stale sessions)
+│   │   ├── queue.py            # QueueWorker — rate-limited outbound send loop
+│   │   ├── rebalance.py        # Sender load-rebalance across campaigns
+│   │   ├── recontact.py        # Protected conversation SQL helpers (recontact policy)
+│   │   ├── restriction_audit.py # Writes SenderRestrictionEvent rows (append-only)
+│   │   ├── rotation.py         # get_or_assign_sender() — per-campaign sender picker
+│   │   ├── telegram.py         # TelegramService singleton (client cache, send, resolve)
+│   │   ├── template.py         # render_template() — {{variable}} substitution
+│   │   ├── warmup.py           # WarmupWorker — inter-account AI warmup sessions
+│   │   └── webhook_notify.py   # notify_signal() — fires campaign webhooks
+│   ├── utils/
+│   │   ├── auth.py             # auth_dep FastAPI Depends (JWT + API key), AuthCtx
+│   │   ├── names.py            # Name normalization helpers
+│   │   └── phone.py            # Phone normalize, is_username_key(), contact_identity_key()
+│   └── data/
+│       └── control_set_known_live.txt  # 49 known-live phone numbers for checker health probe
+├── migrations/                 # Raw-SQL migrations (auto-applied at startup)
 │   ├── _schema_migrations.sql  # Bootstrap: creates schema_migrations tracking table
-│   ├── 001_add_unique_constraint_messages.sql
-│   ├── 002_add_document_webhook_url.sql
-│   ├── ...
-│   └── 026_campaign_allow_recontact.sql
-├── tests/                      # Pytest test suite
-│   ├── conftest.py             # DB setup guard (blocks non-overlay runs) + fixtures
-│   ├── test_ai_engine.py
-│   └── (other test_*.py files)
-├── docker-compose.yml          # Production: db, api, listener
-├── docker-compose.test.yml     # Test overlay: ephemeral db-test in tmpfs
-├── Dockerfile                  # API container
-├── Dockerfile.listener         # Listener container
-├── backup.sh                   # pg_dump to /root/backups/tg-outreach/
-├── pyproject.toml              # Python project + pytest config
-├── requirements.txt            # Pip dependencies
-├── CLAUDE.md                   # Developer instructions (source of truth)
-└── .planning/                  # GSD planning artifacts
-    └── codebase/               # These analysis documents
+│   ├── 001_…sql                # Sequential numbered migrations (001–042 as of 2026-06-30)
+│   └── 042_kb_id_server_defaults.sql  # Latest as of analysis date
+├── tests/                      # pytest test suite (~120 test files)
+│   ├── conftest.py             # DB setup, drop-guard, test client fixtures
+│   ├── utils/
+│   │   └── openai_mocks.py     # OpenAI response stubs
+│   └── test_*.py               # Test files (one per feature/phase)
+├── lovable-handoff/            # Specs consumed by Lovable frontend generator
+│   ├── openapi.json            # OpenAPI spec (source of truth for frontend API calls)
+│   ├── AGENTS.md               # Agent-screen contract
+│   ├── KNOWLEDGE.md            # Knowledge base screen contract
+│   ├── PRD.md                  # Product requirements for Lovable
+│   └── types/                  # Shared TypeScript type stubs
+├── docs/                       # Internal developer docs
+├── Dockerfile                  # API container (python:3.11-slim, uvicorn)
+├── Dockerfile.listener         # Listener container (python:3.11-slim, python -m app.services.listener)
+├── docker-compose.yml          # Production: db + api + listener
+├── docker-compose.test.yml     # Test overlay: adds ephemeral db-test in tmpfs, overrides DATABASE_URL
+├── pyproject.toml              # pytest config, dependency groups
+├── requirements.txt            # Pinned Python dependencies
+├── backup.sh                   # pg_dump script (cron 03:05 daily)
+└── CLAUDE.md                   # Project instructions for Claude Code
 ```
 
 ---
 
-## Frontend Directory Layout
+## Frontend: `/root/apps/aimly/aimly-tg-outreach/`
 
 ```
-/root/apps/aimly/aimly-tg-outreach/
+aimly-tg-outreach/
 ├── src/
-│   ├── components/             # Reusable React components
-│   │   ├── AppSidebar.tsx      # Persistent navigation sidebar
-│   │   ├── EditCampaignModal.tsx
-│   │   ├── OnboardingFlow.tsx  # Telegram account onboarding multi-step UI
-│   │   ├── PulseLogo.tsx
-│   │   ├── Topbar.tsx          # Page-level topbar (title + right actions slot)
-│   │   └── ui/                 # shadcn/ui generated components (30+ files)
-│   ├── hooks/
-│   │   └── use-mobile.tsx
+│   ├── routes/                 # TanStack Router file-based routes
+│   │   ├── __root.tsx          # Root shell: QueryClientProvider, AuthSync, Toaster
+│   │   ├── _authenticated.tsx  # Auth guard layout: checks Supabase session, renders AppSidebar
+│   │   ├── _authenticated/     # All protected screens
+│   │   │   ├── index.tsx       # Dashboard (/)
+│   │   │   ├── accounts.tsx    # Sender accounts + onboarding (/accounts)
+│   │   │   ├── agents.tsx      # AI contexts CRUD (/agents)
+│   │   │   ├── campaigns.index.tsx   # Campaign list (/campaigns)
+│   │   │   ├── campaigns.new.tsx     # Campaign builder (/campaigns/new)
+│   │   │   ├── campaigns.$id.tsx     # Campaign detail + pool health (/campaigns/:id)
+│   │   │   ├── contacts.tsx    # Contact list + CSV import (/contacts)
+│   │   │   ├── inbox.tsx       # Conversation inbox + AI toggle (/inbox)
+│   │   │   ├── knowledge-bases.index.tsx  # KB list (/knowledge-bases)
+│   │   │   ├── knowledge-bases.$id.tsx    # KB documents + search test (/knowledge-bases/:id)
+│   │   │   ├── onboarding.tsx  # Account onboarding wizard (/onboarding)
+│   │   │   ├── settings.tsx    # Workspace settings + API keys (/settings)
+│   │   │   └── warmup.tsx      # Warmup pool + settings (/warmup)
+│   │   ├── auth.callback.tsx   # Supabase OAuth callback (/auth/callback)
+│   │   └── login.tsx           # Login screen (/login)
+│   ├── components/
+│   │   ├── AppSidebar.tsx      # Navigation sidebar with workspace switcher
+│   │   ├── EditCampaignModal.tsx  # Campaign edit modal
+│   │   ├── OnboardingFlow.tsx  # Multi-step account onboarding component
+│   │   ├── StageEditor.tsx     # Dialogue-stage editor for campaign flow
+│   │   ├── Topbar.tsx          # Page topbar
+│   │   ├── PulseLogo.tsx       # Animated logo
+│   │   └── ui/                 # shadcn/ui components (accordion, button, dialog, …)
 │   ├── lib/
-│   │   ├── api.ts              # Central HTTP client — api<T>() function
-│   │   ├── error-capture.ts    # Error boundary utilities
-│   │   ├── error-codes.ts      # Backend error code → user message mapping
-│   │   ├── error-page.ts       # SSR 500 HTML renderer
-│   │   ├── supabase.ts         # Supabase JS client (browser-only)
-│   │   ├── telemetry.ts        # track() event batching + sendBeacon
-│   │   └── utils.ts            # cn() class merge helper (shadcn pattern)
-│   ├── routes/                 # File-based TanStack Router routes
-│   │   ├── __root.tsx          # Root shell + QueryClientProvider + AuthSync
-│   │   ├── _authenticated.tsx  # Auth guard layout + AppSidebar
-│   │   ├── _authenticated/     # Authenticated sub-routes
-│   │   │   ├── index.tsx            → /  (Dashboard)
-│   │   │   ├── accounts.tsx         → /accounts
-│   │   │   ├── agents.tsx           → /agents
-│   │   │   ├── campaigns.index.tsx  → /campaigns
-│   │   │   ├── campaigns.new.tsx    → /campaigns/new
-│   │   │   ├── campaigns.$id.tsx    → /campaigns/:id
-│   │   │   ├── contacts.tsx         → /contacts
-│   │   │   ├── inbox.tsx            → /inbox
-│   │   │   ├── onboarding.tsx       → /onboarding
-│   │   │   └── settings.tsx         → /settings
-│   │   ├── auth.callback.tsx   → /auth/callback (PKCE)
-│   │   └── login.tsx           → /login
-│   ├── styles/
-│   │   └── aimly.css           # Custom design tokens + component classes
-│   ├── types/
-│   │   └── api.ts              # Auto-generated from OpenAPI spec (do NOT edit)
-│   ├── routeTree.gen.ts        # Auto-generated route tree (do NOT edit)
-│   ├── router.tsx              # createRouter() + QueryClient factory
-│   ├── server.ts               # TanStack Start server entry (SSR error handler)
-│   ├── start.ts                # createStart() with middleware
-│   └── styles.css              # Tailwind base + global resets
-├── docs/
-│   ├── KNOWLEDGE.md            # Frontend developer knowledge base (AGENTS.md companion)
-│   ├── error-codes.md          # Backend error code documentation
-│   ├── openapi.json            # Backend OpenAPI spec snapshot (source for type gen)
-│   ├── reconciliation.md       # Frontend ↔ backend reconciliation notes
-│   ├── screen-build-order.md   # Lovable screen build order reference
-│   └── telemetry-events.md     # Telemetry event documentation
-├── design-source/              # Source design files from Lovable (JSX mockups)
-│   └── project/
-│       └── screens/            # Per-screen design reference JSX files
-├── AGENTS.md                   # Lovable AI agent instructions
+│   │   ├── api.ts              # Central fetch wrapper (getAccessToken → Bearer header, error envelope)
+│   │   ├── supabase.ts         # Supabase JS client (lazy, SSR-safe stub)
+│   │   ├── telemetry.ts        # Client-side telemetry event sender → POST /api/v1/telemetry/events
+│   │   ├── error-capture.ts    # Error boundary capture utilities
+│   │   ├── error-codes.ts      # Error envelope parsers
+│   │   ├── error-page.ts       # Error page utilities
+│   │   └── utils.ts            # cn() and other utility helpers
+│   ├── hooks/
+│   │   └── use-mobile.tsx      # Responsive breakpoint hook
+│   ├── routeTree.gen.ts        # Auto-generated route tree (TanStack Router codegen)
+│   ├── router.tsx              # createRouter() factory with QueryClient context
+│   └── server.ts               # Nitro/Cloudflare server entry
+├── design-source/              # Reference designs (JSX mockups, screenshots) — not built code
+├── lovable-handoff/            # Consumed by Lovable during generation (symlinked from backend)
+├── dist/                       # Build output (client/ + server/) — Cloudflare Pages deploy target
+├── wrangler.jsonc              # Cloudflare Workers/Pages deploy config
 ├── components.json             # shadcn/ui config
-├── vite.config.ts              # Vite config (delegates to @lovable.dev/vite-tanstack-config)
-├── tsconfig.json               # TypeScript config
-├── wrangler.jsonc              # Cloudflare Workers deployment config
-├── package.json                # Dependencies
-└── bun.lock                    # Bun lockfile
+├── bunfig.toml                 # Bun package manager config
+├── bun.lock                    # Lockfile
+└── AGENTS.md                   # Instructions for Lovable AI generation
 ```
-
----
-
-## Directory Purposes (Backend)
-
-**`app/`** — The entire application package. All imports are `from app.*`.
-
-**`app/routers/`** — One file per API resource group. Each file: one `router = APIRouter(prefix="...", tags=[...])`. Register new routers in `app/main.py` via `app.include_router(...)`.
-
-**`app/services/`** — Domain logic isolated from HTTP. Background workers live here as module-level singletons (e.g., `queue_worker = QueueWorker()`). Services import from `app/models`, `app/database`, and each other.
-
-**`app/models/__init__.py`** — All ORM models in one file. Adding a model here + a migration file is the full schema change procedure.
-
-**`app/schemas/__init__.py`** — All Pydantic schemas in one file. Mirror the `*Response`/`*Create`/`*Update` pattern.
-
-**`app/utils/`** — Pure stateless helpers. `auth.py` is special: it contains the `auth_dep` FastAPI dependency used by every router.
-
-**`migrations/`** — Each file runs exactly once (tracked by `schema_migrations`). Never delete or rename applied migrations.
-
----
-
-## Directory Purposes (Frontend)
-
-**`src/routes/`** — TanStack Router file-based routes. Route file name encodes the URL path: `_authenticated/campaigns.$id.tsx` → `/campaigns/:id`. `_authenticated.tsx` is a layout route (no URL segment).
-
-**`src/components/`** — Shared React components. `ui/` contains shadcn/ui primitives (generated, not hand-written). Custom app components live at the `components/` top level.
-
-**`src/lib/`** — Framework-level utilities. `api.ts` is the single HTTP gateway — do not call `fetch` directly anywhere else.
-
-**`src/types/api.ts`** — Auto-generated from `docs/openapi.json` via `openapi-typescript`. Regenerate when backend API changes: `npx openapi-typescript docs/openapi.json -o src/types/api.ts`.
-
-**`docs/`** — Frontend developer docs and the OpenAPI spec. `openapi.json` is the source of truth for `src/types/api.ts`.
-
-**`design-source/`** — Original JSX mockup screens from Lovable. Reference only; not imported into the app.
 
 ---
 
 ## Key File Locations
 
-**Backend:**
-- API entry point: `app/main.py`
-- Auth dependency: `app/utils/auth.py::auth_dep`
-- Queue worker: `app/services/queue.py::QueueWorker` + `queue_worker` singleton
-- Campaign enqueue: `app/services/campaign_enqueue.py::CampaignEnqueueWorker`
-- AI reply: `app/services/ai_engine.py::generate_response`
-- Listener container entry: `app/services/listener.py`
-- All ORM models: `app/models/__init__.py`
-- All Pydantic schemas: `app/schemas/__init__.py`
-- Migration files: `migrations/`
-- Config env mapping: `app/config.py`
+**Backend entry points:**
+- `app/main.py` — FastAPI app, lifespan, router registration
+- `app/services/listener.py` — listener container entry (`__main__`)
+- `app/database.py` — `init_db()` + `_apply_migrations()` (startup)
 
-**Frontend:**
-- HTTP client: `src/lib/api.ts::api`
-- Auth client: `src/lib/supabase.ts`
-- API types: `src/types/api.ts`
-- Root route: `src/routes/__root.tsx`
-- Auth guard layout: `src/routes/_authenticated.tsx`
-- Sidebar: `src/components/AppSidebar.tsx`
-- Telemetry: `src/lib/telemetry.ts::track`
+**Auth:**
+- `app/utils/auth.py` — `auth_dep` Depends, `AuthCtx`, JWT verify, API key verify, JWKS cache
+
+**Core workers (all started in `app/main.py` lifespan):**
+- `app/services/queue.py` — outbound message rate-limited send loop
+- `app/services/campaign_enqueue.py` — contact → queue row generator
+- `app/services/contact_check_worker.py` — phone checker orchestrator
+- `app/services/checker.py` — actual Telethon phone resolve logic
+- `app/services/warmup.py` — inter-account AI warmup worker
+- `app/services/kb_ingest_worker.py` — document → chunk → embed pipeline
+
+**AI layer:**
+- `app/services/ai_engine.py` — OpenAI chat wrapper, built-in tools, function dispatch
+- `app/services/kb_search.py` — pgvector search, called from ai_engine tool
+- `app/services/kb_ingest.py` — text extract + chunk + embed (used by worker)
+
+**Migrations:**
+- `migrations/_schema_migrations.sql` — bootstrap tracking table (always runs first)
+- `migrations/NNN_short_name.sql` — numbered migrations applied in lexical order
+
+**Tests:**
+- `tests/conftest.py` — test DB setup, drop-guard (`RuntimeError` if no test overlay)
+- `tests/utils/openai_mocks.py` — shared OpenAI stubs
+- `docker-compose.test.yml` — ephemeral `db-test` (tmpfs), overrides DATABASE_URL
+
+**Frontend API client:**
+- `src/lib/api.ts` — wraps all backend calls with Supabase JWT auth header
+- `src/lib/supabase.ts` — Supabase JS client (browser-only, SSR stub)
+
+**Frontend routes (all behind `_authenticated` guard):**
+- `src/routes/_authenticated/campaigns.$id.tsx` — campaign detail with pool health
+- `src/routes/_authenticated/inbox.tsx` — conversation inbox
+- `src/routes/_authenticated/accounts.tsx` — sender management + onboarding
 
 ---
 
 ## Naming Conventions
 
 **Backend files:**
-- Module files: `snake_case.py`
-- Router files named by resource: `campaigns.py`, `senders.py`
-- Service files named by concern: `queue.py`, `ai_engine.py`, `telegram.py`
+- Routers: `app/routers/{feature}.py` — snake_case, one router per domain
+- Services: `app/services/{service_name}.py` — snake_case
+- Workers: class named `{Name}Worker` (e.g. `QueueWorker`, `CampaignEnqueueWorker`) with `start()`/`stop()` methods; module-level singleton instance
 
-**Backend Python:**
-- Classes: `PascalCase` (e.g., `QueueWorker`, `AuthCtx`)
-- Functions/methods: `snake_case`
-- Constants: `UPPER_SNAKE_CASE` (e.g., `MIN_SEND_INTERVAL`, `FLOOD_HARD_THRESHOLD`)
-- Private helpers: leading underscore (e.g., `_apply_migrations`, `_check_rate_limits`)
+**Migrations:**
+- Format: `NNN_short_name.sql` where NNN is zero-padded 3-digit sequence (e.g. `042_kb_id_server_defaults.sql`)
+- Bootstrap exception: `_schema_migrations.sql` (underscore prefix sorts first, never tracked in the table)
+- Must be idempotent: `IF NOT EXISTS`, `DO $$ EXCEPTION duplicate_object $$`, `ON CONFLICT DO NOTHING`
+
+**ORM models:**
+- All in `app/models/__init__.py`
+- Class names: PascalCase (e.g. `CampaignSender`, `WarmupSession`, `KbChunk`)
+- Enums: Python `enum.Enum` subclasses, `SQLEnum` for DB storage
 
 **Frontend files:**
-- Route files: TanStack Router convention — `_layout.tsx`, `resource.index.tsx`, `resource.$param.tsx`
-- Component files: `PascalCase.tsx` (e.g., `AppSidebar.tsx`, `EditCampaignModal.tsx`)
-- Lib files: `kebab-case.ts` (e.g., `error-codes.ts`, `error-capture.ts`)
-
-**Frontend TypeScript:**
-- Components: `PascalCase` function components
-- Hooks: `use` prefix (e.g., `use-mobile.tsx`)
-- Types derived from API: `type Campaign = components["schemas"]["CampaignResponse"]`
+- Routes: file path = URL path (`campaigns.$id.tsx` → `/campaigns/:id`)
+- Components: PascalCase (`EditCampaignModal.tsx`)
+- Utilities: camelCase (`api.ts`, `supabase.ts`)
 
 ---
 
 ## Where to Add New Code
 
-### New Backend API Endpoint
+**New API endpoint:**
+1. Add router file `app/routers/{feature}.py` with `APIRouter(prefix="/api/v1/{feature}", tags=[...])`
+2. Import and register in `app/main.py` via `app.include_router(routers.{feature}.router)`
+3. Add Pydantic schemas to `app/schemas/__init__.py` (or new `app/schemas/{feature}.py`)
+4. All endpoints must use `Depends(auth_dep)` and scope queries with `.where(Model.workspace_id == ctx.workspace_id)`
 
-1. Add Pydantic schemas to `app/schemas/__init__.py`
-2. Create or extend a router file in `app/routers/`
-3. Register the router in `app/main.py` via `app.include_router(...)`
-4. If new DB columns needed: add migration `migrations/NNN_short_name.sql` (idempotent)
-5. Add/update ORM model in `app/models/__init__.py` if new table
+**New ORM model:**
+1. Add class to `app/models/__init__.py` (inherits `Base`)
+2. Use `server_default=text("gen_random_uuid()")` on UUID PKs for raw-INSERT compatibility
+3. Add a migration `migrations/NNN_short_name.sql` if `create_all` won't fully cover it (indexes, FK constraints, enum values, etc.)
+4. Migration MUST be idempotent
 
-### New Background Worker
+**New migration:**
+1. Create `migrations/NNN_short_name.sql` (NNN = next number in sequence)
+2. Use `IF NOT EXISTS` / `DO $$ EXCEPTION duplicate_object $$`
+3. Rebuild API: `docker compose up -d --build api` — applier picks it up on startup
 
-1. Create service file in `app/services/` following the `QueueWorker` pattern (class with `start()`/`stop()`, `asyncio.Task`, `_running` flag)
-2. Import and register in `app/main.py` lifespan (startup + shutdown)
-3. Export a module-level singleton: `worker_name = WorkerName()`
+**New background worker:**
+1. Create `app/services/{worker_name}.py` with a class following `QueueWorker`/`CampaignEnqueueWorker` pattern
+2. Add `start()`/`stop()` methods; `stop()` should cancel the asyncio task and await it
+3. Wire in `app/main.py` lifespan: call `worker.start()` in startup block, `await worker.stop()` in shutdown block
 
-### New Frontend Route (Screen)
+**New frontend screen:**
+1. Create `src/routes/_authenticated/{screen}.tsx` — TanStack Router auto-discovers it
+2. Add API calls via `src/lib/api.ts` wrapper (not raw `fetch`)
+3. Add route link to `src/components/AppSidebar.tsx`
 
-1. Create `src/routes/_authenticated/<name>.tsx` (or `<name>.index.tsx` for nested)
-2. Run `bun run codegen` (or the equivalent route-tree generation command) to update `src/routeTree.gen.ts`
-3. Add nav link to `src/components/AppSidebar.tsx`
-
-### New Frontend API Call
-
-Use `api<T>("/api/v1/resource", opts)` from `src/lib/api.ts`. Never call `fetch` directly. Type the response using `components["schemas"]["..."]` from `src/types/api.ts`.
-
-### New Migration
-
-1. Create `migrations/NNN_short_name.sql` (increment NNN from latest)
-2. Write idempotent SQL: `CREATE TABLE IF NOT EXISTS ...`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...`
-3. Rebuild API container: `docker compose up -d --build api` — applier runs automatically on startup
+**Shared utilities:**
+- Phone/identity helpers: `app/utils/phone.py`
+- Auth helpers: `app/utils/auth.py` (add only cross-cutting auth primitives)
 
 ---
 
 ## Special Directories
 
+**`lovable-handoff/` (backend):**
+- Purpose: OpenAPI spec + screen contracts consumed by Lovable during frontend generation
+- Generated: Partially (openapi.json is maintained by hand/tooling)
+- Committed: Yes — serves as the frontend ↔ backend contract
+
 **`migrations/`:**
-- Generated: No (hand-written)
-- Committed: Yes
-- Delete/rename: Never (breaks idempotency tracking)
+- Generated: No — hand-written SQL
+- Committed: Yes — required in Docker image (auto-applier reads from filesystem)
 
-**`src/routeTree.gen.ts`:**
-- Generated: Yes (TanStack Router codegen)
-- Committed: Yes (required for builds)
-- Edit manually: No
+**`dist/` (frontend):**
+- Generated: Yes — `bun run build` output
+- Committed: Yes (currently) — Cloudflare Pages deploy artifact
 
-**`src/types/api.ts`:**
-- Generated: Yes (openapi-typescript from `docs/openapi.json`)
-- Committed: Yes
-- Edit manually: No
+**`tests/__pycache__/`, `app/**/__pycache__/`:**
+- Generated: Yes
+- Committed: No (gitignored)
 
-**`src/components/ui/`:**
-- Generated: Yes (shadcn/ui CLI)
-- Committed: Yes
-- Edit manually: Only if customizing a specific primitive
-
-**`.planning/codebase/`:**
-- Generated: Yes (GSD map-codebase command)
-- Committed: Yes
-- Edit manually: Only to add notes; overwritten on next `map-codebase`
+**`.planning/`:**
+- Purpose: GSD planning documents (phases, roadmap, codebase maps)
+- Committed: Yes (to backend repo only)
 
 ---
 
-*Structure analysis: 2026-06-18*
+*Structure analysis: 2026-06-30*

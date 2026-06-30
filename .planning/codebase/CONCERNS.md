@@ -1,274 +1,250 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-06-18
-**Scope:** Backend (`/root/apps/aimly/tg-outreach`) + Frontend (`/root/apps/aimly/aimly-tg-outreach`)
+**Analysis Date:** 2026-06-30
 
 ---
 
-## Backend
+## CRITICAL — Blocking for External Customers
 
-### Tech Debt
+### No Authentication / Authorization Beyond Single-Workspace Prototype
 
-**App-level workspace isolation instead of Postgres RLS — ~30 scattered TODO markers:**
-- Issue: Every router and service filters `WHERE workspace_id = :wid` in application code. Across the entire backend there are ~30 `# TODO(v2-rls): replaced by RLS policy` comments marking code that must be manually updated when RLS lands. A new endpoint that forgets the filter leaks all workspace data silently.
-- Files: `app/routers/agents.py`, `app/routers/campaigns.py`, `app/routers/conversations.py`, `app/routers/contacts.py`, `app/routers/folders.py`, `app/routers/onboarding.py`, `app/routers/senders.py`, `app/routers/workspace.py`, `app/routers/analytics.py`, `app/routers/send.py`, `app/services/onboarding_state.py`, `app/services/rotation.py`, `app/utils/auth.py`
-- Impact: Isolation is correct today because it is consistently applied, but adding any new resource endpoint risks omitting the filter. Correct fix (Postgres RLS) deferred to v2.
-- Fix approach: Implement `SET app.workspace_id` per-request session variable + row-level security policies on all tenant-scoped tables. Replace all application-level `AND workspace_id = :wid` filters.
+- Issue: The system authenticates users via Supabase JWT and maps them to a `workspace_id`, but there is **no ownership enforcement at the DB layer** (no Postgres RLS). Every endpoint manually appends `WHERE workspace_id = :wid` to every query. All 20+ `TODO(v2-rls)` comments across the codebase mark locations where these app-level filters will be replaced by RLS policies.
+- Files: `app/utils/auth.py:32`, `app/routers/campaigns.py:119,157,175,196,566`, `app/routers/conversations.py:77,413,514,573`, `app/routers/folders.py:93,150,184,231,284`, `app/routers/contacts.py:80,192,386,463,518`, `app/routers/agents.py:123,174,198`, `app/routers/send.py:84`, `app/routers/onboarding.py:146,218,736,777`, `app/routers/workspace.py:115,137,166,203,287,322`, `app/services/rotation.py:67`, `app/services/onboarding_state.py:118`
+- Impact: A single code bug (missing `workspace_id` filter in any query) silently exposes another tenant's data. The surface area is large — every SELECT in every router. Current state is safe for a single-tenant deploy but is a hard blocker for multi-tenant external customers.
+- Fix approach: Implement Postgres RLS policies on all tenant-scoped tables (`ALTER TABLE … ENABLE ROW LEVEL SECURITY; CREATE POLICY …`) gated on a session variable set at connection time. After RLS is in place, remove the manual `WHERE workspace_id = :wid` clauses and delete the `TODO(v2-rls)` markers.
 
-**`python-jose` is deprecated — JWT library used in production:**
-- Issue: `requirements.txt` pins `python-jose[cryptography]==3.3.0`. The library is unmaintained and the codebase itself notes migration to `PyJWT` as `TODO(v2)`. A test (`test_phase5_1_auth_unchanged.py`) actively guards against the migration happening accidentally.
-- Files: `app/utils/auth.py` line 46, `requirements.txt` line 17
-- Impact: Security vulnerabilities in `python-jose` will not be patched upstream. No CVEs known as of analysis date, but the window grows over time.
-- Fix approach: Migrate to `PyJWT` (drop-in for HS256 path; JWKS/ES256 path uses `cryptography` primitives directly). The test guard in `test_phase5_1_auth_unchanged.py` must be updated as part of migration.
+---
 
-**`MAX_NEW_CONTACTS_PER_HOUR = 15` hardcoded in queue worker — not configurable per workspace:**
-- Issue: `app/services/queue.py` line 50 hardcodes `MAX_NEW_CONTACTS_PER_HOUR = 15` as a module-level constant. Per-minute/hour/day rates were moved to per-sender DB columns (`rate_per_min/hour/day`), but the unique-contacts-per-hour cap was not.
-- Files: `app/services/queue.py` line 50, `_check_rate_limits()` method
-- Impact: All workspaces and all senders share the same 15 unique contacts/hour limit. A "safe" workspace with slower campaigns is constrained equally with a high-volume one.
-- Fix approach: Add `max_new_contacts_per_hour` column to `senders` table (migration), read from DB in `_check_rate_limits()` like `rate_per_min/hour/day`.
+### API Key Revocation Has Up to 5-Minute Cache Lag
 
-**`spend_usd_cents` always returns 0 — LLM cost tracking is a stub:**
-- Issue: `app/routers/analytics.py` line 457 always returns `spend_usd_cents=0`. Per-model pricing is explicitly noted as deferred to v2.
-- Files: `app/routers/analytics.py`, `app/schemas/__init__.py` line 921
-- Impact: No cost visibility for any workspace. As OpenAI usage grows, operators cannot identify runaway campaigns or bill clients proportionally.
-- Fix approach: Store model name + token counts in `llm_calls` (already logged). Add a price lookup table or config dict keyed by model name. Compute spend on query.
+- Issue: Workspace API keys are cached in an in-process LRU dict (`_TOKEN_CACHE`) for 5 minutes (`_TOKEN_CACHE_TTL_SECONDS = 300`). A revoked key (`revoked_at` set in DB) continues to authenticate for up to 5 minutes per api container process. The cache is not shared between containers, so a multi-container deploy has independent caches.
+- Files: `app/utils/auth.py:61-98`
+- Impact: Immediately revoked API keys remain active for up to 5 minutes. Acceptable for v1 single-container, unacceptable for revoke-on-breach scenarios with multi-container scale.
+- Fix approach: Add a `revoked_at` check on cache hit (cheap DB lookup or pubsub invalidation), or reduce TTL to ~30s and accept the CPU cost at current scale.
 
-**`campaigns.auto_fill` is a stub — returns canned defaults:**
-- Issue: `POST /api/v1/campaigns/auto-fill` returns hardcoded default values regardless of the `brief` body parameter sent by the UI. The LLM-driven implementation is deferred.
-- Files: `app/routers/campaigns.py` lines 420–460
-- Impact: The AI co-pilot button in campaign builder appears functional but produces meaningless output. User trust issue if discovered.
-- Fix approach: Implement actual GPT call using `brief` text to generate campaign fields. Gated behind the core-value KPI telemetry proving user demand.
+---
 
-**Webhook callbacks have no HMAC signature — easily spoofed by receivers:**
-- Issue: `app/services/webhook_notify.py` line 4 explicitly notes `No HMAC (deferred to v2)`. Both the campaign signal webhooks (`lead/handoff/finish`) and the queue callback (`callback_url`) POST to external URLs without any signature header.
-- Files: `app/services/webhook_notify.py`, `app/services/queue.py` `_fire_callback()`
-- Impact: Webhook receivers have no way to verify the payload came from this platform. Enables replay attacks and spoofed conversions.
-- Fix approach: Add `X-Aimly-Signature: sha256=<hmac>` header using a per-workspace secret. Derive secret from `workspace_api_keys` or add a dedicated `webhook_secret` column to `workspaces`.
+### JWT Library (`python-jose`) Is Deprecated
 
-**Onboarding state persisted in DB but `TelegramClient` objects still in-process memory:**
-- Issue: `app/services/onboarding_state.py` stores session state in the `onboarding_sessions` DB table (migrated from the old in-memory dict), but `TelegramClient` instances (which hold live TCP connections to Telegram) are still held in-process via `_clients` dict.
-- Files: `app/services/onboarding_state.py` lines 1–50
-- Impact: Container restart during onboarding loses the live client. Multi-container deploys (load balancer) will fail mid-flow if the next request hits a different instance that has no client object for the session.
-- Fix approach: Reconstruct client from persisted `phone`/session state on each request within the same pod. Document that onboarding flows require session affinity if running multiple API instances.
+- Issue: `python-jose==3.3.0` is used for JWT verification. The library is unmaintained and has known CVEs. The codebase has a `TODO(v2)` comment to migrate to `PyJWT`.
+- Files: `requirements.txt:17`, `app/utils/auth.py:31`
+- Impact: Potential security vulnerabilities in JWT parsing. No immediate known exploits, but the library is not patched.
+- Fix approach: Replace `from jose import jwt` with `PyJWT` (`pip install PyJWT[crypto]`). The ES256/JWKS path and HS256 fallback both have PyJWT equivalents.
 
-**`listener.py` creates its own SQLAlchemy engine — duplicate connection pool:**
-- Issue: `app/services/listener.py` lines 65–70 create a separate `create_async_engine` and `async_sessionmaker` rather than importing from `app/database.py`. The listener container has its own pool of up to 5 connections independent of the API pool.
-- Files: `app/services/listener.py` lines 65–70
-- Impact: Two independent connection pools to the same Postgres. On a constrained VPS this doubles connection overhead. Cannot centrally tune pool settings via `settings.max_pool_size`.
-- Fix approach: Export a reusable engine factory from `app/database.py` that both the API and listener import.
+---
 
-**`listener.py` logging hardcoded to `DEBUG` level:**
-- Issue: `app/services/listener.py` line 59 calls `logging.basicConfig(level=logging.DEBUG, ...)` unconditionally. This ignores the `settings.log_level` setting and emits verbose SQL + Telethon internals in production.
-- Files: `app/services/listener.py` line 59
-- Impact: Listener log volume is uncontrolled. Sensitive data (message text, phone numbers) appears in DEBUG-level traces that may be shipped to log aggregators.
-- Fix approach: Replace hardcoded `DEBUG` with `getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)` matching the API pattern.
+## HIGH — Operational Risks
 
-**`_get_long_pause_seconds` re-randomises threshold on every call — statistically broken:**
-- Issue: `app/services/queue.py` `_get_long_pause_seconds()` calls `random.randint(LONG_PAUSE_EVERY_MIN, LONG_PAUSE_EVERY_MAX)` on every invocation and then checks `recent_count % pause_every == 0`. Because `pause_every` changes each time, the modulo condition rarely holds; long pauses fire far less often than the human-behaviour simulation intends.
-- Files: `app/services/queue.py` lines 246–269
-- Impact: Anti-ban human behaviour simulation weaker than designed. Increased long-term ban risk at scale.
-- Fix approach: Persist `next_long_pause_at` timestamp per sender (in `senders` table or a side table). Compute once at the end of each long pause, not on every tick.
+### `docker compose down -v` Wipes Production Data Volume
 
-**`message_queue` table grows unboundedly — no archival:**
-- Issue: Sent and failed items are never deleted. Rate-limit queries count `WHERE sender_id = :sid AND status = 'sent' AND finished_at >= :since` against the full table on every tick.
-- Files: `app/services/queue.py` `_check_rate_limits()`
-- Impact: After 6–12 months at scale, rate-limit queries on unindexed full scans degrade performance noticeably.
-- Fix approach: Add a nightly archival job that moves `status IN ('sent','failed') AND finished_at < NOW() - INTERVAL '30 days'` rows to a separate `message_queue_archive` table. Existing composite index in `migrations/010_missing_indexes.sql` helps but does not solve growth.
+- Issue: The production PostgreSQL data lives in a named Docker volume (`outreach_platform_db_data`). Running `docker compose down -v` (or `docker compose down` followed by volume pruning) on the production host **permanently deletes the database**. There is no guard preventing this.
+- Files: `docker-compose.yml` (volume definition), `/root/apps/aimly/tg-outreach/backup.sh`
+- Impact: Total data loss. Recovery requires latest backup from `/root/backups/tg-outreach/` which has 14-day retention. Any data since the last backup (cron runs at 03:05 daily) is lost permanently.
+- Fix approach: Daily backups are in place (cron `5 3 * * *`). Document the danger prominently. Consider renaming the volume to something that does not look like a test volume. Add a pre-hook or runbook note to **never** use `-v` on the production host.
 
-### Known Bugs
+---
 
-**`PEER_FLOOD` event fires no external alert — silent account suspension:**
-- Symptoms: When a sender receives `PEER_FLOOD`, the queue marks tasks paused 24h and logs `CRITICAL` only. There is no webhook, email, or Telegram notification to operators.
-- Files: `app/services/queue.py` lines 688–713, line 701 has `# TODO: add external alert`
-- Trigger: Telegram spam score threshold exceeded on any sender.
-- Workaround: Monitor `docker logs` manually for CRITICAL entries.
+### Old Projects (`telegram-api`, `outreach-platform`) Still Running Risk
 
-**`agent_deleted`, `agent_duplicated`, `agent_updated`, `campaign_stopped` telemetry events return 400:**
-- Symptoms: Frontend fires these four event names via `track()` calls; the backend `_EVENT_WHITELIST` does not include them. The `sendBeacon` call silently returns 400 (swallowed client-side), but the events are lost and produce a schema-drift warning in logs.
-- Files: `app/routers/telemetry.py` `_EVENT_WHITELIST`, `app/schemas/__init__.py`
-- Trigger: User deletes/duplicates an agent, or stops a campaign in the UI.
-- Workaround: None — telemetry data for these actions is permanently missing.
-- Fix approach: Add the four missing events to `_EVENT_WHITELIST` in `app/routers/telemetry.py`.
+- Issue: `/root/apps/telegram-api/` and `/root/apps/outreach-platform/` are stopped (`restart: "no"` in their docker-compose), but they still exist on disk and share the same 13 Telegram account session files. If either is accidentally restarted (e.g. `docker compose up` in the wrong directory), their listeners will conflict with `tg-outreach` listener, causing double AI replies and session conflicts.
+- Files: `/root/apps/telegram-api/docker-compose.yml`, `/root/apps/outreach-platform/docker-compose.yml`
+- Impact: Telegram session conflicts → account bans; duplicate AI responses to users. `/root/apps/outreach-platform` still has `restart: unless-stopped` (NOT `restart: no`), making it a live risk.
+- Fix approach: Per CLAUDE.md task list — verify sessions migrated, optionally backup DB history, then delete both directories. Until deleted, add a `restart: "no"` override to `/root/apps/outreach-platform/docker-compose.yml` immediately.
 
-**`allow_recontact` / `recontact_min_age_days` campaign fields not exposed in API schema — frontend cannot set them:**
-- Symptoms: `campaigns.allow_recontact` column exists (migration 026) and is read by `campaign_enqueue.py` and `queue.py`, but is absent from `CampaignCreate` / `CampaignUpdate` Pydantic schemas. No frontend control exists. The field defaults to `false`.
-- Files: `app/schemas/__init__.py` `CampaignCreate`, `CampaignUpdate`; `app/models/__init__.py` line 506
-- Impact: Re-contact policy cannot be changed from the UI or API. Documented feature is silently inaccessible.
-- Fix approach: Add `allow_recontact: bool = False` and `recontact_min_age_days: int = 30` to `CampaignCreate`/`CampaignUpdate` schemas and expose in the router PATCH handler.
+---
 
-### Security Considerations
+### ORM `default=` vs `server_default=` Drift — Recurring Pattern
 
-**`.env` file committed to frontend git history (Supabase anon key exposed):**
-- Risk: `/root/apps/aimly/aimly-tg-outreach/.env` is tracked in git (confirmed via `git ls-files`). It contains `VITE_SUPABASE_ANON_KEY` and `VITE_SUPABASE_URL`. The anon key is a publishable key by Supabase design, but committing the file sets a dangerous precedent and leaks the Supabase project URL to anyone with repo access.
-- Files: `/root/apps/aimly/aimly-tg-outreach/.env`
-- Current mitigation: Anon key is low-risk (public-facing), but `.env` should never be committed.
-- Recommendations: Add `.env` to `.gitignore` immediately (currently only `*.local` is ignored). Rotate the anon key in Supabase dashboard to be safe. Use Lovable project Settings → Environment Variables for build-time secrets instead.
+- Issue: SQLAlchemy `default=` (Python-side) does NOT add a `DEFAULT` clause to the physical column when `create_all` is called. If a raw SQL `INSERT` omits that column, it hits `NotNullViolation`. This has caused production incidents twice: `warmup_sessions.status`/`messages_sent` (migration 040) and `kb_chunks.id`, `kb_documents.id`, `knowledge_bases.id` (migration 042). The `sender_restriction_events.id` column was also affected (fixed earlier).
+- Files: `app/models/__init__.py` (all models with `default=` instead of `server_default=`), `migrations/040_warmup_sessions_defaults_drift.sql`, `migrations/042_kb_id_server_defaults.sql`
+- Impact: Raw SQL inserts in background workers crash with `IntegrityError` on newly-built tables. Pattern will recur with every new table that uses `default=` on a NOT NULL column and has a background worker inserting via raw `text()`.
+- Fix approach: Audit every `Column(..., nullable=False, default=X)` in `app/models/__init__.py` and ensure it also has `server_default=X` (or the equivalent cast). New models must use `server_default` on all NOT NULL columns. Failing that, always pass explicit values in raw SQL inserts.
 
-**Callback URLs for queue items are not validated — SSRF risk:**
-- Risk: `callback_url` in `POST /api/v1/send` body is stored as-is and the queue worker POSTs sensitive data (phone, Telegram ID, sender slug) to it. An attacker who can enqueue a message (via a compromised `wsk_` key) can exfiltrate data to any URL including internal network addresses.
-- Files: `app/schemas/__init__.py` `SendRequest.callback_url`, `app/services/queue.py` `_fire_callback()`
-- Current mitigation: None. Any HTTPS or HTTP URL is accepted.
-- Recommendations: Validate callback URLs are HTTPS. Add per-workspace callback URL allowlist. Block RFC-1918 addresses (SSRF mitigation).
+---
 
-**Per-workspace API key revocation is not immediate — 5-minute cache lag:**
-- Risk: After `DELETE /api/v1/workspace/api-keys/{key_id}`, the revoked key continues to authenticate for up to 5 minutes while it lives in the in-process token cache.
-- Files: `app/utils/auth.py` `_TOKEN_CACHE`, `_TOKEN_CACHE_TTL_SECONDS = 300.0`
-- Current mitigation: Accepted risk documented in code comments. Multi-container: each container has its own cache, so revocation lag varies.
-- Recommendations: For v2 multi-container: use Redis pubsub for immediate revocation propagation. For v1: reduce TTL to 60s.
+### Prod DB Can Be Wiped by Tests If Overlay Is Not Used
 
-**Telegram session strings stored encrypted but proxy credentials stored in plaintext JSONB:**
-- Risk: `senders.proxy` stores SOCKS5 credentials (host, port, username, password) as unencrypted JSONB. DB dump leaks proxy passwords.
-- Files: `app/models/__init__.py` `Sender.proxy`
-- Current mitigation: Telegram sessions are encrypted (`app/services/encryption.py`). Proxy passwords are not.
-- Recommendations: Encrypt `proxy.password` using the same Fernet scheme before storing.
+- Issue: `tests/conftest.py` contains `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` at line 100 and 262. A guard at lines 40-62 checks DSN markers, but this requires discipline: running `docker compose run --rm api pytest` (without the test overlay) routes to the prod DB and has historically wiped it (2026-05-26 incident, all 22 relations recreated at 13:18:21 UTC with identical `file_mtime`).
+- Files: `tests/conftest.py:36-100`, `docker-compose.test.yml`
+- Impact: Complete prod data loss. The guard exists but relies on the developer always using the overlay.
+- Fix approach: Guard is present and documents the risk. Strictly enforce that all test runs go through `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest`. Consider adding a hostname check as a second guard (e.g. refuse to run if `$HOSTNAME` matches the production container name).
 
-**No rate limiting on onboarding endpoints — SMS spam vector:**
-- Risk: `POST /api/v1/onboarding/start` accepts any phone number and triggers an SMS code send. No per-IP or per-phone rate limiting at the application layer.
-- Files: `app/routers/onboarding.py`
-- Current mitigation: Telegram FloodWait fires per-session. No application-layer defence.
-- Recommendations: Add FastAPI rate-limit middleware (e.g., `slowapi`) on onboarding start endpoint. Apply per-IP and per-phone limits.
+---
 
-### Performance Bottlenecks
+### Message Queue Templates Snapshot at Enqueue Time
 
-**Queue tick: 4 separate `COUNT(*)` queries per sender per tick — no batching:**
-- Problem: `_check_rate_limits()` executes 4 sequential SQL queries (msgs last minute, msgs last hour, unique contacts last hour, msgs last 24h) for every eligible sender on every 3-second tick. At 10 senders this is 40 queries every 3 seconds.
-- Files: `app/services/queue.py` lines 399–491
-- Cause: Each count uses a separate DB round-trip.
-- Improvement path: Combine into a single CTE query returning all four counts in one round-trip.
+- Issue: `campaign_enqueue.py` renders `message_template` into `message_queue.message_text` at enqueue time. Editing the campaign template after items are already enqueued does **not** update pending queue rows. The opener is never re-rendered unless a manual re-render call is made (a utility exists in `campaign_enqueue.py:348` but is not exposed as a UI action).
+- Files: `app/services/campaign_enqueue.py:14`, `app/routers/campaigns.py:656`
+- Impact: Template edits during an active campaign silently have no effect on already-pending sends. No error, no warning. Users believe they changed the message but the old text still goes out.
+- Fix approach: Expose a `POST /campaigns/{id}/re-render-pending` endpoint or automatically re-render on PATCH to `message_template`. At minimum, display a UI warning when the template is edited while the campaign has pending queue items.
 
-**Inbox polling at 10-second interval — high read amplification:**
-- Problem: Frontend `src/routes/_authenticated/inbox.tsx` uses `refetchInterval: 10_000` for conversation list and `refetchInterval: 15_000` for message threads. No WebSocket or SSE channel exists. Each polling call hits `GET /api/v1/conversations` which runs a JOIN + COUNT query.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/inbox.tsx` lines 83, 625, 634
-- Cause: No push mechanism; polling is the only option.
-- Improvement path: Add Postgres `LISTEN/NOTIFY` + SSE endpoint on the API for inbox updates. Reduce polling interval as interim measure only if DB is under pressure.
+---
 
-### Fragile Areas
+## HIGH — Checker Pool Fragility
 
-**`TelegramListener` — one exception kills all accounts:**
+### Checker Pool Shadow-Ban / False-Negative Saga
+
+- Issue: Checker accounts that perform bulk `ResolvePhoneRequest` receive a Telegram-side shadow-ban on the contacts API. Two throttle modes exist: soft burst (~45-50 resolves → rare false-negatives, recovers in minutes) and hard shadow-ban (thousands/day → ~0.07% hit-rate, recovers in days). `is_registered=False` conflates four distinct causes: (1) genuinely unregistered, (2) privacy-hidden account, (3) throttled checker, (4) US/cold-account resolver (always returns false for `+79…` numbers). Phase 14 mitigations are deployed but the pool is fragile.
+- Files: `app/services/checker.py` (full file), `app/services/contact_check_worker.py`, `app/data/control_set_known_live.txt`, `.planning/notes/checker-false-negatives.md`, `.planning/notes/checker-problem-and-history.md`
+- Impact: False-negatives silently discard real leads. The single historic checker `sender-8428118140` reported 2.5% registered vs the true ~26% — projecting ~3,600+ discarded live leads from a 14k contact base. All current checkers are parked as of 2026-06-30 (see memory); no new contacts can be resolved until fresh warmed RU checkers are added.
+- Current mitigations: burst cap (30), post-batch rest (`checker_rest_until`), probe-burn escalating backoff (`checker_trip_count`, migration 036), inline throttle detector, restriction-gated selection (Phase 14 RESV-05).
+- Remaining risks: (a) Fresh checkers must be RU-registered accounts (`+79…`); US/cold accounts return 100% false-negative. (b) `contacts_cache` is workspace-isolated but **not** sender-isolated — a poisoned checker's false `not_registered` rows persist in the workspace cache even after the checker is retired; rollback to `pending` is partially ineffective because the stale cache row can be served to the next checker on cache hit. Purge false cache rows explicitly when retiring a checker.
+- Fix approach: Add a cache-poisoning cleanup path: when a checker transitions to `spam_limited`, DELETE its `contacts_cache` rows where `is_registered=false` within the workspace (matching the manual fix done 2026-06-26). Document the "only warmed RU accounts" constraint prominently in onboarding UI.
+
+---
+
+### `is_registered` Field Name Is Misleading
+
+- Issue: `ContactCache.is_registered` and `Contact.tg_status='not_registered'` mean "not resolvable by this checker via phone" — NOT "definitely no Telegram account". Privacy-hidden accounts score `false`. The field name implies definitiveness that it cannot provide.
+- Files: `app/models/__init__.py:197` (`ContactCache.is_registered`), `app/models/__init__.py:489` (`Contact.tg_status`), `app/services/checker.py:15-42`
+- Impact: Any analytics, dedup, or "dead number" logic built on `is_registered=false` ≡ "no TG account" will discard real users. Currently no analytics dashboard uses it directly, but the naming will mislead future developers.
+- Fix approach: Rename `is_registered` to `phone_resolvable` or add a prominent DB comment. For `tg_status`, rename `not_registered` to `not_resolvable` in a future migration (requires updating all callers).
+
+---
+
+## MEDIUM — Technical Debt
+
+### `MAX_NEW_CONTACTS_PER_HOUR = 15` Still Hardcoded in Queue Worker
+
+- Issue: The per-sender maximum new contacts per hour (`MAX_NEW_CONTACTS_PER_HOUR = 15`) is hardcoded as a module-level constant in `queue.py`. The per-sender send rates (`rate_per_min`, `rate_per_hour`, `rate_per_day`) were moved to DB columns in Phase 2, but this contact-contact limit was not.
+- Files: `app/services/queue.py:52`, `app/services/queue.py:634`
+- Impact: Cannot configure different contact-rate limits per workspace or per sender without a code change and redeploy. Blocks workspace-level policy configuration needed for v1 external customers.
+- Fix approach: Add a `max_new_contacts_per_hour` column to `senders` (or `campaigns`) with a `server_default='15'`. Read it alongside `rate_per_min/hour/day` in `_check_rate_limits`.
+
+---
+
+### `listener.py` Is a 1,773-Line Monolith
+
+- Issue: `app/services/listener.py` is the largest file at 1,773 lines. It handles Telegram event registration, AI response dispatch, conversation upsert, warmup traffic filtering, restriction reconcile sweep, and restriction detection — all in one file.
 - Files: `app/services/listener.py`
-- Why fragile: All sender clients run as asyncio tasks in a single process. An unhandled error in one client's event handler propagates through `asyncio.gather`. `ResilientTelegramClient` only wraps `GetDifference` — other unexpected TL types still propagate.
-- Safe modification: Wrap each `start_client` task with a per-client `try/except Exception` loop that logs and restarts only the affected client. Do not let any single-client error reach the gather level.
-- Test coverage: Tests exist for listener reconcile (`test_listener_reconcile.py`) but not for error propagation paths.
-
-**`_apply_migrations` is fail-fast — a bad migration blocks all API starts:**
-- Files: `app/database.py` `_apply_migrations()`
-- Why fragile: If any migration file fails, the API container exits immediately and Docker Compose restart loops. A syntax error in a new migration file can take the service down until the file is fixed and the container is rebuilt.
-- Safe modification: Always test migration files in the test overlay (`docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_migration_*.py`) before deploying. Never deploy migration files without a corresponding `test_migration_NNN.py` file.
-
-**`create_all` + raw migrations coexist — schema drift risk:**
-- Files: `app/database.py` `init_db()`, `migrations/` directory
-- Why fragile: `Base.metadata.create_all` runs on every startup creating ORM-declared tables. The raw SQL migration applier then runs. If an ORM model adds a column but no corresponding migration file is written, the column exists on fresh DBs (from `create_all`) but not on existing prod DB (migration not applied). The 2026-05-26 incident was caused by the reverse.
-- Safe modification: Every ORM model change must have a corresponding `NNN_*.sql` migration. Use `019_schema_drift_fix.sql` as the precedent pattern.
+- Impact: High cognitive load when modifying any one concern. The warmup/internal-filtering logic at lines 610-700 and the restriction reconcile sweep at ~1,036-1,600 are particularly entangled with unrelated message-routing code.
+- Fix approach: Extract the restriction reconcile sweep into `app/services/restriction_audit.py` or a new `reconcile.py`. Extract warmup/internal filtering into `app/services/internal_filter.py`.
 
 ---
 
-## Frontend
+### `ai_engine.py` Is 1,574 Lines
 
-### Tech Debt
-
-**Lovable-generated commit history has no structured change log:**
-- Issue: All recent frontend commits are authored by `gpt-engineer-app[bot]` with messages like "Changes" or "Добавил кнопку и статус в кампанию". No semantic commit convention.
-- Files: `/root/apps/aimly/aimly-tg-outreach` git log
-- Impact: Cannot audit what changed in a given deploy. Regressions are hard to bisect.
-- Fix approach: Establish human-authored commit convention for feature-level changes. Lovable UI changes can remain bot-authored but should tag the Lovable edit ID in the message (already partially done).
-
-**`telemetry.ts` has duplicate entries in `TelemetryEvent` union type:**
-- Issue: `campaign_launched`, `campaign_paused`, `campaign_resumed` appear twice in the `TelemetryEvent` type definition.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/lib/telemetry.ts` lines 20–26
-- Impact: TypeScript does not error on duplicate union members. The duplication is cosmetic but indicates the file was edited by Lovable without deduplication and masks the total event count.
-- Fix approach: Deduplicate the union type. Run `tsc --noEmit` in CI.
-
-**`inbox.tsx` is 1324 lines — God component:**
-- Issue: The entire inbox UI (conversation list, message thread, AI toggle, LLM trace panel, send form) lives in a single route file.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/inbox.tsx`
-- Impact: Lovable re-generates this file on every UI edit, causing large diffs and high merge conflict risk. Logic is hard to test in isolation.
-- Fix approach: Extract `ConversationList`, `MessageThread`, `SendForm`, and `LLMTracePanel` into separate component files under `src/components/inbox/`.
-
-**No TypeScript strict mode or `noUncheckedIndexedAccess`:**
-- Issue: `tsconfig.json` (not analysed — no file found in frontend root) likely uses Lovable defaults. No evidence of `strict: true` enforced.
-- Files: `/root/apps/aimly/aimly-tg-outreach/` (root tsconfig not located during analysis)
-- Impact: Runtime `undefined` errors that TypeScript would catch under strict mode reach users.
-- Fix approach: Enable `"strict": true` in tsconfig. Fix resulting type errors before enabling in CI.
-
-### Security Considerations
-
-**`.env` committed to git — Supabase project URL and anon key exposed:**
-- Risk: See Backend § Security above. Same file — the frontend repo has `.env` tracked. `VITE_SUPABASE_URL` reveals the Supabase project identifier. `VITE_SUPABASE_ANON_KEY` is a publishable key but its exposure in git history is a security anti-pattern.
-- Files: `/root/apps/aimly/aimly-tg-outreach/.env` (confirmed tracked: `git ls-files` returns `.env`)
-- Current mitigation: `.gitignore` only ignores `*.local` — `.env` is not ignored.
-- Recommendations: `git rm --cached .env`, add `.env` to `.gitignore`, rotate the key, use Lovable environment variable settings instead.
-
-**`VITE_BACKEND_URL` baked into build — requires rebuild to change backend URL:**
-- Issue: `src/lib/api.ts` line 4 reads `import.meta.env.VITE_BACKEND_URL` at build time. The value `https://aimly.agsventurelab.com` is baked into the Cloudflare bundle. Changing the backend URL requires a new Lovable build and Cloudflare deploy.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/lib/api.ts`, `/root/apps/aimly/aimly-tg-outreach/src/lib/telemetry.ts`
-- Impact: No runtime override possible. Any backend migration (domain change, staging environment) requires a full frontend rebuild.
-- Fix approach: For staging, use Cloudflare Pages environment variables. For runtime config, expose a `/api/v1/config` public endpoint returning backend metadata (not practical for Vite; document the rebuild requirement instead).
-
-**Telemetry events sent unauthenticated on `pagehide` (sendBeacon path):**
-- Issue: `src/lib/telemetry.ts` `flush(beacon=true)` uses `navigator.sendBeacon` which cannot set `Authorization` headers. Telemetry events fired on page close are sent without a JWT. The backend `auth_dep` requires auth on `POST /api/v1/telemetry/events`.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/lib/telemetry.ts` lines 57–68
-- Impact: `pagehide` events silently fail with 401. Signup/session-end events are lost.
-- Fix approach: Backend telemetry endpoint should accept an anonymous path for events fired on page unload, or frontend should include the token as a query parameter for the beacon URL (non-ideal but standard workaround).
-
-### Performance Bottlenecks
-
-**Dashboard polls 5 separate endpoints every 30 seconds — fan-out on every refetch:**
-- Problem: `src/routes/_authenticated/index.tsx` has 5 separate `useQuery` hooks each with `refetchInterval: 30_000`. Every 30 seconds the dashboard fires 5 concurrent API calls.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/index.tsx` lines 55–89
-- Cause: No aggregated dashboard endpoint; each card fetches independently.
-- Improvement path: Add `GET /api/v1/analytics/dashboard` that returns all five counts in a single query. The backend `AnalyticsCards` schema already covers most fields.
+- Issue: `app/services/ai_engine.py` is 1,574 lines handling prompt construction, KB search, tool dispatch, LLM call logging, and response parsing.
+- Files: `app/services/ai_engine.py`
+- Impact: Changes to prompt templates require navigating the full file. KB search logic is coupled to response generation.
+- Fix approach: Extract KB search into `app/services/kb_search.py`, prompt-building into `app/services/prompt_builder.py`.
 
 ---
 
-## Frontend ↔ Backend Contract Drift
+### `queue.py` Has Two Separate Transaction Contexts for FloodWait
 
-**4 telemetry events fired by frontend not whitelisted in backend — silent data loss:**
-- Issue: Frontend `TelemetryEvent` type and `track()` calls reference `agent_deleted`, `agent_duplicated`, `agent_updated`, `campaign_stopped`. Backend `_EVENT_WHITELIST` in `app/routers/telemetry.py` does not include these four names.
-- Frontend fires: `src/routes/_authenticated/agents.tsx` lines 57, 66, 262 (`agent_deleted`, `agent_duplicated`, `agent_updated`). `campaign_stopped` is in the type definition but no active `track()` call was found for it.
-- Backend result: 400 `UNKNOWN_EVENT`. `sendBeacon` path swallows silently; regular fetch path also swallows (`.catch(() => undefined)` in telemetry).
-- Impact: Telemetry for agent CRUD actions is permanently missing from `telemetry_events` table.
-- Fix: Add the three active events (`agent_deleted`, `agent_duplicated`, `agent_updated`) to `_EVENT_WHITELIST` in `app/routers/telemetry.py`. Decide whether `campaign_stopped` should be added as well. This is a 3-line fix.
-
-**`message` vs `message_text` field name in `/conversations/{id}/send`:**
-- Issue: OpenAPI spec defines `message` as the field name for `SendMessageFromUIRequest`. Lovable's generated client sends `message_text`. Backend works around this via `AliasChoices("message", "message_text")` in `app/schemas/__init__.py` line 770.
-- Files: `app/schemas/__init__.py`, `/root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/inbox.tsx` (sends the field), `docs/openapi.json`
-- Impact: The mismatch is patched and functional, but if the frontend ever regenerates its OpenAPI client from `docs/openapi.json` it will send `message` (canonical), while any handwritten frontend code may send `message_text`. Two code paths for the same field increase fragility.
-- Fix: Update `docs/openapi.json` to document `message_text` as an accepted alias, or regenerate the frontend types from the live backend schema.
-
-**`allow_recontact` / `recontact_min_age_days` backend fields not in frontend OpenAPI spec:**
-- Issue: Backend `campaigns` table has `allow_recontact` (migration 026, committed 2026-06-18). This column is read by the campaign enqueue worker and queue worker. Neither `docs/openapi.json` nor `src/types/api.ts` exposes these fields. The frontend `CampaignResponse` / `CampaignCreate` / `CampaignUpdate` types have no knowledge of re-contact policy.
-- Files: Backend: `app/models/__init__.py` line 506, `migrations/026_campaign_allow_recontact.sql`. Frontend: `/root/apps/aimly/aimly-tg-outreach/docs/openapi.json`, `src/types/api.ts` (generated).
-- Impact: UI users cannot configure re-contact policy even though the backend honours it. Feature exists but is inaccessible.
-- Fix: Add `allow_recontact` and `recontact_min_age_days` to `CampaignCreate`/`CampaignUpdate`/`CampaignResponse` Pydantic schemas, regenerate `openapi.json`, rebuild frontend types.
-
-**Frontend `docs/openapi.json` is a static snapshot — diverges from live backend schema:**
-- Issue: `/root/apps/aimly/aimly-tg-outreach/docs/openapi.json` is a hand-updated snapshot used to generate `src/types/api.ts`. The backend's actual OpenAPI schema at `/openapi.json` is authoritative. Any backend schema change that is not reflected in `docs/openapi.json` creates silent type drift.
-- Files: `/root/apps/aimly/aimly-tg-outreach/docs/openapi.json`, `/root/apps/aimly/aimly-tg-outreach/src/types/api.ts`
-- Impact: Frontend TypeScript types may accept/send fields that the backend rejects, or miss new fields the backend returns. Known current gap: `allow_recontact` (see above).
-- Fix: Add a CI step (or pre-commit hook) that fetches `/openapi.json` from staging backend and diffs against `docs/openapi.json`. Alert on divergence. Automate type generation from the fetched spec.
-
-**Inbox `send` endpoint: frontend sends `message_text`, OpenAPI type `SendMessageFromUIRequest` exposes `message`:**
-- Issue: `src/types/api.ts` `SendMessageFromUIRequest` (auto-generated) defines field `message` (canonical). Actual fetch calls in inbox use the `message_text` alias. If a future Lovable regeneration of fetch calls uses the typed interface, it will switch to `message` — which also works due to `AliasChoices` — but the inconsistency is a maintenance hazard.
-- Files: `/root/apps/aimly/aimly-tg-outreach/src/routes/_authenticated/inbox.tsx`, `src/types/api.ts`
-- Impact: Currently functional. Risk is future breakage if alias logic is ever removed from the backend.
-- Fix: Standardise on one field name. Recommend `message_text` since it is what Lovable naturally generates; update the backend schema to make it canonical (currently it's the alias).
+- Issue: When a HARD FloodWait or PEER_FLOOD error fires, the worker opens a second `AsyncSessionLocal` context (`db2`) to update `message_queue` / `senders` while the original `db` session is still open. This is done to avoid the main TX holding locks, but creates a pattern where the audit event (written to `db`) and the sender status update (written to `db2`) are in different transactions — a crash between the two leaves inconsistent state. WR-04 mitigates this for the audit event on flood_wait by using the same `db`, but PEER_FLOOD and ACCOUNT_FROZEN still use separate `db2`.
+- Files: `app/services/queue.py:930-974` (PEER_FLOOD), `app/services/queue.py:977-1023` (ACCOUNT_FROZEN)
+- Impact: If the api process crashes between the two commits, the sender status update (spam_limited/frozen) might be missing while the restriction event row exists — or vice versa. Low probability, but leads to inconsistent audit logs and a sender that can keep sending despite a restriction.
+- Fix approach: Combine the sender UPDATE and restriction event INSERT into a single transaction. The `record_restriction_event` helper accepts a `db` parameter — pass the existing `db2` session to it.
 
 ---
 
-## Cross-Cutting Concerns
+### Database Connection Pool May Be Undersized
 
-**No external alerting infrastructure — PEER_FLOOD and bans are invisible:**
-- Issue: Critical Telegram events (PEER_FLOOD, `UserDeactivatedBanError`, `AuthKeyError`) log at `CRITICAL` level but fire no webhook or notification. The `# TODO: add external alert` comment in `queue.py` line 701 acknowledges this.
-- Files: `app/services/queue.py` lines 688–713, `app/services/listener.py` lines 1221
-- Impact: Operators only discover account bans when checking logs manually. For a SaaS product with external clients, this is unacceptable uptime posture.
-- Fix: Add a `notify_critical(event, details)` utility that POSTs to a configurable `ALERT_WEBHOOK_URL` env var (or sends a Telegram message to an admin chat). Wire into PEER_FLOOD and ban handlers.
-
-**No monitoring / health dashboards for the outreach platform:**
-- Issue: The parent AGS Foods infrastructure has Grafana, but there are no dashboards tracking queue depth, send success rate, FloodWait frequency, or listener uptime for this application.
-- Files: `/root/apps/aimly/tg-outreach/` — no Grafana provisioning, no metrics endpoint beyond `/api/v1/health`
-- Impact: Silent degradation. A stuck queue or banned sender goes unnoticed until a user reports missed messages.
-- Fix: Add a `GET /api/v1/metrics` endpoint returning queue depth, senders by status, recent FloodWait count. Connect to Grafana datasource.
+- Issue: The SQLAlchemy async engine is configured with `pool_size=5, max_overflow=10` (15 total connections). The API process runs 6 background workers simultaneously (queue, warmup, onboarding cleanup, contact check, campaign enqueue, KB ingest) plus the FastAPI request handlers. Each worker opens new sessions per tick. Under load, all 15 connections can be exhausted.
+- Files: `app/database.py:56-61`
+- Impact: `asyncpg.exceptions.TooManyConnectionsError` under moderate load. Not currently observed but may surface as the user base grows or if the KB ingest worker processes large documents.
+- Fix approach: Increase `pool_size` to 10-15 and `max_overflow` to 20. Monitor via `pg_stat_activity` in prod.
 
 ---
 
-*Concerns audit: 2026-06-18*
+### Supabase JWT `kid` Cache Is Per-Process
+
+- Issue: The JWKS cache (`_JWKS_CACHE`) is a module-level dict, per-process. Each API container warms its own cache. A cache miss triggers one HTTP refetch (handles key rotation), but on a cold start with multiple concurrent requests, all N requests may simultaneously refetch JWKS.
+- Files: `app/utils/auth.py:110-170`
+- Impact: N simultaneous HTTP calls to Supabase JWKS endpoint on cold start or after key rotation. Minor — Supabase JWKS endpoint is fast and the race is bounded by process startup — but worth noting.
+- Fix approach: Add a simple asyncio lock around the JWKS fetch to prevent thundering herd.
+
+---
+
+## MEDIUM — Frontend Drift
+
+### Lovable Frontend Can Drift from OpenAPI Spec
+
+- Issue: The frontend is generated through Lovable from `lovable-handoff/openapi.json`. The frontend sometimes diverges from the spec. Known drift: `POST /conversations/{id}/send` receives `{"message_text": "..."}` instead of the canonical `{"message": "..."}` — worked around via `AliasChoices` in the Pydantic schema. The `GET /telemetry/events` endpoint has a whitelist of 17 events; new events added by Lovable produce 400 errors until the whitelist is updated.
+- Files: `app/routers/conversations.py` (`SendMessageFromUIRequest` with `AliasChoices`), `app/routers/telemetry.py` (`_EVENT_WHITELIST`)
+- Impact: Frontend changes silently break API calls with no type-level enforcement. Debugging requires correlating API logs with Lovable deployments.
+- Fix approach: Keep `lovable-handoff/openapi.json` in sync with the actual FastAPI-generated spec (compare against `/openapi.json` after each phase). Consider adding a CI step to diff the two.
+
+---
+
+### Telethon Entity-Cache Cold Start
+
+- Issue: On first message send via `/conversations/{id}/send`, Telethon may throw `ValueError: Could not find the input entity for PeerUser(user_id=...)` if the peer's `access_hash` is not in the Telethon SQLite session cache. Mitigated by a `get_dialogs(limit=200)` fallback on `ValueError`, but this adds ~500ms latency on first send to any new peer.
+- Files: `app/services/telegram.py` (`send_message_by_telegram_id`)
+- Impact: Occasional 500ms delay on first send to a peer; gracefully recovered. No data loss.
+- Fix approach: Pre-warm entity cache on sender startup by calling `get_dialogs` once. Or maintain `access_hash` in `contacts_cache` and construct `InputPeerUser` directly without a cache lookup.
+
+---
+
+## LOW — Future Issues
+
+### Missing Monitoring / Alerting on Critical Events
+
+- Issue: PEER_FLOOD and ACCOUNT_FROZEN events log at `CRITICAL` level but there is no external alerting (webhook, email, Telegram notification). The queue worker has a comment: `# TODO: add external alert (webhook/email) when monitoring infrastructure is available` (line 955).
+- Files: `app/services/queue.py:955`
+- Impact: A frozen account is invisible to the operator until they check logs. A spam wave can silence multiple accounts before anyone notices.
+- Fix approach: Implement a `notifications.py` service that sends a Telegram message or webhook on `PEER_FLOOD`/`ACCOUNT_FROZEN` events. The `lead_webhook_url` pattern already exists at campaign level — use the same pattern at platform level.
+
+---
+
+### `contacts_cache` Lacks a Unique Constraint on `(workspace_id, phone)`
+
+- Issue: `contacts_cache` has `ON CONFLICT (sender_id, phone) DO UPDATE`. This means workspace-scoped cache reads (`_lookup_cache` filters by `workspace_id`) could theoretically hit rows from a different sender within the same workspace. The workspace-level cache read is correct, but write dedup is keyed to `(sender_id, phone)`, not `(workspace_id, phone)`. Multiple checker rows for the same phone within a workspace are possible.
+- Files: `app/services/checker.py:213`, `migrations/020_contacts_cache_unique.sql`
+- Impact: Slightly stale cache (the latest-updated row wins due to `ORDER BY updated_at DESC`), but a poisoned checker's `not_registered` row can coexist with a healthy checker's `registered` row for the same `(workspace_id, phone)`. The lookup returns whatever is newest.
+- Fix approach: Add a unique constraint on `(workspace_id, phone)` with an `ON CONFLICT DO UPDATE` that only overwrites with `high`-confidence results. Alternatively, query specifically for `tg_confidence='high'` rows on cache lookup.
+
+---
+
+### `CsvImport` Stores Raw File Bytes in PostgreSQL
+
+- Issue: `CsvImport.file_data` is a `LargeBinary` column (i.e. bytea in Postgres) that stores the entire uploaded CSV in the database. Large CSVs (tens of MB) bloat the DB and slow down autovacuum.
+- Files: `app/models/__init__.py:543`
+- Impact: DB storage growth with each import. The records have an `expires_at` column so expired records should be cleaned up, but there is no background cleanup worker for expired CSV imports.
+- Fix approach: Add a scheduled cleanup for expired `csv_imports` rows. Long-term: move file storage to S3/object storage and store only a reference.
+
+---
+
+### No Alerting on Migration Failure at Startup
+
+- Issue: If a migration fails, `init_db()` raises and the API container exits. Docker restarts the container (policy `restart: unless-stopped`), which retries the failing migration infinitely, creating a restart loop. The error is only visible in `docker logs outreach-platform-api`.
+- Files: `app/database.py:144-147`, `docker-compose.yml`
+- Impact: Silent crash loop. No notification sent. An operator who is not actively watching logs will not know the API is down.
+- Fix approach: Add a startup health check endpoint that surfaces migration status. Or send a Telegram message on startup failure (see monitoring concern above).
+
+---
+
+## Operational Runbook Notes
+
+**Safe recovery pattern after prod incident (DROP/fresh DB):**
+```bash
+docker compose up -d --build api  # applier re-runs all migrations from scratch
+```
+
+**Run tests ONLY via:**
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
+```
+Never `docker compose run --rm api pytest` — wipes prod DB.
+
+**Manual backup:**
+```bash
+/root/apps/aimly/tg-outreach/backup.sh
+```
+
+**Check migration state:**
+```sql
+SELECT version, created_at FROM schema_migrations ORDER BY created_at DESC LIMIT 10;
+```
+
+**Checker pool health:**
+```sql
+SELECT slug, lifecycle_status, restriction_status, restricted_until, checker_rest_until, checker_trip_count
+FROM senders WHERE role = 'checker';
+```
+
+---
+
+*Concerns audit: 2026-06-30*

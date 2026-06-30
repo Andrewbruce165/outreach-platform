@@ -1,16 +1,30 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-06-18
+**Analysis Date:** 2026-06-30
 
----
+## Test Framework
 
-## Backend (Python)
+**Runner:** pytest 8.x + pytest-asyncio 0.23+
+**Config:** `pyproject.toml` (project root)
+**Assertion library:** pytest built-ins + `sqlalchemy.exc.IntegrityError` for DB constraint tests
 
-### Test Framework
+**Run Commands:**
 
-**Runner:** pytest with pytest-asyncio
-**Config:** `pyproject.toml` at `/root/apps/aimly/tg-outreach/pyproject.toml`
+```bash
+# ONLY valid way to run tests — test-overlay required
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
 
+# With specific test file
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_campaign_router.py
+
+# With verbose output
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest -v
+
+# FORBIDDEN — DATABASE_URL points at prod inside the api container; conftest guard raises RuntimeError
+docker compose run --rm api pytest
+```
+
+**pytest-asyncio config** (from `pyproject.toml`):
 ```toml
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -18,238 +32,300 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 addopts = "-v --tb=short --strict-markers"
+markers = ["integration: integration tests touching the database"]
 ```
 
-**Key packages:** `pytest-asyncio`, `httpx` (ASGITransport), `asyncpg`, `python-jose`
+`asyncio_mode = "auto"` means all `async def test_*` functions are automatically treated as asyncio tests — no `@pytest.mark.asyncio` decorator needed (though `pytestmark = pytest.mark.asyncio` is still used by most files for explicitness).
 
-**Run commands:**
-```bash
-# ONLY valid invocation — never omit the test overlay
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
+## Test File Organization
 
-# Run a specific test file
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_campaign_router.py
+**Location:** All tests in `tests/` (co-located with app, not inside `app/`)
 
-# Run with -k filter
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest -k "test_list_campaigns"
+**Naming:**
+- Feature/service tests: `test_{feature}.py` — `test_queue_enqueue.py`, `test_senders.py`, `test_checker.py`
+- Migration idempotency tests: `test_migration_{NNN}.py` — `test_migration_013.py`, `test_migration_032.py`
+- Phase-grouped tests: `test_phase{N}_{topic}.py` — `test_phase5_inbox.py`, `test_phase5_1_campaign_v2.py`
+
+**Structure:**
+```
+tests/
+├── conftest.py              # All shared fixtures (prod-guard, DB setup, factories)
+├── utils/
+│   ├── __init__.py
+│   └── openai_mocks.py      # Mock OpenAI response builder (used by ai_engine tests)
+└── test_*.py                # ~99 test files
 ```
 
-**CRITICAL — Test Overlay Rule:**
-Never run `docker compose run --rm api pytest` without the `-f docker-compose.test.yml` overlay. Without the overlay, `DATABASE_URL` resolves from `docker-compose.yml` and points at the **production** `outreach_platform` database. The session-scoped `_setup_database` fixture executes `DROP SCHEMA public CASCADE` — this destroyed the entire prod schema on 2026-05-26.
+## Production Guard (CRITICAL)
 
-The overlay file is at `/root/apps/aimly/tg-outreach/docker-compose.test.yml`. It:
-- Spins up an ephemeral `db-test` postgres in `tmpfs` (fsync off, no persistence)
-- Overrides `DATABASE_URL` to `postgresql+asyncpg://outreach_user:outreach_test_pass@db-test:5432/outreach_test`
-- Mounts `./app`, `./tests`, `./migrations`, `./pyproject.toml` into the api container (allows in-source edits without image rebuild)
-- The `db-test` container has no name and no volume — it disappears after the run
+**2026-05-26 incident:** Running `docker compose run --rm api pytest` used DATABASE_URL from `docker-compose.yml` pointing at prod. `conftest._setup_database` executed `DROP SCHEMA public CASCADE` against live `outreach_platform`. All 22 relations were rebuilt at the same timestamp.
 
-**Conftest guard:** `tests/conftest.py` lines 57-77 implement a hard `RuntimeError` if `DATABASE_URL` does not contain one of `("outreach_test", "_test@", "_test/", "/test_", "@localhost", "@127.0.0.1")`. This is belt-and-suspenders; the overlay is still required.
+**The guard** in `tests/conftest.py:40-64`:
+```python
+_ALLOWED_TEST_DSN_MARKERS = (
+    "outreach_test",   # explicit test DB
+    "_test@", "_test/",
+    "/test_",
+    "@localhost",
+    "@127.0.0.1",
+)
 
-### Test File Organization
+def _assert_test_dsn(dsn: str, action: str = "DESTRUCTIVE TEST SETUP") -> None:
+    if not any(marker in dsn for marker in _ALLOWED_TEST_DSN_MARKERS):
+        raise RuntimeError(
+            f"REFUSING TO RUN {action} AGAINST {dsn!r}. ..."
+        )
+```
+Called at session fixture start AND teardown. Never bypass this guard.
 
-**Location:** All tests in `tests/` directory (flat, co-located with project root)
+## Test Overlay (docker-compose.test.yml)
 
-**Naming pattern:**
-- Feature tests: `test_<resource>.py` — `test_campaigns_model.py`, `test_contacts.py`, `test_folders.py`
-- Router integration tests: `test_<resource>_router.py` — `test_campaign_router.py`
-- Migration tests: `test_migration_NNN.py` — `test_migration_016.py`, `test_migration_015.py`
-- Phase-tagged tests: `test_phase5_<area>.py` — `test_phase5_inbox.py`, `test_phase5_analytics.py`
-- Phase 05.1 tests: `test_phase5_1_<area>.py` — `test_phase5_1_agents_v2.py`, `test_phase5_1_core_value_e2e.py`
+`docker-compose.test.yml` overrides the api service to:
+1. Spin up an ephemeral `db-test` container (`pgvector/pgvector:pg16`) with `tmpfs` storage — data never persists
+2. Override `DATABASE_URL` to point at `db-test:5432/outreach_test`
+3. Mount `./app`, `./tests`, `./migrations`, `./pyproject.toml` into the api container so no rebuild is needed for code edits
 
-**Utilities:** `tests/utils/openai_mocks.py` — mock OpenAI Chat Completions response builder
+```yaml
+services:
+  db-test:
+    image: pgvector/pgvector:pg16
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off"]
+    tmpfs:
+      - /var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: outreach_test
 
-### Test Structure
+  api:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://outreach_user:outreach_test_pass@db-test:5432/outreach_test
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./migrations:/app/migrations
+      - ./pyproject.toml:/app/pyproject.toml:ro
+```
 
-**All test functions are async and marked with module-level `pytestmark`:**
+**pgvector image required** (Phase 16): the test DB must have the `vector` extension. Plain `postgres:16` will fail with `type "vector" does not exist` during schema setup.
+
+## Session-Scoped DB Setup
+
+The `_setup_database` session fixture in `tests/conftest.py:244-264` runs ONCE per test session:
+
+1. Verifies DSN against `_ALLOWED_TEST_DSN_MARKERS`
+2. Drops and recreates the `public` schema
+3. Runs `CREATE EXTENSION IF NOT EXISTS vector` (Phase 16 requirement — before `create_all`)
+4. Calls `Base.metadata.create_all` to build ORM tables
+5. Applies migrations `012` through `041` in explicit named order (hardcoded list, NOT a glob)
+6. Adds `server_default=gen_random_uuid()` on UUID PK columns and warmup column defaults (so raw-SQL tests work without ORM)
+7. Sets DB-level defaults for `ai_contexts` columns (Phase 11 migration 032 interaction)
+
+**Teardown:** `DROP SCHEMA public CASCADE; CREATE SCHEMA public;`
+
+**Important:** migrations `001-011` are NOT replayed in tests — they are assumed covered by ORM `create_all`. Only `012+` are applied.
+
+## Migrations DB (Separate Throwaway DB)
+
+Migration idempotency tests (`test_migration_013.py`, `test_migration_032.py`, etc.) use a **dedicated throwaway DB** `outreach_test_migrations` — isolated from the shared session DB to prevent DDL commits from poisoning other tests.
+
+The `migrations_raw_dsn` session fixture (`conftest.py:267-309`) builds this DB identically to the main test DB, then drops it at teardown.
+
+```python
+# Usage in migration idempotency test:
+async def test_constraint_idempotent(migrations_raw_dsn: str):
+    conn = await asyncpg.connect(dsn=migrations_raw_dsn)
+    sql = (PROJECT_ROOT / "migrations" / "013_phase2.sql").read_text()
+    await conn.execute(sql)  # re-apply — must not raise
+```
+
+## Test Structure Patterns
+
+**Module-level asyncio marking:**
 ```python
 import pytest
+pytestmark = pytest.mark.asyncio  # marks every async def in the file
+```
 
-pytestmark = pytest.mark.asyncio
-
-async def test_something(async_db_session, test_workspace):
+**Fixture injection:** All standard fixtures injected by name:
+```python
+async def test_example(
+    async_db_session: AsyncSession,
+    async_client: AsyncClient,
+    test_workspace,
+    valid_supabase_jwt,
+):
     ...
 ```
 
-**Suite organization pattern:**
+**Typical test shape:**
 ```python
-"""Module docstring describing what area is being tested and why."""
+async def test_enqueue_message(async_db_session, test_sender_factory, test_agent_factory):
+    from app.services.queue import enqueue_message  # in-body import
 
-import pytest
-from sqlalchemy import text
+    sender = await test_sender_factory(slug="enq-1")
+    agent = await test_agent_factory()
 
-pytestmark = pytest.mark.asyncio
+    result = await enqueue_message(
+        db=async_db_session,
+        workspace_id=sender.workspace_id,
+        sender_id=sender.id,
+        ...
+    )
+    assert "queue_id" in result
 
-
-def _auth_headers(jwt_factory, sub: str = "some-user") -> dict:
-    """Local helper — keeps test bodies readable."""
-    return {"Authorization": f"Bearer {jwt_factory(sub=sub)}"}
-
-
-async def _bind(db, ws_id, uid):
-    """Bind user to workspace — repeated helper pattern in router tests."""
-    await db.execute(text("""
-        INSERT INTO user_workspaces (supabase_user_id, workspace_id, role)
-        VALUES (:uid, :wid, 'owner') ON CONFLICT DO NOTHING
-    """), {"uid": uid, "wid": str(ws_id)})
-    await db.commit()
-
-
-async def test_feature_behavior(async_client, valid_supabase_jwt, async_db_session, test_workspace):
-    # Arrange
-    agent = await test_agent_factory(name="Test")
-    await _bind(async_db_session, test_workspace.id, "u1")
-    # Act
-    r = await async_client.post("/api/v1/campaigns", json={...},
-                                headers=_auth_headers(valid_supabase_jwt, "u1"))
-    # Assert
-    assert r.status_code == 201
-    assert r.json()["name"] == "Test"
+    # Verify via raw SQL
+    row = await async_db_session.execute(
+        text("SELECT extra_data FROM message_queue WHERE id = :qid"),
+        {"qid": result["queue_id"]},
+    )
+    assert row.fetchone()[0].get("ai_context_id") == str(agent.id)
 ```
 
-### Core Fixtures (from `tests/conftest.py`)
+**In-body imports:** Services are imported inside the test function body, not at module level. This keeps test collection fast and lets tests fail at import time only if the specific phase feature is exercised.
 
-**Session-scoped setup:**
-- `_setup_database` — destroys + recreates public schema; creates ORM tables via `Base.metadata.create_all`; applies migrations 012–018 and 026 via asyncpg; adds server-side UUID defaults. Runs once per pytest session. Contains the hard DSN guard.
+## Fixtures (conftest.py)
 
-**Function-scoped fixtures (each test gets fresh state via rollback):**
-- `async_db_session` — `AsyncSession` with `await session.rollback()` on teardown; provides isolation without drop/recreate overhead
-- `async_client` — `httpx.AsyncClient` with `ASGITransport(app=app)` — in-process, no real network
-- `valid_supabase_jwt` — callable factory `(sub, email, exp, aud) -> str`; returns HS256 JWT signed with test secret
-- `expired_supabase_jwt` — pre-built expired JWT (`exp=1`)
-- `es256_supabase_jwt` — ES256 JWT factory using ephemeral EC P-256 key; JWKS cache seeded in-process
-- `unsupported_alg_jwt` — HS512-signed JWT to test rejection of unsupported algorithms
+All shared fixtures live in `tests/conftest.py`. Key fixtures:
 
-**Factory fixtures (function-scoped, delegate to `async_db_session`):**
-- `test_workspace` — creates a `Workspace` row
-- `test_sender_factory` — callable: `await test_sender_factory(slug=..., role=..., **overrides) -> Sender`
-- `test_checker` — pre-built checker-role sender
-- `test_folder` — creates a `Folder` row in `test_workspace`
-- `test_agent_factory` — callable: `await test_agent_factory(name=..., system_prompt=...) -> AIContext`
-- `test_contacts_factory` — callable: `await test_contacts_factory(count=N, tg_status=..., **overrides) -> Contact | list[Contact]`
-- `test_campaign_factory` — callable via raw SQL INSERT RETURNING: `await test_campaign_factory(name=..., status=...) -> dict`
-- `test_running_campaign_factory` — composes `test_campaign_factory` + `test_sender_factory` + `attach_sender_to_campaign`
-- `test_conversation_factory` — raw SQL INSERT: `await test_conversation_factory(status=..., ai_enabled=...) -> dict`
-- `test_message_factory` — raw SQL INSERT: `await test_message_factory(conversation_id, count=N, direction=...) -> list[dict]`
-- `attach_sender_to_campaign` — callable: inserts `campaign_senders` row with ON CONFLICT DO NOTHING
+| Fixture | Scope | Purpose |
+|---|---|---|
+| `_setup_database` | session, autouse | Build test schema, apply migrations |
+| `migrations_raw_dsn` | session | Throwaway DB for migration re-apply tests |
+| `async_db_session` | function | `AsyncSession` with rollback-on-teardown |
+| `async_client` | function | `httpx.AsyncClient` via `ASGITransport` (no real network) |
+| `test_workspace` | function | Creates a `Workspace` row |
+| `test_sender_factory` | function | Factory returning `Sender`; pass keyword overrides |
+| `test_checker` | function | Sender with `role="checker"` |
+| `test_folder` | function | Creates a `Folder` row |
+| `test_agent_factory` | function | Factory for `AIContext` |
+| `test_contacts_factory` | function | Factory for `Contact` rows (batch-capable) |
+| `test_campaign_factory` | function | Factory creates draft campaign via raw SQL |
+| `test_queue_item_factory` | function | Seeds `message_queue` row + optional CCA/conversation |
+| `test_conversation_factory` | function | Inserts `conversations` row via raw SQL |
+| `test_message_factory` | function | Inserts `messages` rows |
+| `test_running_campaign_factory` | function | Campaign + N senders, status=`running` |
+| `valid_supabase_jwt` | function | Callable factory — HS256 JWT signed with test secret |
+| `es256_supabase_jwt` | function | Callable factory — ES256 JWT for JWKS auth tests |
+| `expired_supabase_jwt` | function | Pre-expired JWT (exp=1) |
+| `mock_telethon_client` | function | Async mock Telethon client for Phase 14 checker tests |
 
-### Mocking
+**Factory pattern — override via kwargs:**
+```python
+sender = await test_sender_factory(role="checker", slug="my-checker", lifecycle_status="paused")
+contact = await test_contacts_factory(count=5, tg_status="registered")
+agent = await test_agent_factory(tone_preset="Friendly", system_prompt="Custom prompt")
+```
 
-**Framework:** `unittest.mock.patch`, `pytest.monkeypatch`, `unittest.mock.AsyncMock`
+**Session isolation:** `async_db_session` always rolls back after each test — no test leaves permanent data in the shared test DB. Exception: migration idempotency tests use `migrations_raw_dsn` directly with asyncpg (DDL commits are real on that dedicated DB).
 
-**OpenAI mocking (`tests/utils/openai_mocks.py`):**
+## HTTP Client Testing (Router Tests)
+
+```python
+from httpx import ASGITransport, AsyncClient
+
+# async_client fixture wraps the FastAPI app — no real HTTP, no real Telegram
+async def test_list_campaigns(async_client, valid_supabase_jwt, async_db_session, test_workspace):
+    await _bind(async_db_session, test_workspace.id, "u-list")
+
+    resp = await async_client.get(
+        "/api/v1/campaigns",
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-list')}"},
+    )
+    assert resp.status_code == 200
+    assert "items" in resp.json()
+```
+
+Auth helper pattern (common in router test files):
+```python
+def _auth_headers(jwt_factory, sub: str = "router-user") -> dict:
+    return {"Authorization": f"Bearer {jwt_factory(sub=sub)}"}
+
+def _bind(db, ws_id, uid):
+    # Inserts user_workspaces row to make JWT sub resolve to workspace
+    await db.execute(text("INSERT INTO user_workspaces ..."), ...)
+    await db.commit()
+```
+
+## Mocking
+
+**Primary tools:**
+- `unittest.mock.AsyncMock` — for async callables (Telethon client, DB methods)
+- `unittest.mock.MagicMock` — for sync callables (Telethon event objects)
+- `monkeypatch` — for replacing module attributes
+
+**OpenAI mocking** (`tests/utils/openai_mocks.py`):
 ```python
 from tests.utils.openai_mocks import make_openai_response, patched_openai_client
 
-async def test_ai_generates_reply(monkeypatch, async_db_session):
-    resp = make_openai_response(text_content="Hello from AI")
-    patched_openai_client(monkeypatch, resp)
-    # Now ai_engine.client.chat.completions.create returns resp
+def test_ai_response(monkeypatch):
+    patched_openai_client(
+        monkeypatch,
+        make_openai_response(text_content="Hello"),
+    )
+    # ai_engine.client.chat.completions.create is now patched
 ```
 
-`patched_openai_client` supports multiple responses in order (for tool-call → final-reply two-pass flow).
-
-**Telethon mocking:**
-- `telegram_service` patched via `monkeypatch.setattr` on the service's methods
-- `TelegramListener` instantiated directly in unit tests; `get_active_senders()` tested against real DB
-
-**SQL spy pattern (for testing what queries are executed):**
+**Telethon client mock** (`conftest::mock_telethon_client`):
 ```python
-async def spy_execute(self, statement, *args, **kwargs):
-    executed_sql.append(str(statement))
-    return await original_execute(self, statement, *args, **kwargs)
-
-monkeypatch.setattr(AsyncSession, "execute", spy_execute)
+async def test_checker(mock_telethon_client):
+    client = mock_telethon_client
+    client.set_response("ResolvePhoneRequest", None)
+    client.set_response("ImportContactsRequest", _Imported())
+    result = await resolve_phone_with_fallback(client, phone="+79990001234")
+    called = [name for name, _ in client.calls]
+    assert "ImportContactsRequest" in called
 ```
-Used in `tests/test_health.py` to assert no `senders` table scan on public health endpoint.
 
-**JWKS cache injection (for ES256 auth tests):**
+**monkeypatch for listener/services:**
 ```python
-_auth_module._JWKS_CACHE["keys_by_kid"] = {jwk_dict["kid"]: jwk_dict}
-_auth_module._JWKS_CACHE["fetched_at"] = time.time()
+async def test_reconcile(monkeypatch):
+    from app.services import listener as listener_mod
+    listener = listener_mod.TelegramListener()
+    listener.get_active_senders = AsyncMock(return_value=[...])
+    listener.start_client = AsyncMock()
+    ...
 ```
-Injected directly into `app.utils.auth` module's in-process cache; cleared in fixture teardown.
 
-### Migration Tests
+**What to mock:**
+- Telegram network (Telethon client, all `await client(...)` calls)
+- OpenAI API (`ai_engine.client.chat.completions.create`)
+- External webhooks (`httpx.AsyncClient.post` when testing fire-and-forget)
 
-Pattern in `test_migration_NNN.py`:
+**What NOT to mock:**
+- PostgreSQL (use the ephemeral test DB via overlay)
+- FastAPI routing (use `async_client` with `ASGITransport`)
+- Pydantic validation (test it directly)
+
+## DB Constraint Testing
+
+Migration tests assert schema correctness by querying `information_schema` and triggering `IntegrityError`:
+
 ```python
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
-MIG_016 = (PROJECT_ROOT / "migrations" / "016_phase4.sql").read_text()
-
-async def test_migration_016_idempotent(async_db_session):
-    """Applying twice does not fail."""
-    conn = await async_db_session.connection()
-    raw_conn = await conn.get_raw_connection()
-    await raw_conn.driver_connection.execute(MIG_016)  # second apply
+async def test_invalid_role_rejected(async_db_session):
+    with pytest.raises(IntegrityError):
+        await async_db_session.execute(
+            text("INSERT INTO senders (..., role) VALUES (..., 'invalid_role')")
+        )
+        await async_db_session.commit()
 ```
 
-Migration tests verify:
-- Idempotency (apply twice → no error)
-- Schema shape (expected columns present via `information_schema.columns`)
-- FK and CHECK constraints
-- Data behavior after migration (nullability, defaults)
+## Current Test Baseline
 
-### What to Mock vs What Not to Mock
+**Status:** GREEN as of 2026-06-25 (per project memory).
+- **Total test files:** ~99 test files
+- All tests pass via the test-overlay command
+- Migration re-apply tests isolated on `outreach_test_migrations` DB
+- One previously-found product bug (422→500 handler) was fixed but not yet deployed to prod at time of baseline
 
-**Mock:**
-- `ai_engine.client.chat.completions.create` — always mock in tests; never call real OpenAI
-- `telegram_service.send_message` / `get_dialogs` / Telethon client methods — no real Telegram in tests
-- Webhook HTTP calls (`httpx.AsyncClient.post` in `notify_signal`) — use `respx` or `AsyncMock`
+## Error: `asyncio` loop conflicts
 
-**Do NOT mock:**
-- PostgreSQL — all tests hit the real `outreach_test` ephemeral DB (no SQLite, no in-memory)
-- FastAPI app itself — `ASGITransport` runs the real app in-process
-- `app/utils/auth.py` JWT verification — real crypto, test fixtures produce real JWTs
-
-### Test Types
-
-**Unit tests (service-level):**
-- Import service class/function directly; use `async_db_session` fixture
-- Example: `tests/test_ai_engine.py`, `tests/test_template_render.py`, `tests/test_phone_normalization.py`
-
-**Integration/router tests:**
-- Use `async_client` to hit FastAPI endpoints; DB changes committed via `async_db_session`
-- Example: `tests/test_campaign_router.py`, `tests/test_workspace_router.py`, `tests/test_phase5_inbox.py`
-
-**Migration tests:**
-- Verify schema shape post-migration; test idempotency
-- Example: `tests/test_migration_016.py`, `tests/test_migration_015.py`
-
-**E2E API tests:**
-- Full user flow through multiple endpoints in sequence
-- Example: `tests/test_phase5_1_core_value_e2e.py` — fires 6 telemetry events, asserts KPI
-
-### Coverage
-
-**Requirements:** No enforced coverage threshold
-
-**View coverage:**
-```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest --cov=app --cov-report=term-missing
+If tests fail with `"cannot perform operation: another operation is in progress"` or `"Future attached to a different loop"`, the cause is session-scoped fixtures on different event loops. The fix is already in `pyproject.toml`:
+```toml
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 ```
+and `pyproject.toml` **must be mounted** into the test container — see `docker-compose.test.yml` volumes. Without the mount, pytest-asyncio defaults to function-scope loops and the session-scoped DB engine binds to a different loop.
 
 ---
 
-## Frontend (TypeScript/React)
-
-### Test Framework
-
-**No tests exist in the frontend repository.**
-
-The frontend at `/root/apps/aimly/aimly-tg-outreach/` contains no test files, no test runner configuration (`vitest.config.*`, `jest.config.*`), and no test-related devDependencies in `package.json`. There is no `tests/` or `__tests__/` directory.
-
-All verification of frontend behavior is done manually via Lovable preview builds and the per-screen checklist in `AGENTS.md`:
-- Lighthouse accessibility >= 90
-- Reduced-motion CSS guard present
-- Icon-only buttons have `aria-label`
-- Empty states follow 4-element formula
-- 401 redirects to `/login` with correct toast
-
-**If adding frontend tests:** The project uses Vite + TanStack Start. The natural test stack would be Vitest + Testing Library, but this has not been set up.
-
----
-
-*Testing analysis: 2026-06-18*
+*Testing analysis: 2026-06-30*
