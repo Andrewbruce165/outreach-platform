@@ -18,6 +18,8 @@ import {
   CheckSquare,
   User as UserIcon,
   ChevronDown,
+  Phone,
+  Bot,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
@@ -43,6 +45,10 @@ type LLMCall = components["schemas"]["LLMCallResponse"];
 type LLMCallList = components["schemas"]["LLMCallListResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
 type Campaign = components["schemas"]["CampaignResponse"];
+type SenderList = components["schemas"]["SenderListResponse"];
+type Sender = components["schemas"]["SenderResponse"];
+type AgentList = components["schemas"]["AgentListResponse"];
+type Agent = components["schemas"]["AgentResponse"];
 
 export const Route = createFileRoute("/_authenticated/inbox")({
   component: InboxPage,
@@ -868,7 +874,7 @@ function KV({
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            maxWidth: 140,
+            maxWidth: 180,
           }}
         >
           {value}
@@ -953,9 +959,25 @@ function Thread({
     onError: (e) => setSendError(errMsg(e)),
   });
 
+  const sendersQ = useQuery({
+    queryKey: ["senders"],
+    queryFn: () => api<SenderList>("/api/v1/senders"),
+    staleTime: 60_000,
+  });
+
+  const agentsQ = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => api<AgentList>("/api/v1/agents"),
+    staleTime: 60_000,
+  });
+
   const conv = convQ.data;
   const messages = messagesQ.data?.messages ?? [];
   const campaign = campaigns.find((c) => c.id === conv?.campaign_id);
+  const senders: Sender[] = sendersQ.data?.senders ?? [];
+  const agents: Agent[] = agentsQ.data?.agents ?? [];
+  const sender = senders.find((s) => s.slug === conv?.sender_slug);
+  const agent = campaign?.agent_id ? agents.find((a) => a.id === campaign.agent_id) : undefined;
   const name = conv?.contact_name || conv?.contact_phone || "—";
 
   return (
@@ -1011,8 +1033,19 @@ function Thread({
             {conv.sender_slug && (
               <KV
                 label="Sender"
-                value={`@${conv.sender_slug}`}
-                icon={<Send size={13} />}
+                value={
+                  sender
+                    ? `${sender.name} · ${sender.phone}`
+                    : `@${conv.sender_slug}`
+                }
+                icon={<Phone size={13} />}
+              />
+            )}
+            {agent && (
+              <KV
+                label="Agent"
+                value={agent.name}
+                icon={<Bot size={13} />}
               />
             )}
             {campaign && (
