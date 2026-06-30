@@ -25,7 +25,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [ ] **Phase 11: Agent/Campaign Field Split & Prompt Assembly** — развести слои Агент(КТО)/Кампания(ЧТО), убрать дубли в системном промпте (один источник на блок), новые поля (скорость ответа, ход разговора, аргументы и факты, базы знаний) + перестройка UI визарда
 - [x] **Phase 14: Reliable Contact Resolution** — надёжная и масштабируемая проверка контактов в TG: health-probe на заведомо-живых, burst-кап + cooldown, пул чекеров с ротацией, перепроверка контаминированных данных (диагноз: единственный чекер занижал живых в ~15–20 раз) (closed 2026-06-30 — механика задеплоена; перечек контаминированной базы + re-activation пула передан в Phase 17)
 - [x] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича (completed 2026-06-29)
-- [ ] **Phase 16: RAG Knowledge Bases for Agents** — базы знаний для агентов на pgvector (гибридный keyword+vector поиск)
+- [x] **Phase 16: RAG Knowledge Bases for Agents** — базы знаний для агентов на pgvector (гибридный keyword+vector поиск) (completed 2026-06-30)
 - [ ] **Phase 17: Sender-side resolve ladder with username capture and import fallback** — чекер → чистый фильтр + захват @username; отправитель сам резолвит по лестнице кэш→ResolveUsername→ImportContacts (лениво перед отправкой), фолбэк на phone-резолв; чинит инцидент «Barter - ВЭД хук» (22 живых РФ-номера упали на ResolvePhone) — **planned (4 plans, waves 1→3, SRLD-01..09)**
 
 ## Phase Details
@@ -446,7 +446,7 @@ Plans:
 
 **Requirements**: KB-01, KB-02, KB-03, KB-04, KB-05, KB-06 (derived during /gsd:plan-phase 16 — see REQUIREMENTS.md §RAG Knowledge Bases; tracked via decisions D-01..D-12)
 **Depends on:** Phase 3 (Agents / AIContext — точка привязки KB к агенту), Phase 1 (Workspace — scoping)
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -460,7 +460,7 @@ Plans:
 - [x] 16-04-search-tool-wiring-PLAN.md — kb_search.py (cosine query over attached KBs, workspace-filtered) + search_knowledge_base data-tool in ai_engine (gated on ≥1 KB, two-pass continuation, no status change) [Wave 3, depends_on: 16-01, 16-02] — KB-05, KB-06
 
 **Wave 4** *(blocked on Wave 3 — frontend, human-verify)*
-- [ ] 16-05-frontend-surfaces-PLAN.md — sibling repo aimly-tg-outreach: Knowledge bases sidebar tab + list page + KB detail (D-09 header + 5 metrics + 4 tabs Documents/Search/Agents/Settings, poll-while-processing) + agent-editor KB multi-select + human UAT [Wave 4, depends_on: 16-03, 16-04] — KB-01..05 UI
+- [x] 16-05-frontend-surfaces-PLAN.md — sibling repo aimly-tg-outreach: Knowledge bases sidebar tab + list page + KB detail (D-09 header + 5 metrics + 4 tabs Documents/Search/Agents/Settings, poll-while-processing) + agent-editor KB multi-select + human UAT [Wave 4, depends_on: 16-03, 16-04] — KB-01..05 UI
 
 ### Phase 17: Sender-side resolve ladder with username capture and import fallback
 
@@ -502,7 +502,7 @@ Plans:
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 | 14. Reliable Contact Resolution | 6/7 | Closed (superseded → Phase 17) | 2026-06-30 |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
-| 16. RAG Knowledge Bases for Agents | 4/5 | In Progress|  |
+| 16. RAG Knowledge Bases for Agents | 5/5 | Complete   | 2026-06-30 |
 | 17. Sender-side Resolve Ladder | 0/4 | Planned (4 plans, waves 1→3) | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**

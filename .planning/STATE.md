@@ -4,12 +4,12 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 17 context gathered
-last_updated: "2026-06-30T15:41:56.599Z"
-last_activity: 2026-06-30
+last_updated: "2026-06-30T16:12:24.210Z"
+last_activity: 2026-06-30 -- Phase 17 execution started
 progress:
   total_phases: 19
   completed_phases: 15
-  total_plans: 64
+  total_plans: 68
   completed_plans: 62
   percent: 92
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 16 — rag-knowledge-bases-for-agents
+**Current focus:** Phase 17 — sender-side-resolve-ladder-with-username-capture-and-import-fallback
 
 ## Current Position
 
-Phase: 16 (rag-knowledge-bases-for-agents) — EXECUTING
-Plan: 5 of 5
-Status: Ready to execute
-Last activity: 2026-06-30
+Phase: 17 (sender-side-resolve-ladder-with-username-capture-and-import-fallback) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 17
+Last activity: 2026-06-30 -- Phase 17 execution started
 
 Progress: [█████████░] 92% (59/64 plans) — Phase 16: 1/5 plans (16-01 infra/data-model/test-scaffold complete)
 
