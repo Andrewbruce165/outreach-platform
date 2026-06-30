@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 17-03-PLAN.md
-last_updated: "2026-06-30T16:59:10.275Z"
+status: verifying
+stopped_at: Completed 17-04-PLAN.md (Phase 17 complete, 4/4 plans, ready for verification)
+last_updated: "2026-06-30T17:27:40.985Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 19
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 68
-  completed_plans: 66
+  completed_plans: 67
   percent: 96
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 17 (sender-side-resolve-ladder-with-username-capture-and-import-fallback) — EXECUTING
 Plan: 4 of 4 (17-01, 17-02 complete)
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-30
 
 Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 plans (17-01 test scaffold, 17-02 checker username capture + gated read complete)
@@ -89,6 +89,7 @@ Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 p
 | Phase 17 P01 | 14min | 3 tasks | 4 files |
 | Phase 17 P02 | 5min | 2 tasks | 1 files |
 | Phase 17 P03 | 6min | 3 tasks | 1 files |
+| Phase 17 P04 | 18min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -145,6 +146,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 17]: 17-02: checker captures @username on both registered resolve paths (ResolvePhone + ImportContacts fallback), uniform 'username': None elsewhere so worker res.get never KeyErrors; worker:875 already persists it to contacts.tg_username_resolved, CSV contacts.username untouched. _lookup_cache confidence-gates only the is_registered=false bucket via correlated check on contacts (tg_probe_state='suspect' OR tg_confidence IS DISTINCT FROM 'high' -> return None -> live re-resolve; the Igor cross-contamination fix); positives always served, cache never deleted. No migration (cols pre-exist mig 013+034). SRLD-01/02/07-checker GREEN.
 - [Phase 17]: 17-03: sender resolve_contact rebuilt to 3-tier ladder cache→ResolveUsername(captured @username)→ImportContacts(gated on tg_status='registered'); sender's own ResolvePhone REMOVED (D-01) — fixes Barter-ВЭД false negatives
 - [Phase 17]: 17-03: stale captured username (UsernameNotOccupied/Invalid) returns {stale_username:True} and falls through to import tier, never finalizes not_registered (D-09); _get_cached_contact confidence-gates both per-sender and cross-sender false reads (D-12), cache never deleted
+- [Phase 17]: 17-04: UserIsBlockedError caught in send_message+send_file -> code USER_IS_BLOCKED; queue records durable event_type='blocked' (category='restriction', free-form, no migration) in-TX and fails ONLY this item — no auto-pause, no failover, no restriction_status flip (D-16, block != account restriction)
+- [Phase 17]: 17-04: read-only block-rate — sender_block_rate(db, sender_id, window_days=7) helper in restriction_audit.py + GET /senders/{slug}/block-rate (SenderBlockRateResponse blocks_7d/sends_7d/block_rate), workspace-scoped, no control-loop (D-16); US-cannot-resolve-RU country claim reframed as HYPOTHESIS in CLAUDE.md (D-10/SRLD-09); Phase 17 added 0 migrations
 
 ### Roadmap Evolution
 
@@ -217,6 +220,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-30T16:59:10.260Z
-Stopped at: Completed 17-03-PLAN.md
+Last session: 2026-06-30T17:27:40.972Z
+Stopped at: Completed 17-04-PLAN.md (Phase 17 complete, 4/4 plans, ready for verification)
 Resume file: None

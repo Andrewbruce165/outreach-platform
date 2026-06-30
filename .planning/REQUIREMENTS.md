@@ -208,8 +208,8 @@
 - [x] **SRLD-05**: Ленивый import по одному прямо перед отправкой; опора на существующий 4/мин лимит очереди (под burst-онсетом ~47–49); НЕ трогать константы `queue.py`; НЕТ `DeleteContacts` на отправителе (книга остаётся горячей для фоллоу-апов, D-04) (D-04, D-05).
 - [x] **SRLD-06**: Протухший username — `ResolveUsername` бросает `UsernameNotOccupiedError`/`UsernameInvalidError` → fall-through на import-tier (если registered), НИКОГДА не финализировать `not_registered` (сейчас `_resolve_username` кэширует False и выходит) (D-09).
 - [x] **SRLD-07**: Confidence-gated чтение кэша — строка `is_registered=false` от suspect/low-confidence источника НЕ отдаётся (оба read-site: `checker.py::_lookup_cache` + `telegram.py::_get_cached_contact`) → live-перерезолв. Кэш НИКОГДА не удаляется (ROADMAP «не чистим»). Фикс cross-contamination Igor (D-12, D-13).
-- [ ] **SRLD-08**: Durable захват блока — `UserIsBlockedError` на send-пути → `sender_restriction_events` строка (`event_type='blocked'`, `category='restriction'`, free-form — без CHECK-миграции); read-only per-sender block-rate эндпоинт (blocks/sends за окно) поверх захваченных блоков + Phase 10 событий; НЕТ control-loop/auto-pause (D-15, D-16).
-- [ ] **SRLD-09**: Docs — смягчить формулировку «страна = факт» в `/root/CLAUDE.md` §«Семантика checker'а» до гипотезы (country-gate непроверен, в коде НЕ гейтим) (D-10).
+- [x] **SRLD-08**: Durable захват блока — `UserIsBlockedError` на send-пути → `sender_restriction_events` строка (`event_type='blocked'`, `category='restriction'`, free-form — без CHECK-миграции); read-only per-sender block-rate эндпоинт (blocks/sends за окно) поверх захваченных блоков + Phase 10 событий; НЕТ control-loop/auto-pause (D-15, D-16).
+- [x] **SRLD-09**: Docs — смягчить формулировку «страна = факт» в `/root/CLAUDE.md` §«Семантика checker'а» до гипотезы (country-gate непроверен, в коде НЕ гейтим) (D-10).
 
 **NB:** Phase 17 добавляет 0 миграций — всё хранилище переиспользует существующие колонки (`contacts.tg_username_resolved`, `contacts_cache.username`, `contacts.tg_probe_state`/`tg_confidence`, `sender_restriction_events.event_type` free-form).
 
@@ -372,8 +372,8 @@
 | SRLD-05 | Phase 17 | Complete |
 | SRLD-06 | Phase 17 | Complete |
 | SRLD-07 | Phase 17 | Complete |
-| SRLD-08 | Phase 17 | Pending |
-| SRLD-09 | Phase 17 | Pending |
+| SRLD-08 | Phase 17 | Complete |
+| SRLD-09 | Phase 17 | Complete |
 
 **Coverage:**
 
