@@ -3,14 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 16-01-PLAN.md
-last_updated: "2026-06-30T11:43:05.081Z"
+stopped_at: Completed 16-02-ingest-pipeline-and-worker-PLAN.md
+last_updated: "2026-06-30T11:55:22.168Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 64
-  completed_plans: 59
+  completed_plans: 60
+  percent: 92
 ---
 
 # Project State
@@ -25,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 16 (rag-knowledge-bases-for-agents) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -82,6 +83,7 @@ Progress: [█████████░] 92% (59/64 plans) — Phase 16: 1/5 p
 | Phase 13 P01 | 6min | 2 tasks | 1 files |
 | Phase 13 P02 | 8min | 3 tasks | 2 files |
 | Phase 16 P01 | 12min | 3 tasks | 11 files |
+| Phase 16 P02 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -130,6 +132,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 13]: 13-01: Wave-0 RED scaffold tests/test_queue_even_pacing.py (7 tests, PACE-01..07) reuses Phase 12 helpers verbatim; deferred in-body imports keep --collect-only clean; _assert_pacing_predicate_wired() introspection guard (binds :expected_now/:window_start_utc) makes the four behavioural integration tests genuinely RED instead of coincidentally passing on the Phase 12 cap. All 7 RED, 16 pre-existing queue tests stay GREEN.
 - [Phase 13]: 13-02: even pacing implemented in queue.py only (D-09) — _window_elapsed_fraction (raw window D-01, window_start floor D-06, clamped, injectable now) + expected_now = cap*frac*jitter (D-05/D-08) ANDed beside the Phase 12 cap in the candidate SELECT; follow-ups bypass (D-07/D-10), no max() clamp (structural floor D-03), LIMIT 8 / SKIP LOCKED preserved. PACE-01..07 GREEN, full suite 756 passed. Phase 12 test_new_dialog_allowed_under_cap re-seeded 23h-ago (cap vs pace two-counter isolation, assertion unchanged).
 - [Phase 16]: 16-01: pgvector stood up (prod+test images pgvector/pgvector:pg16, command: block preserved); migration 041 (4 KB tables + HNSW vector_cosine_ops + btree, idempotent); ORM mirror incl. Vector(1536) so create_all builds same test schema; conftest CREATE EXTENSION vector before create_all + 041 apply guard; AIContext.knowledge_base untouched (D-08). HNSW chosen (builds on empty table); pasted text in raw_content BYTEA source_kind='text' (OQ1); STORAGE=SUM(size_bytes) (OQ2). 10-test RED scaffold for KB-01..KB-06, full suite 837 collected 0 errors.
+- [Phase 16]: 16-02: kb_ingest pipeline — tiktoken cl100k_base ~800/120 sliding-window chunking, multi-format extract (pdf/docx/txt/md/csv/text) off the event loop via asyncio.to_thread, embed_texts reuses ai_engine AsyncOpenAI client batched ≤256 (Pitfall 6). KnowledgeIngestWorker mirrors ContactCheckWorker: claim pending FOR UPDATE SKIP LOCKED → processing (committed so UI polls) → parse/chunk/embed → indexed/failed; delete-then-insert kb_chunks for idempotent re-index (Pitfall 8); empty doc → indexed chunk_count=0; never-dies loop. Registered in lifespan next to contact_check_worker. KB-02/KB-03 worker tests GREEN; partial-staged main.py KB hunks (left Phase-15 CORS edit unstaged).
 
 ### Roadmap Evolution
 
@@ -200,6 +203,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-30T11:43:05.069Z
-Stopped at: Completed 16-01-PLAN.md
+Last session: 2026-06-30T11:55:12.957Z
+Stopped at: Completed 16-02-ingest-pipeline-and-worker-PLAN.md
 Resume file: None
