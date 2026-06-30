@@ -468,7 +468,7 @@ Plans:
 **Триггер (живой инцидент):** кампания «Barter - ВЭД хук» — 22 живых РФ-номера терминально упали на `ResolvePhone` несмотря на флаг registered/high/clean. Флаг ставил US-аккаунт (чужой резолв не переносится + US на РФ врёт), собственный `ResolvePhone` отправителя дал ложное «нет» (приватность или троттл), а в send-пути нет import-фолбэка. Дизайн-документ: `.planning/notes/sender-side-resolve-redesign.md`.
 **Requirements**: SRLD-01, SRLD-02, SRLD-03, SRLD-04, SRLD-05, SRLD-06, SRLD-07, SRLD-08, SRLD-09 (derived during /gsd:plan-phase 17 — see REQUIREMENTS.md §Sender-side Resolve Ladder; tracked via decisions D-01..D-16)
 **Depends on:** Phase 14 (Reliable Contact Resolution)
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -476,7 +476,7 @@ Plans:
 
 **Wave 2** *(parallel — checker.py vs telegram.py, no file overlap)*
 - [x] 17-02-checker-username-capture-and-gated-read-PLAN.md — checker captures @username (D-06) + confidence-gated _lookup_cache (D-12) [Wave 2, depends_on: 17-01] — SRLD-01, SRLD-02, SRLD-07
-- [ ] 17-03-sender-resolve-ladder-PLAN.md — resolve_contact ladder cache→ResolveUsername→ImportContacts (drop sender ResolvePhone, D-01/D-02), import gate (D-03), stale-username fall-through (D-09), sender false-read gate (D-12) [Wave 2, depends_on: 17-01] — SRLD-03, SRLD-04, SRLD-05, SRLD-06, SRLD-07
+- [x] 17-03-sender-resolve-ladder-PLAN.md — resolve_contact ladder cache→ResolveUsername→ImportContacts (drop sender ResolvePhone, D-01/D-02), import gate (D-03), stale-username fall-through (D-09), sender false-read gate (D-12) [Wave 2, depends_on: 17-01] — SRLD-03, SRLD-04, SRLD-05, SRLD-06, SRLD-07
 
 **Wave 3** *(blocked on 17-03 — shares telegram.py::send_message)*
 - [ ] 17-04-block-capture-and-docs-PLAN.md — UserIsBlockedError capture → durable 'blocked' event + read-only block-rate endpoint (D-15/D-16) + CLAUDE.md country-hypothesis softening (D-10) [Wave 3, depends_on: 17-01, 17-03] — SRLD-08, SRLD-09
@@ -503,7 +503,7 @@ Plans:
 | 14. Reliable Contact Resolution | 6/7 | Closed (superseded → Phase 17) | 2026-06-30 |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
 | 16. RAG Knowledge Bases for Agents | 5/5 | Complete    | 2026-06-30 |
-| 17. Sender-side Resolve Ladder | 2/4 | In Progress|  |
+| 17. Sender-side Resolve Ladder | 3/4 | In Progress|  |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
