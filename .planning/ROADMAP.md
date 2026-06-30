@@ -502,7 +502,7 @@ Plans:
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 | 14. Reliable Contact Resolution | 6/7 | Closed (superseded → Phase 17) | 2026-06-30 |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
-| 16. RAG Knowledge Bases for Agents | 5/5 | Complete   | 2026-06-30 |
+| 16. RAG Knowledge Bases for Agents | 5/5 | Complete    | 2026-06-30 |
 | 17. Sender-side Resolve Ladder | 1/4 | In Progress|  |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
