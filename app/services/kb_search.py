@@ -26,7 +26,7 @@ Design notes
 import logging
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -96,9 +96,11 @@ async def kb_search(
 ) -> list[dict]:
     """Cosine-distance search over the chunks of ``kb_ids`` within ``workspace_id``.
 
-    Embeds ``query`` (via the patchable :func:`embed_query`), runs the pgvector
-    cosine-distance query ordered nearest-first, caps at ``top_k`` and drops any
-    hit beyond ``max_distance``.
+    Hybrid: embeds ``query`` (via the patchable :func:`embed_query`) and keeps a
+    chunk if it is within ``max_distance`` cosine distance OR contains the query
+    as a literal full-text keyword ('simple' config). Keyword matches rank first,
+    then nearest-by-distance; capped at ``top_k``. The keyword leg fixes terse
+    single-word queries that dense vectors score beyond the distance gate.
 
     Args:
         db: async session.
@@ -126,6 +128,20 @@ async def kb_search(
     query_vec = await embed_query(query)
 
     distance = KbChunk.embedding.cosine_distance(query_vec)
+
+    # Hybrid retrieval: dense cosine OR literal keyword (full-text) match.
+    # Pure dense search misses TERSE/single-word queries ("education", "university")
+    # because a 1-word query embedding sits far (cosine ~0.8-0.9) from any prose
+    # passage even when the word is literally present. The keyword leg uses the
+    # 'simple' text-search config (language-agnostic tokenisation, RU+EN, no
+    # stemming) so a chunk containing the literal term is surfaced regardless of
+    # its vector distance. 'simple' is a fixed literal (not user input) so the
+    # functional GIN index `to_tsvector('simple', content)` (migration 043) is used.
+    ts_config = literal_column("'simple'")
+    kw_match = func.to_tsvector(ts_config, KbChunk.content).op("@@", is_comparison=True)(
+        func.websearch_to_tsquery(ts_config, query)
+    )
+
     stmt = (
         select(
             KbChunk.content,
@@ -138,14 +154,17 @@ async def kb_search(
         .where(
             KbChunk.workspace_id == workspace_id,   # KB-06 isolation (defence-in-depth)
             KbChunk.kb_id.in_(kb_ids),
+            # Keep a hit if it is within the cosine ceiling OR a literal keyword
+            # match. Isolation filters above are ANDed, so the OR never leaks.
+            or_(distance <= ceiling, kw_match),
         )
-        .order_by(distance)                          # ascending — nearest first
+        # Keyword matches first (literal term present), then nearest-by-distance.
+        .order_by(kw_match.desc(), distance.asc())
         .limit(limit)
     )
 
     rows = (await db.execute(stmt)).all()
 
-    # Pitfall 4: distance, lower = better. Keep hits within the ceiling.
     return [
         {
             "content": r.content,
@@ -154,5 +173,4 @@ async def kb_search(
             "distance": float(r.distance),
         }
         for r in rows
-        if float(r.distance) <= ceiling
     ]

@@ -86,19 +86,18 @@ class Settings(BaseSettings):
         description="Default top-K chunks returned by search_knowledge_base.",
     )
     kb_chunk_max_tokens: int = Field(
-        default=300,
+        default=800,
         validation_alias="KB_CHUNK_MAX_TOKENS",
-        # Smaller chunks (was 800) so a focused section (e.g. a résumé's EDUCATION
-        # block) lands in its own chunk and short/keyword queries match it tightly
-        # instead of diluting against one big mixed chunk. Live test: a whole
-        # résumé became 1 chunk, so "education"/"university" scored ~0.8-0.86 and
-        # missed; section-sized chunks bring those well under the 0.8 gate.
-        description="Max tokens per KB chunk (tiktoken cl100k_base, far below the 8191 embed limit). Section-sized for retrieval precision on terse queries.",
+        # 800 (D-06). Smaller chunks were trialled to help terse queries but did
+        # NOT (a 1-word query embeds far from ANY prose passage regardless of
+        # chunk size); the hybrid keyword leg in kb_search fixes that instead, so
+        # larger chunks are kept for richer per-hit context to the agent.
+        description="Max tokens per KB chunk (tiktoken cl100k_base, far below the 8191 embed limit).",
     )
     kb_chunk_overlap: int = Field(
-        default=60,
+        default=120,
         validation_alias="KB_CHUNK_OVERLAP",
-        description="Sliding-window token overlap between adjacent KB chunks (~20% of chunk size).",
+        description="Sliding-window token overlap between adjacent KB chunks.",
     )
 
     # Decodo proxy pool (optional)

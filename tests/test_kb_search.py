@@ -161,3 +161,69 @@ async def test_search_workspace_isolated(async_db_session, test_workspace):
     contents = [h["content"] for h in hits]
     assert "a-secret" in contents
     assert "b-secret" not in contents, "search must never leak another workspace's chunks"
+
+
+# ─── Hybrid: literal keyword leg surfaces chunks the dense vector misses ────────
+
+async def test_hybrid_keyword_match_beyond_distance(async_db_session, test_workspace):
+    """A chunk whose vector is BEYOND max_distance is still returned when the query
+    appears as a literal keyword in its content (full-text 'simple' match). This is
+    the fix for terse single-word queries like 'education' that dense cosine scores
+    too far (~0.8-0.9) even though the word is literally present.
+    """
+    from app.services.kb_search import kb_search
+
+    # Query vector points at slot 1; the seeded chunk is ORTHOGONAL (slot 0) →
+    # cosine distance ~1.0, far beyond max_distance=0.55. Pure vector would drop
+    # it. But the content literally contains 'education'.
+    query_vec = _unit_vec(1.0)
+    kb_id = await _seed_kb_with_chunks(
+        async_db_session, test_workspace.id,
+        [("EDUCATION: Siberian State Transport University, BA HR Management", _unit_vec(0.0))],
+    )
+
+    with patch(_EMBED_QUERY_TARGET, new=AsyncMock(return_value=query_vec)):
+        hits = await kb_search(
+            db=async_db_session,
+            workspace_id=test_workspace.id,
+            kb_ids=[uuid.UUID(kb_id)],
+            query="education",          # single keyword, present literally in the chunk
+            top_k=5,
+            max_distance=0.55,
+        )
+
+    contents = [h["content"] for h in hits]
+    assert any("EDUCATION" in c for c in contents), (
+        "hybrid keyword leg must surface a chunk containing the literal query word "
+        "even when its cosine distance exceeds max_distance"
+    )
+
+
+async def test_hybrid_keyword_still_workspace_isolated(async_db_session, test_workspace):
+    """The keyword leg must not bypass workspace isolation: a literal-match chunk in
+    another workspace is never returned.
+    """
+    from app.services.kb_search import kb_search
+
+    query_vec = _unit_vec(1.0)
+    ws_b = uuid.uuid4()
+    await async_db_session.execute(text(
+        "INSERT INTO workspaces (id, name) VALUES (:id, 'WS B kw')"
+    ), {"id": str(ws_b)})
+    await async_db_session.commit()
+    kb_b = await _seed_kb_with_chunks(
+        async_db_session, ws_b,
+        [("EDUCATION secret of workspace B", _unit_vec(0.0))],
+    )
+
+    with patch(_EMBED_QUERY_TARGET, new=AsyncMock(return_value=query_vec)):
+        hits = await kb_search(
+            db=async_db_session,
+            workspace_id=test_workspace.id,   # scope to workspace A
+            kb_ids=[uuid.UUID(kb_b)],         # B's KB id passed in by accident
+            query="education",
+            top_k=5,
+            max_distance=0.55,
+        )
+
+    assert hits == [], "keyword match must still respect workspace isolation (KB-06)"
