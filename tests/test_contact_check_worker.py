@@ -510,3 +510,71 @@ async def test_confidence_written(
         assert r.tg_confidence == "high", "clean-probe checker → high confidence"
         assert str(r.tg_resolved_by) == str(test_checker.id), "resolver-provenance (D-09)"
         assert r.tg_probe_state == "clean"
+
+
+# ─── Phase 17 Wave-0 RED scaffold — SRLD-02 captured-username persistence ─────
+# The checker-captured @username must be persisted DURABLE on
+# contacts.tg_username_resolved (resolve-provenance) and must NEVER clobber the
+# user-provided contacts.username (CSV provenance, Pitfall 5). This is the
+# persistence CONTRACT: drive _apply_results directly with a username in the
+# checker results. The worker UPDATE already writes tg_username_resolved (worker:875)
+# — this test pins the provenance separation so 17-02 (checker stops dropping the
+# username) lands with a green contract instead of accidentally overwriting CSV data.
+
+
+async def test_captured_username_persisted(
+    async_db_session, test_workspace, test_checker, test_contacts_factory,
+):
+    """SRLD-02 (D-07): a checker-captured username persists to
+    contacts.tg_username_resolved WITHOUT touching the CSV contacts.username.
+
+    Drives _apply_results directly (the worker's finalization path) with a
+    registered result carrying username='captured_handle' for a contact whose CSV
+    username is 'csv_handle'. After application:
+      - tg_username_resolved == 'captured_handle' (resolve-provenance)
+      - username           == 'csv_handle'        (CSV provenance, untouched)
+    """
+    from types import SimpleNamespace
+
+    from app.services.contact_check_worker import contact_check_worker
+
+    contact = await test_contacts_factory(
+        count=1, tg_status="pending", username="csv_handle",
+    )
+
+    summary = {
+        "checked": 1,
+        "registered": 1,
+        "not_registered": 0,
+        "flood_wait_hit": False,
+        "results": [
+            {
+                "phone": contact.phone,
+                "is_registered": True,
+                "telegram_id": 909,
+                "username": "captured_handle",
+            }
+        ],
+    }
+    items = [SimpleNamespace(contact_id=contact.id, phone=contact.phone, username=None)]
+
+    await contact_check_worker._apply_results(
+        items, summary, checker_id=str(test_checker.id), probe_state="clean",
+    )
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT tg_status, tg_username_resolved, username "
+                "FROM contacts WHERE id = :cid"
+            ),
+            {"cid": str(contact.id)},
+        )
+    ).fetchone()
+    assert row.tg_status == "registered"
+    assert row.tg_username_resolved == "captured_handle", (
+        "captured @username must persist to tg_username_resolved (SRLD-02/D-07)"
+    )
+    assert row.username == "csv_handle", (
+        "the CSV-provided contacts.username must NOT be clobbered (SRLD-02/D-07, Pitfall 5)"
+    )

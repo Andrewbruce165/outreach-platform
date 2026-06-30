@@ -374,3 +374,62 @@ async def test_confidence_gated_cache_sender_read(
         "a suspect-source cross-sender false must NOT short-circuit — the sender must "
         f"attempt a LIVE resolve (SRLD-07/D-12); calls={names}"
     )
+
+
+async def test_user_blocked_records_event(
+    async_db_session, test_workspace, mock_telethon_client,
+):
+    """SRLD-08 (D-15, send path): when the recipient has blocked the sender, the
+    send raises UserIsBlockedError and TelegramService.send_message returns the
+    structured error code 'USER_IS_BLOCKED' (not the generic SEND_FAILED).
+
+    Resolve is satisfied from the per-sender cache (registered + access_hash) so the
+    send path is reached without any live resolve; client.send_message then raises.
+
+    RED today: send_message has no UserIsBlockedError branch → falls into the
+    generic `except Exception` → code='SEND_FAILED'.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from telethon.errors import UserIsBlockedError
+
+    from app.models import Sender
+    from app.services.telegram import TelegramService
+
+    suffix = _uuid4().hex[:8]
+    phone = "+79990060001"
+
+    sender = Sender(
+        workspace_id=test_workspace.id, slug=f"srld08-snd-{suffix}", name="block sender",
+        phone="+79995558888", session_string="enc", role="sender",
+        auth_status="ok", lifecycle_status="active",
+        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+    )
+    async_db_session.add(sender)
+    await async_db_session.commit()
+    await async_db_session.refresh(sender)
+
+    # Per-sender cache hit: registered + telegram_id + access_hash → send path reached.
+    await async_db_session.execute(text("""
+        INSERT INTO contacts_cache
+            (id, workspace_id, sender_id, phone, telegram_id, access_hash, is_registered)
+        VALUES (:id, :wid, :sid, :phone, 777, 888, true)
+    """), {"id": str(_uuid4()), "wid": str(test_workspace.id), "sid": str(sender.id), "phone": phone})
+    await async_db_session.commit()
+
+    client = mock_telethon_client
+    client.send_message = AsyncMock(side_effect=UserIsBlockedError(request=None))
+    # Synchronous is_connected() so the finally: disconnect_client() guard is a
+    # clean no-op (avoids a never-awaited-coroutine warning on the AsyncMock).
+    client.is_connected = MagicMock(return_value=False)
+
+    res = await TelegramService().send_message(
+        client, phone, "Recipient", "hi",
+        sender_id=str(sender.id), workspace_id=str(test_workspace.id),
+    )
+
+    assert res["success"] is False
+    assert res["error"]["code"] == "USER_IS_BLOCKED", (
+        "a recipient block must surface as the structured USER_IS_BLOCKED code "
+        f"(SRLD-08/D-15), not generic SEND_FAILED; got {res['error']}"
+    )

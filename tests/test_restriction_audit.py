@@ -603,3 +603,84 @@ async def test_history_endpoint(
     )
     assert r2.status_code == 404, r2.text
     assert "account suspended" not in r2.text
+
+
+# ─── Phase 17 Wave-0 RED scaffold — SRLD-08 block capture + block-rate ────────
+# A `UserIsBlockedError` on the send path is captured durable as a
+# sender_restriction_events row with the NEW free-form event_type='blocked'
+# (category='restriction', no CHECK migration needed — Pitfall 6). A read-only
+# per-sender block-rate aggregate sums blocks vs sends over a window (D-15/D-16,
+# no control-loop). The block-rate helper does not exist yet → RED until 17-04.
+
+
+async def test_blocked_event_inserts_no_check_violation(
+    async_db_session, test_running_campaign_factory,
+):
+    """SRLD-08 (D-15, Pitfall 6): a block event inserts with the NEW free-form
+    event_type='blocked' under category='restriction' WITHOUT a CHECK violation.
+
+    event_type is free-form VARCHAR(20) (no CHECK); only `category` is constrained.
+    This GREEN-confirms no migration is needed for the new event_type, giving 17-04
+    a durable write target.
+    """
+    from app.services.restriction_audit import record_restriction_event
+
+    _camp, senders = await test_running_campaign_factory(sender_count=1)
+    sender = senders[0]
+
+    await record_restriction_event(
+        sender_id=sender.id,
+        event_type="blocked",
+        source="queue_error",
+        restricted_until=None,
+        raw_text="Получатель заблокировал отправителя",
+        category="restriction",
+        db=async_db_session,
+    )
+    await async_db_session.commit()
+
+    rows = await _event_rows(async_db_session, sender.id, event_type="blocked")
+    assert len(rows) == 1, f"exactly one 'blocked' event must be recorded: {rows}"
+    assert rows[0]["category"] == "restriction"
+    assert rows[0]["source"] == "queue_error"
+    # A block does NOT flip the account's restriction_status (one recipient blocked
+    # is not an account restriction — D-16 read-only, no auto-pause).
+    assert await _restriction_status(async_db_session, sender.id) == "none"
+
+
+async def test_block_rate_aggregate(
+    async_db_session, test_running_campaign_factory,
+):
+    """SRLD-08 (D-15/D-16, read-only metric): the per-sender block-rate aggregate
+    counts blocked events and sent messages_log rows over a window.
+
+    Seeds N 'blocked' events + M 'sent' messages_log rows for the sender, then asserts
+    the (not-yet-built) block-rate helper returns blocks_7d == N and sends_7d == M.
+
+    RED today: the block-rate query/helper does not exist (17-04 adds it). In-body
+    import keeps --collect-only clean; the import itself fails RED at run time.
+    """
+    # 17-04 helper — does not exist yet. In-body import keeps collection clean.
+    from app.services.restriction_audit import record_restriction_event, sender_block_rate
+
+    _camp, senders = await test_running_campaign_factory(sender_count=1)
+    sender = senders[0]
+
+    n_blocks = 3
+    for _ in range(n_blocks):
+        await record_restriction_event(
+            sender_id=sender.id, event_type="blocked", source="queue_error",
+            restricted_until=None, raw_text="blocked", db=async_db_session,
+        )
+    await async_db_session.commit()
+
+    m_sends = 5
+    for i in range(m_sends):
+        await _seed_sent(
+            async_db_session, sender.workspace_id, sender.id,
+            f"+79993330{i:03d}", minutes_ago=10 + i,
+        )
+
+    stats = await sender_block_rate(async_db_session, sender.id, window_days=7)
+    assert stats["blocks_7d"] == n_blocks, stats
+    assert stats["sends_7d"] == m_sends, stats
