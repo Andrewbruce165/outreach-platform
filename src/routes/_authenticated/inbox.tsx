@@ -43,6 +43,10 @@ type LLMCall = components["schemas"]["LLMCallResponse"];
 type LLMCallList = components["schemas"]["LLMCallListResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
 type Campaign = components["schemas"]["CampaignResponse"];
+type SenderList = components["schemas"]["SenderListResponse"];
+type Sender = components["schemas"]["SenderResponse"];
+type AgentList = components["schemas"]["AgentListResponse"];
+type Agent = components["schemas"]["AgentResponse"];
 
 export const Route = createFileRoute("/_authenticated/inbox")({
   component: InboxPage,
