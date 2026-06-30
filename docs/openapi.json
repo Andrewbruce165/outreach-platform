@@ -1113,6 +1113,85 @@
         }
       }
     },
+    "/api/v1/senders/{slug}/restriction-events": {
+      "get": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "List Restriction Events",
+        "description": "HLTH-03: append-only restriction-event history for a sender, newest-first.\n\nWorkspace-scoped via _load_sender_by_slug (opaque 404 for foreign/unknown\nslugs — no cross-tenant leakage). Read-only over the append-only log; the\nevent SELECT is also constrained by workspace_id (defence-in-depth) and\nbounded by a default LIMIT.",
+        "operationId": "list_restriction_events_api_v1_senders__slug__restriction_events_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RestrictionEventResponse"
+                  },
+                  "title": "Response List Restriction Events Api V1 Senders  Slug  Restriction Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspace/proxies": {
       "get": {
         "tags": [
@@ -1705,6 +1784,82 @@
         }
       }
     },
+    "/api/v1/folders/{folder_id}/stats": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Folder Stats",
+        "description": "Folder-wide Telegram-status breakdown for the /contacts stat cards.\n\nSingle GROUP BY over the folder — returns correct totals immediately, so the UI\nno longer derives counts from the first paginated page (the cause of the\nflash-then-correct bug). 404 if folder is cross-tenant / missing.",
+        "operationId": "folder_stats_api_v1_folders__folder_id__stats_get",
+        "parameters": [
+          {
+            "name": "folder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Folder Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderStatsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/contacts": {
       "get": {
         "tags": [
@@ -2206,6 +2361,84 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Move Contacts Batch Api V1 Contacts Move Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/contacts/delete": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Delete Contacts Batch",
+        "description": "Batch hard-delete. Возвращает {deleted: N}.\n\nЗеркало move_contacts_batch: workspace-scoped fetch+delete, cross-tenant ids\nмолча пропускаются (не светим существование чужих контактов через 404).",
+        "operationId": "delete_contacts_batch_api_v1_contacts_delete_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteContactBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Contacts Batch Api V1 Contacts Delete Post"
                 }
               }
             }
@@ -3532,7 +3765,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CampaignResponse"
+                  "$ref": "#/components/schemas/CampaignWriteResponse"
                 }
               }
             }
@@ -3847,7 +4080,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CampaignResponse"
+                  "$ref": "#/components/schemas/CampaignWriteResponse"
                 }
               }
             }
@@ -3918,6 +4151,82 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/rerender-pending": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Rerender Pending",
+        "description": "Re-render the message_text of all pending queue items for this campaign with\nthe current message_template. On-demand counterpart to the automatic re-render\nin PATCH — lets the UI add a \"refresh queue\" button or recover after a template\nedit made through another path. Already-sent rows are not touched.",
+        "operationId": "rerender_pending_api_v1_campaigns__campaign_id__rerender_pending_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_RerenderResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -4318,7 +4627,7 @@
           "campaigns"
         ],
         "summary": "Duplicate Campaign",
-        "description": "Q2 / C-11: copy campaigns row + campaign_senders. status='draft'.\n\nNOT copied: message_queue items, campaign_contact_assignments — these are\nruntime rotation state, not template.\n\nName: '{name} (copy)' or '{name} (copy N)' if conflict.",
+        "description": "Q2: copy campaigns row only. status='draft'.\n\nNOT copied: campaign_senders (the sender pool), message_queue items,\ncampaign_contact_assignments. The duplicate is created with an EMPTY sender\npool — the user attaches accounts explicitly. Carrying senders over caused\naccounts to appear locked inside the duplicate (held by the source's running\ncampaign) and undeletable from its card.\n\nName: '{name} (copy)' or '{name} (copy N)' if conflict.",
         "operationId": "duplicate_campaign_api_v1_campaigns__campaign_id__duplicate_post",
         "parameters": [
           {
@@ -4366,6 +4675,178 @@
         ],
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/senders": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Attach Sender",
+        "description": "POOL-01/02/03: attach a sender to a draft/paused/running campaign pool.\n\nD-01: allowed on draft/paused/running — no status-transition guard, only the\n_load_campaign 404 scopes the campaign to the workspace.\nD-02: reuses _validate_workspace_owns_senders (404 SENDER_NOT_FOUND) and\n_check_sender_lock (409 SENDER_LOCK_CONFLICT — byte-identical to /start).\nD-08: triggers rebalance_on_attach only when the campaign is running.",
+        "operationId": "attach_sender_api_v1_campaigns__campaign_id__senders_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignSenderAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/senders/{sender_id}": {
+      "delete": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Detach Sender",
+        "description": "POOL-04/05/06/06b: detach a sender from a campaign pool.\n\nD-03 (min-pool): cannot remove the last sender of a running campaign → 409.\nD-04 (cold-pending): un-sent cold pending rows would be silently orphaned → 409.\nD-05 (engaged): dialogs with an open conversation never block detach.\nD-06: no auto-reassign of the cold backlog here — deferred to Phase 9.",
+        "operationId": "detach_sender_api_v1_campaigns__campaign_id__senders__sender_id__delete",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -5140,6 +5621,84 @@
         }
       }
     },
+    "/api/v1/conversations/delete": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Delete Conversations Batch",
+        "description": "Batch hard delete. Возвращает {deleted: N}.\n\nЗеркало contacts.delete_contacts_batch: workspace-scoped, cross-tenant ids\nмолча пропускаются (не светим существование чужих бесед через 404).\nОдин DELETE-statement; FK CASCADE на уровне БД сносит messages + llm_calls\n(как в single-delete ниже). Статический путь /delete объявлен ДО\nDELETE /{conversation_id} и не конфликтует с ним (разные методы/пути).",
+        "operationId": "delete_conversations_batch_api_v1_conversations_delete_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteConversationsBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Conversations Batch Api V1 Conversations Delete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/conversations/{conversation_id}/llm-calls": {
       "get": {
         "tags": [
@@ -5889,6 +6448,1845 @@
         }
       }
     },
+    "/api/v1/warmup/pool": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "List Pool",
+        "description": "Все sender'ы workspace с их статусом в пуле прогрева.\nВозвращает как участников пула, так и тех, кто в него не добавлен.\n\nD-11: каждый аккаунт несёт restriction_status / restricted_until +\nderived warmup_reason (почему аккаунт не греется).",
+        "operationId": "list_pool_api_v1_warmup_pool_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/pool/{sender_id}": {
+      "post": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Add To Pool",
+        "description": "Добавить аккаунт в пул прогрева (только аккаунт текущего workspace).",
+        "operationId": "add_to_pool_api_v1_warmup_pool__sender_id__post",
+        "parameters": [
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Remove From Pool",
+        "description": "Удалить аккаунт из пула прогрева и завершить его активные сессии.",
+        "operationId": "remove_from_pool_api_v1_warmup_pool__sender_id__delete",
+        "parameters": [
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/pool/{sender_id}/toggle": {
+      "patch": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Toggle Pool Member",
+        "description": "Включить / выключить участие аккаунта в прогреве (без удаления из пула).",
+        "operationId": "toggle_pool_member_api_v1_warmup_pool__sender_id__toggle_patch",
+        "parameters": [
+          {
+            "name": "sender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/stats": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Stats",
+        "description": "Сводная статистика прогрева workspace: сообщения сегодня, активные сессии, аккаунты в пуле.",
+        "operationId": "get_stats_api_v1_warmup_stats_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/sessions": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "List Sessions",
+        "description": "Warmup-сессии workspace с прогрессом. По умолчанию — активные.",
+        "operationId": "list_sessions_api_v1_warmup_sessions_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter: active | completed | all",
+              "default": "active",
+              "title": "Status"
+            },
+            "description": "Filter: active | completed | all"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Session",
+        "description": "Детали одной warmup-сессии (только текущего workspace).",
+        "operationId": "get_session_api_v1_warmup_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/sessions/{session_id}/messages": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Session Messages",
+        "description": "История сообщений warmup-сессии workspace (для отображения диалога).",
+        "operationId": "get_session_messages_api_v1_warmup_sessions__session_id__messages_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/warmup/settings": {
+      "get": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Get Settings Endpoint",
+        "description": "Настройки прогрева workspace: master toggle + контент с resolved defaults (D-06/D-10).\n\nНет строки → дефолты с enabled=false (explicit opt-in, D-06).",
+        "operationId": "get_settings_endpoint_api_v1_warmup_settings_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "warmup"
+        ],
+        "summary": "Update Settings Endpoint",
+        "description": "Upsert настроек прогрева workspace (master toggle + контент, D-06/D-10).\n\nИдемпотентный INSERT ... ON CONFLICT (workspace_id) DO UPDATE. Возвращает\n{status, settings} с resolved defaults (что реально в действии).",
+        "operationId": "update_settings_endpoint_api_v1_warmup_settings_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarmupSettingsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases": {
+      "get": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "List Knowledge Bases",
+        "description": "List workspace KBs with the D-09 aggregate per KB (newest-first).",
+        "operationId": "list_knowledge_bases_api_v1_knowledge_bases_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/KnowledgeBaseResponse"
+                  },
+                  "title": "Response List Knowledge Bases Api V1 Knowledge Bases Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Create Knowledge Base",
+        "description": "Create a KB (source_kind='files'). 409 KB_NAME_CONFLICT on duplicate name.",
+        "operationId": "create_knowledge_base_api_v1_knowledge_bases_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeBaseCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeBaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}": {
+      "get": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Get Knowledge Base",
+        "description": "KB detail incl. the D-09 aggregate. 404 if cross-workspace.",
+        "operationId": "get_knowledge_base_api_v1_knowledge_bases__kb_id__get",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeBaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Update Knowledge Base",
+        "description": "Rename / edit description (Settings tab). 409 on duplicate name.",
+        "operationId": "update_knowledge_base_api_v1_knowledge_bases__kb_id__patch",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeBaseUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeBaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Delete Knowledge Base",
+        "description": "Delete a KB. FK cascade drops its documents, chunks and agent links.",
+        "operationId": "delete_knowledge_base_api_v1_knowledge_bases__kb_id__delete",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/documents": {
+      "get": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "List Documents",
+        "description": "Per-document list (D-10), newest-first.",
+        "operationId": "list_documents_api_v1_knowledge_bases__kb_id__documents_get",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/KbDocumentResponse"
+                  },
+                  "title": "Response List Documents Api V1 Knowledge Bases  Kb Id  Documents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Upload Document",
+        "description": "Multipart upload → records a pending kb_documents row (202 Accepted).\n\nThe KnowledgeIngestWorker (Wave 2) claims status='pending' rows and does the\nextract/chunk/embed asynchronously — never parse in this handler (Pitfall).",
+        "operationId": "upload_document_api_v1_knowledge_bases__kb_id__documents_post",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbDocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/documents/paste": {
+      "post": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Paste Document",
+        "description": "Paste raw text → records a pending kb_documents row (source_kind='text', 202).",
+        "operationId": "paste_document_api_v1_knowledge_bases__kb_id__documents_paste_post",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KbPasteTextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbDocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}/reindex": {
+      "post": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Reindex Document",
+        "description": "Set a doc back to pending so the worker re-runs (delete-then-insert is idempotent).",
+        "operationId": "reindex_document_api_v1_knowledge_bases__kb_id__documents__doc_id__reindex_post",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "doc_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Doc Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbDocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}": {
+      "delete": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Delete Document",
+        "description": "Delete a document. FK cascade drops its chunks.",
+        "operationId": "delete_document_api_v1_knowledge_bases__kb_id__documents__doc_id__delete",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "doc_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Doc Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/search": {
+      "post": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Search Knowledge Base",
+        "description": "Manual test retrieval over this KB's chunks (cosine distance, Pitfall 4).\n\nEmbeds the query, runs ``ORDER BY embedding <=> :qvec`` filtered by workspace\n+ this KB, keeps hits within ``kb_search_max_distance``. Prefers the shared\n``app.services.kb_search.kb_search`` helper when plan 16-04 has landed it;\notherwise runs a thin self-contained vector query so this surface works now.",
+        "operationId": "search_knowledge_base_api_v1_knowledge_bases__kb_id__search_post",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KbSearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KbSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/agents": {
+      "get": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "List Agents For Kb",
+        "description": "Reverse M:N: agents this KB is attached to (Agents tab).",
+        "operationId": "list_agents_for_kb_api_v1_knowledge_bases__kb_id__agents_get",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentForKbResponse"
+                  },
+                  "title": "Response List Agents For Kb Api V1 Knowledge Bases  Kb Id  Agents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Attach Agent",
+        "description": "Attach a workspace-owned agent to this KB. INSERT ... ON CONFLICT DO NOTHING.",
+        "operationId": "attach_agent_api_v1_knowledge_bases__kb_id__agents_post",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentKbAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/agents/{agent_id}": {
+      "delete": {
+        "tags": [
+          "knowledge-bases"
+        ],
+        "summary": "Detach Agent",
+        "description": "Detach an agent from this KB (DELETE the M:N row).",
+        "operationId": "detach_agent_api_v1_knowledge_bases__kb_id__agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Root",
@@ -5938,17 +8336,6 @@
               }
             ],
             "title": "Rules"
-          },
-          "tone_of_voice": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tone Of Voice"
           },
           "faq": {
             "items": {
@@ -6012,31 +8399,52 @@
             ],
             "title": "Knowledge Base"
           },
-          "voice_baseline": {
+          "tone_preset": {
             "anyOf": [
               {
                 "type": "string",
                 "enum": [
-                  "Professional",
                   "Friendly",
-                  "Playful"
+                  "Professional",
+                  "Direct",
+                  "Casual"
                 ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Voice Baseline"
+            "title": "Tone Preset"
           },
-          "tone": {
+          "response_speed": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ToneSpec"
+                "type": "string",
+                "enum": [
+                  "instant",
+                  "human",
+                  "slow",
+                  "manual"
+                ]
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Response Speed"
+          },
+          "response_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Delay Seconds"
           },
           "max_message_length": {
             "anyOf": [
@@ -6137,7 +8545,47 @@
           "name"
         ],
         "title": "AgentCreate",
-        "description": "POST /api/v1/agents body (D-02 + UI-SPEC §5.8 v2)."
+        "description": "POST /api/v1/agents body (D-02 + Phase 11 field split)."
+      },
+      "AgentForKbResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "type": "string",
+            "title": "Agent Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "agent_name"
+        ],
+        "title": "AgentForKbResponse",
+        "description": "Reverse M:N row — an agent this KB is attached to (Agents tab).\n\nThe test consumes ``id`` (the agent id) directly; ``agent_id`` is kept as an\nexplicit alias-free duplicate for clarity, both carry the same value."
+      },
+      "AgentKbAttachRequest": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "title": "AgentKbAttachRequest"
       },
       "AgentListResponse": {
         "properties": {
@@ -6192,17 +8640,6 @@
               }
             ],
             "title": "Rules"
-          },
-          "tone_of_voice": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tone Of Voice"
           },
           "faq": {
             "items": {
@@ -6267,7 +8704,7 @@
             ],
             "title": "Knowledge Base"
           },
-          "voice_baseline": {
+          "tone_preset": {
             "anyOf": [
               {
                 "type": "string"
@@ -6276,19 +8713,29 @@
                 "type": "null"
               }
             ],
-            "title": "Voice Baseline"
+            "title": "Tone Preset"
           },
-          "tone": {
+          "response_speed": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Tone"
+            "title": "Response Speed"
+          },
+          "response_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Delay Seconds"
           },
           "max_message_length": {
             "anyOf": [
@@ -6440,17 +8887,6 @@
             ],
             "title": "Rules"
           },
-          "tone_of_voice": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tone Of Voice"
-          },
           "faq": {
             "anyOf": [
               {
@@ -6520,31 +8956,52 @@
             ],
             "title": "Knowledge Base"
           },
-          "voice_baseline": {
+          "tone_preset": {
             "anyOf": [
               {
                 "type": "string",
                 "enum": [
-                  "Professional",
                   "Friendly",
-                  "Playful"
+                  "Professional",
+                  "Direct",
+                  "Casual"
                 ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Voice Baseline"
+            "title": "Tone Preset"
           },
-          "tone": {
+          "response_speed": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ToneSpec"
+                "type": "string",
+                "enum": [
+                  "instant",
+                  "human",
+                  "slow",
+                  "manual"
+                ]
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Response Speed"
+          },
+          "response_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Delay Seconds"
           },
           "max_message_length": {
             "anyOf": [
@@ -6660,6 +9117,16 @@
           "finishes": {
             "type": "integer",
             "title": "Finishes"
+          },
+          "contacts_messaged": {
+            "type": "integer",
+            "title": "Contacts Messaged",
+            "default": 0
+          },
+          "registered_contacts": {
+            "type": "integer",
+            "title": "Registered Contacts",
+            "default": 0
           }
         },
         "type": "object",
@@ -6670,7 +9137,7 @@
           "finishes"
         ],
         "title": "AnalyticsCards",
-        "description": "Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).\n\nВсе 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})\nвозвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.\n\nPitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает\nstatus='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».\nВсе counts исключают status='bot_ignored' (Pitfall 8)."
+        "description": "Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).\n\nВсе 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})\nвозвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.\n\nPitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает\nstatus='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».\nВсе counts исключают status='bot_ignored' (Pitfall 8).\n\nProgress fields (campaign scope only): прогресс кампании = доля reachable\nконтактов, до которых уже дотянулись.\n- ``contacts_messaged`` = COUNT(DISTINCT conversation_id) среди outbound —\n  сколько РАЗНЫХ контактов получили хотя бы одно сообщение (НЕ raw message\n  count, иначе несколько сообщений одному контакту раздувают числитель).\n- ``registered_contacts`` = COUNT(contacts WHERE folder_id=campaign.folder_id\n  AND tg_status='registered') — знаменатель «достижимые контакты в папке»\n  (та же семантика, что _compute_is_exhausted, migration 013).\nДля workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),\nUI не рисует для них progress-бар."
       },
       "AnalyticsReplied": {
         "properties": {
@@ -6901,6 +9368,20 @@
         ],
         "title": "Body_import_preview_api_v1_contacts_import_preview_post"
       },
+      "Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post"
+      },
       "CampaignCreate": {
         "properties": {
           "name": {
@@ -6921,13 +9402,27 @@
             "title": "Description"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
           },
           "folder_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Folder Id"
           },
           "sender_ids": {
@@ -6939,8 +9434,15 @@
             "title": "Sender Ids"
           },
           "message_template": {
-            "type": "string",
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Message Template"
           },
           "timezone": {
@@ -7103,17 +9605,6 @@
             ],
             "title": "Primary Goal"
           },
-          "success_criteria": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Criteria"
-          },
           "webhook_url": {
             "anyOf": [
               {
@@ -7127,14 +9618,133 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "type": "boolean",
+            "title": "Allow Recontact",
+            "default": false
+          },
+          "recontact_min_age_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Recontact Min Age Days",
+            "default": 30
+          },
+          "max_new_dialogs_per_day": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max New Dialogs Per Day",
+            "description": "Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=50; soft-warn >50; hard cap 100.",
+            "default": 50
+          },
+          "dialogue_flow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DialogueStage"
+                },
+                "type": "array",
+                "maxItems": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialogue Flow"
+          },
+          "arguments_facts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments Facts"
+          },
+          "campaign_rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Rules"
+          },
+          "objective_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "book_call",
+                  "book_demo",
+                  "collect_contact",
+                  "qualify",
+                  "direct_sale",
+                  "support",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Preset"
+          },
+          "disclosure_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "reveal_nothing",
+                  "list_price_ok",
+                  "quote_from_pricelist",
+                  "full_disclosure"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disclosure Preset"
+          },
+          "authority_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "handoff_only",
+                  "can_schedule",
+                  "can_send_materials",
+                  "can_offer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Preset"
+          },
+          "style_examples": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Examples"
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "agent_id",
-          "folder_id",
-          "message_template"
+          "name"
         ],
         "title": "CampaignCreate",
         "description": "POST /api/v1/campaigns body."
@@ -7188,13 +9798,27 @@
             "title": "Description"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
           },
           "folder_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Folder Id"
           },
           "status": {
@@ -7341,17 +9965,6 @@
             ],
             "title": "Primary Goal"
           },
-          "success_criteria": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Criteria"
-          },
           "webhook_url": {
             "anyOf": [
               {
@@ -7362,6 +9975,118 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "type": "boolean",
+            "title": "Allow Recontact",
+            "default": false
+          },
+          "recontact_min_age_days": {
+            "type": "integer",
+            "title": "Recontact Min Age Days",
+            "default": 30
+          },
+          "max_new_dialogs_per_day": {
+            "type": "integer",
+            "title": "Max New Dialogs Per Day",
+            "default": 50
+          },
+          "dialogue_flow": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Dialogue Flow"
+          },
+          "arguments_facts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments Facts"
+          },
+          "campaign_rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Rules"
+          },
+          "objective_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Preset"
+          },
+          "disclosure_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disclosure Preset"
+          },
+          "authority_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Preset"
+          },
+          "style_examples": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Examples"
+          },
+          "pause_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pause Reason"
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
           },
           "attached_senders": {
             "items": {
@@ -7374,6 +10099,9 @@
             "type": "boolean",
             "title": "Is Exhausted",
             "default": false
+          },
+          "pool_health": {
+            "$ref": "#/components/schemas/PoolHealth"
           },
           "created_at": {
             "type": "string",
@@ -7391,14 +10119,13 @@
           "id",
           "workspace_id",
           "name",
-          "agent_id",
-          "folder_id",
           "status",
           "timezone",
           "work_hour_start",
           "work_hour_end",
           "work_days_mask",
           "message_template",
+          "pool_health",
           "created_at",
           "updated_at"
         ],
@@ -7434,14 +10161,58 @@
               }
             ],
             "title": "Locked By Campaign Name"
+          },
+          "restriction_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "spam_limited",
+              "frozen"
+            ],
+            "title": "Restriction Status",
+            "default": "none"
+          },
+          "restricted_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restricted Until"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "sender_id",
+          "id"
+        ],
+        "title": "CampaignSenderAttach",
+        "description": "Read-only sender entry inside CampaignResponse.attached_senders[].\n\nlocked_by_campaign_id / locked_by_campaign_name populated when the sender\nis currently attached to a DIFFERENT running campaign in the same workspace.\n\n`id` mirrors `sender_id` so the entry is keyed identically to the Sender it\nreferences (UI/tests read `attached_senders[].id`); `sender_id` is retained\nfor back-compat with Phase 4 consumers."
+      },
+      "CampaignSenderAttachRequest": {
+        "properties": {
+          "sender_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sender Id"
           }
         },
         "type": "object",
         "required": [
           "sender_id"
         ],
-        "title": "CampaignSenderAttach",
-        "description": "Read-only sender entry inside CampaignResponse.attached_senders[].\n\nlocked_by_campaign_id / locked_by_campaign_name populated when the sender\nis currently attached to a DIFFERENT running campaign in the same workspace."
+        "title": "CampaignSenderAttachRequest",
+        "description": "POST /api/v1/campaigns/{id}/senders body — attach a single sender to a pool.\n\nThin request body (Plan 08-03 / D-02): pool mutation is one sender at a time\nvia POST/DELETE /campaigns/{id}/senders. Distinct from CampaignSenderAttach,\nwhich is the read-only response sub-object inside attached_senders[]."
       },
       "CampaignUpdate": {
         "properties": {
@@ -7696,17 +10467,6 @@
             ],
             "title": "Primary Goal"
           },
-          "success_criteria": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Criteria"
-          },
           "webhook_url": {
             "anyOf": [
               {
@@ -7720,11 +10480,171 @@
               }
             ],
             "title": "Webhook Url"
+          },
+          "allow_recontact": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Recontact"
+          },
+          "recontact_min_age_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recontact Min Age Days"
+          },
+          "max_new_dialogs_per_day": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max New Dialogs Per Day"
+          },
+          "dialogue_flow": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DialogueStage"
+                },
+                "type": "array",
+                "maxItems": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialogue Flow"
+          },
+          "arguments_facts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arguments Facts"
+          },
+          "campaign_rules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Rules"
+          },
+          "objective_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "book_call",
+                  "book_demo",
+                  "collect_contact",
+                  "qualify",
+                  "direct_sale",
+                  "support",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Preset"
+          },
+          "disclosure_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "reveal_nothing",
+                  "list_price_ok",
+                  "quote_from_pricelist",
+                  "full_disclosure"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disclosure Preset"
+          },
+          "authority_preset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "handoff_only",
+                  "can_schedule",
+                  "can_send_materials",
+                  "can_offer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Preset"
+          },
+          "style_examples": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Examples"
           }
         },
         "type": "object",
         "title": "CampaignUpdate",
-        "description": "PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).\n\nNote: sender_ids НЕ обновляется через PATCH в Phase 4 — для добавления/удаления\nsenders v1 простоту делаем «удали → создай новую» либо ждём v2 dedicated endpoint."
+        "description": "PATCH /api/v1/campaigns/{id} body — partial PATCH (все поля Optional).\n\nNote: sender_ids НЕ обновляется через PATCH (D-12, намеренно). Пул sender'ов\nуправляется отдельными эндпоинтами POST/DELETE /campaigns/{id}/senders\n(Plan 08-03) с изоляцией workspace, sender-lock и min-pool/cold-pending\nгардами. PATCH игнорирует sender_ids."
+      },
+      "CampaignWriteResponse": {
+        "properties": {
+          "campaign": {
+            "$ref": "#/components/schemas/CampaignResponse"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/WarningItem"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign"
+        ],
+        "title": "CampaignWriteResponse",
+        "description": "Phase 12 D-14: campaign create/update response carrying soft-cap warnings[].\nGET paths keep returning CampaignResponse directly (no warnings)."
       },
       "ContactImportPreviewResponse": {
         "properties": {
@@ -8271,6 +11191,71 @@
         "title": "CoreValueResponse",
         "description": "GET /api/v1/telemetry/core-value response (UI-SPEC §9 KPI #9).\n\nAll three fields may be None for workspaces that have not yet signed up or\nlaunched a campaign; UI renders them as \"—\" in that case."
       },
+      "DeleteContactBatchRequest": {
+        "properties": {
+          "contact_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Contact Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "contact_ids"
+        ],
+        "title": "DeleteContactBatchRequest"
+      },
+      "DeleteConversationsBatchRequest": {
+        "properties": {
+          "conversation_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Conversation Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_ids"
+        ],
+        "title": "DeleteConversationsBatchRequest",
+        "description": "POST /api/v1/conversations/delete body — bulk hard delete.\n\nЗеркало DeleteContactBatchRequest: cross-tenant ids молча пропускаются\nворкером (не светим существование чужих бесед через 404)."
+      },
+      "DialogueStage": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "instruction": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Instruction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "instruction"
+        ],
+        "title": "DialogueStage",
+        "description": "One stage in the campaign's dialogue_flow sequence.\n\ntitle is optional (label for the UI); instruction is the stage directive\ninjected into the prompt. Validated: title≤120, instruction 1..2000 chars.\nSecurity: conlist max_length=7 on the containing field guards array-size abuse (T2)."
+      },
       "EnqueueResponse": {
         "properties": {
           "success": {
@@ -8424,6 +11409,33 @@
         ],
         "title": "FolderResponse"
       },
+      "FolderStatsResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "in_telegram": {
+            "type": "integer",
+            "title": "In Telegram",
+            "default": 0
+          },
+          "checking": {
+            "type": "integer",
+            "title": "Checking",
+            "default": 0
+          },
+          "not_found": {
+            "type": "integer",
+            "title": "Not Found",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "FolderStatsResponse",
+        "description": "Per-folder Telegram-status breakdown.\n\nComputed server-side via a single GROUP BY so the /contacts stat cards render\ncorrect folder-wide numbers immediately, instead of the frontend deriving them\nfrom the first paginated page of contacts.\n\nBuckets mirror the frontend classifiers (contacts.tsx):\n  in_telegram  ← tg_status in (registered, ok, found, in_telegram)\n  checking     ← tg_status in (pending, checking, unknown, unchecked, '')\n  not_found    ← tg_status in (not_registered, not_found, privacy, missing, error)"
+      },
       "FolderUpdate": {
         "properties": {
           "name": {
@@ -8485,6 +11497,306 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "KbDocumentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kb_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kb Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "source_kind": {
+            "type": "string",
+            "title": "Source Kind"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "default": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kb_id",
+          "name",
+          "source_kind",
+          "size_bytes",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "KbDocumentResponse",
+        "description": "D-10 per-document list row."
+      },
+      "KbPasteTextRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "content"
+        ],
+        "title": "KbPasteTextRequest"
+      },
+      "KbSearchHit": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Id"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "distance": {
+            "type": "number",
+            "title": "Distance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "document_id",
+          "distance"
+        ],
+        "title": "KbSearchHit"
+      },
+      "KbSearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Query"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "KbSearchRequest"
+      },
+      "KbSearchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/KbSearchHit"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "KbSearchResponse"
+      },
+      "KnowledgeBaseCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "KnowledgeBaseCreate"
+      },
+      "KnowledgeBaseResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "source_kind": {
+            "type": "string",
+            "title": "Source Kind"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "documents": {
+            "type": "integer",
+            "title": "Documents",
+            "default": 0
+          },
+          "indexed": {
+            "type": "integer",
+            "title": "Indexed",
+            "default": 0
+          },
+          "processing": {
+            "type": "integer",
+            "title": "Processing",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "storage_bytes": {
+            "type": "integer",
+            "title": "Storage Bytes",
+            "default": 0
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "empty"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "source_kind",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "KnowledgeBaseResponse",
+        "description": "KB list/detail row. Carries the D-09 aggregate inline.\n\n``status`` is derived by the router: ``failed`` when any doc failed, else\n``processing`` when any doc is processing, else ``indexed`` when ≥1 doc is\nindexed, else ``empty``."
+      },
+      "KnowledgeBaseUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "title": "KnowledgeBaseUpdate"
       },
       "LLMAggregatesResponse": {
         "properties": {
@@ -8825,6 +12137,42 @@
         ],
         "title": "MoveContactRequest"
       },
+      "PoolHealth": {
+        "properties": {
+          "active": {
+            "type": "integer",
+            "title": "Active"
+          },
+          "paused": {
+            "type": "integer",
+            "title": "Paused"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "earliest_resume_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Resume At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active",
+          "paused",
+          "total"
+        ],
+        "title": "PoolHealth",
+        "description": "POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.\n\nPresentation-free — the green/yellow/red badge is derived ON THE FRONTEND\n(paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).\nearliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4\nrecheck horizon); None when no sender is restricted."
+      },
       "ProxyConfig": {
         "properties": {
           "type": {
@@ -9108,6 +12456,89 @@
         "type": "object",
         "title": "RecheckRequest"
       },
+      "RestrictionEventResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "restricted_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restricted Until"
+          },
+          "raw_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Text"
+          },
+          "activity_slice": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Slice"
+          },
+          "proxy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proxy"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "source",
+          "category",
+          "created_at"
+        ],
+        "title": "RestrictionEventResponse",
+        "description": "HLTH-03: one restriction-event row from sender_restriction_events.\n\nRead-only response for GET /senders/{slug}/restriction-events. ORM read via\nfrom_attributes; mirrors the migration-030 columns."
+      },
       "SendMessageFromUIRequest": {
         "properties": {
           "message": {
@@ -9122,7 +12553,7 @@
           "message"
         ],
         "title": "SendMessageFromUIRequest",
-        "description": "POST /api/v1/conversations/{id}/send body (D-04 auto-takeover)."
+        "description": "POST /api/v1/conversations/{id}/send body (D-04 auto-takeover).\n\n2026-05-26: Accepts both ``message`` (canonical, per openapi spec) and\n``message_text`` (what Lovable's generated client sends). Pydantic's\n``AliasChoices`` lets us read either name without forcing the frontend\nto ship a hotfix. Outgoing serialization still uses canonical ``message``."
       },
       "SendMessageFromUIResponse": {
         "properties": {
@@ -9416,7 +12847,9 @@
               "active",
               "warmup",
               "paused",
-              "error"
+              "error",
+              "limited",
+              "frozen"
             ],
             "title": "Status"
           },
@@ -9432,6 +12865,52 @@
               "paused"
             ],
             "title": "Lifecycle Status"
+          },
+          "restriction_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "spam_limited",
+              "frozen"
+            ],
+            "title": "Restriction Status",
+            "default": "none"
+          },
+          "restricted_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restricted Until"
+          },
+          "checker_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "cooling_down",
+                  "frozen",
+                  "paused",
+                  "reauth_needed",
+                  "banned"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checker Status"
+          },
+          "checker_trip_count": {
+            "type": "integer",
+            "title": "Checker Trip Count",
+            "default": 0
           },
           "rate_limits": {
             "$ref": "#/components/schemas/RateLimits"
@@ -9474,6 +12953,34 @@
               }
             ],
             "title": "Created At"
+          },
+          "sent_today": {
+            "type": "integer",
+            "title": "Sent Today",
+            "default": 0
+          },
+          "locked_by_campaign_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked By Campaign Id"
+          },
+          "locked_by_campaign_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked By Campaign Name"
           }
         },
         "type": "object",
@@ -9719,34 +13226,6 @@
         "title": "TelemetryEventIn",
         "description": "POST /api/v1/telemetry/events body (UI-SPEC §9).\n\nevent_id is client-supplied for navigator.sendBeacon idempotency\n(retry on flaky networks → same event lands once). Default factory\ngenerates a fresh UUIDv4 when the client omits it."
       },
-      "ToneSpec": {
-        "properties": {
-          "formal": {
-            "type": "integer",
-            "maximum": 50.0,
-            "minimum": -50.0,
-            "title": "Formal",
-            "default": 0
-          },
-          "warm": {
-            "type": "integer",
-            "maximum": 50.0,
-            "minimum": -50.0,
-            "title": "Warm",
-            "default": 0
-          },
-          "brief": {
-            "type": "integer",
-            "maximum": 50.0,
-            "minimum": -50.0,
-            "title": "Brief",
-            "default": 0
-          }
-        },
-        "type": "object",
-        "title": "ToneSpec",
-        "description": "Bi-polar tone settings −50..+50 (UI-SPEC §5.8 Voice tab ToneSlider)."
-      },
       "ToolParamSpec": {
         "properties": {
           "name": {
@@ -9968,6 +13447,52 @@
         ],
         "title": "VerifyCodeRequest"
       },
+      "WarmupSettingsUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Topics"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "ru"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tone"
+          }
+        },
+        "type": "object",
+        "title": "WarmupSettingsUpdate",
+        "description": "PUT /settings body — все поля опциональны; отсутствующие сбрасываются в дефолт.\n\n`enabled` — master toggle прогрева workspace (D-06/D-07). `topics` / `system_prompt`\n/ `tone` — per-workspace контент (D-10); пустые → resolved code-defaults в GET."
+      },
       "WarningItem": {
         "properties": {
           "field": {
@@ -10079,9 +13604,9 @@
             "type": "string",
             "title": "Primary Goal"
           },
-          "success_criteria": {
+          "lead_trigger_hint": {
             "type": "string",
-            "title": "Success Criteria"
+            "title": "Lead Trigger Hint"
           },
           "tools": {
             "items": {},
@@ -10094,11 +13619,25 @@
           "name",
           "audience_hints",
           "primary_goal",
-          "success_criteria",
+          "lead_trigger_hint",
           "tools"
         ],
         "title": "_AutoFillResponse",
-        "description": "Canned defaults so the UI button works without an LLM call (v1 stub)."
+        "description": "Canned defaults so the UI button works without an LLM call (v1 stub).\n\nPhase 11 D-13: success_criteria removed; auto-fill stub returns lead_trigger_hint instead."
+      },
+      "_RerenderResponse": {
+        "properties": {
+          "rerendered": {
+            "type": "integer",
+            "title": "Rerendered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rerendered"
+        ],
+        "title": "_RerenderResponse",
+        "description": "POST /campaigns/{id}/rerender-pending result."
       }
     }
   }

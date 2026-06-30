@@ -20,7 +20,9 @@ import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedContactsRouteImport } from './routes/_authenticated/contacts'
 import { Route as AuthenticatedAgentsRouteImport } from './routes/_authenticated/agents'
 import { Route as AuthenticatedAccountsRouteImport } from './routes/_authenticated/accounts'
+import { Route as AuthenticatedKnowledgeBasesIndexRouteImport } from './routes/_authenticated/knowledge-bases.index'
 import { Route as AuthenticatedCampaignsIndexRouteImport } from './routes/_authenticated/campaigns.index'
+import { Route as AuthenticatedKnowledgeBasesIdRouteImport } from './routes/_authenticated/knowledge-bases.$id'
 import { Route as AuthenticatedCampaignsNewRouteImport } from './routes/_authenticated/campaigns.new'
 import { Route as AuthenticatedCampaignsIdRouteImport } from './routes/_authenticated/campaigns.$id'
 
@@ -78,10 +80,22 @@ const AuthenticatedAccountsRoute = AuthenticatedAccountsRouteImport.update({
   path: '/accounts',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedKnowledgeBasesIndexRoute =
+  AuthenticatedKnowledgeBasesIndexRouteImport.update({
+    id: '/knowledge-bases/',
+    path: '/knowledge-bases/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedCampaignsIndexRoute =
   AuthenticatedCampaignsIndexRouteImport.update({
     id: '/campaigns/',
     path: '/campaigns/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedKnowledgeBasesIdRoute =
+  AuthenticatedKnowledgeBasesIdRouteImport.update({
+    id: '/knowledge-bases/$id',
+    path: '/knowledge-bases/$id',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedCampaignsNewRoute =
@@ -110,7 +124,9 @@ export interface FileRoutesByFullPath {
   '/auth/callback': typeof AuthCallbackRoute
   '/campaigns/$id': typeof AuthenticatedCampaignsIdRoute
   '/campaigns/new': typeof AuthenticatedCampaignsNewRoute
+  '/knowledge-bases/$id': typeof AuthenticatedKnowledgeBasesIdRoute
   '/campaigns/': typeof AuthenticatedCampaignsIndexRoute
+  '/knowledge-bases/': typeof AuthenticatedKnowledgeBasesIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -125,7 +141,9 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/campaigns/$id': typeof AuthenticatedCampaignsIdRoute
   '/campaigns/new': typeof AuthenticatedCampaignsNewRoute
+  '/knowledge-bases/$id': typeof AuthenticatedKnowledgeBasesIdRoute
   '/campaigns': typeof AuthenticatedCampaignsIndexRoute
+  '/knowledge-bases': typeof AuthenticatedKnowledgeBasesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -142,7 +160,9 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/campaigns/$id': typeof AuthenticatedCampaignsIdRoute
   '/_authenticated/campaigns/new': typeof AuthenticatedCampaignsNewRoute
+  '/_authenticated/knowledge-bases/$id': typeof AuthenticatedKnowledgeBasesIdRoute
   '/_authenticated/campaigns/': typeof AuthenticatedCampaignsIndexRoute
+  '/_authenticated/knowledge-bases/': typeof AuthenticatedKnowledgeBasesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -159,7 +179,9 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/campaigns/$id'
     | '/campaigns/new'
+    | '/knowledge-bases/$id'
     | '/campaigns/'
+    | '/knowledge-bases/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -174,7 +196,9 @@ export interface FileRouteTypes {
     | '/'
     | '/campaigns/$id'
     | '/campaigns/new'
+    | '/knowledge-bases/$id'
     | '/campaigns'
+    | '/knowledge-bases'
   id:
     | '__root__'
     | '/_authenticated'
@@ -190,7 +214,9 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/campaigns/$id'
     | '/_authenticated/campaigns/new'
+    | '/_authenticated/knowledge-bases/$id'
     | '/_authenticated/campaigns/'
+    | '/_authenticated/knowledge-bases/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -278,11 +304,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAccountsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/knowledge-bases/': {
+      id: '/_authenticated/knowledge-bases/'
+      path: '/knowledge-bases'
+      fullPath: '/knowledge-bases/'
+      preLoaderRoute: typeof AuthenticatedKnowledgeBasesIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/campaigns/': {
       id: '/_authenticated/campaigns/'
       path: '/campaigns'
       fullPath: '/campaigns/'
       preLoaderRoute: typeof AuthenticatedCampaignsIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/knowledge-bases/$id': {
+      id: '/_authenticated/knowledge-bases/$id'
+      path: '/knowledge-bases/$id'
+      fullPath: '/knowledge-bases/$id'
+      preLoaderRoute: typeof AuthenticatedKnowledgeBasesIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/campaigns/new': {
@@ -313,7 +353,9 @@ interface AuthenticatedRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedCampaignsIdRoute: typeof AuthenticatedCampaignsIdRoute
   AuthenticatedCampaignsNewRoute: typeof AuthenticatedCampaignsNewRoute
+  AuthenticatedKnowledgeBasesIdRoute: typeof AuthenticatedKnowledgeBasesIdRoute
   AuthenticatedCampaignsIndexRoute: typeof AuthenticatedCampaignsIndexRoute
+  AuthenticatedKnowledgeBasesIndexRoute: typeof AuthenticatedKnowledgeBasesIndexRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -327,7 +369,9 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedCampaignsIdRoute: AuthenticatedCampaignsIdRoute,
   AuthenticatedCampaignsNewRoute: AuthenticatedCampaignsNewRoute,
+  AuthenticatedKnowledgeBasesIdRoute: AuthenticatedKnowledgeBasesIdRoute,
   AuthenticatedCampaignsIndexRoute: AuthenticatedCampaignsIndexRoute,
+  AuthenticatedKnowledgeBasesIndexRoute: AuthenticatedKnowledgeBasesIndexRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

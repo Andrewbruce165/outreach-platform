@@ -1,10 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
+import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
@@ -14,6 +20,8 @@ type Agent = components["schemas"]["AgentResponse"];
 type AgentCreate = components["schemas"]["AgentCreate"];
 type AgentUpdate = components["schemas"]["AgentUpdate"];
 type AgentListResponse = components["schemas"]["AgentListResponse"];
+type KnowledgeBase = components["schemas"]["KnowledgeBaseResponse"];
+type AgentForKb = components["schemas"]["AgentForKbResponse"];
 
 export const Route = createFileRoute("/_authenticated/agents")({
   component: AgentsPage,
@@ -412,6 +420,20 @@ function AgentEditor({
               />
             </Field>
 
+            {/*
+              Phase 16 D-07/D-08: M:N knowledge-base attach/detach. This is a
+              SEPARATE control from the static `knowledge_base` text field (D-08) —
+              the multi-select is additional. Attach/detach hit
+              POST/DELETE /knowledge-bases/{kb_id}/agents and need an agent id, so
+              for a brand-new agent we prompt the user to save first.
+            */}
+            <Field label="Базы знаний">
+              <KbMultiSelect agentId={agent?.id ?? null} />
+              <span className="field__hint">
+                Агент обращается к этим базам по необходимости во время ответа.
+              </span>
+            </Field>
+
             <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
               <label style={cbStyle}>
                 <input type="checkbox" {...register("mirror_language")} />
@@ -455,6 +477,191 @@ function AgentEditor({
           </footer>
         </form>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Phase 16 D-07: KB multi-select on the agent editor. M:N attach/detach against
+ * POST/DELETE /knowledge-bases/{kb_id}/agents.
+ *
+ * The backend exposes the M:N only from the KB side (reverse list
+ * GET /knowledge-bases/{kb_id}/agents), so this agent's attached set is derived
+ * by checking each workspace KB's agent list for this agent's id. With a small
+ * number of workspace KBs this is a handful of cached queries.
+ *
+ * D-08: this is ADDITIONAL to the static `knowledge_base` text field — they are
+ * independent controls.
+ */
+function KbMultiSelect({ agentId }: { agentId: string | null }) {
+  const qc = useQueryClient();
+  const [picking, setPicking] = useState(false);
+
+  const kbsQ = useQuery({
+    queryKey: ["knowledge-bases"],
+    queryFn: () => api<KnowledgeBase[]>("/api/v1/knowledge-bases"),
+    staleTime: 60_000,
+  });
+  const kbs = kbsQ.data ?? [];
+
+  // Per-KB reverse lists — one cached query each. Only needed when editing an
+  // existing agent (a new agent isn't attached to anything yet).
+  const agentListQs = useQueries({
+    queries: kbs.map((kb) => ({
+      queryKey: ["kb-agents", kb.id],
+      queryFn: () =>
+        api<AgentForKb[]>(`/api/v1/knowledge-bases/${kb.id}/agents`),
+      enabled: !!agentId,
+      staleTime: 60_000,
+    })),
+  });
+
+  const attachedKbIds = new Set<string>();
+  if (agentId) {
+    kbs.forEach((kb, i) => {
+      const agents = agentListQs[i]?.data ?? [];
+      if (agents.some((a) => a.agent_id === agentId || a.id === agentId)) {
+        attachedKbIds.add(kb.id);
+      }
+    });
+  }
+
+  const invalidate = (kbId: string) => {
+    void qc.invalidateQueries({ queryKey: ["kb-agents", kbId] });
+    void qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
+  };
+
+  const attachMut = useMutation({
+    mutationFn: (kbId: string) =>
+      api(`/api/v1/knowledge-bases/${kbId}/agents`, {
+        method: "POST",
+        body: { agent_id: agentId },
+      }),
+    onSuccess: (_d, kbId) => {
+      toast.success("База знаний подключена");
+      invalidate(kbId);
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+
+  const detachMut = useMutation({
+    mutationFn: (kbId: string) =>
+      api(`/api/v1/knowledge-bases/${kbId}/agents/${agentId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (_d, kbId) => {
+      toast.success("База знаний отключена");
+      invalidate(kbId);
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+
+  const busy = attachMut.isPending || detachMut.isPending;
+
+  // New agent: no id yet → can't form the M:N row. Prompt to save first.
+  if (!agentId) {
+    return (
+      <div className="muted text-xs" style={{ lineHeight: 1.5 }}>
+        Сохраните агента, чтобы подключить базы знаний.
+      </div>
+    );
+  }
+
+  if (kbsQ.isLoading) {
+    return <div className="muted text-xs">Загрузка баз знаний…</div>;
+  }
+
+  const selected = kbs.filter((kb) => attachedKbIds.has(kb.id));
+  const available = kbs.filter((kb) => !attachedKbIds.has(kb.id));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {selected.length === 0 ? (
+        <div className="muted text-xs">Базы знаний не подключены.</div>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {selected.map((kb) => (
+            <span
+              key={kb.id}
+              className="pill pill--blue"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              <span className="pill__dot" style={{ background: "var(--tg-blue)" }} />
+              {kb.name}
+              <button
+                type="button"
+                aria-label={`Отключить ${kb.name}`}
+                disabled={busy}
+                onClick={() => detachMut.mutate(kb.id)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: "none",
+                  border: 0,
+                  padding: 0,
+                  cursor: busy ? "default" : "pointer",
+                  color: "inherit",
+                  opacity: busy ? 0.6 : 1,
+                }}
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {available.length > 0 && (
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            disabled={busy}
+            onClick={() => setPicking((v) => !v)}
+          >
+            <Plus size={13} /> Подключить базу
+          </button>
+          {picking && (
+            <div
+              className="card"
+              style={{
+                position: "absolute",
+                top: "calc(100% + 4px)",
+                left: 0,
+                minWidth: 220,
+                padding: 4,
+                zIndex: 40,
+                boxShadow: "var(--shadow-lg)",
+              }}
+            >
+              {available.map((kb) => (
+                <button
+                  key={kb.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setPicking(false);
+                    attachMut.mutate(kb.id);
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    color: "var(--text)",
+                    background: "none",
+                    border: 0,
+                    cursor: "pointer",
+                  }}
+                >
+                  {kb.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
