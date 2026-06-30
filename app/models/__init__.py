@@ -696,7 +696,12 @@ class KnowledgeBase(Base):
     """Workspace-scoped knowledge base (D-05). Container for documents + chunks."""
     __tablename__ = "knowledge_bases"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # server_default so the row gets an id under BOTH the ORM path (client-side
+    # default=) AND raw text() INSERTs. create_all wins over migration 041 in
+    # init_db, so without server_default the prod column has no DB default and
+    # any raw insert omitting id hits NotNullViolation (mirrors sender_restriction_events).
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+                server_default=text("gen_random_uuid()"))
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
@@ -711,7 +716,8 @@ class KbDocument(Base):
     """Uploaded/pasted source document in a KB (D-01/D-02). Ingest-worker target."""
     __tablename__ = "kb_documents"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+                server_default=text("gen_random_uuid()"))
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
@@ -735,7 +741,10 @@ class KbChunk(Base):
     """Embedded text chunk of a document (D-06 text-embedding-3-small, 1536 dims)."""
     __tablename__ = "kb_chunks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # server_default (gen_random_uuid) — the ingest worker inserts chunks via raw
+    # text() SQL omitting id; without a DB default that hits NotNullViolation.
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+                server_default=text("gen_random_uuid()"))
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
