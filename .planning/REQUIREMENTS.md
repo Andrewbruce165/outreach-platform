@@ -199,6 +199,20 @@
 - [x] **KB-06**: Поиск и все KB-эндпоинты строго workspace-scoped — `kb_search` фильтрует по `workspace_id` + подключённым `kb_id`, утечки между workspace нет (D-05).
 - Статическое поле `ai_contexts.knowledge_base` (Phase 11) остаётся рядом, не трогается (D-08).
 
+### Sender-side Resolve Ladder (Phase 17 — derived this phase, see 17-CONTEXT.md / 17-RESEARCH.md / 17-VALIDATION.md; tracked via decisions D-01..D-16)
+
+- [ ] **SRLD-01**: Чекер захватывает `@username` из результата `ResolvePhone`/`ImportContacts` и возвращает его — `resolve_phone_with_fallback` перестаёт выбрасывать `user.username` (возвращал только `{is_registered, telegram_id}`). Username публичный/переносимый (в отличие от per-account `access_hash`) (D-06).
+- [ ] **SRLD-02**: Захваченный username durable на `contacts.tg_username_resolved` (resolve-provenance, mig 013 — reuse, без новой колонки) + `contacts_cache.username`; НИКОГДА не затирает пользовательский `contacts.username` (CSV-provenance). Воркер уже пишет `tg_username_resolved = res.get("username")` (worker:875) — оживает с SRLD-01 (D-07).
+- [ ] **SRLD-03**: Резолв отправителя = трёхступенчатая лестница `кэш(access_hash) → ResolveUsername(захваченный @username) → ImportContacts`; собственный `ResolvePhone` отправителя удаляется полностью (именно он дал ложные «нет» в инциденте Barter-ВЭД) (D-01, D-02).
+- [ ] **SRLD-04**: Tier-3 `ImportContacts` гейтится вердиктом чекера `registered`; `not_registered` → skip (не тратим рискованный import) (D-03, D-11).
+- [ ] **SRLD-05**: Ленивый import по одному прямо перед отправкой; опора на существующий 4/мин лимит очереди (под burst-онсетом ~47–49); НЕ трогать константы `queue.py`; НЕТ `DeleteContacts` на отправителе (книга остаётся горячей для фоллоу-апов, D-04) (D-04, D-05).
+- [ ] **SRLD-06**: Протухший username — `ResolveUsername` бросает `UsernameNotOccupiedError`/`UsernameInvalidError` → fall-through на import-tier (если registered), НИКОГДА не финализировать `not_registered` (сейчас `_resolve_username` кэширует False и выходит) (D-09).
+- [ ] **SRLD-07**: Confidence-gated чтение кэша — строка `is_registered=false` от suspect/low-confidence источника НЕ отдаётся (оба read-site: `checker.py::_lookup_cache` + `telegram.py::_get_cached_contact`) → live-перерезолв. Кэш НИКОГДА не удаляется (ROADMAP «не чистим»). Фикс cross-contamination Igor (D-12, D-13).
+- [ ] **SRLD-08**: Durable захват блока — `UserIsBlockedError` на send-пути → `sender_restriction_events` строка (`event_type='blocked'`, `category='restriction'`, free-form — без CHECK-миграции); read-only per-sender block-rate эндпоинт (blocks/sends за окно) поверх захваченных блоков + Phase 10 событий; НЕТ control-loop/auto-pause (D-15, D-16).
+- [ ] **SRLD-09**: Docs — смягчить формулировку «страна = факт» в `/root/CLAUDE.md` §«Семантика checker'а» до гипотезы (country-gate непроверен, в коде НЕ гейтим) (D-10).
+
+**NB:** Phase 17 добавляет 0 миграций — всё хранилище переиспользует существующие колонки (`contacts.tg_username_resolved`, `contacts_cache.username`, `contacts.tg_probe_state`/`tg_confidence`, `sender_restriction_events.event_type` free-form).
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -351,6 +365,15 @@
 | KB-04 | Phase 16 | Complete |
 | KB-05 | Phase 16 | Complete |
 | KB-06 | Phase 16 | Complete |
+| SRLD-01 | Phase 17 | Pending |
+| SRLD-02 | Phase 17 | Pending |
+| SRLD-03 | Phase 17 | Pending |
+| SRLD-04 | Phase 17 | Pending |
+| SRLD-05 | Phase 17 | Pending |
+| SRLD-06 | Phase 17 | Pending |
+| SRLD-07 | Phase 17 | Pending |
+| SRLD-08 | Phase 17 | Pending |
+| SRLD-09 | Phase 17 | Pending |
 
 **Coverage:**
 
@@ -375,3 +398,4 @@
 *2026-06-26 — derived PACE-01..07 (Even Pacing Across Sending Window) during Phase 13 planning*
 *2026-06-29 — derived WARM-01..15 (Account Warmup via Inter-Account AI Chat) during Phase 15 planning*
 *2026-06-30 — derived KB-01..06 (RAG Knowledge Bases for Agents) during Phase 16 planning*
+*2026-06-30 — derived SRLD-01..09 (Sender-side Resolve Ladder) during Phase 17 planning*

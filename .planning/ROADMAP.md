@@ -23,8 +23,10 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [x] **Phase 9: Cold-Contact Failover** — не-контактированные задачи замёрзшего аккаунта уходят на здоровые; активные диалоги ждут свой аккаунт (completed 2026-06-24)
 - [x] **Phase 10: Pool Visibility & Restriction Audit** (optional) — здоровье пула в кампании (N активно / K на паузе до T) + бейдж; durable аудит всех предупреждений/блокировок аккаунтов с привязкой к предшествующей активности (completed 2026-06-24)
 - [ ] **Phase 11: Agent/Campaign Field Split & Prompt Assembly** — развести слои Агент(КТО)/Кампания(ЧТО), убрать дубли в системном промпте (один источник на блок), новые поля (скорость ответа, ход разговора, аргументы и факты, базы знаний) + перестройка UI визарда
-- [ ] **Phase 14: Reliable Contact Resolution** — надёжная и масштабируемая проверка контактов в TG: health-probe на заведомо-живых, burst-кап + cooldown, пул чекеров с ротацией, перепроверка контаминированных данных (диагноз: единственный чекер занижал живых в ~15–20 раз)
+- [x] **Phase 14: Reliable Contact Resolution** — надёжная и масштабируемая проверка контактов в TG: health-probe на заведомо-живых, burst-кап + cooldown, пул чекеров с ротацией, перепроверка контаминированных данных (диагноз: единственный чекер занижал живых в ~15–20 раз) (closed 2026-06-30 — механика задеплоена; перечек контаминированной базы + re-activation пула передан в Phase 17)
 - [x] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича (completed 2026-06-29)
+- [ ] **Phase 16: RAG Knowledge Bases for Agents** — базы знаний для агентов на pgvector (гибридный keyword+vector поиск)
+- [ ] **Phase 17: Sender-side resolve ladder with username capture and import fallback** — чекер → чистый фильтр + захват @username; отправитель сам резолвит по лестнице кэш→ResolveUsername→ImportContacts (лениво перед отправкой), фолбэк на phone-резолв; чинит инцидент «Barter - ВЭД хук» (22 живых РФ-номера упали на ResolvePhone) — **planned (4 plans, waves 1→3, SRLD-01..09)**
 
 ## Phase Details
 
@@ -357,10 +359,12 @@ Plans:
 
 ### Phase 14: Reliable Contact Resolution
 
+> **✅ CLOSED 2026-06-30 (superseded).** Защитная механика чекера построена и задеплоена (14-01/02/03/05/06/07 + пост-фазовые фиксы b7j/mig-036 и trip_count-reset): деградировавший чекер больше не финализирует false-negatives, селекция гейтит restricted/paused, есть burst-cap/cooldown/rotation/rest и health-probe. **SC #1/#2/#5 закрыты.** **SC #3/#4 НЕ закрыты намеренно** — re-activation пула (14-04 live-smoke провалился) и перечек контаминированной базы (2110+699+14k) требуют genuinely-fresh warmed RU чекеров, которых нет. Этот остаток передан в **Phase 17** (sender-side resolve ladder), который снимает зависимость от отдельного пула чекеров. Фаза закрыта по решению: «ушли дальше, неактуально».
+
 **Goal:** Сделать проверку контактов (phone → есть ли в Telegram) надёжной и масштабируемой, чтобы кампании доставали всех достижимых лидов, а не сливали их молча из-за деградировавшего чекера.
 **Requirements**: RESV-01..RESV-07 (см. REQUIREMENTS.md)
 **Depends on:** Phase 2 (checker / contacts_cache / contact_check_worker). Связано с Phase 10 (sender_restriction_events, restriction_status).
-**Plans:** 3/4 executed + 2 gap-closure plans (14-04 smoke FAILED → see 14-05/14-06)
+**Plans:** 6/7 executed (14-01/02/03/05/06/07); 14-04 (re-activation live-smoke) FAILED → остаток передан в Phase 17
 
 **Контекст (расследование 2026-06-26 — `.planning/notes/checker-false-negatives.md`):**
 
@@ -391,13 +395,16 @@ Plans:
 - [x] 14-03-PLAN.md — RESV-01 health-probe (≥2-miss detect + Phase-10 restriction mark) + RESV-06/D-09 suspect rollback + confidence finalization + RESV-02/D-02 importContacts fallback + DeleteContacts cleanup [RESV-01, RESV-06, RESV-02] [depends_on: 14-02]
 
 **Wave 4** *(blocked on Wave 3 — D-03 activation gate, human-verify)*
-- [ ] 14-04-PLAN.md — pre-activation DB verification + activate 2 parked healthy checkers + RESV-07 docs correction + live control-probe smoke (human-verify) [RESV-04, RESV-07] [depends_on: 14-02, 14-03]
+- [ ] 14-04-PLAN.md — ❌ FAILED (re-activation live-smoke: оба чекера зафлудились на 0% mobile, прод откатили к baseline) → передано в Phase 17 [RESV-04, RESV-07] [depends_on: 14-02, 14-03]
 
 **Wave 5** *(gap-closure — 14-04 live-smoke FAILED; blocked on Wave 3 worker fix)*
-- [ ] 14-05-PLAN.md — Gap A: inline flood/throttle-aware finalization in contact_check_worker (FloodWait or anomalous all-empty batch → roll back to pending, never not_registered/high, degrade checker inline + leave rotation, N=0-healthy safe-stop) + RED-first tests [RESV-01, RESV-02, RESV-06] [depends_on: 14-03]
+- [x] 14-05-PLAN.md — Gap A: inline flood/throttle-aware finalization in contact_check_worker (FloodWait or anomalous all-empty batch → roll back to pending, never not_registered/high, degrade checker inline + leave rotation, N=0-healthy safe-stop) + RED-first tests [RESV-01, RESV-02, RESV-06] [depends_on: 14-03]
 
 **Wave 6** *(gap-closure — blocked on Wave 5 fix; human-verify gate)*
-- [ ] 14-06-PLAN.md — Gap B: read-only diagnostic spike (phone-resolve pool-wide? @username viable? our-rate triggers throttle?) → findings note + GO/NO-GO behind a blocking human-verify gate. NO blind re-activation / NO 14k drain (deferred to a verdict-gated follow-up) [RESV-01, RESV-02] [depends_on: 14-05]
+- [x] 14-06-PLAN.md — Gap B: read-only diagnostic spike (phone-resolve pool-wide? @username viable? our-rate triggers throttle?) → findings note + conditional GO/NO-GO (phone-resolve жив 96–98%, @username мёртв) [RESV-01, RESV-02] [depends_on: 14-05]
+
+**Wave 7** *(gap-closure — benign per-checker rest after batch)*
+- [x] 14-07-PLAN.md — per-checker `checker_rest_until` (mig 035) + CONTACT_CHECK_REST_SECONDS knob: чекер уходит на отдых после батча, ротация чередует ≥2 здоровых; НЕ трогает restriction/lifecycle [RESV-02] [depends_on: 14-05]
 
 > **Gap-closure note (2026-06-26):** 14-04 Task-4 live smoke activated the 2 "healthy" parked checkers and both flooded instantly at 0% mobile (`checked=20..30 reg=0 flood=True`). Root cause: on `flood=True` the worker finalized empty resolves as `not_registered`/high-confidence before the decoupled ≥2-miss probe could flag the checker. Prod rolled back to baseline (0 active checkers). 14-05 fixes the finalization inline; 14-06 diagnoses whether re-activation is even viable. RESV-04 (re-check 14k/2110/699) + full re-activation DEFERRED — not closed by this gap-closure. Evidence: `.planning/notes/checker-false-negatives.md` §"Часть 2".
 
@@ -455,6 +462,27 @@ Plans:
 **Wave 4** *(blocked on Wave 3 — frontend, human-verify)*
 - [ ] 16-05-frontend-surfaces-PLAN.md — sibling repo aimly-tg-outreach: Knowledge bases sidebar tab + list page + KB detail (D-09 header + 5 metrics + 4 tabs Documents/Search/Agents/Settings, poll-while-processing) + agent-editor KB multi-select + human UAT [Wave 4, depends_on: 16-03, 16-04] — KB-01..05 UI
 
+### Phase 17: Sender-side resolve ladder with username capture and import fallback
+
+**Goal:** Перестроить резолв так, чтобы **отправитель сам резолвил и дотягивался** до получателя, а **чекер стал чистым фильтром** «есть/нет». Чекер перестаёт выбрасывать `username` из ответа `ResolvePhone` и **сохраняет @username** (публичный, переносимый между аккаунтами — в отличие от per-account `access_hash`). На отправителе — **тройная лестница резолва**: (1) кэш per-sender → (2) `ResolveUsername` по @username, захваченному чекером (дёшево, безопасно, обходит приватность по телефону, не засоряет адресную книгу) → (3) `ImportContacts` **лениво, по одному перед отправкой** (не пачкой 50 с утра — пачка = burst у порога ~47–49; лимит 4/мин сам размазывает). Чужой `access_hash` не переиспользуется. Фолбэк на phone-резолв, если username сменился/исчез. Очистку кэша не делаем.
+**Триггер (живой инцидент):** кампания «Barter - ВЭД хук» — 22 живых РФ-номера терминально упали на `ResolvePhone` несмотря на флаг registered/high/clean. Флаг ставил US-аккаунт (чужой резолв не переносится + US на РФ врёт), собственный `ResolvePhone` отправителя дал ложное «нет» (приватность или троттл), а в send-пути нет import-фолбэка. Дизайн-документ: `.planning/notes/sender-side-resolve-redesign.md`.
+**Requirements**: SRLD-01, SRLD-02, SRLD-03, SRLD-04, SRLD-05, SRLD-06, SRLD-07, SRLD-08, SRLD-09 (derived during /gsd:plan-phase 17 — see REQUIREMENTS.md §Sender-side Resolve Ladder; tracked via decisions D-01..D-16)
+**Depends on:** Phase 14 (Reliable Contact Resolution)
+**Plans:** 4 plans
+
+Plans:
+**Wave 1**
+- [ ] 17-01-test-scaffold-PLAN.md — Wave-0 RED scaffold: SRLD-01..08 failing tests across test_checker/test_send/test_contact_check_worker/test_restriction_audit (no prod code) [Wave 1, no deps]
+
+**Wave 2** *(parallel — checker.py vs telegram.py, no file overlap)*
+- [ ] 17-02-checker-username-capture-and-gated-read-PLAN.md — checker captures @username (D-06) + confidence-gated _lookup_cache (D-12) [Wave 2, depends_on: 17-01] — SRLD-01, SRLD-02, SRLD-07
+- [ ] 17-03-sender-resolve-ladder-PLAN.md — resolve_contact ladder cache→ResolveUsername→ImportContacts (drop sender ResolvePhone, D-01/D-02), import gate (D-03), stale-username fall-through (D-09), sender false-read gate (D-12) [Wave 2, depends_on: 17-01] — SRLD-03, SRLD-04, SRLD-05, SRLD-06, SRLD-07
+
+**Wave 3** *(blocked on 17-03 — shares telegram.py::send_message)*
+- [ ] 17-04-block-capture-and-docs-PLAN.md — UserIsBlockedError capture → durable 'blocked' event + read-only block-rate endpoint (D-15/D-16) + CLAUDE.md country-hypothesis softening (D-10) [Wave 3, depends_on: 17-01, 17-03] — SRLD-08, SRLD-09
+
+**NB:** Phase 17 adds 0 migrations — all storage reuses existing columns.
+
 ---
 
 ## Progress
@@ -472,9 +500,10 @@ Plans:
 | 8. Pool Management & Even Distribution | 4/4 | Complete   | 2026-06-23 |
 | 9. Cold-Contact Failover | 2/2 | Complete   | 2026-06-24 |
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
-| 14. Reliable Contact Resolution | 3/4 | In Progress|  |
+| 14. Reliable Contact Resolution | 6/7 | Closed (superseded → Phase 17) | 2026-06-30 |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
 | 16. RAG Knowledge Bases for Agents | 4/5 | In Progress|  |
+| 17. Sender-side Resolve Ladder | 0/4 | Planned (4 plans, waves 1→3) | - |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**

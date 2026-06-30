@@ -1,9 +1,9 @@
 ---
 phase: 17
 slug: sender-side-resolve-ladder-with-username-capture-and-import-fallback
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: planned
+nyquist_compliant: true
+wave_0_complete: false  # Wave 0 = plan 17-01 (RED scaffold), executes first
 created: 2026-06-30
 ---
 
@@ -43,16 +43,16 @@ created: 2026-06-30
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | SRLD-01 | unit | `pytest tests/test_checker.py -k username_capture -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-02 | integration | `pytest tests/test_contact_check_worker.py -k captured_username -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-03 | unit | `pytest tests/test_send.py -k resolve_ladder -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-04 | unit | `pytest tests/test_send.py -k import_gate -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-05 | unit + grep | `pytest tests/test_send.py -k lazy_import -x` + `grep -n "DeleteContacts" app/services/telegram.py` (expect 0 in send path) | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-06 | unit | `pytest tests/test_send.py -k stale_username_fallthrough -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-07 | integration | `pytest tests/test_checker.py tests/test_send.py -k confidence_gated_cache -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-08 | integration | `pytest tests/test_restriction_audit.py -k blocked -x` + `pytest tests/test_send.py -k user_blocked -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SRLD-09 | manual/grep | `grep -n "гипотеза\|hypothesis" /root/CLAUDE.md` (doc task) | manual | ⬜ pending |
-| TBD | TBD | TBD | mig 044 (if column added) | integration | `pytest tests/ -k migration -x` (mirror `test_migration_032` pattern) | ❌ W0 | ⬜ pending |
+| T1 | 17-02 | 2 | SRLD-01 | unit | `pytest tests/test_checker.py -k username_capture -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T1 | 17-02 | 2 | SRLD-02 | integration | `pytest tests/test_contact_check_worker.py -k captured_username -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T2 | 17-03 | 2 | SRLD-03 | unit | `pytest tests/test_send.py -k resolve_ladder -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T2 | 17-03 | 2 | SRLD-04 | unit | `pytest tests/test_send.py -k import_gate -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T2 | 17-03 | 2 | SRLD-05 | unit + grep | `pytest tests/test_send.py -k lazy_import -x` + `grep -n "DeleteContacts" app/services/telegram.py` (expect 0 in send path) | ❌ W0 | 🟥 RED (built in 17-01) |
+| T3 | 17-03 | 2 | SRLD-06 | unit | `pytest tests/test_send.py -k stale_username_fallthrough -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T2/T3 | 17-02/17-03 | 2 | SRLD-07 | integration | `pytest tests/test_checker.py tests/test_send.py -k confidence_gated_cache -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T1/T2 | 17-04 | 3 | SRLD-08 | integration | `pytest tests/test_restriction_audit.py -k blocked -x` + `pytest tests/test_send.py -k user_blocked -x` | ❌ W0 | 🟥 RED (built in 17-01) |
+| T3 | 17-04 | 3 | SRLD-09 | manual/grep | `grep -n "гипотеза\|hypothesis" /root/CLAUDE.md` (doc task) | manual | 🟥 RED (built in 17-01) |
+| — | n/a | n/a | mig 044 (if column added) | integration | `pytest tests/ -k migration -x` (mirror `test_migration_032` pattern) | ❌ W0 | ✅ N/A — Phase 17 adds 0 migrations (all columns reused) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -88,4 +88,4 @@ created: 2026-06-30
 - [ ] Feedback latency < 120s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** planned 2026-06-30 — Wave 0 (17-01) precedes all behavior changes; all SRLD reqs have an automated -k target; no migration round-trip needed (0 columns added).
