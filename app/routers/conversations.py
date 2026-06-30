@@ -12,6 +12,7 @@ Endpoints (all under Depends(auth_dep) + workspace-scope):
     POST   /api/v1/conversations/{id}/disable-ai       — manual takeover (INBX-04, D-01/D-02)
     POST   /api/v1/conversations/{id}/enable-ai        — AI back on (INBX-04, D-03)
     POST   /api/v1/conversations/{id}/send             — manager sends UI (INBX-04, D-04)
+    POST   /api/v1/conversations/delete                — bulk hard delete (CASCADE)
     DELETE /api/v1/conversations/{id}                  — hard delete (CASCADE)
     GET    /api/v1/conversations/{id}/llm-calls        — LLM audit log (ANLX-05)
 
@@ -34,14 +35,17 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models import Conversation
 from app.schemas import (
     ConversationListResponse,
     ConversationResponse,
     ConversationUpdate,
+    DeleteConversationsBatchRequest,
     LLMCallListResponse,
     LLMCallResponse,
     MessageListResponse,
@@ -486,6 +490,38 @@ async def send_message_from_ui(
         message_id=message_id,
         telegram_message_id=telegram_message_id,
     )
+
+
+@router.post("/delete", response_model=dict)
+async def delete_conversations_batch(
+    payload: DeleteConversationsBatchRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch hard delete. Возвращает {deleted: N}.
+
+    Зеркало contacts.delete_contacts_batch: workspace-scoped, cross-tenant ids
+    молча пропускаются (не светим существование чужих бесед через 404).
+    Один DELETE-statement; FK CASCADE на уровне БД сносит messages + llm_calls
+    (как в single-delete ниже). Статический путь /delete объявлен ДО
+    DELETE /{conversation_id} и не конфликтует с ним (разные методы/пути).
+    """
+    result = await db.execute(
+        sa_delete(Conversation)
+        .where(
+            Conversation.id.in_(payload.conversation_ids),
+            Conversation.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy app.workspace_id
+        )
+        .returning(Conversation.id)
+        .execution_options(synchronize_session=False)
+    )
+    deleted = len(result.fetchall())
+    await db.commit()
+    logger.info(
+        f"[conversations] batch-delete workspace={ctx.workspace_id} deleted={deleted}"
+    )
+    return {"deleted": deleted}
 
 
 @router.delete("/{conversation_id}", status_code=204)

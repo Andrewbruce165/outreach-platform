@@ -935,6 +935,16 @@ class ConversationUpdate(BaseModel):
         return self
 
 
+class DeleteConversationsBatchRequest(BaseModel):
+    """POST /api/v1/conversations/delete body — bulk hard delete.
+
+    Зеркало DeleteContactBatchRequest: cross-tenant ids молча пропускаются
+    воркером (не светим существование чужих бесед через 404).
+    """
+
+    conversation_ids: List[UUID] = Field(..., min_length=1)
+
+
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

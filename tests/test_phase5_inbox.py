@@ -450,3 +450,65 @@ async def test_delete_conversation_cross_workspace_404_no_delete(
         SELECT COUNT(*) FROM conversations WHERE id = :cid
     """), {"cid": str(conv["id"])})).scalar()
     assert cnt == 1
+
+
+# ── 21. POST /delete batch happy path + cross-workspace skip ──────────────────
+
+
+async def test_delete_conversations_batch_happy_path(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_conversation_factory,
+):
+    """Test 21a: POST /delete removes the listed rows, returns {deleted: N},
+    and leaves unlisted conversations intact."""
+    keep = await test_conversation_factory(contact_phone="+79991203001")
+    drop1 = await test_conversation_factory(contact_phone="+79991203002")
+    drop2 = await test_conversation_factory(contact_phone="+79991203003")
+    await _bind(async_db_session, test_workspace.id, "u-batch-del")
+
+    r = await async_client.post(
+        "/api/v1/conversations/delete",
+        json={"conversation_ids": [str(drop1["id"]), str(drop2["id"])]},
+        headers=_auth_headers(valid_supabase_jwt, "u-batch-del"),
+    )
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 2}
+
+    gone = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM conversations WHERE id = ANY(:ids)
+    """), {"ids": [str(drop1["id"]), str(drop2["id"])]})).scalar()
+    assert gone == 0
+
+    alive = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM conversations WHERE id = :cid
+    """), {"cid": str(keep["id"])})).scalar()
+    assert alive == 1
+
+
+async def test_delete_conversations_batch_cross_workspace_skipped(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_conversation_factory,
+):
+    """Test 21b: batch delete silently skips ids from another workspace —
+    deleted=0, foreign row remains intact (no cross-tenant disclosure)."""
+    from app.models import Workspace
+
+    conv = await test_conversation_factory(contact_phone="+79991204001")
+    other = Workspace(name="OtherBatchDel")
+    async_db_session.add(other)
+    await async_db_session.commit()
+    await async_db_session.refresh(other)
+    await _bind(async_db_session, other.id, "u-batch-other")
+
+    r = await async_client.post(
+        "/api/v1/conversations/delete",
+        json={"conversation_ids": [str(conv["id"])]},
+        headers=_auth_headers(valid_supabase_jwt, "u-batch-other"),
+    )
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 0}
+
+    cnt = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM conversations WHERE id = :cid
+    """), {"cid": str(conv["id"])})).scalar()
+    assert cnt == 1
