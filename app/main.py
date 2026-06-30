@@ -26,6 +26,7 @@ from app.routers import (
     conversations,  # Phase 5 — re-register (was legacy, not previously wired)
     folders,
     health,
+    knowledge_bases,  # Phase 16 — RAG knowledge bases
     onboarding,
     send,
     senders,
@@ -194,6 +195,7 @@ app.include_router(conversations.router)  # Phase 5 — inbox + manager mode
 app.include_router(analytics.router)  # Phase 5 — analytics (4 endpoints) + 05.1 funnel + llm
 app.include_router(telemetry.router)  # Phase 05.1 — UI-SPEC §9 telemetry + core-value KPI
 app.include_router(warmup.router)  # Phase 15 — warmup tab (workspace-scoped, D-05)
+app.include_router(knowledge_bases.router)  # Phase 16 — RAG knowledge bases
 
 
 @app.get("/")

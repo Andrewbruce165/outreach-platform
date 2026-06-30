@@ -13,9 +13,26 @@ Test → requirement map:
 """
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _cleanup_kb_state(async_db_session):
+    """The KnowledgeIngestWorker claims ANY workspace's pending docs globally
+    (``ORDER BY created_at ASC ... FOR UPDATE SKIP LOCKED``). The upload endpoint
+    commits a real ``pending`` kb_documents row, so purge committed KB rows after
+    each test — otherwise a leftover pending doc leaks into a later worker test
+    (test_kb_ingest_worker.py) and gets claimed instead of that test's own doc.
+    Mirrors the autouse cleanup already present in test_kb_ingest_worker.py."""
+    yield
+    await async_db_session.execute(text("DELETE FROM kb_chunks"))
+    await async_db_session.execute(text("DELETE FROM kb_documents"))
+    await async_db_session.execute(text("DELETE FROM agent_knowledge_bases"))
+    await async_db_session.execute(text("DELETE FROM knowledge_bases"))
+    await async_db_session.commit()
 
 
 def _auth_headers(jwt_factory, sub: str) -> dict:

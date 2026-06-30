@@ -18,9 +18,24 @@ Test → requirement map (names consumed by later verify commands):
 import uuid
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _cleanup_kb_state(async_db_session):
+    """Purge committed KB rows after each test so a stray pending doc never leaks
+    into the global-claim KnowledgeIngestWorker test (test_kb_ingest_worker.py).
+    The aggregate test seeds committed kb_documents rows; mirror the autouse
+    cleanup already present in test_kb_ingest_worker.py."""
+    yield
+    await async_db_session.execute(text("DELETE FROM kb_chunks"))
+    await async_db_session.execute(text("DELETE FROM kb_documents"))
+    await async_db_session.execute(text("DELETE FROM agent_knowledge_bases"))
+    await async_db_session.execute(text("DELETE FROM knowledge_bases"))
+    await async_db_session.commit()
 
 
 def _auth_headers(jwt_factory, sub: str) -> dict:
