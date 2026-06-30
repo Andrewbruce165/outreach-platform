@@ -25,6 +25,8 @@ from telethon.errors import (
     SessionPasswordNeededError,
     PhoneNumberInvalidError,
     UserNotMutualContactError,
+    UsernameNotOccupiedError,
+    UsernameInvalidError,
     AuthKeyError,
     AuthKeyUnregisteredError,
     AuthKeyDuplicatedError,
@@ -413,8 +415,30 @@ class TelegramService:
                     "username": row[3],
                     "from_cache": True
                 }
-            if row and row[4] is False:  # known unregistered
-                return {"is_registered": False, "from_cache": True}
+
+            # D-12: a cached `is_registered=false` is only trusted when NO matching
+            # contacts row in the workspace is SUSPECT. The Igor cross-contamination
+            # showed a throttled checker poisons the cache with false negatives; if the
+            # contact's probe is suspect (or its confidence isn't 'high'), we must NOT
+            # serve the blind false — let resolve_contact fall through to a LIVE resolve.
+            # NULL confidence counts as not-trusted (IS DISTINCT FROM is NULL-safe).
+            # Shared suspect predicate with 17-02 (_lookup_cache). The cache is NEVER
+            # deleted — we only suppress the READ.
+            suspect = (await db.execute(
+                text("""
+                    SELECT 1 FROM contacts
+                     WHERE workspace_id = :workspace_id AND phone = :phone
+                       AND (tg_probe_state = 'suspect' OR tg_confidence IS DISTINCT FROM 'high')
+                     LIMIT 1
+                """),
+                {"workspace_id": workspace_id, "phone": phone}
+            )).fetchone()
+
+            if row and row[4] is False:  # known unregistered (per-sender)
+                if suspect:
+                    logger.debug(f"Contact {phone}: per-sender false is suspect — forcing live resolve (D-12)")
+                else:
+                    return {"is_registered": False, "from_cache": True}
 
             # 2. Check conversations table as fallback
             row = (await db.execute(
@@ -437,8 +461,8 @@ class TelegramService:
 
             # 3. Cross-sender lookup (внутри того же workspace) — ONLY для
             # is_registered=false. Если другой чекер этого workspace'а уже
-            # подтвердил что номер не зарегистрирован, пропускаем ResolvePhone.
-            # Для зарегистрированных используем не можем — нужен per-sender access_hash.
+            # подтвердил что номер не зарегистрирован, пропускаем live resolve.
+            # Для зарегистрированных использовать не можем — нужен per-sender access_hash.
             cross_row = (await db.execute(
                 text("""
                     SELECT is_registered FROM contacts_cache
@@ -451,8 +475,11 @@ class TelegramService:
                 {"workspace_id": workspace_id, "phone": phone}
             )).fetchone()
 
-            if cross_row:
-                logger.debug(f"Contact {phone} found unregistered in cross-sender cache — skipping ResolvePhone")
+            # D-12: same suspect gate on the cross-sender false. A suspect-source false
+            # (e.g. a throttled checker on another sender) must NOT short-circuit — the
+            # sender does a LIVE resolve via the ladder instead.
+            if cross_row and not suspect:
+                logger.debug(f"Contact {phone} found unregistered in cross-sender cache — skipping live resolve")
                 return {"is_registered": False, "from_cache": True}
 
         return None
@@ -656,14 +683,22 @@ class TelegramService:
             await self._save_contact_cache(workspace_id, sender_id, key, contact_info)
             return contact_info
 
+        except (UsernameNotOccupiedError, UsernameInvalidError):
+            # D-09: a stale captured @username (the handle was renamed/freed) does NOT
+            # mean the contact is unregistered — it means THIS handle is gone. NEVER
+            # cache/finalize False here; signal the caller to FALL THROUGH to the
+            # import tier (resolve_contact tier-3). For a '@handle' identity-key
+            # contact (no phone), resolve_contact maps this to not_registered.
+            logger.info(f"Contact {key}: captured username is stale → fall through to import")
+            return {"stale_username": True}
         except Exception as e:
-            # USERNAME_NOT_OCCUPIED / USERNAME_INVALID → not registered, cache it.
             err = str(e)
             low = err.lower()
+            # Defence-in-depth: Telethon occasionally surfaces these as generic RPC
+            # errors. Treat the string match the same way — stale, fall through (D-09).
             if "username_not_occupied" in low or "username_invalid" in low:
-                contact_info = {"is_registered": False}
-                await self._save_contact_cache(workspace_id, sender_id, key, contact_info)
-                return {"is_registered": False}
+                logger.info(f"Contact {key}: captured username is stale → fall through to import")
+                return {"stale_username": True}
             # Anything else (FloodWait, frozen account, network) must propagate so
             # the queue worker records the real error and retries.
             logger.error(f"Error checking contact via ResolveUsername: {e}")
