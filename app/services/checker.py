@@ -211,7 +211,7 @@ class CheckerService:
         async with AsyncSessionLocal() as db:
             row = (await db.execute(
                 text("""
-                    SELECT is_registered, telegram_id
+                    SELECT is_registered, telegram_id, username
                     FROM contacts_cache
                     WHERE workspace_id = :workspace_id
                       AND phone = :phone
@@ -246,21 +246,23 @@ class CheckerService:
         return {
             "is_registered": row[0],
             "telegram_id": row[1],
+            "username": row[2],
             "from_cache": True,
         }
 
-    async def _save_cache(self, workspace_id: str, checker_id: str, phone: str, is_registered: bool, telegram_id: Optional[int]):
+    async def _save_cache(self, workspace_id: str, checker_id: str, phone: str, is_registered: bool, telegram_id: Optional[int], username: Optional[str] = None):
         """Persist check result to contacts_cache under the checker's sender_id."""
         try:
             async with AsyncSessionLocal() as db:
                 await db.execute(
                     text("""
                         INSERT INTO contacts_cache
-                            (workspace_id, sender_id, phone, telegram_id, is_registered)
-                        VALUES (:workspace_id, :sender_id, :phone, :telegram_id, :is_registered)
+                            (workspace_id, sender_id, phone, telegram_id, is_registered, username)
+                        VALUES (:workspace_id, :sender_id, :phone, :telegram_id, :is_registered, :username)
                         ON CONFLICT (sender_id, phone) DO UPDATE SET
                             telegram_id = EXCLUDED.telegram_id,
                             is_registered = EXCLUDED.is_registered,
+                            username = EXCLUDED.username,
                             updated_at = NOW()
                     """),
                     {
@@ -269,6 +271,7 @@ class CheckerService:
                         "phone": phone,
                         "telegram_id": telegram_id,
                         "is_registered": is_registered,
+                        "username": username,
                     },
                 )
                 await db.commit()
@@ -293,7 +296,7 @@ class CheckerService:
             "registered": int,
             "not_registered": int,
             "flood_wait_hit": bool,
-            "results": [{"phone": str, "is_registered": bool, "telegram_id": int|None, "from_cache": bool}, ...]
+            "results": [{"phone": str, "is_registered": bool, "telegram_id": int|None, "username": str|None, "from_cache": bool}, ...]
         }
         """
         async with self._get_lock(checker_slug):
@@ -395,6 +398,7 @@ class CheckerService:
                         "phone": phone,
                         "is_registered": cached["is_registered"],
                         "telegram_id": cached.get("telegram_id"),
+                        "username": cached.get("username"),
                         "from_cache": True,
                     })
                     logger.debug(f"[checker:{checker_slug}] {phone} → from cache (registered={cached['is_registered']})")
@@ -408,6 +412,7 @@ class CheckerService:
                     resolved = await resolve_phone_with_fallback(client, phone)
                     is_registered = resolved["is_registered"]
                     telegram_id = resolved["telegram_id"]
+                    username = resolved["username"]
                 except FloodWaitError:
                     raise  # propagate to outer except FloodWaitError handler
                 except Exception as exc:
@@ -419,12 +424,13 @@ class CheckerService:
                     raise
 
                 # 3. Save to cache
-                await self._save_cache(workspace_id, checker_id, phone, is_registered, telegram_id)
+                await self._save_cache(workspace_id, checker_id, phone, is_registered, telegram_id, username)
 
                 results.append({
                     "phone": phone,
                     "is_registered": is_registered,
                     "telegram_id": telegram_id,
+                    "username": username,
                     "from_cache": False,
                 })
                 logger.debug(f"[checker:{checker_slug}] {phone} → registered={is_registered}")

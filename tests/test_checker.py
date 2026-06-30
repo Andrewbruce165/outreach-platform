@@ -143,6 +143,52 @@ async def test_username_capture_in_import_fallback(mock_telethon_client):
     )
 
 
+async def test_check_phones_batch_carries_username(mock_telethon_client, monkeypatch):
+    """SRLD-01/02 regression: the BATCH producer (`check_phones` /
+    `_check_phones_locked`) must thread the captured `@username` into each result
+    dict — not only `resolve_phone_with_fallback`.
+
+    Guards the integration gap found in live UAT (2026-06-30): the helper captured
+    `user.username` but the batch path extracted only `is_registered`/`telegram_id`
+    and built its result dict WITHOUT the `username` key, so the worker's
+    `res.get("username")` was always None and `contacts.tg_username_resolved` never
+    populated (0/16 on a healthy ca-account-1 batch). The earlier persistence test
+    drove `_apply_results` directly with a synthetic username, bypassing this producer.
+    """
+    from unittest.mock import MagicMock
+
+    from app.services.checker import checker_service
+
+    client = mock_telethon_client
+    client.set_response(
+        "ResolvePhoneRequest", _resolved_users(telegram_id=777, username="captured_handle")
+    )
+    # AsyncMock.is_connected() would yield an un-awaited coroutine in the finally
+    # disconnect guard — pin it to a clean no-op (same fix as the 17-01 send tests).
+    client.is_connected = MagicMock(return_value=False)
+
+    async def _fake_get_client(*args, **kwargs):
+        return client
+
+    monkeypatch.setattr(checker_service, "_get_client", _fake_get_client)
+
+    summary = await checker_service.check_phones(
+        workspace_id="00000000-0000-0000-0000-000000000000",
+        checker_id="00000000-0000-0000-0000-000000000001",
+        checker_slug="srld-regress-checker",
+        encrypted_session="unused-mock-session",
+        phones=["+79990003333"],
+    )
+
+    res = summary["results"][0]
+    assert res["is_registered"] is True
+    assert res["telegram_id"] == 777
+    assert res["username"] == "captured_handle", (
+        "the batch producer must carry the captured @username into its results so the "
+        "worker persists tg_username_resolved (SRLD-01/02 — live UAT regression)"
+    )
+
+
 async def test_confidence_gated_cache_checker_read(async_db_session):
     """SRLD-07 (checker side): a `is_registered=false` cache row from a SUSPECT
     source is NOT served by `_lookup_cache` → forces a live re-resolve (D-12).
