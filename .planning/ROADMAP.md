@@ -395,7 +395,7 @@ Plans:
 - [x] 14-03-PLAN.md — RESV-01 health-probe (≥2-miss detect + Phase-10 restriction mark) + RESV-06/D-09 suspect rollback + confidence finalization + RESV-02/D-02 importContacts fallback + DeleteContacts cleanup [RESV-01, RESV-06, RESV-02] [depends_on: 14-02]
 
 **Wave 4** *(blocked on Wave 3 — D-03 activation gate, human-verify)*
-- [ ] 14-04-PLAN.md — ❌ FAILED (re-activation live-smoke: оба чекера зафлудились на 0% mobile, прод откатили к baseline) → передано в Phase 17 [RESV-04, RESV-07] [depends_on: 14-02, 14-03]
+- [x] 14-04-PLAN.md — ❌ FAILED (re-activation live-smoke: оба чекера зафлудились на 0% mobile, прод откатили к baseline) → передано в Phase 17 [RESV-04, RESV-07] [depends_on: 14-02, 14-03] (completed 2026-06-30)
 
 **Wave 5** *(gap-closure — 14-04 live-smoke FAILED; blocked on Wave 3 worker fix)*
 - [x] 14-05-PLAN.md — Gap A: inline flood/throttle-aware finalization in contact_check_worker (FloodWait or anomalous all-empty batch → roll back to pending, never not_registered/high, degrade checker inline + leave rotation, N=0-healthy safe-stop) + RED-first tests [RESV-01, RESV-02, RESV-06] [depends_on: 14-03]
@@ -503,7 +503,7 @@ Plans:
 | 14. Reliable Contact Resolution | 6/7 | Closed (superseded → Phase 17) | 2026-06-30 |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
 | 16. RAG Knowledge Bases for Agents | 5/5 | Complete    | 2026-06-30 |
-| 17. Sender-side Resolve Ladder | 4/4 | Complete   | 2026-06-30 |
+| 17. Sender-side Resolve Ladder | 4/4 | Complete    | 2026-06-30 |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
