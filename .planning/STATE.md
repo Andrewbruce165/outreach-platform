@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 16-04-search-tool-wiring-PLAN.md
-last_updated: "2026-06-30T12:34:38.759Z"
+stopped_at: Phase 17 context gathered
+last_updated: "2026-06-30T15:41:56.599Z"
 last_activity: 2026-06-30
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 15
   total_plans: 64
   completed_plans: 62
@@ -148,6 +148,7 @@ See full log: PROJECT.md → Key Decisions
 - Phase 13 added (2026-06-25): Even pacing across sending window — равномерное распределение новых диалогов по активному окну (`max_new_dialogs_per_day / активные_часы → целевой интервал`), батчинг пула, 1 диалог каждые 3–5 мин с дрожанием. Depends on Phase 12. Выделено из обсуждения Phase 12 (pacing — отдельный механизм от жёсткого потолка, трогает защищённые эмпирические константы queue.py).
 - Phase 14 added (2026-06-26): Reliable Contact Resolution — надёжная/масштабируемая проверка контактов в TG (health-probe на заведомо-живых, burst-кап+cooldown, пул чекеров с ротацией, перепроверка контаминированных данных, confidence/source на not_registered, фикс дыры в `contact_check_worker`). Триггер: расследование во время /gsd-explore — единственный checker `sender-8428118140` теневно ограничен contacts-API и занижал живых в ~15–20 раз (2.5% vs ~26%). Часть 1 (пауза чекера, чистка 2216 кэша, 2110 контактов → pending) выполнена вручную. Диагноз+калибровка: `.planning/notes/checker-false-negatives.md`. Requirements RESV-01..07.
 - Phase 15 added (2026-06-29): Account Warmup via Inter-Account AI Chat — продуктизация взаимного AI-прогрева (аккаунты workspace переписываются между собой через AI для безопасного набора активности/возраста) + отдельная UI-вкладка (старт/стоп, расписание, интенсивность, статус). **Ключевое требование — изоляция от основного флоу аутрича** (не перехватывать реальные диалоги кампаний, не садить лимиты sender'ов, не триггерить AI-ответчик). Базовый движок уже есть: `app/services/warmup.py` + `app/routers/warmup.py`. Референс-прототип (остановлен т.к. влиял на основной флоу): `/root/apps/telegram-api/app/services/warmup.py` + `routers/warmup.py` + `bot_chat.py`. Requirements TBD (определить в discuss-phase).
+- Phase 17 added (2026-06-30): Sender-side resolve ladder with username capture and import fallback — **отправитель сам резолвит и дотягивается**, **чекер = чистый фильтр** «есть/нет» + захват `@username` (публичный/переносимый, в отличие от per-account `access_hash`). Тройная лестница резолва на отправителе: (1) кэш per-sender → (2) `ResolveUsername` по захваченному чекером @username (дёшево/безопасно, обходит приватность по телефону, не засоряет книгу) → (3) `ImportContacts` лениво по одному перед отправкой (не пачкой — burst у ~47–49; 4/мин размазывает). Чужой `access_hash` не переиспользуется; фолбэк на phone-резолв; кэш не чистим. Триггер — живой инцидент «Barter - ВЭД хук»: 22 живых РФ-номера терминально упали на `ResolvePhone` (флаг ставил US-аккаунт — чужой резолв не переносится + US врёт на РФ; собственный ResolvePhone отправителя дал ложное «нет»; в send-пути нет import-фолбэка). Depends on Phase 14. Дизайн-документ: `.planning/notes/sender-side-resolve-redesign.md`. Requirements TBD (derived в /gsd:plan-phase 17).
 - Phase 16 added (2026-06-30): RAG Knowledge Bases for Agents — RAG-база знаний для AI-агентов. Логика: (1) отдельная UI-вкладка **Knowledge Bases**, где пользователь создаёт изолированные KB и загружает в каждую данные; (2) KB подключается **на уровне агента**, который ходит в неё по необходимости (retrieval при генерации). KB workspace-scoped, связь M:N агент↔KB. Предв. scope: модель данных (`knowledge_bases`/`kb_documents`/`kb_chunks`/`agent_knowledge_bases`), ingest-пайплайн (парсинг→чанкинг→эмбеддинги), хранилище векторов (предпочтительно pgvector в существующем PostgreSQL — решить D-NN), retrieval в listener/AI-сервисе. Depends on Phase 3 (Agents/AIContext — точка привязки) + Phase 1 (Workspace scoping). Requirements TBD (derived в /gsd:plan-phase 16).
 
 ### Pending Todos
@@ -158,6 +159,7 @@ None yet.
 
 - Phase 4 первым планом — аудит существующего webhook + function calling (вынести с уровня sender/AIContext на уровень кампании)
 - rotation.py:59,89,122,138 still references DROPPED context_contact_assignments table — 04-04 must rewrite per AUDIT TODO #6 (context_id → campaign_id signature)
+- **✅ RESOLVED — Phase 14 CLOSED 2026-06-30 (superseded).** Защитная механика чекера построена и задеплоена (14-01/02/03/05/06/07 + b7j/mig-036 + trip_count-reset фикс); SC #1/#2/#5 закрыты. SC #3/#4 (re-activation пула + перечек 2110+699+14k) НЕ закрыты намеренно — нужны genuinely-fresh warmed RU чекеры, которых нет; остаток передан в **Phase 17** (sender-side resolve ladder, снимает зависимость от отдельного пула). Решение пользователя: «ушли дальше, неактуально». Записи ниже — историческая хронология, действий не требуют (устаревший «Next: /gsd:execute-phase 14» отменён).
 - **14-04 live smoke FAILED → Phase 14 needs gap-closure (2026-06-26).** Waves 1-3 merged + DEPLOYED (mig 034 applied, probe_checker/resolve_phone_with_fallback/tg_probe_state confirmed in running container; 768 tests GREEN). Re-activated the 2 "healthy" checkers (sender-7979031303/8364639216) under the deployed guards — they STILL produced the throttle signature: `checked=20..30 reg=0 flood=True` = 0% mobile-registered (calibration expects ~50%). **Code gap:** on `flood=True` the worker finalized empty results as `tg_status='not_registered'` with `tg_confidence='high'`/`tg_probe_state='clean'`; control-probe fired NO `sender_restriction_events`, suspect-rollback never engaged. Prod fully rolled back (UPDATE 50 → pending, DELETE 50 false cache; 49 control intact; baseline not_registered=5/pending=14484/registered=53; 0 provenance). All 3 checkers parked, api restarted, worker idle. Gap-closure scope in `.planning/notes/checker-false-negatives.md` §"Часть 2": (1) flood/throttle-aware finalization (never trust flood resolve as not_registered; mark checker restricted + pull from rotation); (2) investigate whether throttle is pool-wide (long cooldown? @username-only resolve?). Docs RESV-07 done (CLAUDE.md commit 9669e7c).
   - **GAP-CLOSURE PLANNED (2026-06-26, commit c7ff169):** 2 new plans, plan-checker VERIFICATION PASSED (no blockers/warnings). **14-05** (Wave 5, autonomous) — Gap A: inline flood/throttle-aware finalization (flood OR anomalous all-empty batch → roll to `pending`, never `not_registered`/`high`/`clean`; degrade checker inline via `_flag_checker_degraded` + `sender_restriction_events` + cooldown; N=0-healthy safe-stop; RED-first tests; no new migration). **14-06** (Wave 6, autonomous:false, blocking human-verify) — Gap B: read-only diagnostic spike → findings note `.planning/notes/checker-pool-throttle-spike.md` answering phone-resolve-dead-pool-wide? / @username-viable? / our-rate-triggers-throttle?, with GO/NO-GO at the gate. **DEFERRED:** RESV-04 full re-check + re-activation of the 14k drain → follow-up only after the spike's GO verdict. Next: `/gsd:execute-phase 14`.
   - **GATE OVERRIDE (2026-06-26):** decision-coverage-plan gate reported 2/11 (D-01/02/03/05/06/08/09/10/11 "uncovered") — known false-positive (gate matches only verbatim `D-NN:` in must_haves/truths, can't soft-match Russian; see memory gsd-decision-coverage-gate-cyrillic). Substantively covered: D-01/02/03/05/06/09 by EXECUTED 14-01..14-04; D-08 = RESV-04 deliberately deferred. User chose "Proceed anyway". Re-surface at verify-phase if relevant.
@@ -208,6 +210,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-30T12:34:38.746Z
-Stopped at: Completed 16-04-search-tool-wiring-PLAN.md
-Resume file: None
+Last session: 2026-06-30T15:41:56.579Z
+Stopped at: Phase 17 context gathered
+Resume file: .planning/phases/17-sender-side-resolve-ladder-with-username-capture-and-import-fallback/17-CONTEXT.md
