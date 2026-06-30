@@ -18,6 +18,8 @@ import {
   CheckSquare,
   User as UserIcon,
   ChevronDown,
+  Phone,
+  Bot,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
