@@ -397,6 +397,30 @@ export interface paths {
         patch: operations["rename_folder_api_v1_folders__folder_id__patch"];
         trace?: never;
     };
+    "/api/v1/folders/{folder_id}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Folder Stats
+         * @description Folder-wide Telegram-status breakdown for the /contacts stat cards.
+         *
+         *     Single GROUP BY over the folder — returns correct totals immediately, so the UI
+         *     no longer derives counts from the first paginated page (the cause of the
+         *     flash-then-correct bug). 404 if folder is cross-tenant / missing.
+         */
+        get: operations["folder_stats_api_v1_folders__folder_id__stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/contacts": {
         parameters: {
             query?: never;
@@ -928,6 +952,29 @@ export interface paths {
         patch: operations["patch_campaign_api_v1_campaigns__campaign_id__patch"];
         trace?: never;
     };
+    "/api/v1/campaigns/{campaign_id}/rerender-pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rerender Pending
+         * @description Re-render the message_text of all pending queue items for this campaign with
+         *     the current message_template. On-demand counterpart to the automatic re-render
+         *     in PATCH — lets the UI add a "refresh queue" button or recover after a template
+         *     edit made through another path. Already-sent rows are not touched.
+         */
+        post: operations["rerender_pending_api_v1_campaigns__campaign_id__rerender_pending_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/campaigns/{campaign_id}/start": {
         parameters: {
             query?: never;
@@ -1253,6 +1300,32 @@ export interface paths {
          *       5. INSERT message row with sent_by='human' on success.
          */
         post: operations["send_message_from_ui_api_v1_conversations__conversation_id__send_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Conversations Batch
+         * @description Batch hard delete. Возвращает {deleted: N}.
+         *
+         *     Зеркало contacts.delete_contacts_batch: workspace-scoped, cross-tenant ids
+         *     молча пропускаются (не светим существование чужих бесед через 404).
+         *     Один DELETE-statement; FK CASCADE на уровне БД сносит messages + llm_calls
+         *     (как в single-delete ниже). Статический путь /delete объявлен ДО
+         *     DELETE /{conversation_id} и не конфликтует с ним (разные методы/пути).
+         */
+        post: operations["delete_conversations_batch_api_v1_conversations_delete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1673,6 +1746,214 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/knowledge-bases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Knowledge Bases
+         * @description List workspace KBs with the D-09 aggregate per KB (newest-first).
+         */
+        get: operations["list_knowledge_bases_api_v1_knowledge_bases_get"];
+        put?: never;
+        /**
+         * Create Knowledge Base
+         * @description Create a KB (source_kind='files'). 409 KB_NAME_CONFLICT on duplicate name.
+         */
+        post: operations["create_knowledge_base_api_v1_knowledge_bases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Knowledge Base
+         * @description KB detail incl. the D-09 aggregate. 404 if cross-workspace.
+         */
+        get: operations["get_knowledge_base_api_v1_knowledge_bases__kb_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Knowledge Base
+         * @description Delete a KB. FK cascade drops its documents, chunks and agent links.
+         */
+        delete: operations["delete_knowledge_base_api_v1_knowledge_bases__kb_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Knowledge Base
+         * @description Rename / edit description (Settings tab). 409 on duplicate name.
+         */
+        patch: operations["update_knowledge_base_api_v1_knowledge_bases__kb_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Documents
+         * @description Per-document list (D-10), newest-first.
+         */
+        get: operations["list_documents_api_v1_knowledge_bases__kb_id__documents_get"];
+        put?: never;
+        /**
+         * Upload Document
+         * @description Multipart upload → records a pending kb_documents row (202 Accepted).
+         *
+         *     The KnowledgeIngestWorker (Wave 2) claims status='pending' rows and does the
+         *     extract/chunk/embed asynchronously — never parse in this handler (Pitfall).
+         */
+        post: operations["upload_document_api_v1_knowledge_bases__kb_id__documents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/documents/paste": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Paste Document
+         * @description Paste raw text → records a pending kb_documents row (source_kind='text', 202).
+         */
+        post: operations["paste_document_api_v1_knowledge_bases__kb_id__documents_paste_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reindex Document
+         * @description Set a doc back to pending so the worker re-runs (delete-then-insert is idempotent).
+         */
+        post: operations["reindex_document_api_v1_knowledge_bases__kb_id__documents__doc_id__reindex_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Document
+         * @description Delete a document. FK cascade drops its chunks.
+         */
+        delete: operations["delete_document_api_v1_knowledge_bases__kb_id__documents__doc_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Search Knowledge Base
+         * @description Manual test retrieval over this KB's chunks (cosine distance, Pitfall 4).
+         *
+         *     Embeds the query, runs ``ORDER BY embedding <=> :qvec`` filtered by workspace
+         *     + this KB, keeps hits within ``kb_search_max_distance``. Prefers the shared
+         *     ``app.services.kb_search.kb_search`` helper when plan 16-04 has landed it;
+         *     otherwise runs a thin self-contained vector query so this surface works now.
+         */
+        post: operations["search_knowledge_base_api_v1_knowledge_bases__kb_id__search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agents For Kb
+         * @description Reverse M:N: agents this KB is attached to (Agents tab).
+         */
+        get: operations["list_agents_for_kb_api_v1_knowledge_bases__kb_id__agents_get"];
+        put?: never;
+        /**
+         * Attach Agent
+         * @description Attach a workspace-owned agent to this KB. INSERT ... ON CONFLICT DO NOTHING.
+         */
+        post: operations["attach_agent_api_v1_knowledge_bases__kb_id__agents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{kb_id}/agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach Agent
+         * @description Detach an agent from this KB (DELETE the M:N row).
+         */
+        delete: operations["detach_agent_api_v1_knowledge_bases__kb_id__agents__agent_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -1740,6 +2021,35 @@ export interface components {
             auto_pause_triggers?: string[] | null;
             /** Auto Pause Scope */
             auto_pause_scope?: ("conversation" | "contact" | "campaign") | null;
+        };
+        /**
+         * AgentForKbResponse
+         * @description Reverse M:N row — an agent this KB is attached to (Agents tab).
+         *
+         *     The test consumes ``id`` (the agent id) directly; ``agent_id`` is kept as an
+         *     explicit alias-free duplicate for clarity, both carry the same value.
+         */
+        AgentForKbResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+        };
+        /** AgentKbAttachRequest */
+        AgentKbAttachRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
         };
         /** AgentListResponse */
         AgentListResponse: {
@@ -2008,6 +2318,14 @@ export interface components {
         };
         /** Body_import_preview_api_v1_contacts_import_preview_post */
         Body_import_preview_api_v1_contacts_import_preview_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
+        /** Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post */
+        Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post: {
             /**
              * File
              * Format: binary
@@ -2573,6 +2891,17 @@ export interface components {
             contact_ids: string[];
         };
         /**
+         * DeleteConversationsBatchRequest
+         * @description POST /api/v1/conversations/delete body — bulk hard delete.
+         *
+         *     Зеркало DeleteContactBatchRequest: cross-tenant ids молча пропускаются
+         *     воркером (не светим существование чужих бесед через 404).
+         */
+        DeleteConversationsBatchRequest: {
+            /** Conversation Ids */
+            conversation_ids: string[];
+        };
+        /**
          * DialogueStage
          * @description One stage in the campaign's dialogue_flow sequence.
          *
@@ -2653,6 +2982,41 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * FolderStatsResponse
+         * @description Per-folder Telegram-status breakdown.
+         *
+         *     Computed server-side via a single GROUP BY so the /contacts stat cards render
+         *     correct folder-wide numbers immediately, instead of the frontend deriving them
+         *     from the first paginated page of contacts.
+         *
+         *     Buckets mirror the frontend classifiers (contacts.tsx):
+         *       in_telegram  ← tg_status in (registered, ok, found, in_telegram)
+         *       checking     ← tg_status in (pending, checking, unknown, unchecked, '')
+         *       not_found    ← tg_status in (not_registered, not_found, privacy, missing, error)
+         */
+        FolderStatsResponse: {
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * In Telegram
+             * @default 0
+             */
+            in_telegram: number;
+            /**
+             * Checking
+             * @default 0
+             */
+            checking: number;
+            /**
+             * Not Found
+             * @default 0
+             */
+            not_found: number;
+        };
         /** FolderUpdate */
         FolderUpdate: {
             /** Name */
@@ -2688,6 +3052,155 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * KbDocumentResponse
+         * @description D-10 per-document list row.
+         */
+        KbDocumentResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kb Id
+             * Format: uuid
+             */
+            kb_id: string;
+            /** Name */
+            name: string;
+            /** Source Kind */
+            source_kind: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Chunk Count
+             * @default 0
+             */
+            chunk_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** KbPasteTextRequest */
+        KbPasteTextRequest: {
+            /** Name */
+            name: string;
+            /** Content */
+            content: string;
+        };
+        /** KbSearchHit */
+        KbSearchHit: {
+            /** Content */
+            content: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Document Name */
+            document_name?: string | null;
+            /** Distance */
+            distance: number;
+        };
+        /** KbSearchRequest */
+        KbSearchRequest: {
+            /** Query */
+            query: string;
+            /** Top K */
+            top_k?: number | null;
+        };
+        /** KbSearchResponse */
+        KbSearchResponse: {
+            /** Results */
+            results: components["schemas"]["KbSearchHit"][];
+        };
+        /** KnowledgeBaseCreate */
+        KnowledgeBaseCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * KnowledgeBaseResponse
+         * @description KB list/detail row. Carries the D-09 aggregate inline.
+         *
+         *     ``status`` is derived by the router: ``failed`` when any doc failed, else
+         *     ``processing`` when any doc is processing, else ``indexed`` when ≥1 doc is
+         *     indexed, else ``empty``.
+         */
+        KnowledgeBaseResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Source Kind */
+            source_kind: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Documents
+             * @default 0
+             */
+            documents: number;
+            /**
+             * Indexed
+             * @default 0
+             */
+            indexed: number;
+            /**
+             * Processing
+             * @default 0
+             */
+            processing: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Storage Bytes
+             * @default 0
+             */
+            storage_bytes: number;
+            /**
+             * Status
+             * @default empty
+             */
+            status: string;
+        };
+        /** KnowledgeBaseUpdate */
+        KnowledgeBaseUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
         };
         /**
          * LLMAggregatesResponse
@@ -3449,6 +3962,14 @@ export interface components {
             lead_trigger_hint: string;
             /** Tools */
             tools: unknown[];
+        };
+        /**
+         * _RerenderResponse
+         * @description POST /campaigns/{id}/rerender-pending result.
+         */
+        _RerenderResponse: {
+            /** Rerendered */
+            rerendered: number;
         };
     };
     responses: never;
@@ -4287,6 +4808,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FolderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    folder_stats_api_v1_folders__folder_id__stats_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderStatsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5359,6 +5914,40 @@ export interface operations {
             };
         };
     };
+    rerender_pending_api_v1_campaigns__campaign_id__rerender_pending_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_RerenderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_campaign_api_v1_campaigns__campaign_id__start_post: {
         parameters: {
             query?: never;
@@ -5911,6 +6500,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SendMessageFromUIResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_conversations_batch_api_v1_conversations_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteConversationsBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -6562,6 +7189,499 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_knowledge_bases_api_v1_knowledge_bases_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_knowledge_base_api_v1_knowledge_bases_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeBaseCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_knowledge_base_api_v1_knowledge_bases__kb_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_knowledge_base_api_v1_knowledge_bases__kb_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_knowledge_base_api_v1_knowledge_bases__kb_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgeBaseUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeBaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_documents_api_v1_knowledge_bases__kb_id__documents_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbDocumentResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_document_api_v1_knowledge_bases__kb_id__documents_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbDocumentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    paste_document_api_v1_knowledge_bases__kb_id__documents_paste_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KbPasteTextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbDocumentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reindex_document_api_v1_knowledge_bases__kb_id__documents__doc_id__reindex_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+                doc_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbDocumentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_document_api_v1_knowledge_bases__kb_id__documents__doc_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+                doc_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_knowledge_base_api_v1_knowledge_bases__kb_id__search_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KbSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbSearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_for_kb_api_v1_knowledge_bases__kb_id__agents_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentForKbResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_agent_api_v1_knowledge_bases__kb_id__agents_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentKbAttachRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_agent_api_v1_knowledge_bases__kb_id__agents__agent_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                kb_id: string;
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
