@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-06-30T16:26:15.306Z"
+stopped_at: Completed 17-02-PLAN.md
+last_updated: "2026-06-30T16:34:00.146Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 19
   completed_phases: 16
   total_plans: 68
-  completed_plans: 64
-  percent: 92
+  completed_plans: 65
+  percent: 96
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 17
-Plan: Not started
+Phase: 17 (sender-side-resolve-ladder-with-username-capture-and-import-fallback) — EXECUTING
+Plan: 3 of 4 (17-01, 17-02 complete)
 Status: Ready to execute
 Last activity: 2026-06-30
 
-Progress: [█████████░] 92% (59/64 plans) — Phase 16: 1/5 plans (16-01 infra/data-model/test-scaffold complete)
+Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 plans (17-01 test scaffold, 17-02 checker username capture + gated read complete)
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Progress: [█████████░] 92% (59/64 plans) — Phase 16: 1/5 p
 | Phase 16 P03 | 12min | 3 tasks | 7 files |
 | Phase 16 P04 | 7min | 2 tasks | 2 files |
 | Phase 17 P01 | 14min | 3 tasks | 4 files |
+| Phase 17 P02 | 5min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 16]: kb_search signature is (db, workspace_id, kb_ids, query, top_k, max_distance) — matches the 16-03 router import + RED tests; agent→kb_ids resolution lives in attached_kb_ids
 - [Phase 16]: search_knowledge_base is a DATA tool (NOT in BUILT_IN_TOOL_NAMES) — gated on ≥1 attached KB (D-04), resolved locally, two-pass continuation, never touches conversation.status
 - [Phase 17]: 17-01: Wave-0 RED scaffold — 12 SRLD tests (10 RED, 2 GREEN contracts) across test_checker/test_send/test_contact_check_worker/test_restriction_audit. SRLD-07 cache-gate uses async_db_session (COMMIT — _lookup_cache/_get_cached_contact open own AsyncSessionLocal); confidence signal read off contacts.tg_probe_state/tg_confidence (contacts_cache has no source col, D-12 reuse). client.calls request-type introspection asserts the resolve-ladder shape (ResolvePhone removed, ResolveUsername/Import fire). SRLD-02 is a GREEN persistence contract (worker:875 already writes tg_username_resolved; pins CSV-vs-resolve provenance). Full suite 852 collected, 0 errors. No app/ touched.
+- [Phase 17]: 17-02: checker captures @username on both registered resolve paths (ResolvePhone + ImportContacts fallback), uniform 'username': None elsewhere so worker res.get never KeyErrors; worker:875 already persists it to contacts.tg_username_resolved, CSV contacts.username untouched. _lookup_cache confidence-gates only the is_registered=false bucket via correlated check on contacts (tg_probe_state='suspect' OR tg_confidence IS DISTINCT FROM 'high' -> return None -> live re-resolve; the Igor cross-contamination fix); positives always served, cache never deleted. No migration (cols pre-exist mig 013+034). SRLD-01/02/07-checker GREEN.
 
 ### Roadmap Evolution
 
@@ -212,6 +214,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-30T16:24:11.891Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-06-30T16:33:31.947Z
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None
