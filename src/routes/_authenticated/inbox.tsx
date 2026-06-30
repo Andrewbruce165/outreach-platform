@@ -874,7 +874,7 @@ function KV({
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            maxWidth: 140,
+            maxWidth: 180,
           }}
         >
           {value}
