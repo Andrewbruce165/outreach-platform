@@ -235,6 +235,11 @@ function AgentEditor({
 }) {
   const isNew = !agent;
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Phase 16: KBs picked while CREATING an agent. The M:N attach needs the agent
+  // id (only exists after save), so for a new agent we collect selections locally
+  // and attach them right after the POST succeeds (deferred attach → one-step UX).
+  const [pendingKbIds, setPendingKbIds] = useState<string[]>([]);
+  const qc = useQueryClient();
 
   const {
     register,
@@ -292,6 +297,28 @@ function AgentEditor({
           body: payload as unknown as Record<string, unknown>,
         });
         track("agent_created", { agent_id: created.id, name: values.name });
+        // Deferred KB attach: now that the agent has an id, attach the KBs the
+        // user picked in the create form. Partial failures don't lose the agent.
+        if (pendingKbIds.length) {
+          const results = await Promise.allSettled(
+            pendingKbIds.map((kbId) =>
+              api(`/api/v1/knowledge-bases/${kbId}/agents`, {
+                method: "POST",
+                body: { agent_id: created.id },
+              }),
+            ),
+          );
+          pendingKbIds.forEach((kbId) =>
+            void qc.invalidateQueries({ queryKey: ["kb-agents", kbId] }),
+          );
+          void qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
+          const failed = results.filter((r) => r.status === "rejected").length;
+          if (failed > 0) {
+            toast.error(
+              `Агент создан, но ${failed} баз(у/ы) не удалось подключить — добавьте их в редактировании`,
+            );
+          }
+        }
       } else {
         await api<Agent>(`/api/v1/agents/${agent.id}`, {
           method: "PATCH",
@@ -428,7 +455,11 @@ function AgentEditor({
               for a brand-new agent we prompt the user to save first.
             */}
             <Field label="Базы знаний">
-              <KbMultiSelect agentId={agent?.id ?? null} />
+              <KbMultiSelect
+                agentId={agent?.id ?? null}
+                pendingKbIds={pendingKbIds}
+                onPendingChange={setPendingKbIds}
+              />
               <span className="field__hint">
                 Агент обращается к этим базам по необходимости во время ответа.
               </span>
@@ -493,7 +524,18 @@ function AgentEditor({
  * D-08: this is ADDITIONAL to the static `knowledge_base` text field — they are
  * independent controls.
  */
-function KbMultiSelect({ agentId }: { agentId: string | null }) {
+function KbMultiSelect({
+  agentId,
+  pendingKbIds,
+  onPendingChange,
+}: {
+  agentId: string | null;
+  // Deferred mode (new agent): selection is held locally and attached by the
+  // parent form right after the agent is created. When agentId is set, these are
+  // ignored and live attach/detach mutations are used instead.
+  pendingKbIds?: string[];
+  onPendingChange?: (ids: string[]) => void;
+}) {
   const qc = useQueryClient();
   const [picking, setPicking] = useState(false);
 
@@ -558,8 +600,12 @@ function KbMultiSelect({ agentId }: { agentId: string | null }) {
 
   const busy = attachMut.isPending || detachMut.isPending;
 
-  // New agent: no id yet → can't form the M:N row. Prompt to save first.
-  if (!agentId) {
+  // New agent + a deferred handler wired → select KBs locally (the parent attaches
+  // them once the agent is created). busy stays false here (mutations never fire).
+  const deferred = !agentId && !!onPendingChange;
+
+  // New agent with no deferred handler → fall back to the save-first hint.
+  if (!agentId && !deferred) {
     return (
       <div className="muted text-xs" style={{ lineHeight: 1.5 }}>
         Сохраните агента, чтобы подключить базы знаний.
@@ -571,8 +617,19 @@ function KbMultiSelect({ agentId }: { agentId: string | null }) {
     return <div className="muted text-xs">Загрузка баз знаний…</div>;
   }
 
-  const selected = kbs.filter((kb) => attachedKbIds.has(kb.id));
-  const available = kbs.filter((kb) => !attachedKbIds.has(kb.id));
+  const isAttached = (kbId: string) =>
+    deferred ? (pendingKbIds ?? []).includes(kbId) : attachedKbIds.has(kbId);
+  const add = (kbId: string) => {
+    if (deferred) onPendingChange!([...(pendingKbIds ?? []), kbId]);
+    else attachMut.mutate(kbId);
+  };
+  const remove = (kbId: string) => {
+    if (deferred) onPendingChange!((pendingKbIds ?? []).filter((id) => id !== kbId));
+    else detachMut.mutate(kbId);
+  };
+
+  const selected = kbs.filter((kb) => isAttached(kb.id));
+  const available = kbs.filter((kb) => !isAttached(kb.id));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -592,7 +649,7 @@ function KbMultiSelect({ agentId }: { agentId: string | null }) {
                 type="button"
                 aria-label={`Отключить ${kb.name}`}
                 disabled={busy}
-                onClick={() => detachMut.mutate(kb.id)}
+                onClick={() => remove(kb.id)}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -641,7 +698,7 @@ function KbMultiSelect({ agentId }: { agentId: string | null }) {
                   disabled={busy}
                   onClick={() => {
                     setPicking(false);
-                    attachMut.mutate(kb.id);
+                    add(kb.id);
                   }}
                   style={{
                     display: "block",
