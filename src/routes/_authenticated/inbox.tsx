@@ -14,10 +14,23 @@ import {
   Check,
   X,
   Flag,
+  Trash2,
+  CheckSquare,
   User as UserIcon,
   ChevronDown,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
@@ -69,6 +82,11 @@ function InboxPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [campaignFilter, setCampaignFilter] = useState<string>("all");
   const [showTrace, setShowTrace] = useState(true);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState<
+    { kind: "single"; id: string; name: string } | { kind: "bulk" } | null
+  >(null);
   const queryClient = useQueryClient();
   // Conversations viewed in this session — used to suppress the unread badge
   // since the backend has no mark-as-read endpoint in v1.
@@ -125,6 +143,72 @@ function InboxPage() {
     });
   }, [selectedId, queryClient]);
 
+  // ── Deletion (single + bulk) ──────────────────────────────────────────────
+  const deleteOneMut = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/v1/conversations/${id}`, { method: "DELETE" }),
+    onSuccess: (_data, id) => {
+      toast.success("Conversation deleted");
+      if (selectedId === id) setSelectedId(null);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.message : "Delete failed"),
+  });
+
+  const deleteBulkMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      api<{ deleted: number }>("/api/v1/conversations/delete", {
+        method: "POST",
+        body: { conversation_ids: ids },
+      }),
+    onSuccess: (res, ids) => {
+      toast.success(`Deleted ${res.deleted} chat${res.deleted === 1 ? "" : "s"}`);
+      if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.message : "Delete failed"),
+  });
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const allVisibleSelected =
+    conversations.length > 0 && conversations.every((c) => selectedIds.has(c.id));
+
+  const toggleSelectAll = () =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) conversations.forEach((c) => next.delete(c.id));
+      else conversations.forEach((c) => next.add(c.id));
+      return next;
+    });
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    if (pendingDelete.kind === "single") deleteOneMut.mutate(pendingDelete.id);
+    else deleteBulkMut.mutate([...selectedIds]);
+    setPendingDelete(null);
+  };
+
   return (
     <>
       <Topbar
@@ -172,6 +256,19 @@ function InboxPage() {
           onStatusFilter={setStatusFilter}
           campaignFilter={campaignFilter}
           onCampaignFilter={setCampaignFilter}
+          selectionMode={selectionMode}
+          selectedIds={selectedIds}
+          allVisibleSelected={allVisibleSelected}
+          bulkPending={deleteBulkMut.isPending}
+          onToggleSelectionMode={() =>
+            selectionMode ? exitSelectionMode() : setSelectionMode(true)
+          }
+          onToggleSelect={toggleSelect}
+          onToggleSelectAll={toggleSelectAll}
+          onRequestDeleteOne={(id, name) =>
+            setPendingDelete({ kind: "single", id, name })
+          }
+          onRequestDeleteBulk={() => setPendingDelete({ kind: "bulk" })}
         />
         {selectedId ? (
           <Thread
@@ -185,6 +282,37 @@ function InboxPage() {
         )}
         {showTrace && selectedId && <TracePane conversationId={selectedId} />}
       </div>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingDelete?.kind === "bulk"
+                ? `Delete ${selectedIds.size} chat${selectedIds.size === 1 ? "" : "s"}?`
+                : "Delete this chat?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.kind === "single" && pendingDelete.name
+                ? `“${pendingDelete.name}” and its full message history will be permanently removed from your inbox. This cannot be undone.`
+                : "The selected conversations and their full message history will be permanently removed from your inbox. This cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              style={{ background: "var(--danger)", color: "#fff" }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -276,6 +404,15 @@ function ConvList({
   onStatusFilter,
   campaignFilter,
   onCampaignFilter,
+  selectionMode,
+  selectedIds,
+  allVisibleSelected,
+  bulkPending,
+  onToggleSelectionMode,
+  onToggleSelect,
+  onToggleSelectAll,
+  onRequestDeleteOne,
+  onRequestDeleteBulk,
 }: {
   loading: boolean;
   error: string | null;
@@ -290,7 +427,17 @@ function ConvList({
   onStatusFilter: (s: StatusFilter) => void;
   campaignFilter: string;
   onCampaignFilter: (c: string) => void;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  allVisibleSelected: boolean;
+  bulkPending: boolean;
+  onToggleSelectionMode: () => void;
+  onToggleSelect: (id: string) => void;
+  onToggleSelectAll: () => void;
+  onRequestDeleteOne: (id: string, name: string) => void;
+  onRequestDeleteBulk: () => void;
 }) {
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   return (
     <aside
       style={{
@@ -398,6 +545,82 @@ function ConvList({
         })}
       </div>
 
+      {/* Selection toolbar / bulk action bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 12px",
+          minHeight: 44,
+          borderBottom: "1px solid var(--border)",
+          background: selectionMode ? "var(--tg-blue-softer, #f3f8fe)" : "transparent",
+        }}
+      >
+        {selectionMode ? (
+          <>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={onToggleSelectAll}
+                disabled={items.length === 0}
+              />
+              {selectedIds.size > 0 ? `${selectedIds.size} selected` : "Select all"}
+            </label>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              className="btn btn--sm"
+              disabled={selectedIds.size === 0 || bulkPending}
+              onClick={onRequestDeleteBulk}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                background: "var(--danger)",
+                color: "#fff",
+                opacity: selectedIds.size === 0 || bulkPending ? 0.5 : 1,
+                cursor: selectedIds.size === 0 || bulkPending ? "not-allowed" : "pointer",
+              }}
+            >
+              <Trash2 size={13} />
+              {bulkPending ? "Deleting…" : `Delete (${selectedIds.size})`}
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onToggleSelectionMode}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onToggleSelectionMode}
+              disabled={items.length === 0}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+            >
+              <CheckSquare size={14} /> Select
+            </button>
+          </>
+        )}
+      </div>
+
       <div className="scroll" style={{ flex: 1 }}>
         {loading && <div className="muted" style={{ padding: 16 }}>Loading…</div>}
         {error && (
@@ -422,20 +645,70 @@ function ConvList({
         {items.map((c) => {
           const active = c.id === activeId;
           const name = c.contact_name || c.contact_phone;
+          const selected = selectedIds.has(c.id);
+          const showDelete = !selectionMode && hoveredId === c.id;
           return (
             <div
               key={c.id}
-              onClick={() => onSelect(c.id)}
+              onClick={() => (selectionMode ? onToggleSelect(c.id) : onSelect(c.id))}
+              onMouseEnter={() => setHoveredId(c.id)}
+              onMouseLeave={() => setHoveredId((h) => (h === c.id ? null : h))}
               style={{
+                position: "relative",
                 padding: "12px 14px",
                 display: "flex",
                 gap: 10,
                 cursor: "pointer",
-                background: active ? "var(--tg-blue-softer, #f3f8fe)" : "transparent",
+                background: selected
+                  ? "var(--tg-blue-soft, #e8f1fc)"
+                  : active
+                    ? "var(--tg-blue-softer, #f3f8fe)"
+                    : "transparent",
                 borderLeft: `3px solid ${active ? "var(--tg-blue, #3390ec)" : "transparent"}`,
                 borderBottom: "1px solid var(--border)",
               }}
             >
+              {selectionMode && (
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    onToggleSelect(c.id);
+                  }}
+                  style={{ flexShrink: 0, alignSelf: "center" }}
+                />
+              )}
+              {showDelete && (
+                <button
+                  type="button"
+                  aria-label="Delete conversation"
+                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRequestDeleteOne(c.id, name);
+                  }}
+                  style={{
+                    position: "absolute",
+                    top: 8,
+                    right: 8,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 26,
+                    height: 26,
+                    borderRadius: 6,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg)",
+                    color: "var(--danger)",
+                    cursor: "pointer",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
               <Avatar name={name} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
