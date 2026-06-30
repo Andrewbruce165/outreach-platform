@@ -439,11 +439,11 @@ Plans:
 
 **Requirements**: KB-01, KB-02, KB-03, KB-04, KB-05, KB-06 (derived during /gsd:plan-phase 16 — see REQUIREMENTS.md §RAG Knowledge Bases; tracked via decisions D-01..D-12)
 **Depends on:** Phase 3 (Agents / AIContext — точка привязки KB к агенту), Phase 1 (Workspace — scoping)
-**Plans:** 5 plans (waves 1→4)
+**Plans:** 1/5 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 16-01-infra-data-model-test-scaffold-PLAN.md — deps (pgvector/tiktoken/pypdf/python-docx) + db image swap pgvector/pgvector:pg16 (prod+test, command preserved) + conftest CREATE EXTENSION vector + migration 041 (4 tables, HNSW) + ORM mirror + RED test scaffold [Wave 1, no deps] — KB-01..06 scaffold
+- [x] 16-01-infra-data-model-test-scaffold-PLAN.md — deps (pgvector/tiktoken/pypdf/python-docx) + db image swap pgvector/pgvector:pg16 (prod+test, command preserved) + conftest CREATE EXTENSION vector + migration 041 (4 tables, HNSW) + ORM mirror + RED test scaffold [Wave 1, no deps] — KB-01..06 scaffold
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 16-02-ingest-pipeline-and-worker-PLAN.md — kb_ingest.py (extract/chunk-tiktoken/embed text-embedding-3-small) + KnowledgeIngestWorker (mirror ContactCheckWorker, idempotent re-index) + lifespan + config knobs [Wave 2, depends_on: 16-01] — KB-02, KB-03
@@ -474,7 +474,7 @@ Plans:
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 | 14. Reliable Contact Resolution | 3/4 | In Progress|  |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
-| 16. RAG Knowledge Bases for Agents | 0/5 | Planned (5 plans, waves 1→4) | - |
+| 16. RAG Knowledge Bases for Agents | 1/5 | In Progress|  |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**

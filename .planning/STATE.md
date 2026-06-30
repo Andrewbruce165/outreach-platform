@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: "14-07 NOT YET DEPLOYED to prod (container runs old code, migration 035 unapplied). Next = user-gated OPS sequence: (1) deploy api (docker compose up -d --build api → applies mig 035 + rest mechanism); (2) set CONTACT_CHECK_REST_SECONDS (default 300); (3) re-activate the 2 parked checkers (sender-7979031303/8364639216); (4) re-upload base pre-filtered of landline numbers to cut volume; (5) staged drain of the ~14.5k pending, watching for degrade/recover thrash. 14-06 GO verdict was CONDITIONAL — for an UNCONDITIONAL pool-wide GO a fresh non-checker account probe was recommended (deferred). Note: post-14-04-rollback prod baseline = pending 14484 / registered 53 / not_registered 5."
-stopped_at: Phase 16 UI-SPEC approved
-last_updated: "2026-06-30T10:33:03.153Z"
-last_activity: "2026-06-30 -- Completed quick task 260630-e02: delete chats from inbox (single hover-trash + bulk select); backend POST /conversations/delete + frontend inbox.tsx (NOT yet deployed)"
+status: executing
+stopped_at: Completed 16-01-PLAN.md
+last_updated: "2026-06-30T11:43:05.081Z"
+last_activity: 2026-06-30
 progress:
   total_phases: 18
   completed_phases: 15
-  total_plans: 59
-  completed_plans: 58
+  total_plans: 64
+  completed_plans: 59
 ---
 
 # Project State
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 14 — reliable-contact-resolution
+**Current focus:** Phase 16 — rag-knowledge-bases-for-agents
 
 ## Current Position
 
-Phase: 14 (reliable-contact-resolution) — all resolution-reliability CODE done; remaining = OPS (deploy + re-activate + landline-filter + drain)
-Plan: 14-01/02/03 merged+deployed; 14-05 (inline flood-aware finalization) merged dbc7190; 14-06 (read-only pool-throttle spike) merged f210a5b, gate=GO; 14-07 (benign per-checker post-batch rest, Q3 prevention gap) merged 716f10c (778 tests GREEN). 14-04 (blind live re-activation) superseded/deferred — NOT executed.
-Status: 14-07 NOT YET DEPLOYED to prod (container runs old code, migration 035 unapplied). Next = user-gated OPS sequence: (1) deploy api (docker compose up -d --build api → applies mig 035 + rest mechanism); (2) set CONTACT_CHECK_REST_SECONDS (default 300); (3) re-activate the 2 parked checkers (sender-7979031303/8364639216); (4) re-upload base pre-filtered of landline numbers to cut volume; (5) staged drain of the ~14.5k pending, watching for degrade/recover thrash. 14-06 GO verdict was CONDITIONAL — for an UNCONDITIONAL pool-wide GO a fresh non-checker account probe was recommended (deferred). Note: post-14-04-rollback prod baseline = pending 14484 / registered 53 / not_registered 5.
-Last activity: 2026-06-30 -- Completed quick task 260630-e02: delete chats from inbox (single hover-trash + bulk select); backend POST /conversations/delete + frontend inbox.tsx (NOT yet deployed)
+Phase: 16 (rag-knowledge-bases-for-agents) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-06-30
 
-Progress: [████████░░] 3/4 plans (14-04 blocked at human-verify smoke)
+Progress: [█████████░] 92% (59/64 plans) — Phase 16: 1/5 plans (16-01 infra/data-model/test-scaffold complete)
 
 ## Performance Metrics
 
@@ -81,6 +81,7 @@ Progress: [████████░░] 3/4 plans (14-04 blocked at human-ver
 | Phase 11 P03 | 25min | 3 tasks | 2 files |
 | Phase 13 P01 | 6min | 2 tasks | 1 files |
 | Phase 13 P02 | 8min | 3 tasks | 2 files |
+| Phase 16 P01 | 12min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 11 P04]: openapi.json+types regenerated via export-handoff (rebuilt API container first — was stale pre-P11); frontend Agent form: tone_preset select (4 opts) replaces voice_baseline+sliders+tone_of_voice (all deleted); response_speed select + conditional delay input; Campaign wizard: StageEditor (add/remove/up-down, no dnd lib, aria-labels, empty-state copy), arguments_facts+campaign_rules textareas, audience_hints→Кому пишем relabel, success_criteria field removed→merged into leadHint (Сигнал Лид), autoFillMut→lead_trigger_hint; EditCampaignModal updated with InlineStageEditor+new fields; tsc clean; awaiting human UAT (Task 4)
 - [Phase 13]: 13-01: Wave-0 RED scaffold tests/test_queue_even_pacing.py (7 tests, PACE-01..07) reuses Phase 12 helpers verbatim; deferred in-body imports keep --collect-only clean; _assert_pacing_predicate_wired() introspection guard (binds :expected_now/:window_start_utc) makes the four behavioural integration tests genuinely RED instead of coincidentally passing on the Phase 12 cap. All 7 RED, 16 pre-existing queue tests stay GREEN.
 - [Phase 13]: 13-02: even pacing implemented in queue.py only (D-09) — _window_elapsed_fraction (raw window D-01, window_start floor D-06, clamped, injectable now) + expected_now = cap*frac*jitter (D-05/D-08) ANDed beside the Phase 12 cap in the candidate SELECT; follow-ups bypass (D-07/D-10), no max() clamp (structural floor D-03), LIMIT 8 / SKIP LOCKED preserved. PACE-01..07 GREEN, full suite 756 passed. Phase 12 test_new_dialog_allowed_under_cap re-seeded 23h-ago (cap vs pace two-counter isolation, assertion unchanged).
+- [Phase 16]: 16-01: pgvector stood up (prod+test images pgvector/pgvector:pg16, command: block preserved); migration 041 (4 KB tables + HNSW vector_cosine_ops + btree, idempotent); ORM mirror incl. Vector(1536) so create_all builds same test schema; conftest CREATE EXTENSION vector before create_all + 041 apply guard; AIContext.knowledge_base untouched (D-08). HNSW chosen (builds on empty table); pasted text in raw_content BYTEA source_kind='text' (OQ1); STORAGE=SUM(size_bytes) (OQ2). 10-test RED scaffold for KB-01..KB-06, full suite 837 collected 0 errors.
 
 ### Roadmap Evolution
 
@@ -198,6 +200,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-30T10:33:03.139Z
-Stopped at: Phase 16 UI-SPEC approved
-Resume file: .planning/phases/16-rag-knowledge-bases-for-agents/16-UI-SPEC.md
+Last session: 2026-06-30T11:43:05.069Z
+Stopped at: Completed 16-01-PLAN.md
+Resume file: None
