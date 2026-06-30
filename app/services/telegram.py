@@ -457,6 +457,39 @@ class TelegramService:
 
         return None
 
+    async def _load_contact_verdict(self, workspace_id: str, phone: str) -> dict:
+        """Load the checker verdict + captured @username for a phone (tier-2/tier-3 inputs).
+
+        Reads the existing Phase-14/17 columns on `contacts`:
+          - `tg_status` — the checker verdict ('registered' | 'not_registered' | 'pending' | …),
+            the gate for the tier-3 ImportContacts (only 'registered' triggers an import, D-03/D-11).
+          - `tg_username_resolved` — the public, transferable @handle the checker captured
+            (17-02), the input for the sender's tier-2 ResolveUsername (D-07).
+
+        A phone may map to multiple contacts; the ORDER BY prefers a `registered` row
+        (conservative — favours reachability) then the most recently updated one. Returns
+        `{"tg_status": None, "captured_username": None}` when there is no contacts row
+        (e.g. a '@handle' identity-key contact or an ad-hoc send) — callers treat a None
+        verdict permissively per the existing send-path semantics, but ONLY 'registered'
+        ever triggers an import.
+        """
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(
+                text("""
+                    SELECT tg_status, tg_username_resolved
+                      FROM contacts
+                     WHERE workspace_id = :workspace_id AND phone = :phone
+                     ORDER BY (tg_status = 'registered') DESC, updated_at DESC
+                     LIMIT 1
+                """),
+                {"workspace_id": workspace_id, "phone": phone}
+            )).fetchone()
+
+        return {
+            "tg_status": row[0] if row else None,
+            "captured_username": row[1] if row else None,
+        }
+
     async def _save_contact_cache(self, workspace_id: str, sender_id: str, phone: str, contact_info: dict):
         """Save contact lookup result to DB cache."""
         try:
