@@ -1,6 +1,11 @@
 services:
   db:
-    image: postgres:16
+    # Phase 16 (D-05): pgvector/pgvector:pg16 = postgres:16 + the `vector` extension
+    # precompiled. Same PG16 major ⇒ the existing postgres_data volume mounts
+    # unchanged (no re-init, no data loss). NEVER `docker compose down -v` — it wipes
+    # the prod volume. The `command:` block below MUST stay (it is per-service config;
+    # the new image does NOT inherit it — Pitfall 2 / 2026-05-26 anti-drift logging).
+    image: pgvector/pgvector:pg16
     container_name: outreach-platform-db
     restart: unless-stopped
     # 2026-05-26 anti-drift: log all DDL (CREATE/ALTER/DROP/TRUNCATE) and slow queries.

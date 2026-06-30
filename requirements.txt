@@ -31,3 +31,9 @@ qrcode[pil]==7.4.2
 # Testing (Phase 1 Wave 0)
 pytest>=8.0
 pytest-asyncio>=0.23
+
+# Phase 16 — RAG knowledge bases
+pgvector==0.4.2
+tiktoken==0.13.0
+pypdf==6.14.2
+python-docx==1.2.0

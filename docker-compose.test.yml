@@ -14,7 +14,11 @@
 
 services:
   db-test:
-    image: postgres:16
+    # Phase 16 (Pitfall 1): pgvector image so the ephemeral test DB has the `vector`
+    # extension — conftest._build_outreach_schema runs CREATE EXTENSION vector before
+    # create_all, which emits a VECTOR(1536) column. Without the extension the whole
+    # suite fails to set up with `type "vector" does not exist`.
+    image: pgvector/pgvector:pg16
     # No container_name on purpose — compose run creates ephemeral instances.
     # No restart, no persistent volume — ephemeral by design.
     command:
