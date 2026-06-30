@@ -1,10 +1,11 @@
 ---
 phase: 16
 slug: rag-knowledge-bases-for-agents
-status: draft
+status: approved
 shadcn_initialized: true
 preset: "new-york / slate / cssVariables (existing aimly frontend — components.json)"
 created: 2026-06-30
+reviewed_at: 2026-06-30
 ---
 
 # Phase 16 — UI Design Contract
