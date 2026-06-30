@@ -16,7 +16,6 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.contacts import (
     ImportContactsRequest,
     GetContactsRequest,
-    ResolvePhoneRequest,
     ResolveUsernameRequest,
 )
 from telethon.tl.types import InputPhoneContact, InputPeerUser
@@ -432,7 +431,8 @@ class TelegramService:
             )).fetchone()
 
             # conversations table has no access_hash — don't return from cache,
-            # let ResolvePhoneRequest fetch it so we get a valid access_hash
+            # let the live resolve ladder (ResolveUsername / ImportContacts) fetch a
+            # valid per-sender access_hash.
             pass
 
             # 3. Cross-sender lookup (внутри того же workspace) — ONLY для
@@ -546,47 +546,81 @@ class TelegramService:
         # 2a. Username identity key ('@handle') — resolve via ResolveUsername.
         # No phone to import; cache is keyed on the same '@handle' string.
         if is_username_key(phone):
-            return await self._resolve_username(client, workspace_id, sender_id, phone)
-
-        # 2. Cache miss — call Telegram API using ResolvePhoneRequest (no contact import)
-        logger.info(f"Contact {phone} not in cache, calling ResolvePhoneRequest")
-        try:
-            result = await client(ResolvePhoneRequest(phone=phone))
-
-            if result and result.users:
-                user = result.users[0]
-                contact_info = {
-                    "is_registered": True,
-                    "telegram_id": user.id,
-                    "access_hash": user.access_hash,
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                    "username": user.username
-                }
-            else:
-                contact_info = {"is_registered": False}
-
-            # 3. Cache the result
-            await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
-            return contact_info
-
-        except PhoneNumberInvalidError:
-            contact_info = {"is_registered": False}
-            await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
-            return {"is_registered": False, "error": "Invalid phone number"}
-        except Exception as e:
-            # ResolvePhoneRequest raises an RPC error (e.g. PHONE_NOT_OCCUPIED) when
-            # the number is not registered — treat that as unregistered and cache it.
-            err = str(e)
-            if "PHONE_NOT_OCCUPIED" in err or "phone_not_occupied" in err.lower():
-                contact_info = {"is_registered": False}
-                await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
+            res = await self._resolve_username(client, workspace_id, sender_id, phone)
+            # A '@handle' contact has no phone to import; a stale signal here is
+            # genuinely unregistered (the handle was the only identity we had).
+            if res.get("stale_username"):
                 return {"is_registered": False}
-            # Any other exception (frozen account, FloodWait, network error, etc.)
-            # must NOT be silently treated as "not registered" — raise so the queue
-            # worker records the real error and retries.
-            logger.error(f"Error checking contact via ResolvePhone: {e}")
-            raise
+            return res
+
+        # 2b. PHONE key — the 3-tier sender resolve ladder (D-01/D-02). The sender's
+        # OWN ResolvePhone is GONE (D-01): it gave the false negatives in the
+        # Barter-ВЭД incident (throttle/privacy on a per-recipient lookup). A
+        # checker's resolve (and its access_hash) can never be reused on a sender
+        # (per-account, Telethon — verified), so the sender does its own lookup via
+        # the transferable top tier (captured @username) and an import fallback.
+        verdict = await self._load_contact_verdict(workspace_id, phone)
+
+        # Tier-2: ResolveUsername on the captured @username (D-07). The cheapest,
+        # safest transferable resolve — a public handle resolves identically on any
+        # account. A stale handle (Task 3) falls through to the import tier (D-09),
+        # it is NEVER finalized as not_registered.
+        captured = verdict.get("captured_username")
+        if captured:
+            res = await self._resolve_username(
+                client, workspace_id, sender_id, "@" + captured.lstrip("@")
+            )
+            if res.get("is_registered"):
+                # Cache the access_hash under the PHONE key so follow-up sends are
+                # phone-cache hits (the @handle key is also cached by _resolve_username).
+                await self._save_contact_cache(workspace_id, sender_id, phone, res)
+                return res
+            # res.get("stale_username") → fall through to tier-3 import (D-09).
+            # (any FloodWait/frozen would have propagated out of _resolve_username)
+
+        # Tier-3: ImportContacts, GATED on the checker verdict 'registered'
+        # (D-03/D-11). ImportContacts surfaces registered-but-privacy-hidden numbers
+        # that ResolvePhone misses; we only spend a (risky) import when the checker
+        # has already confirmed the number is registered. A 'not_registered' (or any
+        # non-'registered') verdict → skip the import entirely (D-03).
+        if verdict.get("tg_status") == "registered":
+            logger.info(f"Contact {phone}: tier-3 ImportContacts (registered, no live username)")
+            try:
+                result = await client(ImportContactsRequest(
+                    contacts=[InputPhoneContact(
+                        client_id=0,
+                        phone=phone,
+                        first_name=recipient_name or "",
+                        last_name="",
+                    )]
+                ))
+                # D-04: the SENDER KEEPS the imported contact (hot entity-cache for
+                # follow-ups) — NO DeleteContactsRequest here (unlike the checker).
+                if result and result.users:
+                    user = result.users[0]
+                    contact_info = {
+                        "is_registered": True,
+                        "telegram_id": user.id,
+                        "access_hash": user.access_hash,
+                        "first_name": user.first_name,
+                        "last_name": user.last_name,
+                        "username": user.username,
+                    }
+                    await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
+                    return contact_info
+                # Import returned no users — do NOT cache/finalize False here; leave
+                # finalization to the checker (D-09 semantics). The number was tagged
+                # registered, so an empty import is more likely privacy/transient.
+                return {"is_registered": False}
+            except PhoneNumberInvalidError:
+                return {"is_registered": False, "error": "Invalid phone number"}
+            # FloodWait / frozen / network errors propagate (do NOT mask) so the
+            # queue worker records the real error and retries.
+
+        # Verdict is 'not_registered' (or 'pending'/None with no captured username):
+        # skip the import (D-03) and report not-registered WITHOUT caching False —
+        # finalization is the checker's job (D-09 semantics).
+        return {"is_registered": False}
 
     async def _resolve_username(
         self,
@@ -701,8 +735,9 @@ class TelegramService:
             access_hash = contact_info.get("access_hash")
 
             # Use InputPeerUser with access_hash to avoid "entity not found" errors.
-            # ResolvePhoneRequest returns the user object but doesn't add it to the
-            # session entity cache — so bare telegram_id would fail on send.
+            # The resolve ladder (ResolveUsername / ImportContacts) returns the user
+            # object with access_hash but may not warm the session entity cache — so a
+            # bare telegram_id could fail on send.
             if access_hash is not None:
                 peer = InputPeerUser(user_id=telegram_id, access_hash=access_hash)
             else:
