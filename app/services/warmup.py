@@ -197,8 +197,17 @@ class WarmupWorker:
               AND s.auth_status = 'ok'
               AND s.role = 'sender'
               AND COALESCE(ws.enabled, false) = true
-              AND s.restriction_status = 'none'
-              AND (s.restricted_until IS NULL OR s.restricted_until <= NOW())
+              -- Warmup ВКЛЮЧАЕТ spam_limited: прогрев — это и есть восстановление
+              -- доверия для аккаунта под спам-ограничением (мягкий full-mesh чат
+              -- со знакомыми peer'ами). Исключаем только 'frozen' (Telegram
+              -- блокирует все отправки). spam_limited греется и сквозь свой
+              -- restricted_until (recheck-кулдаун); для 'none' кулдаун уважаем.
+              AND s.restriction_status IN ('none', 'spam_limited')
+              AND (
+                  s.restriction_status = 'spam_limited'
+                  OR s.restricted_until IS NULL
+                  OR s.restricted_until <= NOW()
+              )
         """))
         rows = result.fetchall()
         now = datetime.now(timezone.utc)
@@ -318,7 +327,14 @@ class WarmupWorker:
             {"ids": [from_id, to_id]}
         )
 
-        def _not_restricted(restriction_status, restricted_until) -> bool:
+        def _warmup_eligible(restriction_status, restricted_until) -> bool:
+            # Зеркало _get_active_pool: spam_limited греется сквозь кулдаун
+            # (восстановление доверия), 'frozen' исключён всегда, 'none'
+            # уважает будущий restricted_until.
+            if restriction_status == "frozen":
+                return False
+            if restriction_status == "spam_limited":
+                return True
             if restriction_status != "none":
                 return False
             if restricted_until is None:
@@ -337,7 +353,7 @@ class WarmupWorker:
                 "restricted_until": r[8],
                 "is_eligible": (
                     r[4] == "active" and r[5] == "ok"
-                    and _not_restricted(r[7], r[8])
+                    and _warmup_eligible(r[7], r[8])
                 ),
             }
             for r in result.fetchall()
@@ -568,8 +584,9 @@ class WarmupWorker:
             await db.execute(
                 text("""
                     INSERT INTO warmup_sessions
-                        (workspace_id, sender_a_id, sender_b_id, topic, target_messages, next_message_at)
-                    VALUES (:wid, :a, :b, :topic, :target, :first_at)
+                        (workspace_id, sender_a_id, sender_b_id, topic, target_messages,
+                         next_message_at, status, messages_sent)
+                    VALUES (:wid, :a, :b, :topic, :target, :first_at, 'active', 0)
                 """),
                 {
                     "wid":      sender_a["workspace_id"],

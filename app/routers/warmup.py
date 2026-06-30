@@ -66,12 +66,10 @@ def _derive_warmup_reason(
     if restriction_status == "frozen":
         return "Аккаунт заморожен Telegram — прогрев приостановлен"
     if restriction_status == "spam_limited":
-        if restricted_until is not None:
-            return (
-                "Аккаунт под спам-ограничением — прогрев возобновится после "
-                f"{restricted_until.isoformat()}"
-            )
-        return "Аккаунт под спам-ограничением — прогрев приостановлен"
+        # spam_limited ТЕПЕРЬ греется (восстановление доверия) — это не причина
+        # «не греется». Бейдж спам-ограничения UI берёт из отдельного поля
+        # restriction_status; здесь блокирующей причины нет.
+        return None
     if restriction_status and restriction_status != "none":
         return f"Аккаунт ограничен ({restriction_status}) — прогрев приостановлен"
     return None

@@ -96,7 +96,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins_list,
     allow_origin_regex=settings.cors_allowed_origin_regex,
     allow_credentials=True,
-    allow_methods=["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight; PUT — warmup/settings (единственный PUT-роут)
     allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
 )
 

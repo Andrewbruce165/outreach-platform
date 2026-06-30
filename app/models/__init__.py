@@ -362,8 +362,8 @@ class WarmupSession(Base):
     sender_b_id     = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
                              nullable=False)
     topic           = Column(Text, nullable=False)
-    status          = Column(String(20), nullable=False, default="active")  # active, completed
-    messages_sent   = Column(Integer, nullable=False, default=0)
+    status          = Column(String(20), nullable=False, default="active", server_default="active")  # active, completed
+    messages_sent   = Column(Integer, nullable=False, default=0, server_default="0")
     target_messages = Column(Integer, nullable=False, default=6)
     next_message_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_sender_id  = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="SET NULL"),
