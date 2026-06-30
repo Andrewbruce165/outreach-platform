@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 16-03-api-endpoints-and-handoff-PLAN.md
-last_updated: "2026-06-30T12:12:56.198Z"
+stopped_at: Completed 16-04-search-tool-wiring-PLAN.md
+last_updated: "2026-06-30T12:34:38.759Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 64
-  completed_plans: 61
+  completed_plans: 62
   percent: 92
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 16 (rag-knowledge-bases-for-agents) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -85,6 +85,7 @@ Progress: [█████████░] 92% (59/64 plans) — Phase 16: 1/5 p
 | Phase 16 P01 | 12min | 3 tasks | 11 files |
 | Phase 16 P02 | 8min | 2 tasks | 4 files |
 | Phase 16 P03 | 12min | 3 tasks | 7 files |
+| Phase 16 P04 | 7min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 16]: 16-01: pgvector stood up (prod+test images pgvector/pgvector:pg16, command: block preserved); migration 041 (4 KB tables + HNSW vector_cosine_ops + btree, idempotent); ORM mirror incl. Vector(1536) so create_all builds same test schema; conftest CREATE EXTENSION vector before create_all + 041 apply guard; AIContext.knowledge_base untouched (D-08). HNSW chosen (builds on empty table); pasted text in raw_content BYTEA source_kind='text' (OQ1); STORAGE=SUM(size_bytes) (OQ2). 10-test RED scaffold for KB-01..KB-06, full suite 837 collected 0 errors.
 - [Phase 16]: 16-02: kb_ingest pipeline — tiktoken cl100k_base ~800/120 sliding-window chunking, multi-format extract (pdf/docx/txt/md/csv/text) off the event loop via asyncio.to_thread, embed_texts reuses ai_engine AsyncOpenAI client batched ≤256 (Pitfall 6). KnowledgeIngestWorker mirrors ContactCheckWorker: claim pending FOR UPDATE SKIP LOCKED → processing (committed so UI polls) → parse/chunk/embed → indexed/failed; delete-then-insert kb_chunks for idempotent re-index (Pitfall 8); empty doc → indexed chunk_count=0; never-dies loop. Registered in lifespan next to contact_check_worker. KB-02/KB-03 worker tests GREEN; partial-staged main.py KB hunks (left Phase-15 CORS edit unstaged).
 - [Phase 16]: Plan 16-03: workspace-scoped KB API (CRUD + upload/paste 202 → pending row + D-09 COUNT(*) FILTER aggregate + manual cosine search + agent M:N attach/detach + reverse list) under auth_dep; list endpoints return bare arrays (RED-test contract); openapi regenerated offline via app.openapi() (no un-gated prod deploy); router partial-staged in main.py leaving Phase-15 CORS hunk unstaged. KB-01/02/03/04 GREEN.
+- [Phase 16]: kb_search signature is (db, workspace_id, kb_ids, query, top_k, max_distance) — matches the 16-03 router import + RED tests; agent→kb_ids resolution lives in attached_kb_ids
+- [Phase 16]: search_knowledge_base is a DATA tool (NOT in BUILT_IN_TOOL_NAMES) — gated on ≥1 attached KB (D-04), resolved locally, two-pass continuation, never touches conversation.status
 
 ### Roadmap Evolution
 
@@ -205,6 +208,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-06-30T12:12:47.836Z
-Stopped at: Completed 16-03-api-endpoints-and-handoff-PLAN.md
+Last session: 2026-06-30T12:34:38.746Z
+Stopped at: Completed 16-04-search-tool-wiring-PLAN.md
 Resume file: None

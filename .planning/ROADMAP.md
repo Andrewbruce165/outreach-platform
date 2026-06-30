@@ -439,7 +439,7 @@ Plans:
 
 **Requirements**: KB-01, KB-02, KB-03, KB-04, KB-05, KB-06 (derived during /gsd:plan-phase 16 — see REQUIREMENTS.md §RAG Knowledge Bases; tracked via decisions D-01..D-12)
 **Depends on:** Phase 3 (Agents / AIContext — точка привязки KB к агенту), Phase 1 (Workspace — scoping)
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -450,7 +450,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 — parallel: router vs ai_engine, no file overlap)*
 - [x] 16-03-api-endpoints-and-handoff-PLAN.md — workspace-scoped /api/v1/knowledge-bases router (CRUD + upload/paste 202 + list/reindex/delete docs + D-09 aggregate + manual search + agent attach/detach + reverse list) + schemas + openapi handoff regen [Wave 3, depends_on: 16-01, 16-02] — KB-01, KB-02, KB-03, KB-04
-- [ ] 16-04-search-tool-wiring-PLAN.md — kb_search.py (cosine query over attached KBs, workspace-filtered) + search_knowledge_base data-tool in ai_engine (gated on ≥1 KB, two-pass continuation, no status change) [Wave 3, depends_on: 16-01, 16-02] — KB-05, KB-06
+- [x] 16-04-search-tool-wiring-PLAN.md — kb_search.py (cosine query over attached KBs, workspace-filtered) + search_knowledge_base data-tool in ai_engine (gated on ≥1 KB, two-pass continuation, no status change) [Wave 3, depends_on: 16-01, 16-02] — KB-05, KB-06
 
 **Wave 4** *(blocked on Wave 3 — frontend, human-verify)*
 - [ ] 16-05-frontend-surfaces-PLAN.md — sibling repo aimly-tg-outreach: Knowledge bases sidebar tab + list page + KB detail (D-09 header + 5 metrics + 4 tabs Documents/Search/Agents/Settings, poll-while-processing) + agent-editor KB multi-select + human UAT [Wave 4, depends_on: 16-03, 16-04] — KB-01..05 UI
@@ -474,7 +474,7 @@ Plans:
 | 10. Pool Visibility & Restriction Audit (optional) | 4/4 | Complete    | 2026-06-24 |
 | 14. Reliable Contact Resolution | 3/4 | In Progress|  |
 | 15. Account Warmup via Inter-Account AI Chat | 4/4 | Complete   | 2026-06-29 |
-| 16. RAG Knowledge Bases for Agents | 3/5 | In Progress|  |
+| 16. RAG Knowledge Bases for Agents | 4/5 | In Progress|  |
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
