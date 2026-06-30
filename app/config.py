@@ -57,6 +57,40 @@ class Settings(BaseSettings):
         description="OpenAI chat model used by ai_engine + warmup. Override via env without redeploy.",
     )
 
+    # Phase 16 (KB-02/KB-03/KB-05): RAG knowledge-base ingest + search knobs.
+    # The embedding model is an env knob so it can be swapped without a redeploy;
+    # text-embedding-3-small is 1536 dims (mirrored by KbChunk.embedding Vector(1536)).
+    openai_embedding_model: str = Field(
+        default="text-embedding-3-small",
+        validation_alias="OPENAI_EMBEDDING_MODEL",
+        description="OpenAI embedding model for KB ingest/search. 1536 dims. Override via env without redeploy.",
+    )
+    kb_ingest_poll_interval: int = Field(
+        default=5,
+        validation_alias="KB_INGEST_POLL_INTERVAL",
+        description="Polling interval (seconds) for the KnowledgeIngestWorker loop.",
+    )
+    kb_search_max_distance: float = Field(
+        default=0.55,
+        validation_alias="KB_SEARCH_MAX_DISTANCE",
+        description="Max cosine distance for a KB search hit (Pitfall 4 — distance, not similarity; lower = closer).",
+    )
+    kb_search_top_k: int = Field(
+        default=5,
+        validation_alias="KB_SEARCH_TOP_K",
+        description="Default top-K chunks returned by search_knowledge_base.",
+    )
+    kb_chunk_max_tokens: int = Field(
+        default=800,
+        validation_alias="KB_CHUNK_MAX_TOKENS",
+        description="Max tokens per KB chunk (tiktoken cl100k_base, far below the 8191 embed limit).",
+    )
+    kb_chunk_overlap: int = Field(
+        default=120,
+        validation_alias="KB_CHUNK_OVERLAP",
+        description="Sliding-window token overlap between adjacent KB chunks.",
+    )
+
     # Decodo proxy pool (optional)
     decodo_host: Optional[str] = None
     decodo_username: Optional[str] = None
