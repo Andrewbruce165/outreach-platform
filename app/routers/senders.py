@@ -43,6 +43,7 @@ from app.schemas import (
     ProxyPoolListResponse,
     RateLimits,
     RestrictionEventResponse,
+    SenderBlockRateResponse,
     SenderCreate,
     SenderCreateResponse,
     SenderListResponse,
@@ -774,6 +775,50 @@ async def list_restriction_events(
         .limit(200)
     )
     return result.scalars().all()
+
+
+# ─── Block-rate aggregate (SRLD-08, D-15/D-16) ───────────────────────────────
+
+
+@router.get(
+    "/senders/{slug}/block-rate",
+    response_model=SenderBlockRateResponse,
+)
+async def get_block_rate(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """SRLD-08 (D-15/D-16): read-only per-sender block-rate over a 7-day window.
+
+    Counts durable event_type='blocked' restriction events vs message_type='sent'
+    messages_log rows. block_rate = blocks_7d / sends_7d (0.0 when no sends) — the
+    design-doc "metric that actually matters" (blocks → reports → PeerFlood →
+    freeze). STRICTLY read-only (D-16): NO control-loop, NO auto-pause, NO writes.
+
+    Workspace-scoped via _load_sender_by_slug (opaque 404 for foreign/unknown
+    slugs) PLUS an explicit workspace_id filter in the SQL (defence-in-depth,
+    mirroring list_restriction_events).
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    row = (await db.execute(text("""
+        SELECT
+          (SELECT COUNT(*) FROM sender_restriction_events e
+            WHERE e.sender_id = :sid AND e.workspace_id = :wid
+              AND e.event_type = 'blocked'
+              AND e.created_at > now() - interval '7 days')  AS blocks_7d,
+          (SELECT COUNT(*) FROM messages_log m
+            WHERE m.sender_id = :sid AND m.workspace_id = :wid
+              AND m.message_type = 'sent'
+              AND m.created_at > now() - interval '7 days')  AS sends_7d
+    """), {"sid": str(sender.id), "wid": str(ctx.workspace_id)})).one()
+    blocks_7d = int(row.blocks_7d)
+    sends_7d = int(row.sends_7d)
+    return SenderBlockRateResponse(
+        blocks_7d=blocks_7d,
+        sends_7d=sends_7d,
+        block_rate=(blocks_7d / sends_7d) if sends_7d else 0.0,
+    )
 
 
 # ─── Workspace proxy pool CRUD (D-22) ────────────────────────────────────────

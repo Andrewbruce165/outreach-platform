@@ -863,6 +863,19 @@ class RestrictionEventResponse(BaseModel):
     created_at: datetime
 
 
+class SenderBlockRateResponse(BaseModel):
+    """SRLD-08 (D-15/D-16): read-only per-sender block-rate aggregate.
+
+    Response for GET /senders/{slug}/block-rate — counts durable 'blocked'
+    restriction events vs 'sent' messages over a trailing 7-day window.
+    Strictly read-only: no control-loop, no auto-pause (D-16). block_rate is
+    blocks_7d / sends_7d (0.0 when no sends).
+    """
+    blocks_7d: int
+    sends_7d: int
+    block_rate: float
+
+
 class CampaignWriteResponse(BaseModel):
     """Phase 12 D-14: campaign create/update response carrying soft-cap warnings[].
     GET paths keep returning CampaignResponse directly (no warnings)."""
