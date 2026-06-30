@@ -189,6 +189,16 @@
 - [ ] **WARM-14**: Выборка пула пропускает аккаунты с `restriction_status != 'none'`/`restricted_until` в будущем (D-14).
 - [ ] **WARM-15**: Изучить старую `telegram-api` warmup как референс и зафиксировать, почему она конфликтовала (изоляция) (D-15).
 
+### RAG Knowledge Bases for Agents (Phase 16 — derived this phase, see 16-CONTEXT.md / 16-RESEARCH.md / 16-VALIDATION.md)
+
+- [ ] **KB-01**: Пользователь создаёт workspace-изолированную KB (`knowledge_bases` table, workspace_id FK ON DELETE CASCADE); другой workspace её не видит и не трогает (D-05).
+- [ ] **KB-02**: Пользователь загружает файлы (PDF/DOCX/TXT/MD/CSV через multipart) или вставляет текст — создаётся `kb_documents` строка `status='pending'` + `size_bytes`, 202 Accepted, воркер индексирует асинхронно (D-01/D-02).
+- [ ] **KB-03**: Ingest-воркер ведёт документ pending→processing→indexed/failed (`chunk_count`, `error`), re-index идемпотентен (delete-then-insert чанков); KB detail даёт D-09 агрегат (DOCUMENTS/INDEXED/PROCESSING/FAILED/STORAGE) + D-10 per-document статус/размер/дату (D-02/D-09/D-10).
+- [ ] **KB-04**: KB вешается на агента (M:N `agent_knowledge_bases`, mirror `CampaignSender`); attach/detach + обратный список агентов для KB (Agents tab); KB переиспользуемы между агентами (D-07).
+- [ ] **KB-05**: Retrieval через data-tool `search_knowledge_base` — регистрируется только когда у агента ≥1 KB (D-04), ищет по объединению подключённых KB, возвращает чанки `role:"tool"` сообщением, модель продолжает (two-pass), НЕ меняет `conversation.status`; пустой результат → off-topic fallback (D-03/D-04).
+- [ ] **KB-06**: Поиск и все KB-эндпоинты строго workspace-scoped — `kb_search` фильтрует по `workspace_id` + подключённым `kb_id`, утечки между workspace нет (D-05).
+- Статическое поле `ai_contexts.knowledge_base` (Phase 11) остаётся рядом, не трогается (D-08).
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -335,6 +345,12 @@
 | WARM-13 | Phase 15 | Pending |
 | WARM-14 | Phase 15 | Pending |
 | WARM-15 | Phase 15 | Pending |
+| KB-01 | Phase 16 | Pending |
+| KB-02 | Phase 16 | Pending |
+| KB-03 | Phase 16 | Pending |
+| KB-04 | Phase 16 | Pending |
+| KB-05 | Phase 16 | Pending |
+| KB-06 | Phase 16 | Pending |
 
 **Coverage:**
 
@@ -342,6 +358,7 @@
 - Mapped to phases: 70
 - Unmapped: 0 ✓
 - Post-v1 (Sender Pool Resilience): FRZ-01..05 (Phase 7), POOL-01..09 (Phase 8), FAIL-01..09 (Phase 9), HLTH-01..03 + POOLV-01..04 (Phase 10) — all mapped
+- Phase 16 (RAG Knowledge Bases): KB-01..06 derived during /gsd:plan-phase 16 — all mapped across plans 16-01..16-05
 
 **Deprecated from previous v1 scope** (replaced by new model):
 
@@ -357,3 +374,4 @@
 *2026-06-25 — derived NDLG-01..06 (Per-Campaign Daily New-Dialog Limit) during Phase 12 planning*
 *2026-06-26 — derived PACE-01..07 (Even Pacing Across Sending Window) during Phase 13 planning*
 *2026-06-29 — derived WARM-01..15 (Account Warmup via Inter-Account AI Chat) during Phase 15 planning*
+*2026-06-30 — derived KB-01..06 (RAG Knowledge Bases for Agents) during Phase 16 planning*
