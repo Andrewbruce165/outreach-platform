@@ -86,7 +86,13 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     ``is_registered=False`` (the conservative, re-checkable verdict). No decrypted
     session string or full imported-contact PII is logged.
 
-    Returns ``{"is_registered": bool, "telegram_id": int | None}``.
+    Returns ``{"is_registered": bool, "telegram_id": int | None, "username": str | None}``.
+
+    SRLD-01/D-06: the captured ``username`` is the public, *transferable* identity
+    (unlike the per-account ``access_hash``, which can never be reused). When present
+    it lets the sender do a cheap, safe tier-2 ``ResolveUsername`` instead of a
+    phone-import. The key is ALWAYS present (``None`` when not registered / no handle)
+    so the worker's ``res.get("username")`` never KeyErrors.
     """
     from telethon.tl.functions.contacts import (
         DeleteContactsRequest,
@@ -100,12 +106,17 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     try:
         result = await client(ResolvePhoneRequest(phone=phone))
         if result and result.users:
-            return {"is_registered": True, "telegram_id": result.users[0].id}
+            user = result.users[0]
+            return {
+                "is_registered": True,
+                "telegram_id": user.id,
+                "username": getattr(user, "username", None),
+            }
         resolve_empty = True
     except FloodWaitError:
         raise  # caller handles FloodWait — never mask it
     except PhoneNumberInvalidError:
-        return {"is_registered": False, "telegram_id": None}
+        return {"is_registered": False, "telegram_id": None, "username": None}
     except PhoneNotOccupiedError:
         resolve_empty = True
     except Exception as exc:  # noqa: BLE001
@@ -116,7 +127,7 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
             raise  # unexpected (frozen/network) — let the caller stop the batch
 
     if not resolve_empty:
-        return {"is_registered": False, "telegram_id": None}
+        return {"is_registered": False, "telegram_id": None, "username": None}
 
     # 2. Fallback: importContacts — surfaces a private/registered user that
     #    ResolvePhone could not see. Its own failure is non-fatal (→ not registered).
@@ -131,10 +142,10 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
         raise
     except Exception as exc:  # noqa: BLE001 — import fallback must not crash the batch
         logger.warning("importContacts fallback failed for a phone: %s", exc)
-        return {"is_registered": False, "telegram_id": None}
+        return {"is_registered": False, "telegram_id": None, "username": None}
 
     if imported_user is None:
-        return {"is_registered": False, "telegram_id": None}
+        return {"is_registered": False, "telegram_id": None, "username": None}
 
     # 3. MANDATORY cleanup (D-02 / Pitfall 4): remove the imported contact so the
     #    checker's address book / behavioural profile stays clean.
@@ -143,7 +154,11 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     except Exception as exc:  # noqa: BLE001 — cleanup failure is logged, not fatal
         logger.warning("DeleteContacts cleanup after import failed: %s", exc)
 
-    return {"is_registered": True, "telegram_id": imported_user.id}
+    return {
+        "is_registered": True,
+        "telegram_id": imported_user.id,
+        "username": getattr(imported_user, "username", None),
+    }
 
 
 class CheckerService:
