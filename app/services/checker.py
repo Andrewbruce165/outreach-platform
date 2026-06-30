@@ -193,6 +193,20 @@ class CheckerService:
         Workspace-isolated by D-03 (Phase 1 multi-tenant): cache hits from another
         tenant's checker are not visible — prevents cross-tenant data leak via
         resolve cache.
+
+        SRLD-07/D-12 — confidence-gated read of the negative bucket: a cached
+        ``is_registered=false`` from a SUSPECT/low-confidence resolver is the Igor
+        cross-contamination root cause — it short-circuits a re-check before
+        Telegram is ever called, so the live re-resolve never happens. We therefore
+        SUPPRESS a cached false (return ``None`` → force live re-resolve) whenever
+        ANY matching ``contacts`` row in the same workspace is suspect or not
+        high-confidence. Positive (``is_registered=true``) rows are served
+        unchanged (a positive is not a contamination risk here). The cache row is
+        NEVER deleted (ROADMAP "кэш не чистим").
+
+        OQ#1 (Research): a phone may map to multiple contacts. The predicate is
+        deliberately CONSERVATIVE — if ANY matching contact is suspect/low-confidence
+        we fall through to a live resolve rather than trust a stale clean sibling.
         """
         async with AsyncSessionLocal() as db:
             row = (await db.execute(
@@ -208,8 +222,27 @@ class CheckerService:
                 {"workspace_id": workspace_id, "phone": phone},
             )).fetchone()
 
-        if row is None:
-            return None
+            if row is None:
+                return None
+
+            # Confidence-gate ONLY the negative bucket (SRLD-07/D-12).
+            if row[0] is False:
+                suspect = (await db.execute(
+                    text("""
+                        SELECT 1
+                        FROM contacts
+                        WHERE workspace_id = :workspace_id
+                          AND phone = :phone
+                          AND (tg_probe_state = 'suspect'
+                               OR tg_confidence IS DISTINCT FROM 'high')
+                        LIMIT 1
+                    """),
+                    {"workspace_id": workspace_id, "phone": phone},
+                )).fetchone()
+                if suspect is not None:
+                    # Poisoned/uncertified false → don't serve; force live re-resolve.
+                    return None
+
         return {
             "is_registered": row[0],
             "telegram_id": row[1],
