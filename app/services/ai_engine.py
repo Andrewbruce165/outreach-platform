@@ -81,6 +81,50 @@ _BUILTIN_FAREWELL_INSTRUCTION = (
     "or missing `content`."
 )
 
+# Phase 16 KB-05 / D-04: the search_knowledge_base DATA tool. UNLIKE the built-in
+# signal tools above, this one does NOT terminate the loop and does NOT touch
+# conversation.status — it returns reference passages and the model continues via
+# the existing two-pass (role:"tool" message + second completion) flow. It is
+# therefore deliberately NOT in BUILT_IN_TOOL_NAMES; it lands in the custom_calls
+# bucket and is resolved locally (vector search), not via execute_webhook.
+SEARCH_KB_TOOL_NAME = "search_knowledge_base"
+SEARCH_KB_TOOL = {
+    "type": "function",
+    "function": {
+        "name": SEARCH_KB_TOOL_NAME,
+        "description": (
+            "Search the agent's attached knowledge bases for relevant reference "
+            "material. Call this when the contact asks something that may be answered "
+            "by stored documents/facts. Returns relevant passages; use them to answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language search query.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def build_kb_tool_spec(has_kb: bool) -> list[dict]:
+    """Phase 16 D-04: return the search_knowledge_base tool spec ONLY when the
+    agent has >=1 attached KB.
+
+    Args:
+        has_kb: True when the conversation's agent has at least one attached KB.
+
+    Returns:
+        ``[SEARCH_KB_TOOL]`` when ``has_kb`` else ``[]`` — so the data-tool is
+        offered to the model only when there is something to search (never
+        registered unconditionally).
+    """
+    return [SEARCH_KB_TOOL] if has_kb else []
+
 
 def build_builtin_tools(campaign: dict) -> list[dict]:
     """Phase 4 D-12: build 3 built-in OpenAI function tools for campaign signals.
@@ -1163,6 +1207,27 @@ class AIEngine:
             # (NOT ai_contexts.webhook_functions — dropped in Phase 3 migration 015).
             custom_tools_spec = campaign.get("tools", []) if campaign else []
 
+            # Phase 16 KB-05 / D-04: resolve whether to offer the search_knowledge_base
+            # DATA tool. Derive the agent from the resolved context (campaign path sets
+            # context["agent_id"]; legacy get_context path falls back to context_id).
+            # attached_kb_ids reads agent_knowledge_bases and returns BOTH the workspace
+            # and the attached KB ids — so the legacy path (which lacks workspace_id in
+            # the context dict) is still workspace-isolated. Defensive: never let a KB
+            # lookup failure break reply generation.
+            from app.services import kb_search as _kb_search
+
+            kb_agent_id = context.get("agent_id") or context_id
+            kb_workspace_id = None
+            kb_ids: list = []
+            try:
+                kb_workspace_id, kb_ids = await _kb_search.attached_kb_ids(
+                    session, kb_agent_id
+                )
+            except Exception as _kb_e:  # pragma: no cover — defensive
+                logger.warning("KB attach lookup failed (agent=%s): %s", kb_agent_id, _kb_e)
+                kb_workspace_id, kb_ids = None, []
+            has_kb = bool(kb_ids)
+
             # Получаем историю
             history = await self.get_conversation_history(session, conversation_id, limit=20)
 
@@ -1187,9 +1252,15 @@ class AIEngine:
             custom_tools = self.build_tools(custom_tools_spec)
             all_tools = builtin_tools + custom_tools
 
+            # Phase 16 D-04: offer the search_knowledge_base DATA tool ONLY when the
+            # agent has >=1 attached KB. build_kb_tool_spec returns [] when has_kb is
+            # False, so this is a no-op for agents without a KB (never unconditional).
+            kb_tool = build_kb_tool_spec(has_kb)
+            all_tools = all_tools + kb_tool
+
             logger.info(
-                "🤖 Генерируем ответ для %s... (tools: %d built-in + %d custom = %d)",
-                contact_name, len(builtin_tools), len(custom_tools), len(all_tools),
+                "🤖 Генерируем ответ для %s... (tools: %d built-in + %d custom + %d kb = %d)",
+                contact_name, len(builtin_tools), len(custom_tools), len(kb_tool), len(all_tools),
             )
 
             # Параметры запроса
@@ -1317,6 +1388,33 @@ class AIEngine:
             tool_results: dict[str, str] = {}
             for tool_call, func_name, func_args in custom_calls:
                 logger.info(f"📤 Функция: {func_name}, аргументы: {func_args}")
+
+                # Phase 16 KB-05: the search_knowledge_base DATA tool is resolved
+                # LOCALLY via the vector search — NOT via execute_webhook. It writes
+                # its own tool_results entry then `continue`s so the existing two-pass
+                # block below appends a role:"tool" message and runs the second
+                # completion UNCHANGED (the model continues with the chunks in context).
+                # It never touches conversation.status (data tool, not a signal tool).
+                if func_name == SEARCH_KB_TOOL_NAME:
+                    try:
+                        hits = await _kb_search.kb_search(
+                            db=session,
+                            workspace_id=kb_workspace_id,
+                            kb_ids=kb_ids,
+                            query=func_args.get("query", ""),
+                        )
+                    except Exception as _se:  # never crash the reply (Pitfall 5)
+                        logger.warning("kb_search failed: %s", _se)
+                        hits = []
+                    # Pitfall 5: empty hits → explicit no-passages note so the model
+                    # falls back to existing off-topic behaviour instead of hallucinating.
+                    payload = (
+                        {"results": hits}
+                        if hits
+                        else {"results": [], "note": "no relevant passages found"}
+                    )
+                    tool_results[tool_call.id] = json.dumps(payload, ensure_ascii=False)
+                    continue   # do NOT fall through to the webhook lookup
 
                 # Find func_config in campaign.tools (NOT ai_contexts.webhook_functions —
                 # that path is fully retired in Phase 4 D-14).
