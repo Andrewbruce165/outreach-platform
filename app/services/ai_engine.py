@@ -11,6 +11,8 @@ custom tools sourced from campaigns.tools JSONB (NOT ai_contexts.webhook_functio
 import logging
 import json
 import time
+import re
+import unicodedata
 import httpx
 from openai import AsyncOpenAI
 from openai import (
@@ -668,6 +670,68 @@ _PROMPT_MIRROR_LANGUAGE = (
 _PROMPT_NO_EMOJI = "Do not use emojis in any messages. None at all."
 
 
+# Explicit zero-width / bidi set. Most are Unicode category Cf (and thus already
+# removed by the category strip below), but we keep an explicit pass so the intent
+# is clear and robust regardless of the running Python's Unicode tables.
+_ZERO_WIDTH_BIDI = {
+    "​", "‌", "‍",              # zero-width space / non-joiner / joiner
+    "⁠",                                    # word joiner
+    "﻿",                                    # zero-width no-break space / BOM
+    "‪", "‫", "‬", "‭", "‮",  # bidi embeddings/overrides
+    "⁦", "⁧", "⁨", "⁩",      # bidi isolates
+}
+
+# Neutralize the isolation delimiter regardless of case/whitespace so a contact
+# cannot break out of <user_message>...</user_message>. Whitespace is allowed on
+# both sides of an optional slash ("< / user_message >" is still a spoof attempt).
+_USER_MSG_TAG_RE = re.compile(r"<\s*/?\s*user_message\s*>", re.IGNORECASE)
+
+
+def sanitize_inbound(text: str, max_length: int = 4096) -> str:
+    """Sanitize inbound (contact-originated) text before it is placed inside the
+    <user_message> isolation boundary or fed as inbound history to the LLM.
+
+    - None/empty -> "".
+    - Strip Unicode categories Cc/Cf (control/format), preserving \\n and \\t.
+    - Remove an explicit zero-width/bidi set (defence-in-depth for banlist bypass).
+    - Remove </user_message> / <user_message> tokens (any case/whitespace) so the
+      delimiter cannot be spoofed.
+    - Collapse 3+ consecutive newlines to \\n\\n, then strip.
+    - Truncate to max_length with a '… [truncated]' suffix when longer.
+
+    Pure and synchronous. NOTE: `text` param shadows the module-level sqlalchemy
+    `text` import inside this function only — do not call sqlalchemy text() here.
+    """
+    if not text:
+        return ""
+
+    # 1. Strip control/format chars (Cc/Cf) except newline and tab; also drop the
+    #    explicit zero-width/bidi set.
+    cleaned = []
+    for ch in text:
+        if ch in ("\n", "\t"):
+            cleaned.append(ch)
+            continue
+        if ch in _ZERO_WIDTH_BIDI:
+            continue
+        if unicodedata.category(ch) in ("Cc", "Cf"):
+            continue
+        cleaned.append(ch)
+    result = "".join(cleaned)
+
+    # 2. Neutralize the isolation delimiter.
+    result = _USER_MSG_TAG_RE.sub("", result)
+
+    # 3. Collapse 3+ newlines to a paragraph break, then strip surrounding whitespace.
+    result = re.sub(r"\n{3,}", "\n\n", result).strip()
+
+    # 4. Length cap.
+    if len(result) > max_length:
+        result = result[:max_length] + "… [truncated]"
+
+    return result
+
+
 class AIEngine:
     """AI Engine для генерации ответов с поддержкой Function Calling"""
 
@@ -768,8 +832,13 @@ class AIEngine:
             messages = []
             for row in reversed(rows):
                 direction, text_content, sent_by = row
-                role = "user" if direction == "inbound" else "assistant"
-                messages.append({"role": role, "content": text_content})
+                if direction == "inbound":
+                    role = "user"
+                    content = sanitize_inbound(text_content)
+                else:
+                    role = "assistant"
+                    content = text_content
+                messages.append({"role": role, "content": content})
 
             return messages
 
@@ -1268,11 +1337,13 @@ class AIEngine:
 
             # Добавляем историю
             for msg in history:
-                if msg["content"] != new_message:
+                if msg["content"] != new_message:      # dedup vs RAW message — unchanged
                     messages.append(msg)
 
-            # Добавляем новое сообщение (обёрнуто для изоляции от инъекций)
-            messages.append({"role": "user", "content": f"<user_message>{new_message}</user_message>"})
+            # Добавляем новое сообщение (обёрнуто для изоляции от инъекций).
+            # Санитизируем ТОЛЬКО обёрнутый текст; dedup выше сравнивает сырой new_message.
+            clean = sanitize_inbound(new_message)
+            messages.append({"role": "user", "content": f"<user_message>{clean}</user_message>"})
 
             # Phase 4 D-12 + CAMP-16: merge built-in + custom tools.
             builtin_tools = build_builtin_tools(campaign)
