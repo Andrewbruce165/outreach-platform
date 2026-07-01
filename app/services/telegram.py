@@ -89,7 +89,7 @@ def parse_spambot_limit_until(text: str) -> Optional[datetime]:
 # treated as a restriction (the 2026-06-29 false-positive: a clean "Good news, no
 # limits … free as a bird!" reply was flagged spam_limited for 6h — see
 # .planning/debug/checker-false-spam-limited.md).
-_SPAMBOT_FREE_PHRASES = ("good news", "no limits", "нет ограничений", "всё хорошо", "free as a bird")
+_SPAMBOT_FREE_PHRASES = ("good news", "no limits", "нет ограничений", "всё хорошо", "free as a bird", "свободен от", "свободна от")
 _SPAMBOT_LIMITED_PHRASES = ("limited", "restrict", "ограничен")
 _SPAMBOT_SUSPENDED_PHRASES = (
     "suspended", "blocked", "banned",

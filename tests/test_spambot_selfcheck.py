@@ -212,3 +212,28 @@ async def test_antispam_guard_skips_clean_spambot_body_even_without_marker(
 
     assert q_status == "pending"     # clean reply → queue untouched (not paused)
     assert restriction == "none"     # sender NOT flagged (the bug fix)
+
+
+# ── 5: classify_spambot_text — RU free reply must be 'free', not 'limited' ──
+
+
+async def test_classify_spambot_text_russian_free_reply():
+    """RU regression (2026-07-01): @SpamBot's Russian clean reply
+    'Ваш аккаунт свободен от каких-либо ограничений.' must classify as 'free'.
+
+    Bug: 'свободен' was absent from _SPAMBOT_FREE_PHRASES, while the limited phrase
+    'ограничен' matched INSIDE the word 'ограничений' → the free reply was misread as
+    'limited', pinning RU-locale accounts spam_limited indefinitely (the reconcile
+    sweep re-checks via @SpamBot and never lifted them). 'free' is evaluated first,
+    so 'свободен от' now wins over the incidental 'ограничен' substring.
+    """
+    from app.services.telegram import classify_spambot_text
+
+    # the exact RU clean reply that was mis-flagged
+    assert classify_spambot_text("Ваш аккаунт свободен от каких-либо ограничений.") == "free"
+    # a genuine RU restriction still classifies as limited
+    assert classify_spambot_text(
+        "Ваш аккаунт временно ограничен: Вы не можете писать тем, кто не сохранил Ваш номер."
+    ) == "limited"
+    # English clean reply unchanged
+    assert classify_spambot_text("Good news, no limits — you're free as a bird!") == "free"
