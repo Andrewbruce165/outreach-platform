@@ -992,7 +992,7 @@ function Thread({
         background: "var(--bg-soft)",
       }}
     >
-      {/* Header */}
+      {/* Header — Sender · Agent · Campaign */}
       <header
         style={{
           padding: "12px 20px",
@@ -1000,65 +1000,27 @@ function Thread({
           borderBottom: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
-          gap: 12,
+          gap: 18,
+          minHeight: 60,
         }}
       >
-        <Avatar name={name} size={42} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 14.5, fontWeight: 600 }}>{name}</span>
-            {conv?.contact_phone && conv.contact_phone !== name && (
-              <span className="muted" style={{ fontSize: 12 }}>
-                · {conv.contact_phone}
-              </span>
-            )}
-          </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-            last active{" "}
-            {conv?.last_message_at
-              ? new Date(conv.last_message_at).toLocaleString()
-              : "—"}
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flex: 1, minWidth: 0 }}>
+          <KV
+            label="Sender"
+            value={sender ? sender.name : conv?.sender_slug ? `@${conv.sender_slug}` : "—"}
+            icon={<Phone size={13} />}
+          />
+          <KV
+            label="Agent"
+            value={agent ? agent.name : "—"}
+            icon={<Bot size={13} />}
+          />
+          <KV
+            label="Campaign"
+            value={campaign ? campaign.name : "—"}
+            icon={<Flag size={13} />}
+          />
         </div>
-
-        {conv && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 14,
-              marginRight: 10,
-              paddingRight: 14,
-              borderRight: "1px solid var(--border)",
-            }}
-          >
-            {conv.sender_slug && (
-              <KV
-                label="Sender"
-                value={
-                  sender
-                    ? `${sender.name} · ${sender.phone}`
-                    : `@${conv.sender_slug}`
-                }
-                icon={<Phone size={13} />}
-              />
-            )}
-            {agent && (
-              <KV
-                label="Agent"
-                value={agent.name}
-                icon={<Bot size={13} />}
-              />
-            )}
-            {campaign && (
-              <KV
-                label="Campaign"
-                value={campaign.name}
-                icon={<Flag size={13} />}
-              />
-            )}
-          </div>
-        )}
 
         {conv &&
           (conv.ai_enabled ? (
@@ -1086,12 +1048,14 @@ function Thread({
             type="button"
             className="btn btn--ghost btn--sm"
             onClick={onToggleLlm}
-            aria-label="Show LLM trace"
+            aria-label="Show details"
           >
             <Brain size={14} />
           </button>
         )}
       </header>
+      {/* keep name available for downstream refs */}
+      {false && <span>{name}</span>}
 
       {/* Lead banner */}
       {conv?.status === "lead" && (
