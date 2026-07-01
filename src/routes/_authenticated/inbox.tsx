@@ -1006,6 +1006,15 @@ function Thread({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 18, flex: 1, minWidth: 0 }}>
           <KV
+            label="Recipient"
+            value={
+              conv?.contact_name && conv?.contact_phone
+                ? `${conv.contact_name} · ${conv.contact_phone}`
+                : conv?.contact_name || conv?.contact_phone || name
+            }
+            icon={<UserIcon size={13} />}
+          />
+          <KV
             label="Sender"
             value={sender ? sender.name : conv?.sender_slug ? `@${conv.sender_slug}` : "—"}
             icon={<Phone size={13} />}
