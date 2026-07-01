@@ -1507,8 +1507,6 @@ function DetailsTab({
     <div className="scroll" style={{ flex: 1, padding: "14px 14px" }}>
       <DetailSection title="Agent" icon={<Bot size={12} />}>
         <DetailRow label="Name" value={agent?.name ?? "—"} />
-        {agent?.tone && <DetailRow label="Tone" value={agent.tone} />}
-        {agent?.language && <DetailRow label="Language" value={agent.language} />}
       </DetailSection>
 
       <DetailSection title="Campaign" icon={<Flag size={12} />}>
