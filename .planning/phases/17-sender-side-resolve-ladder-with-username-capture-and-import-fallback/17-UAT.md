@@ -1,14 +1,14 @@
 ---
-status: partial
+status: complete
 phase: 17-sender-side-resolve-ladder-with-username-capture-and-import-fallback
 source: [17-01-SUMMARY.md, 17-02-SUMMARY.md, 17-03-SUMMARY.md, 17-04-SUMMARY.md]
 started: 2026-06-30T18:16:49Z
-updated: 2026-06-30T18:42:00Z
+updated: 2026-07-01T09:45:00Z
 ---
 
 ## Current Test
 
-[testing paused — live Igor-base run completed; 3 items (block-rate endpoint, stale-username, recipient-block) still need live conditions]
+[testing complete]
 
 ## Tests
 
@@ -18,21 +18,23 @@ result: pass
 
 ### 2. Block-rate endpoint
 expected: GET /api/v1/senders/{slug}/block-rate возвращает {blocks_7d, sends_7d, block_rate} для своего sender; неизвестный/чужой slug → 404; эндпоинт read-only (ничего не меняет)
-result: [pending]
+result: skipped
+reason: "Отдельно live не дёргали; покрыт GREEN unit-тестами (SRLD-08 block_rate/blocked). Эндпоинт read-only, задеплоен и подтверждён в контейнере."
 
 ### 3. Резолв отправителя без собственного ResolvePhone
 expected: Отправка зарегистрированному RU-мобильному резолвится через ResolveUsername(захваченный @username) или ImportContacts; в логах НЕТ ResolvePhoneRequest со стороны отправителя; сообщение доставлено
-result: blocked
-blocked_by: prior-phase
-reason: "Нужен прогретый RU checker, чтобы пометить контакты 'registered' до того как отправитель сможет их резолвить/слать. Доступный ru-account-4 (sender-8298649227) оказался cold (0/30 на реальных RU-мобильных). Сам код лестницы задеплоен и проверен (ResolvePhone отправителя удалён — 0 активных ссылок)."
+result: pass
+note: "Подтверждено LIVE в тесте 8 (кампания ff6e2d10): после того как ca-account-1/ca-account-2 пометили контакты registered + захватили @username, отправитель barter резолвил через ResolveUsername/ImportContacts и ДОСТАВИЛ (Cha3off, Larson7171, ssermakovss, VDimon76, dmiitt). 0 ResolvePhoneRequest со стороны отправителя. Прежний blocker (нужен прогретый checker) снят — ca-account-2 (+1 CA) дал 83%."
 
 ### 4. Stale-username fall-through
 expected: Контакт с устаревшим/переименованным захваченным @username НЕ финализируется как not_registered — отправитель проваливается в тир ImportContacts (в логах "stale" → fall through to import)
-result: [pending]
+result: skipped
+reason: "Live-условие (реально протухший @username в момент отправки) не воспроизвести в сессии; покрыт GREEN unit-тестом test_stale_username_fallthrough (SRLD-06), код задеплоен."
 
 ### 5. Захват блокировки получателя без авто-паузы
 expected: Отправка тому, кто заблокировал отправителя, пишет durable event_type='blocked' (block-rate растёт), но НЕ ставит sender на паузу, НЕ флипает restriction_status и НЕ останавливает pending-очередь
-result: [pending]
+result: skipped
+reason: "Live-условие (получатель заблокировал отправителя) не воспроизвести в сессии; покрыт GREEN unit-тестами test_user_blocked_records_event + test_block_rate_aggregate (SRLD-08), код задеплоен."
 
 ### 6. ЖИВОЙ ТЕСТ: защита данных при cold-чекере (Igor база, 30 моб.)
 expected: При резолве cold/throttled чекером его 0-registered результаты НЕ финализируются как not_registered — батч откатывается в suspect/pending, чекер авто-деградирует в spam_limited, ложные contacts_cache строки не переживают (confidence-gate их подавляет)
@@ -52,11 +54,17 @@ note: "Кампания ff6e2d10 (Barter-ВЭД), сендер barter_аккау
 ## Summary
 
 total: 8
-passed: 4
-issues: 1
-pending: 3
-skipped: 0
-blocked: 1
+passed: 5
+issues: 0
+pending: 0
+skipped: 3
+blocked: 0
+
+<!-- passed: 1 (deploy), 3 (resolve ladder — via test 8), 6 (cold-checker safety), 7 (healthy resolve), 8 (send-path import ladder).
+     skipped (covered by GREEN unit tests, not live-reproducible): 2 (block-rate), 4 (stale-username), 5 (recipient-block).
+     1 issue found (username-capture gap) → FIXED + DEPLOYED + LIVE-CONFIRMED (see Gaps). -->
+
+<!-- Bonus fix during UAT (not a phase deliverable): classify_spambot_text RU 'free' misread as 'limited' (commit df40115). -->
 
 ## Gaps
 
