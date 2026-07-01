@@ -286,7 +286,9 @@ function InboxPage() {
         ) : (
           <EmptyMid />
         )}
-        {showTrace && selectedId && <TracePane conversationId={selectedId} />}
+        {showTrace && selectedId && (
+          <RightPane conversationId={selectedId} campaigns={campaigns} />
+        )}
       </div>
 
       <AlertDialog
