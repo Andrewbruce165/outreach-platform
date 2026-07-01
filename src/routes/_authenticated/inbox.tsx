@@ -1344,7 +1344,200 @@ function MessageBubble({ m }: { m: Message }) {
   );
 }
 
-/* ---------------- RIGHT: thought trace ---------------- */
+/* ---------------- RIGHT: details + thought trace ---------------- */
+
+function RightPane({
+  conversationId,
+  campaigns,
+}: {
+  conversationId: string;
+  campaigns: Campaign[];
+}) {
+  const [tab, setTab] = useState<"details" | "trace">("details");
+  const convQ = useQuery({
+    queryKey: ["conversation", conversationId],
+    queryFn: () => api<Conversation>(`/api/v1/conversations/${conversationId}`),
+    staleTime: 10_000,
+  });
+  const sendersQ = useQuery({
+    queryKey: ["senders"],
+    queryFn: () => api<SenderList>("/api/v1/senders"),
+    staleTime: 60_000,
+  });
+  const agentsQ = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => api<AgentList>("/api/v1/agents"),
+    staleTime: 60_000,
+  });
+
+  const conv = convQ.data;
+  const sender = sendersQ.data?.senders.find((s) => s.slug === conv?.sender_slug);
+  const campaign = campaigns.find((c) => c.id === conv?.campaign_id);
+  const agent = campaign?.agent_id
+    ? agentsQ.data?.agents.find((a) => a.id === campaign.agent_id)
+    : undefined;
+
+  return (
+    <aside
+      style={{
+        borderLeft: "1px solid var(--border)",
+        background: "var(--bg)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        minWidth: 0,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          gap: 4,
+          padding: "10px 12px 0",
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
+        {(["details", "trace"] as const).map((t) => {
+          const active = tab === t;
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              style={{
+                padding: "8px 12px",
+                fontSize: 12.5,
+                fontWeight: 600,
+                background: "transparent",
+                border: "none",
+                borderBottom: active
+                  ? "2px solid var(--tg-blue, #3390ec)"
+                  : "2px solid transparent",
+                color: active ? "var(--text)" : "var(--text-muted)",
+                cursor: "pointer",
+                marginBottom: -1,
+              }}
+            >
+              {t === "details" ? "Details" : "Thought trace"}
+            </button>
+          );
+        })}
+      </div>
+      {tab === "details" ? (
+        <DetailsTab conv={conv} sender={sender} agent={agent} campaign={campaign} />
+      ) : (
+        <TracePane conversationId={conversationId} />
+      )}
+    </aside>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0" }}>
+      <span className="muted" style={{ fontSize: 11.5 }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 12.5, fontWeight: 500, textAlign: "right", wordBreak: "break-word" }}>
+        {value ?? "—"}
+      </span>
+    </div>
+  );
+}
+
+function DetailSection({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: 10,
+        padding: "10px 14px",
+        marginBottom: 12,
+        background: "var(--bg)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          color: "var(--text-muted)",
+          marginBottom: 6,
+        }}
+      >
+        <span style={{ color: "var(--text-faint)" }}>{icon}</span>
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function DetailsTab({
+  conv,
+  sender,
+  agent,
+  campaign,
+}: {
+  conv?: Conversation;
+  sender?: Sender;
+  agent?: Agent;
+  campaign?: Campaign;
+}) {
+  if (!conv) {
+    return (
+      <div className="scroll muted" style={{ padding: 16, fontSize: 12 }}>
+        Loading…
+      </div>
+    );
+  }
+  return (
+    <div className="scroll" style={{ flex: 1, padding: "14px 14px" }}>
+      <DetailSection title="Agent" icon={<Bot size={12} />}>
+        <DetailRow label="Name" value={agent?.name ?? "—"} />
+        {agent?.tone && <DetailRow label="Tone" value={agent.tone} />}
+        {agent?.language && <DetailRow label="Language" value={agent.language} />}
+      </DetailSection>
+
+      <DetailSection title="Campaign" icon={<Flag size={12} />}>
+        <DetailRow label="Name" value={campaign?.name ?? "—"} />
+        {campaign?.status && <DetailRow label="Status" value={campaign.status} />}
+      </DetailSection>
+
+      <DetailSection title="Sender account" icon={<Phone size={12} />}>
+        <DetailRow label="Name" value={sender?.name ?? (conv.sender_slug ? `@${conv.sender_slug}` : "—")} />
+        <DetailRow label="Phone" value={sender?.phone ?? "—"} />
+        {sender?.status && <DetailRow label="Status" value={sender.status} />}
+        {sender?.role && <DetailRow label="Role" value={sender.role} />}
+      </DetailSection>
+
+      <DetailSection title="Recipient" icon={<UserIcon size={12} />}>
+        <DetailRow label="Name" value={conv.contact_name ?? "—"} />
+        <DetailRow label="Phone" value={conv.contact_phone ?? "—"} />
+        {conv.contact_telegram_id != null && (
+          <DetailRow label="Telegram ID" value={String(conv.contact_telegram_id)} />
+        )}
+        <DetailRow label="Status" value={conv.status ?? "—"} />
+        <DetailRow
+          label="Last active"
+          value={conv.last_message_at ? new Date(conv.last_message_at).toLocaleString() : "—"}
+        />
+      </DetailSection>
+    </div>
+  );
+}
 
 function TracePane({ conversationId }: { conversationId: string }) {
   const tracesQ = useQuery({
