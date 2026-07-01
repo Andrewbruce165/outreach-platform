@@ -44,10 +44,15 @@ expected: Здоровый чекер с реальным contacts-резолв�
 result: pass
 note: "ca-account-1 (sender-7867638054, +16398525147, +1 CANADA) на тех же 30 чистых +79 моб.: control-probe 3/3, batch checked=30 registered=16 not_registered=14 = 53%, чекер остался здоров (trip 0), батч финализирован high/clean (данные сохранены). ИЗОЛЯЦИОННЫЙ ТЕСТ опроверг country-гипотезу: тёплый +1 CA = 53%, холодный +79 RU = 0%. Решает то прогретость/здоровье, не страна (Phase 17 D-10 подтверждён)."
 
+### 8. ЖИВОЙ ТЕСТ: send-path import-лестница (SRLD-03/04/05) на кампании ff6e2d10
+expected: Отправка идёт по 3-tier лестнице (cache → ResolveUsername(захваченный @username) → ImportContacts), собственный ResolvePhone отправителя НЕ вызывается; registered-контакт с захваченным @username доставляется через ResolveUsername
+result: pass
+note: "Кампания ff6e2d10 (Barter-ВЭД), сендер barter_аккаунт Игоря (sender-7375001431, +79, свежеразбанен). Контролируемый батч 5. Логи: 2 контакта с захваченным @username (Cha3off, Larson7171) → 'not in cache, calling ResolveUsernameRequest' → ДОСТАВЛЕНО (result_message_id set). 3 контакта registered-но-без-username → 'tier-3 ImportContacts (registered, no live username)' → import пуст (phone-private) → 'не зарегистрирован'. НИ ОДНОГО ResolvePhoneRequest — старый класс ошибки 'No user associated (caused by ResolvePhoneRequest)' устранён (D-01). Вывод: захваченный @username = ключ доставки для phone-private registered; сегодняшний username-фикс напрямую повышает reachability. Ограничение (inherent Telegram privacy): registered + phone-private + без @username = недоставляемо любым аккаунтом."
+
 ## Summary
 
-total: 7
-passed: 3
+total: 8
+passed: 4
 issues: 1
 pending: 3
 skipped: 0
