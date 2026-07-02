@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Integer, LargeBinary, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, Text, Boolean, BigInteger, DateTime, Integer, Float, LargeBinary, ForeignKey, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import ARRAY, UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func, text
@@ -421,6 +421,38 @@ class WarmupSettings(Base):
                            onupdate=func.now(), nullable=False)
 
 
+class LLMSettings(Base):
+    """Per-workspace LLM provider/model/knobs + encrypted BYO key (Phase 18).
+
+    D-01: setting scope is workspace-level — one row per workspace (PK workspace_id),
+    no per-agent override this phase. Absence of a row = platform default (D-02):
+    platform OPENAI_API_KEY + settings.openai_model. `api_key_encrypted`
+    is Fernet ciphertext (D-04); `api_key_prefix` (prefix+last4) is the ONLY
+    key material ever returned to the UI. `api_key_status` tracks validity
+    (D-05/D-06). Knob columns are nullable => provider/code default.
+
+    Every NOT NULL column carries server_default= matching the SQL DEFAULT in
+    migration 044 (Pitfall 5 — mig 040/042 create_all drift): create_all must
+    build the test schema WITH the DB default so raw-SQL INSERTs don't NotNull.
+    """
+    __tablename__ = "llm_settings"
+
+    workspace_id      = Column(UUID(as_uuid=True),
+                               ForeignKey("workspaces.id", ondelete="CASCADE"),
+                               primary_key=True)
+    provider          = Column(Text, nullable=False, server_default=text("'openai'"))
+    model             = Column(Text, nullable=True)
+    api_key_encrypted = Column(Text, nullable=True)
+    api_key_prefix    = Column(Text, nullable=True)
+    api_key_status    = Column(Text, nullable=False, server_default=text("'unset'"))
+    temperature       = Column(Float, nullable=True)
+    reasoning_effort  = Column(Text, nullable=True)
+    max_tokens        = Column(Integer, nullable=True)
+    created_at        = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at        = Column(DateTime(timezone=True), server_default=func.now(),
+                               onupdate=func.now(), nullable=False)
+
+
 # ─── Rotation ─────────────────────────────────────────────────────────────────
 
 class ProxyPool(Base):
@@ -825,6 +857,8 @@ class LLMCall(Base):
     total_tokens = Column(Integer, nullable=True)
     latency_ms = Column(Integer, nullable=True)
     error = Column(Text, nullable=True)
+    provider = Column(Text, nullable=True)    # D-07 (Phase 18): 'openai'|'anthropic'
+    key_source = Column(Text, nullable=True)  # D-07 (Phase 18): 'platform'|'byok'|'fallback'
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
