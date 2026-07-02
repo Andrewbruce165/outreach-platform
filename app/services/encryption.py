@@ -25,3 +25,16 @@ def decrypt_session(encrypted: str) -> str:
     fernet = get_fernet()
     decrypted = fernet.decrypt(encrypted.encode())
     return decrypted.decode()
+
+
+# Phase 18 (D-04): Bring-Your-Own LLM key encryption reuses the exact same Fernet
+# (one ENCRYPTION_KEY, one code path) as Telegram-session encryption — no second
+# key to manage. These are thin semantic aliases so call-sites read intent.
+def encrypt_api_key(api_key: str) -> str:
+    """Encrypt a BYO LLM provider API key before storing in llm_settings."""
+    return encrypt_session(api_key)
+
+
+def decrypt_api_key(encrypted: str) -> str:
+    """Decrypt a BYO LLM provider API key when building the provider client."""
+    return decrypt_session(encrypted)
