@@ -1014,21 +1014,6 @@ function Thread({
             }
             icon={<UserIcon size={13} />}
           />
-          <KV
-            label="Sender"
-            value={sender ? sender.name : conv?.sender_slug ? `@${conv.sender_slug}` : "—"}
-            icon={<Phone size={13} />}
-          />
-          <KV
-            label="Agent"
-            value={agent ? agent.name : "—"}
-            icon={<Bot size={13} />}
-          />
-          <KV
-            label="Campaign"
-            value={campaign ? campaign.name : "—"}
-            icon={<Flag size={13} />}
-          />
         </div>
 
         {conv &&
