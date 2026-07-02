@@ -6272,7 +6272,7 @@
           "analytics"
         ],
         "summary": "Llm Aggregates",
-        "description": "UI-SPEC §5.6 LLM trace tab — top-of-tab aggregates over since-window.\n\nReturns total_calls / avg_latency_ms / prompt_tokens / completion_tokens /\ntotal_tokens / spend_usd_cents. spend_usd_cents is 0 in v1 — per-model\npricing is deferred to v2 (RESEARCH §\"Backend Gap Map\" note).\n\nscope=workspace counts every LLM call in the workspace. scope=campaign\nfilters by `llm_calls.campaign_id = :scope_val` (404 if cross-workspace).\n\navg_latency_ms is None when no rows match — Pydantic Optional handles this.",
+        "description": "UI-SPEC §5.6 LLM trace tab — top-of-tab aggregates over since-window.\n\nReturns total_calls / avg_latency_ms / prompt_tokens / completion_tokens /\ntotal_tokens / spend_usd_cents. spend_usd_cents is real USD spend in cents,\ncomputed from a per-model GROUP BY over the same since-window and priced via\napp.services.llm_pricing.compute_spend_cents (unknown models → 0 + warning).\n\nscope=workspace counts every LLM call in the workspace. scope=campaign\nfilters by `llm_calls.campaign_id = :scope_val` (404 if cross-workspace).\n\navg_latency_ms is None when no rows match — Pydantic Optional handles this.",
         "operationId": "llm_aggregates_api_v1_analytics_llm_get",
         "parameters": [
           {
@@ -9493,6 +9493,11 @@
             "type": "integer",
             "title": "Registered Contacts",
             "default": 0
+          },
+          "llm_spend_usd_cents": {
+            "type": "integer",
+            "title": "Llm Spend Usd Cents",
+            "default": 0
           }
         },
         "type": "object",
@@ -9503,7 +9508,7 @@
           "finishes"
         ],
         "title": "AnalyticsCards",
-        "description": "Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).\n\nВсе 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})\nвозвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.\n\nPitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает\nstatus='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».\nВсе counts исключают status='bot_ignored' (Pitfall 8).\n\nProgress fields (campaign scope only): прогресс кампании = доля reachable\nконтактов, до которых уже дотянулись.\n- ``contacts_messaged`` = COUNT(DISTINCT conversation_id) среди outbound —\n  сколько РАЗНЫХ контактов получили хотя бы одно сообщение (НЕ raw message\n  count, иначе несколько сообщений одному контакту раздувают числитель).\n- ``registered_contacts`` = COUNT(contacts WHERE folder_id=campaign.folder_id\n  AND tg_status='registered') — знаменатель «достижимые контакты в папке»\n  (та же семантика, что _compute_is_exhausted, migration 013).\nДля workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),\nUI не рисует для них progress-бар."
+        "description": "Per D-16: identical schema across all 4 levels (workspace / campaign / agent / sender).\n\nВсе 4 analytics endpoints (workspace, campaigns/{id}, agents/{id}, senders/{id})\nвозвращают эту схему — UI Lovable рендерит одну и ту же сетку из 4 карточек.\n\nPitfall 9: leads и finishes — mutually exclusive (status='lead' НЕ включает\nstatus='finished'). UI label для leads: «Активные лиды (ещё не финишировали)».\nВсе counts исключают status='bot_ignored' (Pitfall 8).\n\nProgress fields (campaign scope only): прогресс кампании = доля reachable\nконтактов, до которых уже дотянулись.\n- ``contacts_messaged`` = COUNT(DISTINCT conversation_id) среди outbound —\n  сколько РАЗНЫХ контактов получили хотя бы одно сообщение (НЕ raw message\n  count, иначе несколько сообщений одному контакту раздувают числитель).\n- ``registered_contacts`` = COUNT(contacts WHERE folder_id=campaign.folder_id\n  AND tg_status='registered') — знаменатель «достижимые контакты в папке»\n  (та же семантика, что _compute_is_exhausted, migration 013).\nДля workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),\nUI не рисует для них progress-бар.\n\n``llm_spend_usd_cents`` = all-time LLM spend в центах (USD) для текущего\nscope (workspace/campaign/agent/sender — фильтр по соответствующей колонке\nllm_calls). All-time (без since-окна), как и остальные карточки (D-14).\nAdditive optional-with-default поле — существующие consumer'ы фронта не\nломаются; фронт делит на 100 для отображения в USD."
       },
       "AnalyticsReplied": {
         "properties": {
