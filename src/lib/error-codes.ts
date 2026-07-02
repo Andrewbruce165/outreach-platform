@@ -28,6 +28,12 @@ const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   DETACH_BLOCKED_PENDING: () =>
     "This account still has un-sent contacts. Pause the campaign or wait for the queue to drain.",
   NO_SENDERS_ATTACHED: () => "Attach at least one account before launching",
+  KEY_REQUIRED: () =>
+    "Введите API-ключ, чтобы переключить провайдера или модель.",
+  CONNECTION_INVALID: (d) =>
+    d.detail
+      ? `Ключ не прошёл проверку: ${String(d.detail)}`
+      : "Ключ провайдера не прошёл проверку. Проверьте ключ и провайдера.",
   UNKNOWN_EVENT: () => "Internal: unknown telemetry event",
   ID_REQUIRED: () => "Missing id parameter",
   INVALID_PHONE: () => "Phone number is invalid. Use +1 415 555 2810 format.",

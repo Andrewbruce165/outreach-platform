@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Copy, Plus, Trash2, LogOut, Loader2 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
+import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { supabase } from "@/lib/supabase";
 import { track } from "@/lib/telemetry";
 
@@ -12,10 +13,11 @@ export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
 });
 
-type Tab = "workspace" | "api-keys" | "members" | "profile" | "appearance";
+type Tab = "workspace" | "ai-llm" | "api-keys" | "members" | "profile" | "appearance";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "workspace", label: "Workspace" },
+  { id: "ai-llm", label: "AI / LLM" },
   { id: "api-keys", label: "API keys" },
   { id: "members", label: "Members" },
   { id: "profile", label: "Profile" },
@@ -55,6 +57,7 @@ function SettingsPage() {
       </div>
       <div className="scroll" style={{ padding: 24, flex: 1 }}>
         {tab === "workspace" && <WorkspaceTab />}
+        {tab === "ai-llm" && <AiLlmTab />}
         {tab === "api-keys" && <ApiKeysTab />}
         {tab === "members" && <MembersTab />}
         {tab === "profile" && <ProfileTab />}
@@ -134,6 +137,397 @@ function WorkspaceTab() {
         {save.isPending ? "Saving…" : "Save changes"}
       </button>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AI / LLM settings — provider switch + BYO key + live model list + capability-
+// gated knobs with the D-10 green corridor. Wired to /api/v1/workspace/llm-settings.
+// ---------------------------------------------------------------------------
+
+type LlmProvider = "openai" | "anthropic";
+
+interface LlmSettings {
+  provider: LlmProvider;
+  model: string | null;
+  api_key_prefix: string | null;
+  api_key_status: "unset" | "valid" | "invalid";
+  temperature: number | null;
+  reasoning_effort: string | null;
+  max_tokens: number | null;
+}
+
+interface LlmModelList {
+  models: string[];
+  note?: string | null;
+}
+
+interface LlmTestConnection {
+  status: "valid" | "invalid";
+  detail?: string | null;
+}
+
+const REASONING_FLOOR = 4000; // D-10 — reasoning models must not go below this.
+const MAX_TOKENS_CEILING = 32000; // D-10 green-corridor ceiling.
+const EFFORT_LEVELS = ["minimal", "low", "medium", "high"] as const;
+
+// Mirror of app/services/llm/capabilities.is_reasoning_model (OpenAI reasoning
+// family: gpt-5*/o1/o3/o4*). Claude reasoning is provider-driven, gated separately.
+function isOpenAiReasoning(model: string | null): boolean {
+  const m = (model ?? "").toLowerCase();
+  return (
+    m.startsWith("gpt-5") ||
+    m.startsWith("o1") ||
+    m.startsWith("o3") ||
+    m.startsWith("o4")
+  );
+}
+
+// D-09: temperature shows for non-reasoning OpenAI models + ALL Claude models.
+function supportsTemperature(provider: LlmProvider, model: string | null): boolean {
+  if (provider === "anthropic") return true;
+  return !isOpenAiReasoning(model);
+}
+
+// D-09: reasoning-effort shows for OpenAI reasoning models + ALL Claude models.
+function supportsReasoningEffort(provider: LlmProvider, model: string | null): boolean {
+  if (provider === "anthropic") return true;
+  return isOpenAiReasoning(model);
+}
+
+// D-10 green corridor: the reasoning-family floor applies to OpenAI reasoning
+// models and Claude (extended thinking eats the budget the same way).
+function hasReasoningFloor(provider: LlmProvider, model: string | null): boolean {
+  return provider === "anthropic" || isOpenAiReasoning(model);
+}
+
+function AiLlmTab() {
+  const qc = useQueryClient();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["llm-settings"],
+    queryFn: () => api<LlmSettings>("/api/v1/workspace/llm-settings"),
+    retry: false,
+  });
+
+  // Local editable state, seeded from the server settings.
+  const [provider, setProvider] = useState<LlmProvider>("openai");
+  const [model, setModel] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>(""); // never pre-filled — write-only.
+  const [temperature, setTemperature] = useState<number>(1);
+  const [reasoningEffort, setReasoningEffort] = useState<string>("medium");
+  const [maxTokens, setMaxTokens] = useState<number>(REASONING_FLOOR);
+
+  useEffect(() => {
+    if (!data) return;
+    setProvider(data.provider ?? "openai");
+    setModel(data.model ?? "");
+    setTemperature(data.temperature ?? 1);
+    setReasoningEffort(data.reasoning_effort ?? "medium");
+    setMaxTokens(data.max_tokens ?? REASONING_FLOOR);
+  }, [data]);
+
+  // D-03 gate: a switch (provider/model) needs a key to be stored OR just entered.
+  const keyStored = data?.api_key_status === "valid" || data?.api_key_status === "invalid";
+  const hasKey = keyStored || apiKey.trim().length > 0;
+
+  // Live model list — fetched for the *currently selected* provider. OpenAI can
+  // list against the platform key pre-BYOK; Anthropic needs a key (D-03/D-08).
+  const modelsEnabled = provider === "openai" || hasKey;
+  const { data: modelList, isFetching: modelsLoading } = useQuery({
+    queryKey: ["llm-models", provider],
+    queryFn: () =>
+      api<LlmModelList>("/api/v1/workspace/llm-settings/models", {
+        query: { provider },
+      }),
+    enabled: modelsEnabled,
+    retry: false,
+  });
+
+  const testConn = useMutation({
+    mutationFn: () =>
+      api<LlmTestConnection>("/api/v1/workspace/llm-settings/test-connection", {
+        method: "POST",
+        body: { provider, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}) },
+      }),
+    onSuccess: (r) => {
+      if (r.status === "valid") toast.success("Ключ валиден");
+      else toast.error(r.detail ? `Ключ не прошёл: ${r.detail}` : "Ключ невалиден");
+      qc.invalidateQueries({ queryKey: ["llm-settings"] });
+    },
+    onError: (e: unknown) =>
+      toast.error(e instanceof ApiError ? e.message : "Проверка не удалась"),
+  });
+
+  const save = useMutation({
+    mutationFn: (payload: Partial<LlmSettings> & { api_key?: string }) =>
+      api<LlmSettings>("/api/v1/workspace/llm-settings", {
+        method: "PATCH",
+        body: payload,
+      }),
+    onSuccess: () => {
+      track("settings_changed", { tab: "ai-llm" });
+      toast.success("Настройки LLM сохранены");
+      setApiKey("");
+      qc.invalidateQueries({ queryKey: ["llm-settings"] });
+      qc.invalidateQueries({ queryKey: ["llm-models"] });
+    },
+    onError: (e: unknown) =>
+      toast.error(e instanceof ApiError ? e.message : "Не удалось сохранить"),
+  });
+
+  function saveKey() {
+    if (!apiKey.trim()) return;
+    save.mutate({ provider, api_key: apiKey.trim() });
+  }
+
+  function saveConfig() {
+    // D-10: warn (do not block) if a reasoning model is below the floor. The
+    // backend hard-clamps regardless, but the user should see it.
+    const belowFloor = hasReasoningFloor(provider, model || null) && maxTokens < REASONING_FLOOR;
+    if (belowFloor) {
+      toast.warning(
+        `Бюджет токенов ниже рекомендованного минимума (${REASONING_FLOOR}) для reasoning-модели — сервер поднимет до ${REASONING_FLOOR}.`,
+      );
+    }
+    const payload: Partial<LlmSettings> & { api_key?: string } = {
+      provider,
+      model: model || null,
+      max_tokens: maxTokens,
+    };
+    if (supportsTemperature(provider, model || null)) payload.temperature = temperature;
+    if (supportsReasoningEffort(provider, model || null)) payload.reasoning_effort = reasoningEffort;
+    if (apiKey.trim()) payload.api_key = apiKey.trim();
+    save.mutate(payload);
+  }
+
+  if (isLoading) return <Skeleton />;
+  if (error) return <ErrorState error={error} />;
+
+  const tempMax = provider === "anthropic" ? 1 : 2; // 0-1 Claude, 0-2 OpenAI (D-10).
+  const showTemperature = supportsTemperature(provider, model || null);
+  const showReasoningEffort = supportsReasoningEffort(provider, model || null);
+  const reasoningFloor = hasReasoningFloor(provider, model || null);
+  const belowFloorWarning = reasoningFloor && maxTokens < REASONING_FLOOR;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card
+        title="Провайдер и ключ"
+        sub="AI-ответчик чата и warmup используют выбранного провайдера и модель."
+      >
+        <div className="field" style={{ marginBottom: 16 }}>
+          <label className="field__label" htmlFor="llm-provider">Провайдер</label>
+          <select
+            id="llm-provider"
+            className="input"
+            value={provider}
+            onChange={(e) => {
+              setProvider(e.target.value as LlmProvider);
+              setModel(""); // model list is provider-specific; reset on switch.
+            }}
+          >
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic (Claude)</option>
+          </select>
+        </div>
+
+        <div className="field" style={{ marginBottom: 8 }}>
+          <label className="field__label" htmlFor="llm-key">API-ключ</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              id="llm-key"
+              className="input"
+              type="password"
+              autoComplete="off"
+              placeholder={
+                data?.api_key_prefix
+                  ? `Сохранён: ${data.api_key_prefix}…`
+                  : "Вставьте ключ провайдера"
+              }
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+            <button
+              className="btn btn--primary"
+              disabled={!apiKey.trim() || save.isPending}
+              onClick={saveKey}
+            >
+              {save.isPending ? "…" : "Сохранить ключ"}
+            </button>
+          </div>
+          <div className="field__hint" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <KeyStatusBadge status={data?.api_key_status ?? "unset"} />
+            {data?.api_key_prefix && (
+              <span className="mono muted">{data.api_key_prefix}…</span>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+          <button
+            className="btn btn--ghost"
+            disabled={testConn.isPending || (!hasKey)}
+            onClick={() => testConn.mutate()}
+          >
+            {testConn.isPending ? (
+              <>
+                <Loader2 size={13} className="animate-spin" /> Проверяем…
+              </>
+            ) : (
+              "Проверить соединение"
+            )}
+          </button>
+          {!hasKey && (
+            <span className="field__hint">Введите ключ, чтобы проверить.</span>
+          )}
+        </div>
+      </Card>
+
+      <Card title="Модель" sub="Живой список, отфильтрованный до чат-моделей с поддержкой инструментов.">
+        {!hasKey ? (
+          // D-03 gate — mirror the backend KEY_REQUIRED so the user never hits a raw 400.
+          <div className="field__hint" style={{ color: "var(--warning, #a86200)" }}>
+            {errorMessageFromEnvelope("KEY_REQUIRED", {})}
+          </div>
+        ) : (
+          <>
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label className="field__label" htmlFor="llm-model">Модель</label>
+              <select
+                id="llm-model"
+                className="input"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={!hasKey}
+              >
+                <option value="">
+                  {modelsLoading ? "Загрузка…" : "Платформенная по умолчанию"}
+                </option>
+                {(modelList?.models ?? []).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+                {/* keep the stored model selectable even if the live list omits it */}
+                {model && !(modelList?.models ?? []).includes(model) && (
+                  <option value={model}>{model}</option>
+                )}
+              </select>
+              {modelList?.note && (
+                <div className="field__hint">
+                  {modelList.note} — можно ввести идентификатор модели вручную ниже.
+                </div>
+              )}
+            </div>
+            {modelList?.note && (
+              <div className="field" style={{ marginBottom: 12 }}>
+                <label className="field__label" htmlFor="llm-model-manual">Модель вручную</label>
+                <input
+                  id="llm-model-manual"
+                  className="input"
+                  placeholder="напр. claude-3-5-sonnet-latest"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                />
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+
+      {hasKey && (
+        <Card title="Настройки модели" sub="Показаны только те, что поддерживает выбранная модель.">
+          {showTemperature && (
+            <div className="field" style={{ marginBottom: 16 }}>
+              <label className="field__label" htmlFor="llm-temp">
+                Temperature: {temperature.toFixed(2)}
+              </label>
+              <input
+                id="llm-temp"
+                type="range"
+                min={0}
+                max={tempMax}
+                step={0.05}
+                value={temperature}
+                onChange={(e) => setTemperature(Number(e.target.value))}
+              />
+              <div className="field__hint">
+                Рекомендованный диапазон 0–{tempMax} для {provider === "anthropic" ? "Claude" : "OpenAI"}.
+              </div>
+            </div>
+          )}
+
+          {showReasoningEffort && (
+            <div className="field" style={{ marginBottom: 16 }}>
+              <label className="field__label" htmlFor="llm-effort">Reasoning effort</label>
+              <select
+                id="llm-effort"
+                className="input"
+                value={reasoningEffort}
+                onChange={(e) => setReasoningEffort(e.target.value)}
+              >
+                {EFFORT_LEVELS.map((lvl) => (
+                  <option key={lvl} value={lvl}>{lvl}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="field" style={{ marginBottom: 16 }}>
+            <label className="field__label" htmlFor="llm-maxtok">Бюджет ответа (max tokens)</label>
+            <input
+              id="llm-maxtok"
+              className="input"
+              type="number"
+              min={reasoningFloor ? REASONING_FLOOR : 1}
+              max={MAX_TOKENS_CEILING}
+              value={maxTokens}
+              onChange={(e) => setMaxTokens(Number(e.target.value))}
+            />
+            <div className="field__hint">
+              {reasoningFloor
+                ? `Рекомендованный диапазон ${REASONING_FLOOR}–${MAX_TOKENS_CEILING} для reasoning-модели.`
+                : `Рекомендованный диапазон до ${MAX_TOKENS_CEILING}.`}
+            </div>
+            {belowFloorWarning && (
+              <div className="field__hint" style={{ color: "var(--warning, #a86200)" }}>
+                Ниже рекомендованного минимума {REASONING_FLOOR} — reasoning-модель может вернуть
+                пустой ответ. Сервер поднимет значение до {REASONING_FLOOR}.
+              </div>
+            )}
+          </div>
+
+          <button
+            className="btn btn--primary"
+            disabled={save.isPending || !hasKey}
+            onClick={saveConfig}
+          >
+            {save.isPending ? "Сохранение…" : "Сохранить настройки"}
+          </button>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function KeyStatusBadge({ status }: { status: "unset" | "valid" | "invalid" }) {
+  const map = {
+    unset: { label: "не задан", color: "var(--muted, #888)" },
+    valid: { label: "валиден", color: "var(--success, #1a7f37)" },
+    invalid: { label: "невалиден", color: "var(--danger, #cf222e)" },
+  } as const;
+  const s = map[status];
+  return (
+    <span
+      style={{
+        fontSize: 12,
+        fontWeight: 600,
+        color: s.color,
+        border: `1px solid ${s.color}`,
+        borderRadius: 6,
+        padding: "1px 8px",
+      }}
+    >
+      {s.label}
+    </span>
   );
 }
 
