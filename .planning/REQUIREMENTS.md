@@ -213,6 +213,23 @@
 
 **NB:** Phase 17 добавляет 0 миграций — всё хранилище переиспользует существующие колонки (`contacts.tg_username_resolved`, `contacts_cache.username`, `contacts.tg_probe_state`/`tg_confidence`, `sender_restriction_events.event_type` free-form).
 
+### Switchable LLM Provider in UI (Phase 18 — derived this phase, see 18-CONTEXT.md / 18-RESEARCH.md / 18-VALIDATION.md; tracked via decisions D-01..D-12)
+
+- [ ] **LLMP-01**: Per-workspace `llm_settings` row (PK `workspace_id`, mirrors `warmup_settings`) holds provider/model/knobs + Fernet-encrypted key + key-status; migration `044_llm_settings.sql` idempotent, auto-applied; ORM `LLMSettings` mirror with `server_default` on every NOT NULL column (ORM-drift lesson mig 040/042) (D-01, D-04).
+- [ ] **LLMP-02**: Default-off resolution — no `llm_settings` row (or no valid key) resolves to the platform OpenAI key + `settings.openai_model`, byte-identical to today; nothing breaks for existing workspaces (D-02).
+- [ ] **LLMP-03**: Own API key is mandatory to switch provider/model — PATCH without a stored/entered key → 400 `KEY_REQUIRED`; the UI blocks the switch until a key is present (D-03).
+- [ ] **LLMP-04**: Key stored Fernet-encrypted at rest (reuse `app/services/encryption.py`); only a masked `api_key_prefix` is ever returned in API responses; the key is never written to logs or error details (D-04).
+- [ ] **LLMP-05**: Test-connection endpoint probes the chosen provider (cheap `models.list`) and reports valid/invalid, flipping `api_key_status` accordingly (D-05).
+- [ ] **LLMP-06**: Runtime key-level error (401/403/`insufficient_quota`/402) on a byok call → fallback to the platform OpenAI default (dialog continues) + flag `api_key_status='invalid'`; transient 429/5xx do NOT fall back (Pitfall 6 — no client-traffic leak) (D-06).
+- [ ] **LLMP-07**: `llm_logger` records `provider` + `key_source` (`platform`/`byok`/`fallback`) + the actual model on every logged call; `llm_calls.provider`/`key_source` columns (migration 044); never-raise contract + no-prompt-in-logs guard preserved (D-07).
+- [ ] **LLMP-08**: Model list is live from the provider API (`models.list()`) per the client's key, server-side family-filtered to chat-with-tools families (gpt-4o*/gpt-5*/o*/claude-*), dropping embeddings/whisper/tts/dall-e/realtime/transcribe/deprecated (D-08).
+- [ ] **LLMP-09**: UI knobs temperature / reasoning-effort / max-tokens are capability-gated — temperature hidden for OpenAI reasoning models (400 unsupported_value), reasoning-effort shown only for reasoning models / Claude (maps to extended-thinking budget or effort) (D-09).
+- [ ] **LLMP-10**: Backend hard-clamp + UI green corridor — reasoning-model max-tokens floored at ≥4000 (2026-07-02 ghosted-contact incident), sane ceiling; impossible to break the prod answerer with a setting; Claude thinking `budget < max_tokens` (Pitfall 2) (D-10).
+- [ ] **LLMP-11**: The chat answerer (all `ai_engine.generate_response` LLM calls incl. empty-retry + second-pass) AND warmup route through the chosen provider/model/knobs via a thin `app/services/llm/` adapter (OpenAIProvider + AnthropicProvider normalizing to a single `LLMResult`); switch applies at the next call, no redeploy (D-11).
+- [ ] **LLMP-12**: Whisper transcription + KB embeddings (ingest + search) ALWAYS stay on the platform OpenAI singleton regardless of provider choice — Anthropic has no such APIs; choosing Claude does not break voice or KB (D-12).
+
+**NB:** Phase 18 subsumes seed BYOK-01 (own OpenAI key per workspace, was Out of Scope v2) and extends it to multi-provider. Adds ONE migration (044). Remove the PROJECT.md Out-of-Scope BYOK-01 line at phase transition.
+
 ## v2 Requirements
 
 ### Advanced Outreach
@@ -374,6 +391,18 @@
 | SRLD-07 | Phase 17 | Complete |
 | SRLD-08 | Phase 17 | Complete |
 | SRLD-09 | Phase 17 | Complete |
+| LLMP-01 | Phase 18 | Pending |
+| LLMP-02 | Phase 18 | Pending |
+| LLMP-03 | Phase 18 | Pending |
+| LLMP-04 | Phase 18 | Pending |
+| LLMP-05 | Phase 18 | Pending |
+| LLMP-06 | Phase 18 | Pending |
+| LLMP-07 | Phase 18 | Pending |
+| LLMP-08 | Phase 18 | Pending |
+| LLMP-09 | Phase 18 | Pending |
+| LLMP-10 | Phase 18 | Pending |
+| LLMP-11 | Phase 18 | Pending |
+| LLMP-12 | Phase 18 | Pending |
 
 **Coverage:**
 
@@ -399,3 +428,4 @@
 *2026-06-29 — derived WARM-01..15 (Account Warmup via Inter-Account AI Chat) during Phase 15 planning*
 *2026-06-30 — derived KB-01..06 (RAG Knowledge Bases for Agents) during Phase 16 planning*
 *2026-06-30 — derived SRLD-01..09 (Sender-side Resolve Ladder) during Phase 17 planning*
+*2026-07-02 — derived LLMP-01..12 (Switchable LLM Provider in UI) during Phase 18 planning*
