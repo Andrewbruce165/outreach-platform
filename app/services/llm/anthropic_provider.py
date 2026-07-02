@@ -23,6 +23,53 @@ from app.services.llm.base import LLMResult, ToolCall
 from app.services.llm.capabilities import clamp_max_tokens, effort_to_budget
 
 
+def _to_anthropic_messages(messages: list) -> list:
+    """Translate the provider-neutral second-pass turns into Anthropic content blocks.
+
+    The wiring layer (18-04) appends a neutral assistant turn
+    `{"role":"assistant","content":str,"tool_calls":[{id,name,arguments}]}` and
+    neutral tool-result turns `{"role":"tool","tool_call_id","content"}`. Anthropic
+    represents these as `tool_use` blocks on an assistant turn and `tool_result`
+    blocks on a user turn respectively. Plain turns (no tool_calls / not role='tool')
+    pass through unchanged so the normal dialogue path is untouched."""
+    out: list = []
+    for m in messages:
+        role = m.get("role") if isinstance(m, dict) else None
+        tcs = m.get("tool_calls") if isinstance(m, dict) else None
+        if role == "assistant" and tcs:
+            blocks: list = []
+            text = m.get("content")
+            if text:
+                blocks.append({"type": "text", "text": text})
+            for tc in tcs:
+                args = tc.get("arguments")
+                if isinstance(args, str):
+                    import json as _json
+                    try:
+                        args = _json.loads(args or "{}")
+                    except Exception:
+                        args = {}
+                blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id"),
+                    "name": tc.get("name"),
+                    "input": args or {},
+                })
+            out.append({"role": "assistant", "content": blocks})
+        elif role == "tool":
+            out.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": m.get("tool_call_id"),
+                    "content": m.get("content", ""),
+                }],
+            })
+        else:
+            out.append(m)
+    return out
+
+
 def _coalesce_roles(messages: list) -> list:
     """Merge consecutive same-role messages so the final list strictly alternates
     user/assistant (Anthropic alternation constraint, research line 153).
@@ -97,7 +144,10 @@ class AnthropicProvider:
 
         # System messages, if any slipped into the list, are stripped: system is top-level.
         non_system = [m for m in messages if m.get("role") != "system"]
-        coalesced = _coalesce_roles(non_system)
+        # Translate provider-neutral tool turns (assistant tool_calls / role='tool')
+        # into Anthropic tool_use / tool_result content blocks before coalescing.
+        translated = _to_anthropic_messages(non_system)
+        coalesced = _coalesce_roles(translated)
 
         params: dict = {
             "model": self.model,

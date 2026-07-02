@@ -19,6 +19,37 @@ from app.services.llm.capabilities import (
 )
 
 
+def _to_openai_messages(messages: list) -> list:
+    """Translate the provider-neutral second-pass assistant turn into OpenAI's
+    native shape. The wiring layer (ai_engine second pass, 18-04) appends a neutral
+    assistant turn `{"role":"assistant","content","tool_calls":[{id,name,arguments}]}`
+    so the SAME messages list can drive either provider. OpenAI expects
+    `tool_calls:[{id,type:"function",function:{name,arguments}}]` (arguments a str),
+    so reshape any neutral tool_calls found. All other turns pass through unchanged."""
+    import json as _json
+
+    out: list = []
+    for m in messages:
+        tcs = m.get("tool_calls") if isinstance(m, dict) else None
+        if tcs and isinstance(tcs, list) and tcs and "function" not in tcs[0]:
+            native = []
+            for tc in tcs:
+                args = tc.get("arguments")
+                if not isinstance(args, str):
+                    args = _json.dumps(args or {}, ensure_ascii=False)
+                native.append({
+                    "id": tc.get("id"),
+                    "type": "function",
+                    "function": {"name": tc.get("name"), "arguments": args},
+                })
+            new_msg = dict(m)
+            new_msg["tool_calls"] = native
+            out.append(new_msg)
+        else:
+            out.append(m)
+    return out
+
+
 class OpenAIProvider:
     """LLMProvider for OpenAI chat.completions."""
 
@@ -49,7 +80,7 @@ class OpenAIProvider:
         chat_messages: list = []
         if system:
             chat_messages.append({"role": "system", "content": system})
-        chat_messages.extend(messages)
+        chat_messages.extend(_to_openai_messages(messages))
 
         params: dict = {
             "model": model,

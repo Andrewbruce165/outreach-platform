@@ -32,12 +32,25 @@ from datetime import datetime, timezone
 from app.config import get_settings
 from app.services.webhook_notify import notify_signal
 from app.services.llm_logger import log_llm_call  # Phase 5 ANLX-05
+# Phase 18 — provider adapter (switchable LLM). The answerer routes its three
+# LLM calls through the workspace-resolved provider; Whisper + KB embeddings
+# STAY on the module-level platform `client` singleton below (D-12).
+from app.services.llm import (
+    resolve_llm_config,
+    get_provider,
+    is_key_level_error,
+    platform_fallback_config,
+)
+from app.services.llm.openai_provider import OpenAIProvider
+from app.services.llm.capabilities import is_reasoning_model as _cap_is_reasoning_model
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-# OpenAI client
+# OpenAI client — platform singleton. Phase 18 D-12: this stays the ONLY client
+# used by transcribe_audio (Whisper) + KB embeddings, regardless of a workspace's
+# provider choice. The answerer routes through the app.services.llm adapter instead.
 client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Phase 4 D-12 (C-04 mapping): built-in OpenAI function tools that the LLM may
@@ -63,9 +76,35 @@ def _is_reasoning_model(model: str) -> bool:
     hidden reasoning tokens and visible output and accept `reasoning_effort`.
     Non-reasoning chat models (gpt-4o*, gpt-4*, gpt-3.5*) reject reasoning_effort
     with a 400 — callers gate on this before adding the param, so OPENAI_MODEL
-    can be rolled back to gpt-4o-mini without a code change."""
-    m = (model or "").lower()
-    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+    can be rolled back to gpt-4o-mini without a code change.
+
+    Phase 18: delegates to capabilities.is_reasoning_model (single source of
+    truth shared with the provider adapter) — no duplicated startswith list."""
+    return _cap_is_reasoning_model(model)
+
+
+async def _flag_key_invalid(session: AsyncSession, workspace_id) -> None:
+    """Phase 18 D-06: best-effort mark a workspace's BYO key invalid after a
+    key-level runtime error, so the Settings UI shows it needs re-testing and the
+    next resolve_llm_config falls back to the platform default. Swallows all errors
+    — flagging the key must NEVER break the live reply."""
+    if not workspace_id:
+        return
+    try:
+        await session.execute(
+            text(
+                "UPDATE llm_settings SET api_key_status='invalid', updated_at=NOW() "
+                "WHERE workspace_id = :ws"
+            ),
+            {"ws": str(workspace_id)},
+        )
+        await session.commit()
+    except Exception as _e:  # pragma: no cover — defensive, never break the reply
+        logger.warning("could not flag llm key invalid for ws=%s: %s", workspace_id, _e)
+        try:
+            await session.rollback()
+        except Exception:
+            pass
 
 
 def _build_completion_params(
@@ -1307,6 +1346,18 @@ class AIEngine:
             # Phase 4: try to resolve through campaign first.
             campaign_context = await get_context_for_conversation(conversation_id, session)
 
+            # Phase 18 D-11/D-02: resolve the workspace's LLM config ONCE on the
+            # existing context path. Absent row / no valid BYO key => platform
+            # default (byte-identical to today). A valid BYO row swaps provider +
+            # model + knobs. Legacy path (no campaign_context) uses the platform
+            # default (D-02). The decrypted key is never logged.
+            ws_id = (campaign_context or {}).get("workspace_id")
+            if ws_id:
+                llm_cfg = await resolve_llm_config(session, ws_id)
+            else:
+                llm_cfg = platform_fallback_config(settings)
+                llm_cfg.key_source = "platform"  # legacy path is a normal platform call
+
             if campaign_context is not None:
                 context = campaign_context
                 campaign = campaign_context.get("campaign") or {}
@@ -1409,44 +1460,99 @@ class AIEngine:
                 contact_name, len(builtin_tools), len(custom_tools), len(kb_tool), len(all_tools),
             )
 
-            # Параметры запроса (model-aware: reasoning_effort + token headroom)
-            # all_tools is always non-empty (built-in always injected per D-12).
-            request_params = _build_completion_params(messages, tools=all_tools)
-
-            # === Phase 5 ANLX-05: wrap first OpenAI call for llm_calls logging ===
-            # Inline await — deterministic, testable (Open Question #3 resolution).
-            # log_llm_call NEVER raises (Pitfall 5 / T-05-03-LOG-FAIL-DOS) — safe
-            # to await unconditionally in finally block.
-            _start_ts = time.perf_counter()
-            _log_error: Optional[str] = None
-            response = None
-            try:
-                response = await client.chat.completions.create(**request_params)
-            except Exception as _e:
-                _log_error = str(_e)[:500]
-                raise  # re-raise — external RateLimitError/APIError handler catches it
-            finally:
-                _latency_ms = int((time.perf_counter() - _start_ts) * 1000)
-                await log_llm_call(
-                    workspace_id=None,  # llm_logger resolves from conversations
-                    conversation_id=conversation_id,
-                    model=request_params["model"],
-                    prompt=request_params,
-                    response=response,
-                    latency_ms=_latency_ms,
-                    error=_log_error,
+            # Phase 18: route every answerer LLM call through the resolved provider.
+            # `_complete` builds the provider from `cfg`, computes the model-aware
+            # budget/effort (falling back to the existing ai_engine constants when
+            # the workspace didn't override them), logs the call, and — on a
+            # key-level error against a BYO key — flags the key invalid and retries
+            # ONCE on the platform OpenAI default (D-06). Returns a normalized
+            # LLMResult. Transient 429/5xx/conn errors are re-raised so the outer
+            # RateLimitError/APIConnectionError/APIStatusError handlers still
+            # return None (unchanged degrade).
+            async def _complete(msgs, *, tools, retry, cfg):
+                system_str = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
+                rest = msgs[1:] if system_str else msgs
+                max_toks = cfg.max_tokens or (
+                    AI_MAX_COMPLETION_TOKENS_RETRY if retry else AI_MAX_COMPLETION_TOKENS
                 )
-            # === End Phase 5 wrap (point #1) ===
+                effort = cfg.reasoning_effort or (
+                    AI_REASONING_EFFORT_RETRY if retry else AI_REASONING_EFFORT
+                )
 
-            response_message = response.choices[0].message
+                async def _run(active_cfg):
+                    provider = get_provider(active_cfg)
+                    # D-12 seam preservation: the OpenAI platform/fallback path reuses
+                    # the module-level platform `client` so existing tests (and prod)
+                    # share one client; BYOK OpenAI keeps the provider's own client.
+                    if (
+                        isinstance(provider, OpenAIProvider)
+                        and active_cfg.key_source != "byok"
+                    ):
+                        provider.client = client
+                    _start = time.perf_counter()
+                    _err: Optional[str] = None
+                    _res = None
+                    try:
+                        # NB: model comes from the provider ctor (get_provider(cfg)
+                        # built it with cfg.model) — complete() takes no model kwarg.
+                        _res = await provider.complete(
+                            system=system_str,
+                            messages=rest,
+                            tools=tools,
+                            max_tokens=max_toks,
+                            temperature=active_cfg.temperature,
+                            reasoning_effort=effort,
+                        )
+                        return _res
+                    except Exception as _e:
+                        _err = str(_e)[:500]
+                        raise
+                    finally:
+                        _latency = int((time.perf_counter() - _start) * 1000)
+                        await log_llm_call(
+                            workspace_id=None,  # llm_logger resolves from conversations
+                            conversation_id=conversation_id,
+                            model=active_cfg.model,
+                            prompt={
+                                "system": system_str,
+                                "messages": rest,
+                                "tools": tools,
+                                "model": active_cfg.model,
+                                "max_tokens": max_toks,
+                                "reasoning_effort": effort,
+                                "temperature": active_cfg.temperature,
+                            },
+                            response=_res,
+                            latency_ms=_latency,
+                            error=_err,
+                            provider=active_cfg.provider,
+                            key_source=active_cfg.key_source,
+                        )
+
+                try:
+                    return await _run(cfg)
+                except Exception as _e:
+                    # D-06: only a key-level error on a BYO key triggers fallback.
+                    if is_key_level_error(_e) and cfg.key_source == "byok":
+                        logger.error(
+                            "🔑 BYO ключ workspace=%s дал key-level ошибку (%s) — "
+                            "флагаю invalid и делаю fallback на платформенный OpenAI.",
+                            ws_id, type(_e).__name__,
+                        )
+                        await _flag_key_invalid(session, ws_id)
+                        return await _run(platform_fallback_config(settings))
+                    raise  # transient — outer handlers return None unchanged
+
+            # First LLM call. all_tools is always non-empty (built-in always
+            # injected per D-12).
+            result = await _complete(messages, tools=all_tools, retry=False, cfg=llm_cfg)
+
             logger.debug(
-                "🔍 response_message: content=%r tool_calls=%s finish_reason=%s",
-                response_message.content,
-                response_message.tool_calls,
-                response.choices[0].finish_reason,
+                "🔍 result: text=%r tool_calls=%s finish_reason=%s",
+                result.text, result.tool_calls, result.finish_reason,
             )
 
-            text_content = response_message.content
+            text_content = result.text
             text_content_clean = text_content.strip() if text_content else None
 
             # Empty-content guard (fix: ai-empty-llm-response, 2026-07-02).
@@ -1458,75 +1564,60 @@ class AIEngine:
             # model spends tokens on visible output. If the retry surfaces a
             # tool_call instead, the existing downstream flow handles it.
             if (
-                not response_message.tool_calls
+                not result.tool_calls
                 and not text_content_clean
-                and response.choices[0].finish_reason == "length"
+                and result.finish_reason_normalized == "length"
             ):
                 logger.error(
                     "⚠️ Пустой ответ LLM (finish_reason=length) для %s — модель %s "
                     "исчерпала бюджет на reasoning. Ретрай: reasoning=%s, %d токенов.",
-                    contact_name, settings.openai_model,
+                    contact_name, llm_cfg.model,
                     AI_REASONING_EFFORT_RETRY, AI_MAX_COMPLETION_TOKENS_RETRY,
                 )
-                retry_params = _build_completion_params(
-                    messages, tools=all_tools, retry=True
+                result = await _complete(
+                    messages, tools=all_tools, retry=True, cfg=llm_cfg
                 )
-                _start_ts_r = time.perf_counter()
-                _log_error_r: Optional[str] = None
-                response_retry = None
-                try:
-                    response_retry = await client.chat.completions.create(**retry_params)
-                except Exception as _e:
-                    _log_error_r = str(_e)[:500]
-                    raise
-                finally:
-                    _latency_ms_r = int((time.perf_counter() - _start_ts_r) * 1000)
-                    await log_llm_call(
-                        workspace_id=None,
-                        conversation_id=conversation_id,
-                        model=retry_params["model"],
-                        prompt=retry_params,
-                        response=response_retry,
-                        latency_ms=_latency_ms_r,
-                        error=_log_error_r,
-                    )
-                response = response_retry
-                response_message = response.choices[0].message
-                text_content = response_message.content
+                text_content = result.text
                 text_content_clean = text_content.strip() if text_content else None
                 logger.info(
                     "🔁 Ретрай LLM для %s: content=%r finish_reason=%s tool_calls=%s",
                     contact_name, text_content_clean,
-                    response.choices[0].finish_reason,
-                    bool(response_message.tool_calls),
+                    result.finish_reason,
+                    bool(result.tool_calls),
                 )
-                if not text_content_clean and not response_message.tool_calls:
+                if not text_content_clean and not result.tool_calls:
                     logger.error(
                         "❌ Ретрай LLM тоже пустой для %s — ответ не отправлен. "
                         "finish_reason=%s. Проверьте лимит токенов/модель.",
-                        contact_name, response.choices[0].finish_reason,
+                        contact_name, result.finish_reason,
                     )
 
             # Нет tool_calls — обычный текстовый ответ
-            if not response_message.tool_calls:
+            if not result.tool_calls:
                 if text_content_clean:
                     logger.info(f"✅ Ответ сгенерирован: {text_content_clean[:50]}...")
                 return text_content_clean
 
-            logger.info(f"🔧 AI вызвал {len(response_message.tool_calls)} функций")
+            logger.info(f"🔧 AI вызвал {len(result.tool_calls)} функций")
 
             # Split tool_calls into built-in signals and custom calls.
+            # Phase 18: ToolCall exposes .name and .arguments (str-JSON for OpenAI,
+            # dict for Anthropic) directly — no .function wrapper.
             builtin_signals: list[tuple[str, str]] = []  # (signal_name, reason)
             custom_calls: list[tuple[Any, str, dict]] = []  # (tool_call, name, args)
 
-            for tool_call in response_message.tool_calls:
-                func_name = tool_call.function.name
+            for tool_call in result.tool_calls:
+                func_name = tool_call.name
+                raw_args = tool_call.arguments
                 try:
-                    func_args = json.loads(tool_call.function.arguments or "{}")
+                    if isinstance(raw_args, str):
+                        func_args = json.loads(raw_args or "{}")
+                    else:
+                        func_args = raw_args or {}  # Anthropic already-parsed dict
                 except json.JSONDecodeError as e:
                     logger.error(
                         f"❌ Не удалось распарсить аргументы функции {func_name}: {e}. "
-                        f"Raw: {tool_call.function.arguments[:200]}"
+                        f"Raw: {str(raw_args)[:200]}"
                     )
                     # Skip — cannot dispatch without valid args.
                     continue
@@ -1633,7 +1724,22 @@ class AIEngine:
                     tool_results[tool_call.id] = "Функция не найдена"
 
             # Second LLM call to summarise tool results into a final reply.
-            messages.append(response_message)
+            # Phase 18 (BLOCKER fix): append a PROVIDER-NEUTRAL assistant turn built
+            # from the first-call LLMResult — NOT the raw OpenAI SDK object. The
+            # neutral shape {"role":"assistant","content","tool_calls":[{id,name,
+            # arguments}]} is what AnthropicProvider translates into `tool_use`
+            # content blocks and OpenAI consumes natively, so the SAME messages list
+            # works for both providers on the second pass. (result here is the
+            # first/initial LLMResult whose tool_calls were just dispatched.)
+            assistant_turn = {
+                "role": "assistant",
+                "content": result.text or "",
+                "tool_calls": [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in result.tool_calls
+                ],
+            }
+            messages.append(assistant_turn)
             for tool_call, _name, _args in custom_calls:
                 messages.append({
                     "role": "tool",
@@ -1641,43 +1747,22 @@ class AIEngine:
                     "content": tool_results.get(tool_call.id, "Функция выполнена"),
                 })
 
-            # === Phase 5 ANLX-05: wrap second OpenAI call (tool result summarisation) ===
-            # Same model-aware reasoning/token controls as the first call (no tools
-            # on the summarisation pass) — fix: ai-empty-llm-response, 2026-07-02.
-            _second_params = _build_completion_params(messages)
-            _start_ts_2 = time.perf_counter()
-            _log_error_2: Optional[str] = None
-            response2 = None
-            try:
-                response2 = await client.chat.completions.create(**_second_params)
-            except Exception as _e:
-                _log_error_2 = str(_e)[:500]
-                raise
-            finally:
-                _latency_ms_2 = int((time.perf_counter() - _start_ts_2) * 1000)
-                await log_llm_call(
-                    workspace_id=None,
-                    conversation_id=conversation_id,
-                    model=_second_params["model"],
-                    prompt=_second_params,
-                    response=response2,
-                    latency_ms=_latency_ms_2,
-                    error=_log_error_2,
-                )
-            # === End Phase 5 wrap (point #2) ===
+            # Second pass through the same resolved provider (no tools on the
+            # summarisation pass) — model-aware budget/effort as the first call.
+            result2 = await _complete(messages, tools=None, retry=False, cfg=llm_cfg)
 
-            reply = response2.choices[0].message.content
+            reply = result2.text
             if reply:
                 reply = reply.strip()
             if reply:
                 logger.info(f"✅ Ответ сгенерирован: {reply[:50]}...")
-            elif response2.choices[0].finish_reason == "length":
+            elif result2.finish_reason_normalized == "length":
                 # Never silently drop the tool-result summary either
                 # (fix: ai-empty-llm-response, 2026-07-02).
                 logger.error(
                     "⚠️ Пустой ответ LLM на суммаризации tool-результатов для %s "
                     "(finish_reason=length) — ответ не отправлен. Модель %s, %d токенов.",
-                    contact_name, settings.openai_model, AI_MAX_COMPLETION_TOKENS,
+                    contact_name, llm_cfg.model, AI_MAX_COMPLETION_TOKENS,
                 )
 
             return reply
