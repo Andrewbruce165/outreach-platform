@@ -559,10 +559,11 @@ function AiLlmTab() {
 
 function KeyStatusBadge({ status }: { status: "unset" | "valid" | "invalid" }) {
   const map = {
-    unset: { label: "не задан", color: "var(--muted, #888)" },
-    valid: { label: "валиден", color: "var(--success, #1a7f37)" },
-    invalid: { label: "невалиден", color: "var(--danger, #cf222e)" },
+    unset: { label: "not set", color: "var(--muted, #888)" },
+    valid: { label: "valid", color: "var(--success, #1a7f37)" },
+    invalid: { label: "invalid", color: "var(--danger, #cf222e)" },
   } as const;
+
   const s = map[status];
   return (
     <span
