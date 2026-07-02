@@ -1192,6 +1192,81 @@
         }
       }
     },
+    "/api/v1/senders/{slug}/block-rate": {
+      "get": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Get Block Rate",
+        "description": "SRLD-08 (D-15/D-16): read-only per-sender block-rate over a 7-day window.\n\nCounts durable event_type='blocked' restriction events vs message_type='sent'\nmessages_log rows. block_rate = blocks_7d / sends_7d (0.0 when no sends) — the\ndesign-doc \"metric that actually matters\" (blocks → reports → PeerFlood →\nfreeze). STRICTLY read-only (D-16): NO control-loop, NO auto-pause, NO writes.\n\nWorkspace-scoped via _load_sender_by_slug (opaque 404 for foreign/unknown\nslugs) PLUS an explicit workspace_id filter in the SQL (defence-in-depth,\nmirroring list_restriction_events).",
+        "operationId": "get_block_rate_api_v1_senders__slug__block_rate_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SenderBlockRateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspace/proxies": {
       "get": {
         "tags": [
@@ -5465,7 +5540,7 @@
           "conversations"
         ],
         "summary": "Enable Ai",
-        "description": "INBX-04 / D-03 — reverse switch. NEVER touches status.\n\nLegacy bug fix: legacy router set status='active' here, which destroyed\n'lead'/'finished'/'manual' markers. Phase 5 keeps the historic status\nintact — UI may PATCH /{id} explicitly if a status change is desired.",
+        "description": "INBX-04 / D-03 — reverse switch: turn AI back on and undo a manual takeover.\n\nThe listener only auto-replies when `ai_enabled=true AND status='active'`\n(services/listener.py). So flipping `ai_enabled=true` alone left a dialog\nthat was 'manual' (from disable-ai) mute — the bot stayed silent despite the\nUI toggle being on. Reverse the disable-ai takeover by moving\n'manual' → 'active' as well.\n\nLegacy bug guard preserved: only 'manual' is reset. Historic markers\n'lead'/'handoff'/'finished'/'bot_ignored' are left intact (a previous\nversion set status='active' unconditionally and destroyed them) — UI may\nPATCH /{id} explicitly if a different status change is desired.",
         "operationId": "enable_ai_api_v1_conversations__conversation_id__enable_ai_post",
         "parameters": [
           {
@@ -8273,6 +8348,297 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspace/llm-settings": {
+      "get": {
+        "tags": [
+          "llm-settings"
+        ],
+        "summary": "Get Llm Settings",
+        "description": "Masked read of the workspace LLM config (D-01 workspace-scoped). Absent row =>\nplatform default (D-02). NEVER decrypts the key into the response — api_key_prefix only.",
+        "operationId": "get_llm_settings_api_v1_workspace_llm_settings_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "llm-settings"
+        ],
+        "summary": "Patch Llm Settings",
+        "description": "Upsert THE single workspace row (D-01). Store the key Fernet-encrypted (D-04),\nmask to prefix+last4, reset api_key_status to 'unset' (re-test required). D-03 gate:\nswitching to a non-default provider/model needs a key (stored or in the body).",
+        "operationId": "patch_llm_settings_api_v1_workspace_llm_settings_patch",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LLMSettingsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspace/llm-settings/test-connection": {
+      "post": {
+        "tags": [
+          "llm-settings"
+        ],
+        "summary": "Test Connection",
+        "description": "Probe the chosen provider with the resolved key (D-05). Success => flip the stored\napi_key_status to 'valid'; a key-level (or any probe) error => 'invalid'. The key is\nresolved from the body override first, else the stored decrypted key. Never leaks it.",
+        "operationId": "test_connection_api_v1_workspace_llm_settings_test_connection_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestConnectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspace/llm-settings/models": {
+      "get": {
+        "tags": [
+          "llm-settings"
+        ],
+        "summary": "List Models",
+        "description": "Live, family-filtered model list per provider (D-08). Uses the stored/decrypted key.\nSoft-fails to an empty list + a note on any provider error — test-connection is the\nauthoritative validity signal, so a transient /v1/models outage must not 500 Settings.",
+        "operationId": "list_models_api_v1_workspace_llm_settings_models_get",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelListResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -12026,6 +12392,153 @@
         "title": "LLMCallResponse",
         "description": "Per-conversation LLM audit row for inbox-debug UI.\n\nMirrors the 15-column llm_calls table (D-09). prompt is the full request\ndict (messages + tools + temperature + model). tool_calls is the parsed\nlist of {id, name, arguments} (None when LLM returned plain text)."
       },
+      "LLMSettingsResponse": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "api_key_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Prefix"
+          },
+          "api_key_status": {
+            "type": "string",
+            "title": "Api Key Status"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "api_key_status"
+        ],
+        "title": "LLMSettingsResponse",
+        "description": "Masked read of the workspace LLM config. NO plaintext key field EVER exists here —\nonly `api_key_prefix` (prefix+last4) is exposed to the UI (D-04)."
+      },
+      "LLMSettingsUpdate": {
+        "properties": {
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          }
+        },
+        "type": "object",
+        "title": "LLMSettingsUpdate",
+        "description": "All fields optional — a PATCH may change just the model, just the key, etc."
+      },
       "MessageListResponse": {
         "properties": {
           "messages": {
@@ -12098,6 +12611,33 @@
           "created_at"
         ],
         "title": "MessageResponse"
+      },
+      "ModelListResponse": {
+        "properties": {
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "title": "ModelListResponse"
       },
       "MoveContactBatchRequest": {
         "properties": {
@@ -12693,6 +13233,30 @@
         "title": "SendMessageRequest",
         "description": "Phase 4 D-16 rewrite: campaign_id REQUIRED (was the legacy agent-id in Phase 3).\n\nAgent выводится через JOIN campaigns.agent_id. Workspace API-key push (n8n)\nпродолжает работать тем же endpoint'ом — n8n должен передавать campaign_id."
       },
+      "SenderBlockRateResponse": {
+        "properties": {
+          "blocks_7d": {
+            "type": "integer",
+            "title": "Blocks 7D"
+          },
+          "sends_7d": {
+            "type": "integer",
+            "title": "Sends 7D"
+          },
+          "block_rate": {
+            "type": "number",
+            "title": "Block Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "blocks_7d",
+          "sends_7d",
+          "block_rate"
+        ],
+        "title": "SenderBlockRateResponse",
+        "description": "SRLD-08 (D-15/D-16): read-only per-sender block-rate aggregate.\n\nResponse for GET /senders/{slug}/block-rate — counts durable 'blocked'\nrestriction events vs 'sent' messages over a trailing 7-day window.\nStrictly read-only: no control-loop, no auto-pause (D-16). block_rate is\nblocks_7d / sends_7d (0.0 when no sends)."
+      },
       "SenderCreate": {
         "properties": {
           "slug": {
@@ -13225,6 +13789,58 @@
         ],
         "title": "TelemetryEventIn",
         "description": "POST /api/v1/telemetry/events body (UI-SPEC §9).\n\nevent_id is client-supplied for navigator.sendBeacon idempotency\n(retry on flaky networks → same event lands once). Default factory\ngenerates a fresh UUIDv4 when the client omits it."
+      },
+      "TestConnectionRequest": {
+        "properties": {
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "title": "TestConnectionRequest"
+      },
+      "TestConnectionResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "TestConnectionResponse"
       },
       "ToolParamSpec": {
         "properties": {
