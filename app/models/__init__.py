@@ -320,7 +320,11 @@ class Conversation(Base):
     campaign_id = Column(UUID(as_uuid=True),
                          ForeignKey("campaigns.id", ondelete="SET NULL"),
                          nullable=True)
-    status = Column(String(20), default="active", server_default="active")  # active|manual|paused|lead|handoff|finished
+    status = Column(String(20), default="active", server_default="active")  # active|manual|paused|lead|handoff|finished|bot_ignored|no_reply
+    # Phase 19 (D-03/D-04/D-08): follow-up state counter — how many pings this
+    # conversation has already received. server_default="0" duplicates migration-045
+    # so the create_all rebuild path (post-DROP-incident) reconstructs the DB default.
+    pings_sent = Column(Integer, nullable=False, default=0, server_default="0")
     paused_at = Column(DateTime(timezone=True), nullable=True)
     paused_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -659,6 +663,14 @@ class Campaign(Base):
     # path (post-DROP-incident rebuild reconstructs tables from the ORM). API enforces
     # the ge=1/le=100 bounds (D-12); no DB CHECK.
     max_new_dialogs_per_day = Column(Integer, nullable=False, server_default="50")
+    # Phase 19 (D-08/D-12): no-reply follow-up + auto-finish policy per campaign.
+    # follow_up_enabled off by default (opt-in). server_default values duplicate the
+    # migration-045 DB defaults for the create_all rebuild path. API enforces the
+    # bounds (interval 4–168h, max_pings 1–5, auto_finish 24–720h); no DB CHECK.
+    follow_up_enabled = Column(Boolean, nullable=False, server_default="false")
+    follow_up_interval_hours = Column(Integer, nullable=False, server_default="24")
+    follow_up_max_pings = Column(Integer, nullable=False, server_default="2")
+    auto_finish_hours = Column(Integer, nullable=False, server_default="72")
     # 029: auto-pause visibility. NULL = manual pause / never paused; a machine
     # code ('no_senders_attached' | 'senders_unavailable') = auto-paused by the
     # enqueue worker because the campaign could no longer send. Cleared on start/resume.
