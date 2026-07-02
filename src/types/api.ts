@@ -298,6 +298,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/senders/{slug}/block-rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Block Rate
+         * @description SRLD-08 (D-15/D-16): read-only per-sender block-rate over a 7-day window.
+         *
+         *     Counts durable event_type='blocked' restriction events vs message_type='sent'
+         *     messages_log rows. block_rate = blocks_7d / sends_7d (0.0 when no sends) — the
+         *     design-doc "metric that actually matters" (blocks → reports → PeerFlood →
+         *     freeze). STRICTLY read-only (D-16): NO control-loop, NO auto-pause, NO writes.
+         *
+         *     Workspace-scoped via _load_sender_by_slug (opaque 404 for foreign/unknown
+         *     slugs) PLUS an explicit workspace_id filter in the SQL (defence-in-depth,
+         *     mirroring list_restriction_events).
+         */
+        get: operations["get_block_rate_api_v1_senders__slug__block_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspace/proxies": {
         parameters: {
             query?: never;
@@ -1264,11 +1293,18 @@ export interface paths {
         put?: never;
         /**
          * Enable Ai
-         * @description INBX-04 / D-03 — reverse switch. NEVER touches status.
+         * @description INBX-04 / D-03 — reverse switch: turn AI back on and undo a manual takeover.
          *
-         *     Legacy bug fix: legacy router set status='active' here, which destroyed
-         *     'lead'/'finished'/'manual' markers. Phase 5 keeps the historic status
-         *     intact — UI may PATCH /{id} explicitly if a status change is desired.
+         *     The listener only auto-replies when `ai_enabled=true AND status='active'`
+         *     (services/listener.py). So flipping `ai_enabled=true` alone left a dialog
+         *     that was 'manual' (from disable-ai) mute — the bot stayed silent despite the
+         *     UI toggle being on. Reverse the disable-ai takeover by moving
+         *     'manual' → 'active' as well.
+         *
+         *     Legacy bug guard preserved: only 'manual' is reset. Historic markers
+         *     'lead'/'handoff'/'finished'/'bot_ignored' are left intact (a previous
+         *     version set status='active' unconditionally and destroyed them) — UI may
+         *     PATCH /{id} explicitly if a different status change is desired.
          */
         post: operations["enable_ai_api_v1_conversations__conversation_id__enable_ai_post"];
         delete?: never;
@@ -1490,8 +1526,9 @@ export interface paths {
          * @description UI-SPEC §5.6 LLM trace tab — top-of-tab aggregates over since-window.
          *
          *     Returns total_calls / avg_latency_ms / prompt_tokens / completion_tokens /
-         *     total_tokens / spend_usd_cents. spend_usd_cents is 0 in v1 — per-model
-         *     pricing is deferred to v2 (RESEARCH §"Backend Gap Map" note).
+         *     total_tokens / spend_usd_cents. spend_usd_cents is real USD spend in cents,
+         *     computed from a per-model GROUP BY over the same since-window and priced via
+         *     app.services.llm_pricing.compute_spend_cents (unknown models → 0 + warning).
          *
          *     scope=workspace counts every LLM call in the workspace. scope=campaign
          *     filters by `llm_calls.campaign_id = :scope_val` (404 if cross-workspace).
@@ -1954,6 +1991,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/llm-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Llm Settings
+         * @description Masked read of the workspace LLM config (D-01 workspace-scoped). Absent row =>
+         *     platform default (D-02). NEVER decrypts the key into the response — api_key_prefix only.
+         */
+        get: operations["get_llm_settings_api_v1_workspace_llm_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Llm Settings
+         * @description Upsert THE single workspace row (D-01). Store the key Fernet-encrypted (D-04),
+         *     mask to prefix+last4, reset api_key_status to 'unset' (re-test required). D-03 gate:
+         *     switching to a non-default provider/model needs a key (stored or in the body).
+         */
+        patch: operations["patch_llm_settings_api_v1_workspace_llm_settings_patch"];
+        trace?: never;
+    };
+    "/api/v1/workspace/llm-settings/test-connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Connection
+         * @description Probe the chosen provider with the resolved key (D-05). Success => flip the stored
+         *     api_key_status to 'valid'; a key-level (or any probe) error => 'invalid'. The key is
+         *     resolved from the body override first, else the stored decrypted key. Never leaks it.
+         */
+        post: operations["test_connection_api_v1_workspace_llm_settings_test_connection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/llm-settings/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Models
+         * @description Live, family-filtered model list per provider (D-08). Uses the stored/decrypted key.
+         *     Soft-fails to an empty list + a note on any provider error — test-connection is the
+         *     authoritative validity signal, so a transient /v1/models outage must not 500 Settings.
+         */
+        get: operations["list_models_api_v1_workspace_llm_settings_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -2192,6 +2300,12 @@ export interface components {
          *       (та же семантика, что _compute_is_exhausted, migration 013).
          *     Для workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),
          *     UI не рисует для них progress-бар.
+         *
+         *     ``llm_spend_usd_cents`` = all-time LLM spend в центах (USD) для текущего
+         *     scope (workspace/campaign/agent/sender — фильтр по соответствующей колонке
+         *     llm_calls). All-time (без since-окна), как и остальные карточки (D-14).
+         *     Additive optional-with-default поле — существующие consumer'ы фронта не
+         *     ломаются; фронт делит на 100 для отображения в USD.
          */
         AnalyticsCards: {
             /** Sent */
@@ -2211,6 +2325,11 @@ export interface components {
              * @default 0
              */
             registered_contacts: number;
+            /**
+             * Llm Spend Usd Cents
+             * @default 0
+             */
+            llm_spend_usd_cents: number;
         };
         /**
          * AnalyticsReplied
@@ -3295,6 +3414,45 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * LLMSettingsResponse
+         * @description Masked read of the workspace LLM config. NO plaintext key field EVER exists here —
+         *     only `api_key_prefix` (prefix+last4) is exposed to the UI (D-04).
+         */
+        LLMSettingsResponse: {
+            /** Provider */
+            provider: string;
+            /** Model */
+            model?: string | null;
+            /** Api Key Prefix */
+            api_key_prefix?: string | null;
+            /** Api Key Status */
+            api_key_status: string;
+            /** Temperature */
+            temperature?: number | null;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+        };
+        /**
+         * LLMSettingsUpdate
+         * @description All fields optional — a PATCH may change just the model, just the key, etc.
+         */
+        LLMSettingsUpdate: {
+            /** Provider */
+            provider?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+            /** Temperature */
+            temperature?: number | null;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+        };
         /** MessageListResponse */
         MessageListResponse: {
             /** Messages */
@@ -3327,6 +3485,13 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** ModelListResponse */
+        ModelListResponse: {
+            /** Models */
+            models: string[];
+            /** Note */
+            note?: string | null;
         };
         /** MoveContactBatchRequest */
         MoveContactBatchRequest: {
@@ -3591,6 +3756,23 @@ export interface components {
              */
             callback_url?: string | null;
         };
+        /**
+         * SenderBlockRateResponse
+         * @description SRLD-08 (D-15/D-16): read-only per-sender block-rate aggregate.
+         *
+         *     Response for GET /senders/{slug}/block-rate — counts durable 'blocked'
+         *     restriction events vs 'sent' messages over a trailing 7-day window.
+         *     Strictly read-only: no control-loop, no auto-pause (D-16). block_rate is
+         *     blocks_7d / sends_7d (0.0 when no sends).
+         */
+        SenderBlockRateResponse: {
+            /** Blocks 7D */
+            blocks_7d: number;
+            /** Sends 7D */
+            sends_7d: number;
+            /** Block Rate */
+            block_rate: number;
+        };
         /** SenderCreate */
         SenderCreate: {
             /** Slug */
@@ -3771,6 +3953,20 @@ export interface components {
             };
             /** Client Timestamp */
             client_timestamp?: string | null;
+        };
+        /** TestConnectionRequest */
+        TestConnectionRequest: {
+            /** Provider */
+            provider?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** TestConnectionResponse */
+        TestConnectionResponse: {
+            /** Status */
+            status: string;
+            /** Detail */
+            detail?: string | null;
         };
         /**
          * ToolParamSpec
@@ -4533,6 +4729,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RestrictionEventResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_block_rate_api_v1_senders__slug__block_rate_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SenderBlockRateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7682,6 +7912,144 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_llm_settings_api_v1_workspace_llm_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_llm_settings_api_v1_workspace_llm_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LLMSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_connection_api_v1_workspace_llm_settings_test_connection_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestConnectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_models_api_v1_workspace_llm_settings_models_get: {
+        parameters: {
+            query: {
+                provider: string;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelListResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

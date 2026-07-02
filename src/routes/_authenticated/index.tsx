@@ -17,6 +17,7 @@ import {
   Rocket,
   ChevronDown,
   ArrowRight,
+  CircleDollarSign,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
@@ -174,6 +175,7 @@ function Dashboard() {
   const replyRate = sent > 0 ? Math.round((replyCount / sent) * 1000) / 10 : 0;
   const leads = a?.leads ?? 0;
   const finished = a?.finishes ?? 0;
+  const llmSpendUsd = (a?.llm_spend_usd_cents ?? 0) / 100;
 
   const activeFilterCount =
     (filters.campaignId ? 1 : 0) +
@@ -261,7 +263,7 @@ function Dashboard() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
             gap: 14,
             marginBottom: 14,
           }}
@@ -297,6 +299,14 @@ function Dashboard() {
             icon={<User size={14} />}
             color="var(--warning, #f59e0b)"
             spark={[2, 3, 4, 3, 5, 4, 5, 4, 4, 3, 2, 2]}
+          />
+          <KpiCard
+            label="LLM spend"
+            value={`$${llmSpendUsd.toFixed(2)}`}
+            sub="AI responder, all time"
+            icon={<CircleDollarSign size={14} />}
+            color="var(--ai-purple, #8774e1)"
+            spark={[1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 7, 8]}
           />
         </div>
 
