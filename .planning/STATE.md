@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 18-04-PLAN.md
-last_updated: "2026-07-02T11:54:04.265Z"
+stopped_at: 18-05 automatable tasks done (handoff + frontend AI/LLM); Task 3 human-verify pending
+last_updated: "2026-07-02T12:02:01.907Z"
 last_activity: 2026-07-02
 progress:
   total_phases: 20
-  completed_phases: 17
+  completed_phases: 18
   total_plans: 73
-  completed_plans: 71
+  completed_plans: 72
   percent: 96
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 18 (switchable-llm-provider) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: 18-05 automatable tasks complete (handoff regen + frontend AI/LLM section); Task 3 = BLOCKING human-verify of the end-to-end OpenAI↔Claude switch (deploy api+listener + real Anthropic key + llm_calls check) — awaiting user
 Last activity: 2026-07-02
 
 Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 plans (17-01 test scaffold, 17-02 checker username capture + gated read complete)
@@ -94,6 +94,7 @@ Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 p
 | Phase 18 P02 | 7min | 3 tasks | 7 files |
 | Phase 18 P03 | 4min | 2 tasks | 5 files |
 | Phase 18 P04 | 22min | 4 tasks | 7 files |
+| Phase 18 P05 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 18]: 18-04: answerer routes all 3 LLM calls through the resolved provider via a nested _complete() helper; OpenAI platform/fallback path reuses the module-level ai_engine.client so existing patch seams + prod share one client (BYOK keeps its own). Whisper+embeddings stay on the platform singleton (D-12).
 - [Phase 18]: 18-04: second-pass BLOCKER fixed — neutral assistant turn {role:assistant,content,tool_calls:[{id,name,arguments}]} replaces the raw OpenAI SDK object; OpenAIProvider._to_openai_messages + AnthropicProvider._to_anthropic_messages translate it to native (function wrapper / tool_use+tool_result). complete() takes model from ctor, not a kwarg.
 - [Phase 18]: 18-04: D-06 fallback = key-level error on a byok call flags api_key_status='invalid' (_flag_key_invalid best-effort) + retries once on platform OpenAI (key_source='fallback'); transient 429/5xx re-raise unchanged. warmup routes through the same factory (D-11) but gets NO fallback (best-effort None). llm_logger persists provider+key_source and reads LLMResult (D-07).
+- [Phase 18]: 18-05: handoff regenerated OFFLINE via app.openapi() in the test container (no prod-api rebuild, Phase-16 precedent) + llm-settings paths in openapi/types; sibling AI/LLM Settings tab — provider select, masked BYO key + status badge + Test connection, live provider-filtered model list (+manual fallback on note), D-09 capability-gated knobs (temp non-reasoning-OpenAI+Claude, effort reasoning+Claude, max-tokens), D-10 green corridor (floor 4000/ceiling 32000, warn-not-block), D-03 key gate surfacing KEY_REQUIRED. Task 3 end-to-end switch = BLOCKING human-verify (auto_advance off), NOT executed.
 
 ### Roadmap Evolution
 
@@ -239,6 +241,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-02T11:53:50.994Z
-Stopped at: Completed 18-04-PLAN.md
+Last session: 2026-07-02T12:02:01.891Z
+Stopped at: 18-05 automatable tasks done (handoff + frontend AI/LLM); Task 3 human-verify pending
 Resume file: None

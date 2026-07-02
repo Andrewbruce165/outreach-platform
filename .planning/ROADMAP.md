@@ -27,7 +27,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [x] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича (completed 2026-06-29)
 - [x] **Phase 16: RAG Knowledge Bases for Agents** — базы знаний для агентов на pgvector (гибридный keyword+vector поиск) (completed 2026-06-30)
 - [x] **Phase 17: Sender-side resolve ladder with username capture and import fallback** — чекер → чистый фильтр + захват @username; отправитель сам резолвит по лестнице кэш→ResolveUsername→ImportContacts (лениво перед отправкой), фолбэк на phone-резолв; чинит инцидент «Barter - ВЭД хук» (22 живых РФ-номера упали на ResolvePhone) — **planned (4 plans, waves 1→3, SRLD-01..09)** (completed 2026-06-30)
-- [ ] **Phase 18: Switchable LLM Provider in UI** — выбор провайдера (Claude/OpenAI) и модели в настройках + частичные настройки модели из конфига + API-ключ провайдера; чат/AI-ответчик работает через выбранную LLM
+- [x] **Phase 18: Switchable LLM Provider in UI** — выбор провайдера (Claude/OpenAI) и модели в настройках + частичные настройки модели из конфига + API-ключ провайдера; чат/AI-ответчик работает через выбранную LLM (completed 2026-07-02)
 
 ## Phase Details
 
@@ -489,7 +489,7 @@ Plans:
 **Goal:** Переключение LLM-модели прямо из UI: (1) выбор провайдера в настройках — пока только Claude (Anthropic) и OpenAI; (2) выбор конкретной модели + частичные настройки модели из нашего конфига (temperature, reasoning effort, token budget и т.п.); (3) подстановка API-ключа для работы выбранного провайдера; (4) AI-ответчик в чате работает через ту LLM, которая выбрана. Сейчас модель захардкожена через env `OPENAI_MODEL` (gpt-5-mini) — вынести в настройки.
 **Requirements**: LLMP-01, LLMP-02, LLMP-03, LLMP-04, LLMP-05, LLMP-06, LLMP-07, LLMP-08, LLMP-09, LLMP-10, LLMP-11, LLMP-12 (derived during /gsd:plan-phase 18 — see REQUIREMENTS.md §Switchable LLM Provider in UI; tracked via decisions D-01..D-12)
 **Depends on:** Phase 17
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -503,7 +503,7 @@ Plans:
 - [x] 18-04-wire-answerer-warmup-and-logger-PLAN.md — route generate_response (3 call sites) + warmup through the adapter + D-06 fallback + llm_logger provider/key_source; Whisper/embeddings stay platform (D-12) [Wave 3, depends_on: 18-02, 18-03] — LLMP-06/07/11/12
 
 **Wave 4** *(frontend + handoff, human-verify)*
-- [ ] 18-05-openapi-handoff-and-frontend-settings-PLAN.md — regenerate openapi/types + sibling-repo AI/LLM Settings section (provider/model/key/knobs + green corridor + Test connection) + human UAT [Wave 4, depends_on: 18-03, 18-04] — LLMP-03/05/08/09/10/11
+- [x] 18-05-openapi-handoff-and-frontend-settings-PLAN.md — regenerate openapi/types + sibling-repo AI/LLM Settings section (provider/model/key/knobs + green corridor + Test connection) + human UAT [Wave 4, depends_on: 18-03, 18-04] — LLMP-03/05/08/09/10/11
 
 ---
 
