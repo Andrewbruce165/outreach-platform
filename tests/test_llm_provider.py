@@ -118,6 +118,51 @@ async def test_anthropic_thinking_excludes_temperature():
     assert "temperature" not in params
 
 
+async def test_anthropic_adaptive_thinking_for_claude5_generation():
+    """Claude-5-generation models (claude-sonnet-5 hit live in 18-05 UAT) reject the
+    older `{"type":"enabled","budget_tokens":N}` shape entirely (400: '"thinking.type
+    .enabled" is not supported for this model'). They require `thinking={"type":
+    "adaptive"}` + a TOP-LEVEL `effort` param (low/medium/high) instead, and must
+    still omit temperature while thinking is active."""
+    from app.services.llm.anthropic_provider import AnthropicProvider
+
+    provider = AnthropicProvider(api_key="sk-ant-test", model="claude-sonnet-5")
+    params = provider.build_params(
+        system=_SYSTEM,
+        messages=[{"role": "user", "content": "Привет"}],
+        tools=None,
+        max_tokens=4000,
+        temperature=0.4,
+        reasoning_effort="medium",
+    )
+
+    assert params["thinking"] == {"type": "adaptive"}
+    assert params["effort"] == "medium"
+    assert "budget_tokens" not in params["thinking"]
+    assert "temperature" not in params
+
+
+async def test_anthropic_adaptive_thinking_omitted_for_minimal_effort():
+    """'minimal' has no Anthropic equivalent (only low/medium/high) — for a Claude-5
+    model it must omit thinking+effort entirely, same as the 0-budget case on the
+    older manual-budget path, and temperature (if given) passes through."""
+    from app.services.llm.anthropic_provider import AnthropicProvider
+
+    provider = AnthropicProvider(api_key="sk-ant-test", model="claude-sonnet-5")
+    params = provider.build_params(
+        system=_SYSTEM,
+        messages=[{"role": "user", "content": "Привет"}],
+        tools=None,
+        max_tokens=4000,
+        temperature=0.7,
+        reasoning_effort="minimal",
+    )
+
+    assert "thinking" not in params
+    assert "effort" not in params
+    assert params["temperature"] == 0.7
+
+
 async def test_anthropic_coalesces_consecutive_same_role():
     """The debounce case: get_conversation_history can produce two inbound (user) turns
     in a row. Anthropic 400s on non-alternating roles (research line 153), so the adapter

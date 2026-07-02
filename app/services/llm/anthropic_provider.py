@@ -20,7 +20,12 @@ from typing import Optional
 from anthropic import AsyncAnthropic
 
 from app.services.llm.base import LLMResult, ToolCall
-from app.services.llm.capabilities import clamp_max_tokens, effort_to_budget
+from app.services.llm.capabilities import (
+    anthropic_uses_adaptive_thinking,
+    clamp_max_tokens,
+    effort_to_anthropic_level,
+    effort_to_budget,
+)
 
 
 def _to_anthropic_messages(messages: list) -> list:
@@ -136,9 +141,14 @@ class AnthropicProvider:
         - max_tokens is REQUIRED and always present (clamped).
         - messages are role-coalesced to guarantee strict alternation.
         - tools reshaped to {name, description, input_schema} (no function wrapper).
-        - temperature omitted entirely when None (0.0–1.0 range otherwise).
-        - thinking={"type":"enabled","budget_tokens":b} only when effort budget > 0
-          (manual budget; omitted for 'minimal'/None — Pitfall 1/2, budget < max_tokens).
+        - temperature omitted entirely when None (0.0–1.0 range otherwise), and ALWAYS
+          omitted whenever thinking is active in either shape (Anthropic 400s if
+          temperature != 1 while thinking is on).
+        - Claude-5-generation models (+ Opus 4.7/4.8): thinking={"type":"adaptive"} +
+          a TOP-LEVEL `effort` param (low/medium/high) — no budget_tokens support.
+        - Older models: thinking={"type":"enabled","budget_tokens":b} only when effort
+          budget > 0 (manual budget; omitted for 'minimal'/None — Pitfall 1/2, budget
+          < max_tokens).
         """
         clamped = clamp_max_tokens(self.model, max_tokens)
 
@@ -158,13 +168,22 @@ class AnthropicProvider:
         translated_tools = _translate_tools(tools)
         if translated_tools:
             params["tools"] = translated_tools
-        # Anthropic rejects temperature != 1 whenever thinking is enabled, so the two
-        # are mutually exclusive here (mirrors the OpenAI reasoning-model exclusion, D-09).
-        budget = effort_to_budget(reasoning_effort, clamped)
-        if budget > 0:
-            params["thinking"] = {"type": "enabled", "budget_tokens": budget}
-        elif temperature is not None:
-            params["temperature"] = temperature
+        # Anthropic rejects temperature != 1 whenever thinking is enabled (either shape),
+        # so temperature and thinking are mutually exclusive (mirrors the OpenAI
+        # reasoning-model exclusion, D-09).
+        if anthropic_uses_adaptive_thinking(self.model):
+            level = effort_to_anthropic_level(reasoning_effort)
+            if level:
+                params["thinking"] = {"type": "adaptive"}
+                params["effort"] = level  # top-level, sibling of `thinking` — NOT nested
+            elif temperature is not None:
+                params["temperature"] = temperature
+        else:
+            budget = effort_to_budget(reasoning_effort, clamped)
+            if budget > 0:
+                params["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            elif temperature is not None:
+                params["temperature"] = temperature
         return params
 
     def normalize_response(self, resp) -> LLMResult:

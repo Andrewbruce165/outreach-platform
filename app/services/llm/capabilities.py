@@ -27,6 +27,24 @@ EFFORT_TO_BUDGET = {"minimal": 0, "low": 2000, "medium": 8000, "high": 16000}
 # always holds (Anthropic 400s when budget_tokens >= max_tokens — Pitfall 2).
 _THINKING_HEADROOM = 512
 
+# Claude-5-generation models (+ Opus 4.7/4.8) dropped manual thinking-budget support:
+# their Messages API only accepts `thinking={"type":"adaptive"}` + a TOP-LEVEL `effort`
+# param and 400s on the older `{"type":"enabled","budget_tokens":N}` shape (hit live in
+# 18-05 UAT against claude-sonnet-5). Older models (sonnet-4-5, opus-4.5, haiku-4.5) keep
+# the manual budget_tokens shape.
+_ADAPTIVE_ONLY_PREFIXES = (
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-haiku-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+)
+
+# Anthropic's adaptive-effort param only accepts low/medium/high — no 'minimal'.
+_EFFORT_TO_ANTHROPIC_LEVEL = {"low": "low", "medium": "medium", "high": "high"}
+
 
 def is_reasoning_model(model: str) -> bool:
     """True for OpenAI reasoning models (gpt-5*, o1/o3/o4*) that split
@@ -67,6 +85,21 @@ def effort_to_budget(effort: Optional[str], max_tokens: int) -> int:
     if budget <= 0:
         return 0
     return min(budget, max(0, max_tokens - _THINKING_HEADROOM))
+
+
+def anthropic_uses_adaptive_thinking(model: str) -> bool:
+    """True for Claude models whose Messages API requires the adaptive thinking
+    shape (`thinking={"type":"adaptive"}` + top-level `effort`) and rejects the
+    older manual `{"type":"enabled","budget_tokens":N}` shape with a 400."""
+    m = (model or "").lower()
+    return m.startswith(_ADAPTIVE_ONLY_PREFIXES)
+
+
+def effort_to_anthropic_level(effort: Optional[str]) -> Optional[str]:
+    """Map a reasoning-effort string to Anthropic's adaptive `effort` values
+    (low/medium/high only). 'minimal'/None/unknown -> None => omit thinking
+    entirely (mirrors effort_to_budget's 0-budget case for the manual path)."""
+    return _EFFORT_TO_ANTHROPIC_LEVEL.get((effort or "").lower())
 
 
 def filter_chat_models(provider: str, model_ids: list) -> list:

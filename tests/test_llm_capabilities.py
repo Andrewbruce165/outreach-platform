@@ -78,3 +78,27 @@ def test_effort_to_budget_below_max_tokens():
 
     # 'minimal' disables thinking (budget 0 => omit the thinking block).
     assert effort_to_budget("minimal", max_tokens) == 0
+
+
+def test_anthropic_uses_adaptive_thinking_gate():
+    """Claude-5-generation models (+ Opus 4.7/4.8) require the adaptive thinking
+    shape and 400 on the older manual budget_tokens shape (18-05 live UAT hit this
+    against claude-sonnet-5); older Claude models keep the manual-budget path."""
+    from app.services.llm.capabilities import anthropic_uses_adaptive_thinking
+
+    assert anthropic_uses_adaptive_thinking("claude-sonnet-5") is True
+    assert anthropic_uses_adaptive_thinking("claude-opus-4-8") is True
+    assert anthropic_uses_adaptive_thinking("claude-sonnet-4-5") is False
+    assert anthropic_uses_adaptive_thinking("claude-3-5-sonnet-latest") is False
+
+
+def test_effort_to_anthropic_level_only_low_medium_high():
+    """Anthropic's adaptive `effort` param accepts only low/medium/high — 'minimal'
+    (OpenAI-only concept) and unknown values map to None (omit thinking entirely)."""
+    from app.services.llm.capabilities import effort_to_anthropic_level
+
+    assert effort_to_anthropic_level("low") == "low"
+    assert effort_to_anthropic_level("medium") == "medium"
+    assert effort_to_anthropic_level("high") == "high"
+    assert effort_to_anthropic_level("minimal") is None
+    assert effort_to_anthropic_level(None) is None
