@@ -1,3 +1,7 @@
+# NOTE (Phase 18): this file will be updated in plan 18-04 to patch the LLM adapter path
+# (provider.complete) instead of ai_engine.client.chat.completions.create directly, so the
+# empty-guard/retry works through the adapter for BOTH providers. Left unchanged here to keep
+# the Wave-0 scaffold collect-clean; do not rewrite it in 18-01.
 """Regression: reasoning-model empty-response handling (fix: ai-empty-llm-response).
 
 Incident 2026-07-02: OPENAI_MODEL was switched to a reasoning model

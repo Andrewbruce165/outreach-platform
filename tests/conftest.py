@@ -210,6 +210,16 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_041.exists():
             await asyncpg_conn.execute(_mig_041.read_text())
 
+        # 044: Phase 18 llm_settings table + llm_calls.provider/key_source columns.
+        # The table and the two llm_calls columns come from ORM create_all (the
+        # CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS are no-ops here), but
+        # the CHECK constraints (provider IN ..., api_key_status IN ...) are SQL-only —
+        # apply the migration so the test DB exercises the same constraint path as prod.
+        # Exists-guard so this conftest change stays green until migrations/044 lands.
+        _mig_044 = PROJECT_ROOT / "migrations" / "044_llm_settings.sql"
+        if _mig_044.exists():
+            await asyncpg_conn.execute(_mig_044.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
