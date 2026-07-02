@@ -122,8 +122,9 @@ async def test_anthropic_adaptive_thinking_for_claude5_generation():
     """Claude-5-generation models (claude-sonnet-5 hit live in 18-05 UAT) reject the
     older `{"type":"enabled","budget_tokens":N}` shape entirely (400: '"thinking.type
     .enabled" is not supported for this model'). They require `thinking={"type":
-    "adaptive"}` + a TOP-LEVEL `effort` param (low/medium/high) instead, and must
-    still omit temperature while thinking is active."""
+    "adaptive"}` + output_config.effort (low/medium/high; live-verified — a top-level
+    `effort` is ALSO rejected, and SDK 0.115.1 has no such kwarg, so it rides the
+    extra_body passthrough), and must still omit temperature while thinking is on."""
     from app.services.llm.anthropic_provider import AnthropicProvider
 
     provider = AnthropicProvider(api_key="sk-ant-test", model="claude-sonnet-5")
@@ -137,7 +138,8 @@ async def test_anthropic_adaptive_thinking_for_claude5_generation():
     )
 
     assert params["thinking"] == {"type": "adaptive"}
-    assert params["effort"] == "medium"
+    assert params["extra_body"] == {"output_config": {"effort": "medium"}}
+    assert "effort" not in params  # top-level effort is rejected by the API
     assert "budget_tokens" not in params["thinking"]
     assert "temperature" not in params
 
@@ -160,6 +162,7 @@ async def test_anthropic_adaptive_thinking_omitted_for_minimal_effort():
 
     assert "thinking" not in params
     assert "effort" not in params
+    assert "extra_body" not in params
     assert params["temperature"] == 0.7
 
 

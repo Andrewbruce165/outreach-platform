@@ -145,7 +145,8 @@ class AnthropicProvider:
           omitted whenever thinking is active in either shape (Anthropic 400s if
           temperature != 1 while thinking is on).
         - Claude-5-generation models (+ Opus 4.7/4.8): thinking={"type":"adaptive"} +
-          a TOP-LEVEL `effort` param (low/medium/high) — no budget_tokens support.
+          output_config.effort (low/medium/high, sent via the SDK extra_body
+          passthrough) — no budget_tokens support.
         - Older models: thinking={"type":"enabled","budget_tokens":b} only when effort
           budget > 0 (manual budget; omitted for 'minimal'/None — Pitfall 1/2, budget
           < max_tokens).
@@ -175,7 +176,11 @@ class AnthropicProvider:
             level = effort_to_anthropic_level(reasoning_effort)
             if level:
                 params["thinking"] = {"type": "adaptive"}
-                params["effort"] = level  # top-level, sibling of `thinking` — NOT nested
+                # SDK 0.115.1 has no `effort`/`output_config` kwarg — the REST body
+                # field is output_config.effort (live-verified 2026-07-02; a top-level
+                # `effort` is rejected with 400 'Extra inputs are not permitted'), so
+                # it goes through the SDK's extra_body passthrough.
+                params["extra_body"] = {"output_config": {"effort": level}}
             elif temperature is not None:
                 params["temperature"] = temperature
         else:
