@@ -55,6 +55,13 @@ const PERIOD_MS: Record<PeriodKey, number> = {
   "30d": 30 * 24 * 3600_000,
   "90d": 90 * 24 * 3600_000,
 };
+// Backend `since` values for the analytics cards endpoints ("24h" maps to "1d").
+const PERIOD_SINCE: Record<PeriodKey, "1d" | "7d" | "30d" | "90d"> = {
+  "24h": "1d",
+  "7d": "7d",
+  "30d": "30d",
+  "90d": "90d",
+};
 
 type DashFilters = {
   campaignId: string | null;
@@ -77,9 +84,24 @@ function Dashboard() {
     status: null,
   });
 
+  // KPI cards follow the campaign/sender filter (campaign wins, mirroring the
+  // funnel scope below) and the period selector via the backend `since` param.
+  const cardsPath = filters.campaignId
+    ? `/api/v1/analytics/campaigns/${filters.campaignId}`
+    : filters.senderId
+      ? `/api/v1/analytics/senders/${filters.senderId}`
+      : "/api/v1/analytics/workspace";
   const analyticsQ = useQuery({
-    queryKey: ["analytics", "workspace"],
-    queryFn: () => api<AnalyticsCards>("/api/v1/analytics/workspace"),
+    queryKey: [
+      "analytics",
+      "cards",
+      filters.campaignId ?? filters.senderId ?? "workspace",
+      period,
+    ],
+    queryFn: () =>
+      api<AnalyticsCards>(cardsPath, {
+        query: { since: PERIOD_SINCE[period] },
+      }),
     refetchInterval: 30_000,
   });
 
@@ -271,7 +293,7 @@ function Dashboard() {
           <KpiCard
             label="Messages sent"
             value={sent.toLocaleString()}
-            sub={analyticsQ.isLoading ? "Loading…" : `Across ${filteredCampaigns.length} campaigns`}
+            sub={analyticsQ.isLoading ? "Loading…" : PERIOD_LABELS[period]}
             icon={<Send size={14} />}
             color="var(--tg-blue, #3390ec)"
             spark={[180, 210, 240, 260, 295, 310, 340, 360, 380, 395, 410, 420]}
@@ -287,7 +309,7 @@ function Dashboard() {
           <KpiCard
             label="Leads"
             value={leads.toLocaleString()}
-            sub={`From ${filteredCampaigns.filter((c) => c.status === "running").length} active campaigns`}
+            sub={`Active leads · ${PERIOD_LABELS[period]}`}
             icon={<Flag size={14} />}
             color="var(--success, #4dcd5e)"
             spark={[3, 5, 7, 8, 12, 14, 18, 20, 24, 29, 34, 38]}
@@ -295,7 +317,7 @@ function Dashboard() {
           <KpiCard
             label="Finished"
             value={finished.toLocaleString()}
-            sub="Conversations closed"
+            sub={`Conversations closed · ${PERIOD_LABELS[period]}`}
             icon={<User size={14} />}
             color="var(--warning, #f59e0b)"
             spark={[2, 3, 4, 3, 5, 4, 5, 4, 4, 3, 2, 2]}
@@ -303,7 +325,7 @@ function Dashboard() {
           <KpiCard
             label="LLM spend"
             value={`$${llmSpendUsd.toFixed(2)}`}
-            sub="AI responder, all time"
+            sub={`AI responder · ${PERIOD_LABELS[period]}`}
             icon={<CircleDollarSign size={14} />}
             color="var(--ai-purple, #8774e1)"
             spark={[1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 7, 8]}

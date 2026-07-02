@@ -1402,7 +1402,9 @@ export interface paths {
         };
         /**
          * Workspace Analytics
-         * @description ANLX-01 — метрики workspace юзера (all-time, real-time).
+         * @description ANLX-01 — метрики workspace юзера (real-time).
+         *
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["workspace_analytics_api_v1_analytics_workspace_get"];
         put?: never;
@@ -1423,6 +1425,8 @@ export interface paths {
         /**
          * Campaign Analytics
          * @description ANLX-02 — метрики одной кампании. 404 на cross-workspace campaign.
+         *
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["campaign_analytics_api_v1_analytics_campaigns__campaign_id__get"];
         put?: never;
@@ -1445,6 +1449,7 @@ export interface paths {
          * @description ANLX-04 — метрики одного агента. 404 на cross-workspace agent.
          *
          *     Per D-16: ``agent.campaign_count`` лежит в /api/v1/agents (Phase 3) — НЕ здесь.
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["agent_analytics_api_v1_analytics_agents__agent_id__get"];
         put?: never;
@@ -1468,6 +1473,7 @@ export interface paths {
          *
          *     Per D-16: sender errors (FloodWait/Failed/auth) лежат на странице sender
          *     (Phase 2 SNDR-03) — НЕ здесь.
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["sender_analytics_api_v1_analytics_senders__sender_id__get"];
         put?: never;
@@ -6820,7 +6826,9 @@ export interface operations {
     };
     workspace_analytics_api_v1_analytics_workspace_get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
@@ -6852,7 +6860,9 @@ export interface operations {
     };
     campaign_analytics_api_v1_analytics_campaigns__campaign_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
@@ -6886,7 +6896,9 @@ export interface operations {
     };
     agent_analytics_api_v1_analytics_agents__agent_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
@@ -6920,7 +6932,9 @@ export interface operations {
     };
     sender_analytics_api_v1_analytics_senders__sender_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
