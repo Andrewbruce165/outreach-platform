@@ -33,6 +33,7 @@ from app.schemas import (
     FunnelResponse,
     LLMAggregatesResponse,
 )
+from app.services.llm_pricing import compute_spend_cents
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,41 @@ async def _compute_cards(
               AND (ct.phone IS NOT NULL OR ct.username IS NOT NULL)
         """), params)).scalar() or 0
 
+    # 6. LLM spend — all-time (D-14), scoped via llm_calls' OWN columns
+    # (llm_calls does not join conversations here). Map the conversation-scope
+    # column onto the matching llm_calls column; unknown/unmapped scope → skip
+    # (leave 0, do not raise).
+    llm_spend_usd_cents = 0
+    _LLM_SCOPE_COL = {
+        "campaign_id": "campaign_id",
+        "ai_context_id": "agent_id",
+        "sender_id": "sender_id",
+    }
+    llm_scope_clause = ""
+    llm_params: dict = {"wid": str(workspace_id)}
+    llm_ok = True
+    if scope is not None:
+        col, val = scope
+        lc_col = _LLM_SCOPE_COL.get(col)
+        if lc_col is None:
+            llm_ok = False  # unknown scope column → skip spend
+        else:
+            llm_scope_clause = f" AND lc.{lc_col} = :scope_val"
+            llm_params["scope_val"] = str(val)
+    if llm_ok:
+        model_rows = (await db.execute(text(f"""
+            SELECT lc.model                                   AS model,
+                   COALESCE(SUM(lc.prompt_tokens), 0)::BIGINT     AS p,
+                   COALESCE(SUM(lc.completion_tokens), 0)::BIGINT AS c
+            FROM llm_calls lc
+            WHERE lc.workspace_id = :wid
+              {llm_scope_clause}
+            GROUP BY lc.model
+        """), llm_params)).all()
+        llm_spend_usd_cents = compute_spend_cents(
+            [(r.model, r.p, r.c) for r in model_rows]
+        )
+
     return AnalyticsCards(
         sent=sent,
         replied=AnalyticsReplied(
@@ -262,6 +298,7 @@ async def _compute_cards(
         finishes=finishes,
         contacts_messaged=contacts_messaged,
         registered_contacts=registered_contacts,
+        llm_spend_usd_cents=llm_spend_usd_cents,
     )
 
 
@@ -457,8 +494,9 @@ async def llm_aggregates(
     """UI-SPEC §5.6 LLM trace tab — top-of-tab aggregates over since-window.
 
     Returns total_calls / avg_latency_ms / prompt_tokens / completion_tokens /
-    total_tokens / spend_usd_cents. spend_usd_cents is 0 in v1 — per-model
-    pricing is deferred to v2 (RESEARCH §"Backend Gap Map" note).
+    total_tokens / spend_usd_cents. spend_usd_cents is real USD spend in cents,
+    computed from a per-model GROUP BY over the same since-window and priced via
+    app.services.llm_pricing.compute_spend_cents (unknown models → 0 + warning).
 
     scope=workspace counts every LLM call in the workspace. scope=campaign
     filters by `llm_calls.campaign_id = :scope_val` (404 if cross-workspace).
@@ -502,11 +540,24 @@ async def llm_aggregates(
           {scope_clause}
     """), params)).first()
 
+    # Per-model breakdown (same WHERE + scope + params) → real USD spend.
+    model_rows = (await db.execute(text(f"""
+        SELECT lc.model                                   AS model,
+               COALESCE(SUM(lc.prompt_tokens), 0)::BIGINT     AS p,
+               COALESCE(SUM(lc.completion_tokens), 0)::BIGINT AS c
+        FROM llm_calls lc
+        WHERE lc.workspace_id = :wid
+          AND lc.created_at >= NOW() - (:days || ' days')::INTERVAL
+          {scope_clause}
+        GROUP BY lc.model
+    """), params)).all()
+    spend = compute_spend_cents([(r.model, r.p, r.c) for r in model_rows])
+
     return LLMAggregatesResponse(
         total_calls=(row.total_calls if row else 0) or 0,
         avg_latency_ms=row.avg_latency_ms if row else None,
         prompt_tokens=(row.prompt_tokens if row else 0) or 0,
         completion_tokens=(row.completion_tokens if row else 0) or 0,
         total_tokens=(row.total_tokens if row else 0) or 0,
-        spend_usd_cents=0,  # v1 stub — RESEARCH defers per-model pricing
+        spend_usd_cents=spend,
     )
