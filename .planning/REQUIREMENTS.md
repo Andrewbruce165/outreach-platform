@@ -419,6 +419,26 @@
 - `CONT-04` старый (переменные `{{имя}}`) → переехал в `CAMP-10`
 
 ---
+
+## Phase 19: No Reply Follow-Up and Auto-Finish (NORP-01..13)
+
+*Derived during /gsd:plan-phase 19 from CONTEXT.md decisions D-01..D-17.*
+
+- **NORP-01**: `no_reply` added to `conversations.status` CHECK + ORM; visible in inbox filters/analytics (D-01)
+- **NORP-02**: Campaign gains `follow_up_enabled` (default false), `follow_up_interval_hours` (default 24, 4–168), `follow_up_max_pings` (default 2, 1–5), `auto_finish_hours` (default 72, 24–720); bounds enforced at API layer (D-08, D-12)
+- **NORP-03**: Ping counter (`pings_sent`) persisted per conversation; silence timer anchored to last outbound message (D-02, D-04)
+- **NORP-04**: FollowUpWorker — on interval expiry flip active→no_reply, AI-generate ping, enqueue as follow-up item, restart timer; auto-finish on threshold or max pings (D-02, D-04, D-07, D-08, D-13)
+- **NORP-05**: Ping text AI-generated via ai_engine + Phase 18 provider, no tools (D-07)
+- **NORP-06**: Auto-finish → status finished, cancel pings, fire finish webhook with reason=no_reply (D-09, D-10)
+- **NORP-07**: Incoming message reverts no_reply→active + cancels pending pings (listener hook) (D-03, D-17)
+- **NORP-08**: Pre-send re-check — contact replied since ping scheduled → cancel (second guard) (D-17)
+- **NORP-09**: Pings respect working hours + rate limits, bypass new-dialog cap/pacing (D-13)
+- **NORP-10**: Same-sender-only; frozen sender → ping waits, auto-finish still closes (D-14)
+- **NORP-11**: Toggle-on retroactive with smoothing; already-past-threshold dialogs finish immediately (D-15)
+- **NORP-12**: Campaign paused freezes timers; done cancels pings (D-16)
+- **NORP-13**: Campaign form Follow Up block + openapi.json regen (cross-repo) (D-08, D-12)
+
+---
 *Requirements defined: 2026-04-02*
 *Last updated: 2026-05-21 — restructured into 6 phases with Campaign entity*
 *2026-06-24 — added HLTH-01..03 (Account Health & Restriction Audit) to Phase 10*
@@ -429,3 +449,4 @@
 *2026-06-30 — derived KB-01..06 (RAG Knowledge Bases for Agents) during Phase 16 planning*
 *2026-06-30 — derived SRLD-01..09 (Sender-side Resolve Ladder) during Phase 17 planning*
 *2026-07-02 — derived LLMP-01..12 (Switchable LLM Provider in UI) during Phase 18 planning*
+*2026-07-02 — derived NORP-01..13 (No Reply Follow-Up and Auto-Finish) during Phase 19 planning*
