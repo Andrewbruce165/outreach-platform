@@ -116,7 +116,7 @@ async def test_workspace_endpoint_returns_4_metrics(
     data = r.json()
     assert set(data.keys()) == {
         "sent", "replied", "leads", "finishes",
-        "contacts_messaged", "registered_contacts",
+        "contacts_messaged", "registered_contacts", "llm_spend_usd_cents",
     }
     assert set(data["replied"].keys()) == {"conversation_count", "message_count"}
     assert data["sent"] == 0
@@ -127,6 +127,8 @@ async def test_workspace_endpoint_returns_4_metrics(
     # Progress fields are campaign-scoped only → 0 for workspace scope.
     assert data["contacts_messaged"] == 0
     assert data["registered_contacts"] == 0
+    # Additive LLM spend field (ILX-LLM-SPEND) — 0 with no priced calls.
+    assert data["llm_spend_usd_cents"] == 0
 
 
 async def test_workspace_endpoint_workspace_isolation(
@@ -297,7 +299,7 @@ async def test_all_4_endpoints_same_schema(
 
     expected_top = {
         "sent", "replied", "leads", "finishes",
-        "contacts_messaged", "registered_contacts",
+        "contacts_messaged", "registered_contacts", "llm_spend_usd_cents",
     }
     expected_replied = {"conversation_count", "message_count"}
 

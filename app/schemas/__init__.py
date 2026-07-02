@@ -1036,6 +1036,12 @@ class AnalyticsCards(BaseModel):
       (та же семантика, что _compute_is_exhausted, migration 013).
     Для workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),
     UI не рисует для них progress-бар.
+
+    ``llm_spend_usd_cents`` = all-time LLM spend в центах (USD) для текущего
+    scope (workspace/campaign/agent/sender — фильтр по соответствующей колонке
+    llm_calls). All-time (без since-окна), как и остальные карточки (D-14).
+    Additive optional-with-default поле — существующие consumer'ы фронта не
+    ломаются; фронт делит на 100 для отображения в USD.
     """
 
     sent: int
@@ -1044,6 +1050,7 @@ class AnalyticsCards(BaseModel):
     finishes: int
     contacts_messaged: int = 0
     registered_contacts: int = 0
+    llm_spend_usd_cents: int = 0
 
 
 # === Phase 5 LLM call schemas (ANLX-05) ======================================
