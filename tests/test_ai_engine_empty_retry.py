@@ -1,7 +1,8 @@
-# NOTE (Phase 18): this file will be updated in plan 18-04 to patch the LLM adapter path
-# (provider.complete) instead of ai_engine.client.chat.completions.create directly, so the
-# empty-guard/retry works through the adapter for BOTH providers. Left unchanged here to keep
-# the Wave-0 scaffold collect-clean; do not rewrite it in 18-01.
+# Phase 18 (18-04): the three integration tests now patch the LLM adapter path
+# (OpenAIProvider.complete) instead of ai_engine.client.chat.completions.create, so the
+# empty-guard/retry is exercised THROUGH the provider adapter (the seam the answerer now
+# uses for BOTH providers). The pure _is_reasoning_model / _build_completion_params unit
+# tests are unchanged.
 """Regression: reasoning-model empty-response handling (fix: ai-empty-llm-response).
 
 Incident 2026-07-02: OPENAI_MODEL was switched to a reasoning model
@@ -36,9 +37,15 @@ from app.services.ai_engine import (
     _build_completion_params,
     _is_reasoning_model,
 )
-from tests.utils.openai_mocks import make_openai_response
+from app.services.llm.base import LLMResult
+from app.services.llm.openai_provider import OpenAIProvider
 
 pytestmark = pytest.mark.asyncio
+
+
+def _llm_result(text_content, finish_reason):
+    """Build a normalized LLMResult the way the answerer now consumes it (adapter path)."""
+    return LLMResult(text=text_content, tool_calls=[], finish_reason=finish_reason, usage={})
 
 
 # ─── _is_reasoning_model ────────────────────────────────────────────────────
@@ -92,14 +99,13 @@ async def test_empty_length_response_retries_and_returns_text(
     monkeypatch.setattr(ai_engine.settings, "openai_model", "gpt-5-mini-2025-08-07")
     agent = await test_agent_factory(name="Empty Retry Agent")
 
-    empty = make_openai_response(text_content="", finish_reason="length")
-    recovered = make_openai_response(
-        text_content="Привет! Расскажу подробнее про завтрак 18 июля.",
-        finish_reason="stop",
+    empty = _llm_result("", finish_reason="length")
+    recovered = _llm_result(
+        "Привет! Расскажу подробнее про завтрак 18 июля.", finish_reason="stop",
     )
-    mock_create = AsyncMock(side_effect=[empty, recovered])
+    mock_complete = AsyncMock(side_effect=[empty, recovered])
 
-    with patch.object(ai_engine.client.chat.completions, "create", new=mock_create):
+    with patch.object(OpenAIProvider, "complete", new=mock_complete):
         reply = await ai_engine.ai_engine.generate_response(
             session=async_db_session,
             conversation_id=str(_uuid.uuid4()),
@@ -109,13 +115,13 @@ async def test_empty_length_response_retries_and_returns_text(
         )
 
     # Retry fired exactly once (two completions total) and the reply was recovered.
-    assert mock_create.await_count == 2, "empty finish_reason=length must trigger a retry"
+    assert mock_complete.await_count == 2, "empty finish_reason=length must trigger a retry"
     assert reply == "Привет! Расскажу подробнее про завтрак 18 июля."
 
-    # The retry escalated reasoning_effort + token budget.
-    retry_kwargs = mock_create.await_args_list[1].kwargs
+    # The retry escalated reasoning_effort + token budget (through the adapter).
+    retry_kwargs = mock_complete.await_args_list[1].kwargs
     assert retry_kwargs["reasoning_effort"] == AI_REASONING_EFFORT_RETRY
-    assert retry_kwargs["max_completion_tokens"] == AI_MAX_COMPLETION_TOKENS_RETRY
+    assert retry_kwargs["max_tokens"] == AI_MAX_COMPLETION_TOKENS_RETRY
 
 
 async def test_empty_length_both_calls_returns_none_not_crash(
@@ -126,10 +132,10 @@ async def test_empty_length_both_calls_returns_none_not_crash(
     monkeypatch.setattr(ai_engine.settings, "openai_model", "gpt-5-mini-2025-08-07")
     agent = await test_agent_factory(name="Empty Twice Agent")
 
-    empty = make_openai_response(text_content="", finish_reason="length")
-    mock_create = AsyncMock(side_effect=[empty, empty])
+    empty = _llm_result("", finish_reason="length")
+    mock_complete = AsyncMock(side_effect=[empty, empty])
 
-    with patch.object(ai_engine.client.chat.completions, "create", new=mock_create):
+    with patch.object(OpenAIProvider, "complete", new=mock_complete):
         reply = await ai_engine.ai_engine.generate_response(
             session=async_db_session,
             conversation_id=str(_uuid.uuid4()),
@@ -138,7 +144,7 @@ async def test_empty_length_both_calls_returns_none_not_crash(
             new_message="Не знаю его",
         )
 
-    assert mock_create.await_count == 2, "retry once, then stop (no loop)"
+    assert mock_complete.await_count == 2, "retry once, then stop (no loop)"
     assert reply is None
 
 
@@ -149,10 +155,10 @@ async def test_normal_stop_response_no_retry(
     monkeypatch.setattr(ai_engine.settings, "openai_model", "gpt-5-mini-2025-08-07")
     agent = await test_agent_factory(name="Normal Agent")
 
-    ok = make_openai_response(text_content="Как дела?", finish_reason="stop")
-    mock_create = AsyncMock(side_effect=[ok])
+    ok = _llm_result("Как дела?", finish_reason="stop")
+    mock_complete = AsyncMock(side_effect=[ok])
 
-    with patch.object(ai_engine.client.chat.completions, "create", new=mock_create):
+    with patch.object(OpenAIProvider, "complete", new=mock_complete):
         reply = await ai_engine.ai_engine.generate_response(
             session=async_db_session,
             conversation_id=str(_uuid.uuid4()),
@@ -161,5 +167,5 @@ async def test_normal_stop_response_no_retry(
             new_message="Привет",
         )
 
-    assert mock_create.await_count == 1, "no retry on a normal reply"
+    assert mock_complete.await_count == 1, "no retry on a normal reply"
     assert reply == "Как дела?"
