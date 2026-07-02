@@ -41,6 +41,7 @@ import qrcode
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 from telethon.errors import (
@@ -238,6 +239,17 @@ async def _refresh_sender_session(
     """
     sender.session_string = encrypt_session(client.session.save())
     sender.auth_status = "ok"
+    # Backfill telegram_id for legacy rows: older create code never set it on
+    # INSERT, so explicit-reauth of such rows would keep it NULL forever.
+    if sender.telegram_id is None:
+        try:
+            me = await client.get_me()
+            tg_id = getattr(me, "id", None)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[onboarding] get_me failed during reauth refresh: {e}")
+            tg_id = None
+        if tg_id is not None:
+            sender.telegram_id = tg_id
     if session_row.proxy is not None:
         sender.proxy = session_row.proxy
     await db.commit()
@@ -287,10 +299,23 @@ async def _create_sender_from_session(
     client: TelegramClient,
     name: Optional[str] = None,
 ) -> Sender:
-    """After successful sign_in / qr scan — create a Sender in the workspace.
+    """After successful sign_in / qr scan — create OR update a Sender.
 
     Default ``lifecycle_status='active'`` (D-12) and ``auth_status='ok'``;
     rate_per_* default to the migration server_defaults (4/20/150).
+
+    Idempotent by ``(workspace_id, slug)`` — the slug is deterministic
+    (``sender-<telegram_id>``), so re-onboarding the same physical Telegram
+    account yields the same slug. This is the documented re-auth contract
+    (reconciliation.md: no dedicated ``/reauth`` endpoint is required — re-auth
+    reuses the plain onboarding flow against the same slug and the backend
+    writes the new encrypted session to the existing row). Without this
+    upsert, a plain-flow re-auth INSERTs a duplicate row and violates
+    ``idx_senders_workspace_slug`` (UNIQUE on workspace_id+slug) → 500.
+
+    The ``original_sender_id`` branch in ``_finalize_onboarding_or_reauth``
+    remains the fast path for the explicit ``/reauth/{slug}`` endpoints; this
+    upsert is the safety net when re-auth comes through plain onboarding.
     """
     session_string = client.session.save()
     try:
@@ -304,11 +329,42 @@ async def _create_sender_from_session(
     suffix = str(tg_id) if tg_id is not None else str(session_row.id)[:8]
     slug = f"sender-{suffix}"
 
+    # Upsert on (workspace_id, slug): if this Telegram account already exists in
+    # the workspace, treat this as a re-auth and UPDATE in place rather than
+    # INSERTing a duplicate (which would hit idx_senders_workspace_slug).
+    existing_result = await db.execute(
+        select(Sender).where(
+            Sender.slug == slug,
+            Sender.workspace_id == ctx.workspace_id,
+            # TODO(v2-rls): replaced by RLS policy app.workspace_id
+        )
+    )
+    async def _update_in_place(row: Sender) -> Sender:
+        row.session_string = encrypt_session(session_string)
+        row.auth_status = "ok"
+        if tg_id is not None:
+            row.telegram_id = tg_id
+        if session_row.proxy is not None:
+            row.proxy = session_row.proxy
+        await db.commit()
+        await db.refresh(row)
+        logger.info(
+            f"[onboarding] sender re-authed via onboarding (upsert) slug={slug} "
+            f"role={session_row.role} workspace={str(ctx.workspace_id)[:8]} "
+            f"sender_id={str(row.id)[:8]}"
+        )
+        return row
+
+    existing = existing_result.scalars().first()
+    if existing is not None:
+        return await _update_in_place(existing)
+
     sender = Sender(
         workspace_id=ctx.workspace_id,
         slug=slug,
         name=name or first_name or slug,
         phone=session_row.phone or "",
+        telegram_id=tg_id,
         session_string=encrypt_session(session_string),
         role=session_row.role,
         proxy=session_row.proxy,
@@ -317,7 +373,28 @@ async def _create_sender_from_session(
         # rate_per_* server_default = 4 / 20 / 150 (migration 013)
     )
     db.add(sender)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Race: a concurrent finalization (double-submitted verify-2fa, or
+        # verify-code + QR poll) INSERTed the same (workspace_id, slug) between
+        # our SELECT above and this commit. Recover by updating the winner row
+        # instead of surfacing a 500.
+        await db.rollback()
+        raced_result = await db.execute(
+            select(Sender).where(
+                Sender.slug == slug,
+                Sender.workspace_id == ctx.workspace_id,
+            )
+        )
+        raced = raced_result.scalars().first()
+        if raced is None:
+            raise
+        logger.warning(
+            f"[onboarding] INSERT raced on (workspace, slug={slug}) — "
+            "falling back to update-in-place"
+        )
+        return await _update_in_place(raced)
     await db.refresh(sender)
     logger.info(
         f"[onboarding] sender created slug={slug} role={session_row.role} "
