@@ -17,6 +17,7 @@ requirements: [LLMP-03, LLMP-04, LLMP-06, LLMP-09, LLMP-10, LLMP-11]
 must_haves:
   truths:
     - "An internal messages+tools representation translates correctly to both OpenAI and Anthropic native shapes"
+    - "Consecutive same-role messages are coalesced before Anthropic messages.create (alternation constraint) so multi-turn debounced conversations never 400"
     - "Both providers normalize their response into a single LLMResult{text, tool_calls, finish_reason, usage}"
     - "Temperature is never sent to OpenAI reasoning models; max_tokens for reasoning models is clamped to >=4000"
     - "resolve_llm_config returns platform default when no llm_settings row exists"
@@ -29,7 +30,7 @@ must_haves:
       provides: "OpenAI translation + response normalization"
       contains: "chat.completions.create"
     - path: "app/services/llm/anthropic_provider.py"
-      provides: "Anthropic translation + response normalization"
+      provides: "Anthropic translation (role coalescing + tool blocks) + response normalization"
       contains: "messages.create"
     - path: "app/services/llm/capabilities.py"
       provides: "capability gating + clamp + effort->budget mapping"
@@ -84,6 +85,20 @@ if tools:
 # temperature ONLY for non-reasoning OpenAI models (else 400 unsupported_value)
 ```
 
+app/services/ai_engine.py:859-889 (get_conversation_history — maps direction->role per DB row, NO merging):
+```python
+for row in reversed(rows):
+    direction, text_content, sent_by = row
+    role = "user" if direction == "inbound" else "assistant"
+    messages.append({"role": role, "content": ...})
+```
+CRITICAL: debounce (3-5 min) means a contact routinely sends 2+ inbound messages in a row,
+producing consecutive {"role":"user"} entries. Anthropic messages.create() returns
+400 invalid_request_error on non-alternating roles (RESEARCH line 153: "roles must alternate").
+OpenAI tolerates consecutive same-role turns; Anthropic does NOT. warmup._generate_message
+(app/services/warmup.py:626-655) builds history the same way and hits the same constraint.
+Therefore AnthropicProvider.complete MUST coalesce consecutive same-role messages before the call.
+
 app/services/encryption.py (Fernet helper to reuse — same ENCRYPTION_KEY):
 ```python
 def encrypt_session(session_string: str) -> str: ...
@@ -93,6 +108,7 @@ def decrypt_session(encrypted: str) -> str: ...
 RESEARCH translation map (OpenAI chat.completions  vs  Anthropic messages):
 | Concept | OpenAI | Anthropic |
 | System | messages[0]={role:"system"} | top-level system= param (NOT a message) |
+| User/assistant turns | {role, content} (consecutive same-role OK) | {role, content} (roles MUST alternate — RESEARCH line 153) |
 | Max out | max_completion_tokens (reasoning) / max_tokens | max_tokens (REQUIRED always) |
 | Tools | tools=[{type:"function", function:{name,description,parameters}}] | tools=[{name,description,input_schema}] |
 | Tool call out | message.tool_calls[].{id, function.name, function.arguments(str JSON)} | content block {type:"tool_use", id, name, input(dict)} |
@@ -226,16 +242,18 @@ EFFORT_TO_BUDGET = {"minimal": 0, "low": 2000, "medium": 8000, "high": 16000}
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 2: OpenAIProvider + AnthropicProvider translation & normalization</name>
+  <name>Task 2: OpenAIProvider + AnthropicProvider translation & normalization (incl. role coalescing)</name>
   <read_first>
     - app/services/ai_engine.py lines 1420-1500 (how the current code reads response.choices[0].message.content / .tool_calls / finish_reason — the OpenAI response shape to normalize)
+    - app/services/ai_engine.py lines 859-889 (get_conversation_history — proves consecutive same-role turns are produced; Anthropic 400s on those)
     - app/services/llm/base.py (LLMResult/ToolCall/LLMProvider from Task 1)
     - app/services/llm/capabilities.py (is_reasoning_model, temperature_allowed, clamp_max_tokens, effort_to_budget)
-    - tests/test_llm_provider.py (the RED translation + normalization assertions)
-    - .planning/phases/18-switchable-llm-provider/18-RESEARCH.md § Pattern 1 translation map + Anthropic native call example + § Pitfall 1/2
+    - tests/test_llm_provider.py (the RED translation + normalization + alternation assertions)
+    - .planning/phases/18-switchable-llm-provider/18-RESEARCH.md § Pattern 1 translation map (line 153 "roles must alternate") + Anthropic native call example + § Pitfall 1/2
   </read_first>
   <behavior>
-    - OpenAIProvider.complete builds params: messages[0].role=='system', max_completion_tokens=clamped (reasoning) present, reasoning_effort only for reasoning model, temperature only when temperature_allowed and not None, tools kept in {type:'function', function:{...}} shape, tool_choice='auto' when tools.
+    - OpenAIProvider.complete builds params: messages[0].role=='system', max_completion_tokens=clamped (reasoning) present, reasoning_effort only for reasoning model, temperature only when temperature_allowed and not None, tools kept in {type:'function', function:{...}} shape, tool_choice='auto' when tools. OpenAI does NOT need role coalescing (it tolerates consecutive same-role turns).
+    - AnthropicProvider.complete COALESCES consecutive same-role messages BEFORE the call: given [{user,"a"},{user,"b"},{assistant,"c"},{user,"d"}] it emits [{user,"a\n\nb"},{assistant,"c"},{user,"d"}] — strictly alternating user/assistant. Coalescing joins the string `content` of consecutive same-role plain-text turns with "\n\n". (tool_result / tool_use content-block turns are handled by the block-translation step, not string-joined.)
     - AnthropicProvider.complete builds native call: system= is top-level (system NOT in messages), max_tokens=clamped (required), tools reshaped to {name, description, input_schema}, thinking added only when effort_to_budget>0 (manual) — omitted when 0, temperature 0.0-1.0 only when not None.
     - AnthropicProvider normalizes a Message with content blocks: text = "".join text blocks; tool_calls from tool_use blocks (arguments = json.dumps(block.input)); finish_reason 'max_tokens'->'length', 'tool_use'->'tool_calls', else 'stop'; usage mapped input_tokens->prompt_tokens, output_tokens->completion_tokens.
     - OpenAIProvider normalizes ChatCompletion: text=choices[0].message.content; tool_calls from message.tool_calls; finish_reason passed through ('length' stays 'length'); usage passed through.
@@ -249,7 +267,8 @@ EFFORT_TO_BUDGET = {"minimal": 0, "low": 2000, "medium": 8000, "high": 16000}
     Create `app/services/llm/anthropic_provider.py`:
     - `from anthropic import AsyncAnthropic` + import the typed exceptions used by resolve.
     - `class AnthropicProvider` holding an `AsyncAnthropic` client.
-    - `async def complete(...)`: build `params = {"model": model, "max_tokens": clamp_max_tokens(max_tokens, model=model), "system": system, "messages": messages_without_system}`; add `tools=[{"name":..,"description":..,"input_schema":..}]` translated from the OpenAI-shape tools (strip the `type:'function'`/`function:{}` wrapper, `parameters`->`input_schema`); add `temperature` only when not None (0.0-1.0); compute `budget = effort_to_budget(reasoning_effort, max_tokens=params["max_tokens"])` and add `thinking={"type":"enabled","budget_tokens":budget}` ONLY when `budget>0` (Pitfall 1/2 — omit for 5-series/adaptive; the capability-aware path can be refined in wiring but manual-budget is the safe default and is gated by budget>0). Also translate any incoming `{role:'tool', tool_call_id, content}` messages into Anthropic user `tool_result` content blocks, and any assistant tool_call turns into `tool_use` content blocks (needed for the second-pass call). Call `await self.client.messages.create(**params)` then `return self._normalize(resp)`.
+    - Add a module-level pure helper `_coalesce_roles(messages: list) -> list` that MERGES consecutive same-role messages so the final list strictly alternates user/assistant (Anthropic 400s otherwise — RESEARCH line 153; real cause = debounce delivers 2+ inbound in a row via get_conversation_history). Algorithm: iterate the messages (already system-stripped); when the current message's role equals the previous emitted message's role AND both carry plain string `content`, append the current content to the previous with a "\n\n" separator instead of pushing a new entry; otherwise push a new entry. Leave list/content-block turns (tool_result / tool_use, produced by the tool-block translation below) untouched — do not string-join those. This helper MUST run before assembling `params["messages"]`.
+    - `async def complete(...)`: strip the system message, translate any incoming `{role:'tool', tool_call_id, content}` messages into Anthropic user `tool_result` content blocks and any assistant tool_call turns into `tool_use` content blocks (needed for the second-pass call), then run `_coalesce_roles(...)` over the plain-text turns to guarantee alternation. Build `params = {"model": model, "max_tokens": clamp_max_tokens(max_tokens, model=model), "system": system, "messages": coalesced_messages}`; add `tools=[{"name":..,"description":..,"input_schema":..}]` translated from the OpenAI-shape tools (strip the `type:'function'`/`function:{}` wrapper, `parameters`->`input_schema`); add `temperature` only when not None (0.0-1.0); compute `budget = effort_to_budget(reasoning_effort, max_tokens=params["max_tokens"])` and add `thinking={"type":"enabled","budget_tokens":budget}` ONLY when `budget>0` (Pitfall 1/2 — omit for 5-series/adaptive; the capability-aware path can be refined in wiring but manual-budget is the safe default and is gated by budget>0). Call `await self.client.messages.create(**params)` then `return self._normalize(resp)`.
     - `_normalize(resp) -> LLMResult`: `text = "".join(b.text for b in resp.content if getattr(b,'type',None)=='text')`; `tool_calls = [ToolCall(id=b.id, name=b.name, arguments=json.dumps(b.input, ensure_ascii=False)) for b in resp.content if getattr(b,'type',None)=='tool_use']`; map `stop_reason` ('max_tokens'->'length', 'tool_use'->'tool_calls', else 'stop'); `usage = {'prompt_tokens': resp.usage.input_tokens, 'completion_tokens': resp.usage.output_tokens, 'total_tokens': input+output}`.
 
     Do NOT make Anthropic emulate OpenAI's object graph — normalize into the plain `LLMResult` (Anti-Pattern in RESEARCH).
@@ -260,12 +279,13 @@ EFFORT_TO_BUDGET = {"minimal": 0, "low": 2000, "medium": 8000, "high": 16000}
   <acceptance_criteria>
     - `app/services/llm/openai_provider.py` contains `class OpenAIProvider` and calls `self.client.chat.completions.create`
     - `app/services/llm/anthropic_provider.py` contains `class AnthropicProvider` and calls `self.client.messages.create`
+    - `app/services/llm/anthropic_provider.py` contains a `_coalesce_roles` helper that merges consecutive same-role messages joining content with `"\n\n"` (grep: `_coalesce_roles` and `\n\n`)
     - Anthropic path builds `system=` as a top-level param (grep: `"system": system` or `system=`) and `max_tokens` (required)
     - Anthropic tool translation produces `input_schema` (grep `input_schema`), never `type":"function"`
     - Both providers return `LLMResult` (grep `LLMResult` in both files)
-    - `tests/test_llm_provider.py` passes (exit 0)
+    - `tests/test_llm_provider.py` passes (exit 0) — INCLUDING the alternation case: two consecutive `user` turns produce a strictly alternating Anthropic message list (no consecutive same-role entries)
   </acceptance_criteria>
-  <done>OpenAIProvider + AnthropicProvider translate the internal representation to native and normalize responses to LLMResult; provider tests GREEN.</done>
+  <done>OpenAIProvider + AnthropicProvider translate the internal representation to native and normalize responses to LLMResult; AnthropicProvider coalesces consecutive same-role turns so debounced multi-turn conversations never 400; provider tests GREEN.</done>
 </task>
 
 <task type="auto" tdd="true">
@@ -313,16 +333,18 @@ EFFORT_TO_BUDGET = {"minimal": 0, "low": 2000, "medium": 8000, "high": 16000}
 <verification>
 - `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_llm_capabilities.py tests/test_llm_provider.py tests/test_llm_fallback.py -x` — all GREEN
 - Adapter is pure (no listener/ai_engine edits in this plan)
-- Anthropic path: system top-level, max_tokens required, input_schema tools, budget<max_tokens
+- Anthropic path: system top-level, max_tokens required, input_schema tools, budget<max_tokens, consecutive same-role turns coalesced (strict alternation)
 - OpenAI path: temperature gated off reasoning models, reasoning max_tokens floor >=4000
 </verification>
 
 <success_criteria>
 - 6 files under app/services/llm/ + encryption aliases
 - test_llm_capabilities, test_llm_provider, test_llm_fallback all GREEN
+- AnthropicProvider coalesces consecutive same-role messages (alternation constraint honored — no 400 on debounced multi-turn dialogs)
 - No PROTECTED queue constant touched; no changes to ai_engine/warmup/listener (deferred to 18-04)
 </success_criteria>
 
 <output>
 After completion, create `.planning/phases/18-switchable-llm-provider/18-02-SUMMARY.md`
+</output>
 </output>

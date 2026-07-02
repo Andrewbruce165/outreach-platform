@@ -16,13 +16,14 @@ requirements: [LLMP-06, LLMP-07, LLMP-11, LLMP-12]
 must_haves:
   truths:
     - "The chat answerer's three LLM calls all route through the resolved workspace provider/model/knobs"
+    - "The second (tool-summarization) pass appends a provider-neutral assistant turn (not a raw OpenAI SDK object) so both providers can translate it"
     - "Warmup routes through the same workspace-aware provider factory (single tone everywhere)"
     - "On a key-level error the answerer falls back to the platform OpenAI default and continues; key flagged invalid"
     - "llm_logger records provider + key_source on every logged call"
     - "Whisper transcription and KB embeddings still use the platform OpenAI singleton regardless of provider choice"
   artifacts:
     - path: "app/services/ai_engine.py"
-      provides: "answerer routed through provider adapter with D-06 fallback"
+      provides: "answerer routed through provider adapter with D-06 fallback + provider-neutral second-pass turn"
       contains: "resolve_llm_config"
     - path: "app/services/warmup.py"
       provides: "warmup routed through the workspace-aware provider factory"
@@ -46,7 +47,7 @@ must_haves:
 ---
 
 <objective>
-Route the chat answerer (three `chat.completions.create` sites in `generate_response`) and warmup through the provider adapter using the per-workspace resolved config, preserving the empty-response guard/retry across both providers. Implement the D-06 key-level fallback (platform OpenAI + flag key invalid). Extend `llm_logger` with provider + key_source (D-07). Keep Whisper + KB embeddings pinned to the platform OpenAI singleton (D-12).
+Route the chat answerer (three `chat.completions.create` sites in `generate_response`) and warmup through the provider adapter using the per-workspace resolved config, preserving the empty-response guard/retry across both providers. Rebuild the second-pass (tool-summarization) message list to be provider-neutral so Anthropic can translate the assistant tool-call turn. Implement the D-06 key-level fallback (platform OpenAI + flag key invalid). Extend `llm_logger` with provider + key_source (D-07). Keep Whisper + KB embeddings pinned to the platform OpenAI singleton (D-12).
 
 Purpose: This is where the switch takes effect at runtime. Highest-risk plan — touches the hot answerer path in the listener. Sequenced last (Wave 3) so the adapter (18-02) and settings API (18-03) are already merged.
 Output: adapter-wired ai_engine + warmup + logger; test_llm_logger_provider, test_llm_isolation GREEN; updated test_ai_engine_empty_retry works across providers.
@@ -85,11 +86,31 @@ The three current call sites (all `await client.chat.completions.create(**params
 - empty-retry:  line ~1478  (retry_params = _build_completion_params(messages, tools=all_tools, retry=True))
 - second-pass:  line ~1652  (_second_params = _build_completion_params(messages))
 
+app/services/ai_engine.py:1635-1642 (second-pass message assembly — BLOCKER: appends the RAW OpenAI SDK object):
+```python
+# Second LLM call to summarise tool results into a final reply.
+messages.append(response_message)                    # <-- raw OpenAI ChatCompletionMessage SDK object
+for tool_call, _name, _args in custom_calls:
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "content": tool_results.get(tool_call.id, "Функция выполнена"),
+    })
+```
+`response_message` here is the raw OpenAI SDK object from the FIRST call. That object cannot be
+translated by AnthropicProvider into `tool_use` content blocks — Claude tool flows (mark_as_lead /
+custom webhook tools) would crash or mis-translate on the second pass. It MUST become a
+provider-neutral plain dict built from the normalized LLMResult before appending.
+
 Empty-guard (line ~1460): `if not tool_calls and not text_content_clean and finish_reason=='length': retry`.
 This must keep working: LLMResult.finish_reason is normalized so Anthropic 'max_tokens' -> 'length'.
 
 app/services/llm/resolve.py (from 18-02): resolve_llm_config, get_provider, is_key_level_error, platform_fallback_config, LLMConfig.
 app/services/llm/base.py: LLMResult{text, tool_calls:[ToolCall{id,name,arguments}], finish_reason, usage}.
+app/services/llm/anthropic_provider.py (from 18-02): translates incoming assistant tool-call turns of shape
+`{"role":"assistant","tool_calls":[{"id","name","arguments"}]}` into `tool_use` content blocks, and
+`{"role":"tool","tool_call_id","content"}` into `tool_result` blocks. The second-pass list MUST use
+that neutral shape so both providers translate it.
 
 app/services/warmup.py:99 (own client -> replace) + :640-658 (_generate_message call):
 ```python
@@ -139,11 +160,13 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 2: Route generate_response through the adapter + D-06 fallback</name>
+  <name>Task 2: Route generate_response through the adapter + provider-neutral second-pass turn + D-06 fallback</name>
   <read_first>
-    - app/services/ai_engine.py lines 1279-1700 (generate_response — the three call sites, empty-guard, tool dispatch, second pass, error handlers)
+    - app/services/ai_engine.py lines 1279-1700 (generate_response — the three call sites, empty-guard, tool dispatch, second pass at 1635-1667, error handlers)
+    - app/services/ai_engine.py lines 1635-1642 (the RAW `messages.append(response_message)` + tool-result appends — the BLOCKER to fix on the APPEND side)
     - app/services/ai_engine.py lines 41, 61-95 (platform singleton + _is_reasoning_model + _build_completion_params)
     - app/services/llm/__init__.py + resolve.py + base.py (from 18-02)
+    - app/services/llm/anthropic_provider.py (from 18-02 — how it translates a neutral assistant tool-call turn into tool_use blocks; the second-pass dict must match that shape)
     - app/services/llm/capabilities.py::is_reasoning_model (single source; ai_engine._is_reasoning_model becomes a re-export)
     - tests/test_ai_engine_empty_retry.py (the patch seam that must keep working through the adapter)
     - .planning/phases/18-switchable-llm-provider/18-RESEARCH.md § Pattern 2/3 + § Pitfall 4/6/7
@@ -152,6 +175,7 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
     - generate_response resolves LLMConfig once via resolve_llm_config(session, workspace_id) where workspace_id comes from campaign_context.
     - All three LLM calls go through provider.complete(...) (initial with tools, empty-retry with a larger budget + minimal effort, second-pass no tools). The empty-guard still fires on normalized finish_reason=='length'.
     - Tool dispatch reads LLMResult.tool_calls (ToolCall.name, ToolCall.arguments str-JSON) — the existing built-in/custom split works unchanged (same field names).
+    - SECOND-PASS APPEND is provider-neutral: instead of appending the raw OpenAI SDK `response_message`, the code appends a plain dict `{"role":"assistant","content": result.text or "", "tool_calls":[{"id":tc.id,"name":tc.name,"arguments":tc.arguments} for tc in result.tool_calls]}` built from the normalized LLMResult, followed by the existing `{"role":"tool", tool_call_id, content}` results. Both OpenAI (which accepts the assistant+tool_calls dict) and Anthropic (which translates the neutral assistant turn into tool_use blocks, 18-02) can consume this messages list.
     - On is_key_level_error during a byok call: log the failure, flip llm_settings.api_key_status='invalid' for that workspace, rebuild the provider from platform_fallback_config, retry the SAME call once on platform OpenAI (key_source='fallback'), and continue. Transient 429/5xx are NOT fallback — they hit the existing RateLimitError/APIConnectionError/APIStatusError handlers returning None (unchanged).
     - The module-level `client` (platform AsyncOpenAI) is untouched and still used ONLY by transcribe_audio + embeddings paths (D-12).
   </behavior>
@@ -165,7 +189,19 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
       - `text_content = result.text`; `text_content_clean = text_content.strip() if text_content else None`.
       - `response_message.tool_calls` -> `result.tool_calls` (list of ToolCall). The built-in/custom split loop uses `tool_call.name` and `json.loads(tool_call.arguments or "{}")` — ToolCall exposes `.name` and `.arguments` (str JSON), same as before via `.function.name`/`.function.arguments`. Adjust the two attribute reads accordingly.
       - Empty-guard checks `result.finish_reason == "length"` (normalized).
-      - Second-pass: append the assistant tool-call turn + the `{role:"tool", tool_call_id, content}` messages to `messages` as today; the AnthropicProvider (18-02) already translates `role:"tool"` messages into `tool_result` blocks, so the SAME messages list works for both providers.
+    - FIX THE SECOND-PASS APPEND (BLOCKER): at line ~1636, REPLACE `messages.append(response_message)` (which appends the raw OpenAI ChatCompletionMessage SDK object) with a provider-neutral assistant turn built from the first-call LLMResult. Construct a plain dict:
+      ```python
+      assistant_turn = {
+          "role": "assistant",
+          "content": result.text or "",
+          "tool_calls": [
+              {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+              for tc in result.tool_calls
+          ],
+      }
+      messages.append(assistant_turn)
+      ```
+      (Use the LLMResult from the FIRST/initial call — the one whose tool_calls were dispatched, not a fresh object.) Do NOT append the raw SDK `response_message` anymore. Keep the existing `{"role":"tool", tool_call_id, content}` appends after it. AnthropicProvider (18-02) translates this neutral assistant turn into `tool_use` content blocks and the tool messages into `tool_result` blocks, so the SAME messages list works for both providers on the second pass. Then call the second pass via `await _complete(messages, tools=None, retry=False, cfg=...)`.
     - Keep `log_llm_call(...)` at all three sites, now passing `provider=cfg.provider, key_source=cfg.key_source` (or cfg2's on fallback) and `model=cfg.model`. `response=` becomes the LLMResult (logger handles it — Task 1).
     - Add a small `async def _flag_key_invalid(session, workspace_id)` helper doing an idempotent `UPDATE llm_settings SET api_key_status='invalid', updated_at=NOW() WHERE workspace_id=:ws` (best-effort, swallow errors — must never break the reply).
     - Do NOT touch `transcribe_audio` (Whisper) or any embedding call — they keep the module-level platform `client` (D-12).
@@ -176,13 +212,14 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
   <acceptance_criteria>
     - `app/services/ai_engine.py` imports `resolve_llm_config`, `get_provider`, `is_key_level_error`, `platform_fallback_config`
     - `generate_response` calls `resolve_llm_config` (grep) and no longer calls `client.chat.completions.create` in the answerer path (grep: the three answerer call sites now go through `_complete`/`provider.complete`; the ONLY remaining `client.` uses are transcribe_audio/embeddings)
+    - Second-pass append is provider-neutral: `app/services/ai_engine.py` NO LONGER contains `messages.append(response_message)` (grep must NOT match it) and DOES construct an assistant turn dict from the LLMResult before appending (grep: `"role": "assistant"` AND `"tool_calls"` in the second-pass block, built from `result.tool_calls` / `tc.arguments`)
     - D-06 fallback: grep `is_key_level_error` AND `api_key_status='invalid'` (or `_flag_key_invalid`) present in ai_engine.py
     - `_is_reasoning_model` delegates to `capabilities.is_reasoning_model` (no duplicated startswith list)
     - `log_llm_call` calls in ai_engine pass `provider=` and `key_source=`
     - `transcribe_audio` still references the module-level `client` (grep `client.audio` unchanged)
     - `tests/test_ai_engine_empty_retry.py` passes (updated to patch the adapter path — see Task 4) and `tests/test_llm_provider.py` still GREEN
   </acceptance_criteria>
-  <done>The answerer routes all three LLM calls through the workspace-resolved provider with the empty-guard preserved and D-06 fallback wired; Whisper untouched.</done>
+  <done>The answerer routes all three LLM calls through the workspace-resolved provider with the empty-guard preserved, the second pass appends a provider-neutral assistant turn (no raw SDK object), and D-06 fallback is wired; Whisper untouched.</done>
 </task>
 
 <task type="auto">
@@ -197,7 +234,7 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
   <action>
     In `app/services/warmup.py`:
     - Remove `self._openai = AsyncOpenAI()` from `__init__` (and the now-unused `AsyncOpenAI` import if nothing else uses it — check first).
-    - In `_generate_message`, accept a resolved config or the workspace_id so it can build the provider. Simplest: add a `workspace_id: Optional[str] = None` param; inside, open a short-lived session (mirror the `async with AsyncSessionLocal() as db` pattern already in warmup) OR reuse a passed session, call `cfg = await resolve_llm_config(db, workspace_id) if workspace_id else platform_fallback_config(settings)`, then `provider = get_provider(cfg)`, and `result = await provider.complete(system=messages[0]["content"], messages=messages[1:], tools=None, model=cfg.model, max_tokens=cfg.max_tokens or 1024, temperature=cfg.temperature, reasoning_effort=cfg.reasoning_effort)`; `return result.text.strip() if result.text else None`.
+    - In `_generate_message`, accept a resolved config or the workspace_id so it can build the provider. Simplest: add a `workspace_id: Optional[str] = None` param; inside, open a short-lived session (mirror the `async with AsyncSessionLocal() as db` pattern already in warmup) OR reuse a passed session, call `cfg = await resolve_llm_config(db, workspace_id) if workspace_id else platform_fallback_config(settings)`, then `provider = get_provider(cfg)`, and `result = await provider.complete(system=messages[0]["content"], messages=messages[1:], tools=None, model=cfg.model, max_tokens=cfg.max_tokens or 1024, temperature=cfg.temperature, reasoning_effort=cfg.reasoning_effort)`; `return result.text.strip() if result.text else None`. Warmup history is built the same direction->role way as the answerer, so consecutive same-role turns are possible — AnthropicProvider's role-coalescing (18-02) handles this transparently, warmup needs no extra merge logic.
     - At the call site of `_generate_message`, pass the workspace_id from the `from_sender` dict (`from_sender["workspace_id"]`) so warmup uses that workspace's chosen provider (D-11).
     - Keep the existing APIError/Exception handling (return None on failure — warmup must degrade gracefully, never crash the tick). Warmup LLM calls are NOT logged to llm_calls (unchanged — D-09..D-12 from Phase 5).
     - Note: warmup does NOT get the D-06 fallback (that is answerer-specific); a warmup key error just returns None for that message (acceptable — warmup is best-effort, not a live customer dialog).
@@ -245,6 +282,7 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
 <verification>
 - Full suite GREEN via test-overlay: `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest -q`
 - Answerer + warmup route through the provider factory; three answerer call sites no longer call the raw OpenAI client
+- Second pass appends a provider-neutral assistant turn built from LLMResult (no `messages.append(response_message)` raw SDK object) — Claude tool flows survive the second pass
 - D-06 fallback triggers only on key-level errors; transient errors keep existing None-degrade
 - Whisper + embeddings still on the platform singleton (D-12) — test_llm_isolation GREEN
 - llm_logger records provider + key_source
@@ -252,10 +290,12 @@ Its response extraction (lines 92-111) reads response.choices[0].message — mus
 
 <success_criteria>
 - ai_engine + warmup + llm_logger wired to the adapter
+- second-pass message list is provider-neutral (both providers translate it)
 - test_llm_logger_provider, test_llm_isolation, test_ai_engine_empty_retry GREEN; full suite GREEN
 - No PROTECTED queue constant touched; empty-response guard preserved across providers
 </success_criteria>
 
 <output>
 After completion, create `.planning/phases/18-switchable-llm-provider/18-04-SUMMARY.md`
+</output>
 </output>

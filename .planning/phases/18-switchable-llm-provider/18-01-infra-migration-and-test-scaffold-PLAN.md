@@ -20,7 +20,7 @@ requirements: [LLMP-01, LLMP-04, LLMP-06, LLMP-07, LLMP-08, LLMP-09, LLMP-10, LL
 must_haves:
   truths:
     - "anthropic SDK is importable in the api and listener containers"
-    - "llm_settings table exists with one-row-per-workspace shape (PK workspace_id)"
+    - "llm_settings table exists with one-row-per-workspace shape (PK workspace_id) — workspace-level setting scope per D-01"
     - "llm_calls has provider and key_source columns for D-07 logging"
     - "The full test suite collects with 0 errors after the new RED test files are added"
   artifacts:
@@ -126,11 +126,12 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     anthropic>=0.69,<1.0
     ```
 
-    Create `migrations/044_llm_settings.sql` — idempotent, wrapped `BEGIN; ... COMMIT;`, with a header comment block modelled on 038's header (state: per-workspace LLM settings, absence of row = platform default D-02, auto-applied, fail-fast). Exact content:
+    Create `migrations/044_llm_settings.sql` — idempotent, wrapped `BEGIN; ... COMMIT;`, with a header comment block modelled on 038's header (state: per-workspace LLM settings, absence of row = platform default D-02, auto-applied, fail-fast). The table is keyed `PRIMARY KEY (workspace_id)` — one row per workspace — which implements the workspace-level setting scope (D-01: provider/model choice lives at the workspace level; no per-agent override this phase). Exact content:
     ```sql
     BEGIN;
 
     -- Per-workspace LLM provider/model/knobs + encrypted BYO API key (Phase 18).
+    -- D-01: setting scope is workspace-level (PK = workspace_id, one row per workspace; no per-agent override).
     -- Absence of a row = platform default (D-02): platform OPENAI_API_KEY + settings.openai_model.
     -- api_key stored Fernet-encrypted (D-04); only api_key_prefix ever returned to UI.
     -- Idempotent: CREATE TABLE IF NOT EXISTS + DO$$ duplicate_object CHECK guards.
@@ -168,18 +169,19 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     Do NOT use a PG enum type (ALTER TYPE ADD VALUE cannot run in a transaction — same reason `campaigns.status` is VARCHAR+CHECK).
   </action>
   <verify>
-    <automated>grep -q "anthropic>=0.69,<1.0" requirements.txt && grep -q "CREATE TABLE IF NOT EXISTS llm_settings" migrations/044_llm_settings.sql && grep -q "ADD COLUMN IF NOT EXISTS provider" migrations/044_llm_settings.sql && echo OK</automated>
+    <automated>grep -q "anthropic>=0.69,<1.0" requirements.txt && grep -q "CREATE TABLE IF NOT EXISTS llm_settings" migrations/044_llm_settings.sql && grep -q "ADD COLUMN IF NOT EXISTS provider" migrations/044_llm_settings.sql && grep -q "D-01" migrations/044_llm_settings.sql && echo OK</automated>
   </verify>
   <acceptance_criteria>
     - `requirements.txt` contains `anthropic>=0.69,<1.0`
     - `requirements.txt` still contains `openai>=1.40.0,<2.0.0` (unchanged)
     - `migrations/044_llm_settings.sql` contains `CREATE TABLE IF NOT EXISTS llm_settings`
+    - `migrations/044_llm_settings.sql` header cites `D-01` (workspace-level scope, PK workspace_id) — literal "D-01" present for decision-coverage tracing
     - `migrations/044_llm_settings.sql` contains `api_key_encrypted   TEXT` and `api_key_prefix      TEXT` and `api_key_status      TEXT NOT NULL DEFAULT 'unset'`
     - `migrations/044_llm_settings.sql` contains `ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS provider   TEXT` and `key_source TEXT`
     - `migrations/044_llm_settings.sql` contains `EXCEPTION WHEN duplicate_object THEN NULL` (idempotent CHECK)
     - No `CREATE TYPE` / `ALTER TYPE ADD VALUE` anywhere in the migration
   </acceptance_criteria>
-  <done>anthropic SDK added; migration 044 creates llm_settings + adds llm_calls.provider/key_source, all idempotent.</done>
+  <done>anthropic SDK added; migration 044 creates llm_settings (workspace-level PK per D-01) + adds llm_calls.provider/key_source, all idempotent.</done>
 </task>
 
 <task type="auto">
@@ -195,7 +197,8 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     class LLMSettings(Base):
         """Per-workspace LLM provider/model/knobs + encrypted BYO key (Phase 18).
 
-        One row per workspace. Absence of a row = platform default (D-02):
+        D-01: setting scope is workspace-level — one row per workspace (PK workspace_id),
+        no per-agent override this phase. Absence of a row = platform default (D-02):
         platform OPENAI_API_KEY + settings.openai_model. `api_key_encrypted`
         is Fernet ciphertext (D-04); `api_key_prefix` (prefix+last4) is the ONLY
         key material ever returned to the UI. `api_key_status` tracks validity
@@ -231,7 +234,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
   </verify>
   <acceptance_criteria>
     - `app/models/__init__.py` contains `class LLMSettings(Base):`
-    - `LLMSettings` has `__tablename__ = "llm_settings"` and PK `workspace_id`
+    - `LLMSettings` has `__tablename__ = "llm_settings"` and PK `workspace_id` (D-01 workspace-level scope, cited in the class docstring)
     - `LLMSettings.provider` has `server_default=text("'openai'")` and `nullable=False`
     - `LLMSettings.api_key_status` has `server_default=text("'unset'")` and `nullable=False`
     - `LLMSettings` has nullable `api_key_encrypted`, `api_key_prefix`, `model`, `temperature`, `reasoning_effort`, `max_tokens`
@@ -246,7 +249,8 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     - tests/conftest.py (fixtures: `async_client`, `test_workspace`, JWT fixtures — reuse verbatim; also the DSN guard)
     - tests/test_ai_engine_empty_retry.py (patch seam: `patch.object(ai_engine.client.chat.completions, "create", new=AsyncMock(...))`)
     - .planning/phases/18-switchable-llm-provider/18-VALIDATION.md (Wave 0 Requirements list + Per-Task Verification Map — the exact 7 files and what each asserts)
-    - .planning/phases/18-switchable-llm-provider/18-RESEARCH.md § Validation Architecture (test seams: adapter pure translation, capability/clamp pure, is_key_level_error taxonomy, settings API masking)
+    - .planning/phases/18-switchable-llm-provider/18-RESEARCH.md § Validation Architecture (test seams: adapter pure translation, capability/clamp pure, is_key_level_error taxonomy, settings API masking) + line 153 (Anthropic "roles must alternate")
+    - app/services/ai_engine.py lines 859-889 (get_conversation_history — proves consecutive same-role turns are produced by debounce; the Anthropic alternation test targets this real case)
   </read_first>
   <action>
     Create 7 RED test files. Each MUST import inside the test body (deferred import) so `--collect-only` stays clean even before the app modules exist (mirror the Phase 13/17 scaffold pattern). Each file gets fully-asserting tests that FAIL now (module not yet built) and pass once the corresponding plan lands. Target modules: `app.services.llm.capabilities`, `app.services.llm.resolve`, `app.services.llm.base`, `app.services.llm.openai_provider`, `app.services.llm.anthropic_provider`, and the settings router. Files + minimum test coverage:
@@ -264,13 +268,14 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     3. `tests/test_llm_provider.py` (LLMP-11, unit, no network):
        - `test_openai_adapter_builds_native_params`: internal {system, messages, tools} → OpenAI params has `messages[0].role=='system'`, tools shaped `{type:'function', function:{name,...}}`, `max_completion_tokens` present for a reasoning model.
        - `test_anthropic_adapter_builds_native_params`: same internal input → Anthropic params has top-level `system=` (NOT a system message), `max_tokens` present (required), tools shaped `{name, description, input_schema}` (NO `type:'function'` wrapper), and NO temperature key when temperature is None.
+       - `test_anthropic_coalesces_consecutive_same_role`: internal messages = `[{role:'user',content:'a'},{role:'user',content:'b'},{role:'assistant',content:'c'},{role:'user',content:'d'}]` (the debounce case: 2 inbound in a row from get_conversation_history). Assert the params `messages` handed to `messages.create` STRICTLY ALTERNATE user/assistant (no two consecutive entries share a role), the two leading user turns are merged into one whose content contains BOTH `'a'` and `'b'` joined by `"\n\n"`, and the final list is `user, assistant, user` (length 3). This is the RED test the checker requires — Anthropic 400s on non-alternating roles (RESEARCH line 153). Capture the params via a mocked `AsyncAnthropic.messages.create` (AsyncMock) and inspect `call_args.kwargs["messages"]`.
        - `test_anthropic_normalizes_response`: given a fake Anthropic Message (content = [text block + tool_use block], stop_reason='tool_use', usage input/output tokens) the adapter returns a normalized `LLMResult` with `.text` (concatenated text blocks), `.tool_calls` (list with name+arguments), `.finish_reason`, `.usage`.
 
     4. `tests/test_llm_settings_api.py` (LLMP-01/02/04/05, integration, uses async_client + test_workspace):
        - `test_get_settings_default_off`: GET `/api/v1/workspace/llm-settings` with no row returns provider default and `api_key_status=='unset'`, `model` null.
        - `test_patch_stores_encrypted_and_masks`: PATCH with `{provider, model, api_key}` returns 200; response body NEVER contains the full key (only masked prefix); a DB read shows `api_key_encrypted` != plaintext key.
        - `test_test_connection` (the id referenced in VALIDATION): POST `/api/v1/workspace/llm-settings/test-connection` with a mocked provider client returns `{status:'valid'}` for a good key and `{status:'invalid'}` for a key-level error.
-       - `test_workspace_isolation`: workspace A cannot read workspace B's llm-settings.
+       - `test_workspace_isolation`: workspace A cannot read workspace B's llm-settings (D-01 workspace-level scope enforced).
 
     5. `tests/test_llm_models_filter.py` (LLMP-08, unit):
        - `test_openai_family_filter`: filter of a raw id list `['gpt-4o','gpt-5-mini','text-embedding-3-small','whisper-1','dall-e-3','o3-mini','gpt-4o-realtime-preview']` keeps `gpt-4o`, `gpt-5-mini`, `o3-mini` and drops embeddings/whisper/dall-e/realtime.
@@ -294,29 +299,32 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     - `tests/test_llm_capabilities.py` contains `def test_max_tokens_clamp_reasoning_floor`
     - `tests/test_llm_fallback.py` contains `def test_key_level_errors_true` and `def test_transient_errors_false`
     - `tests/test_llm_provider.py` contains `def test_anthropic_adapter_builds_native_params`
+    - `tests/test_llm_provider.py` contains `def test_anthropic_coalesces_consecutive_same_role` asserting two consecutive user turns produce a strictly alternating Anthropic message list (contents merged with `"\n\n"`)
     - `tests/test_llm_settings_api.py` contains `def test_test_connection`
     - `tests/test_llm_isolation.py` contains a test asserting Whisper/embeddings use the platform singleton
     - When run (not collect-only) the new behavioural tests FAIL (RED) because target modules do not yet exist — this is expected
   </acceptance_criteria>
-  <done>7 RED test files land, collect cleanly, and fail on behaviour (target modules absent) — every downstream plan has a failing test to green.</done>
+  <done>7 RED test files land, collect cleanly, and fail on behaviour (target modules absent) — every downstream plan has a failing test to green, including the Anthropic role-alternation case.</done>
 </task>
 
 </tasks>
 
 <verification>
 - `grep -q "anthropic>=0.69,<1.0" requirements.txt` succeeds
-- Migration 044 is idempotent (contains IF NOT EXISTS + duplicate_object guards)
+- Migration 044 is idempotent (contains IF NOT EXISTS + duplicate_object guards) and cites D-01 (workspace-level scope)
 - `class LLMSettings` exists with server_default on all NOT NULL columns; `LLMCall` has provider + key_source
+- `tests/test_llm_provider.py` includes the Anthropic role-alternation RED case (`test_anthropic_coalesces_consecutive_same_role`)
 - Full suite still COLLECTS with 0 errors via test-overlay: `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest --collect-only -q 2>&1 | tail -3`
 - New behavioural tests are RED (target modules not built yet) — correct for Wave 0
 </verification>
 
 <success_criteria>
-- anthropic SDK declared; migration 044 + ORM mirror create the llm_settings table and llm_calls columns
-- 7 RED test files exist, collect clean, fail on behaviour
+- anthropic SDK declared; migration 044 + ORM mirror create the llm_settings table (workspace-level PK, D-01) and llm_calls columns
+- 7 RED test files exist, collect clean, fail on behaviour (incl. Anthropic alternation case)
 - No PROTECTED constant (queue intervals) touched; no PG enum introduced; openai pin unchanged
 </success_criteria>
 
 <output>
 After completion, create `.planning/phases/18-switchable-llm-provider/18-01-SUMMARY.md`
+</output>
 </output>

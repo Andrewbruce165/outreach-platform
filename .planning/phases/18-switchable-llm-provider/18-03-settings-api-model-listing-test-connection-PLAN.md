@@ -19,6 +19,7 @@ user_setup:
         location: "Workspace Settings UI"
 must_haves:
   truths:
+    - "GET/PATCH llm-settings are workspace-scoped (one config per workspace, keyed by ctx.workspace_id) — the API surface of the workspace-level setting scope (D-01)"
     - "GET llm-settings returns the workspace config with the key MASKED (prefix+last4), never the full key"
     - "PATCH llm-settings stores the api key Fernet-encrypted and blocks switching without a key (D-03)"
     - "Test-connection probes the chosen provider and reports valid/invalid, flipping api_key_status"
@@ -44,7 +45,7 @@ must_haves:
 ---
 
 <objective>
-Add the workspace-scoped LLM settings API: GET (masked), PATCH (encrypt + validate D-03 key-mandatory), test-connection probe (D-05), and live model listing with server-side family filter (D-08). Register the router in main.py.
+Add the workspace-scoped LLM settings API: GET (masked), PATCH (encrypt + validate D-03 key-mandatory), test-connection probe (D-05), and live model listing with server-side family filter (D-08). Register the router in main.py. All endpoints are keyed by `ctx.workspace_id` — this is the API surface of the workspace-level setting scope (D-01).
 
 Purpose: This is the surface the Settings UI (18-05) drives. Runs in parallel with the adapter plan (18-02) — no shared files (adapter package vs router + a distinct models_filter module).
 Output: `app/routers/llm_settings.py`, `app/services/llm/models_filter.py`, main.py registration. Turns `tests/test_llm_settings_api.py` + `tests/test_llm_models_filter.py` GREEN.
@@ -85,7 +86,7 @@ app.include_router(knowledge_bases.router)
 ```
 
 app/models/__init__.py::LLMSettings (from 18-01) — columns:
-workspace_id (PK), provider, model, api_key_encrypted, api_key_prefix, api_key_status, temperature, reasoning_effort, max_tokens, created_at, updated_at
+workspace_id (PK — one row per workspace, D-01 scope), provider, model, api_key_encrypted, api_key_prefix, api_key_status, temperature, reasoning_effort, max_tokens, created_at, updated_at
 
 Masking: `api_key_prefix` is the ONLY key material ever returned. Compute on PATCH as e.g. `f"{key[:6]}...{key[-4:]}"` (never the whole key).
 
@@ -142,7 +143,7 @@ Anthropic /v1/models: returns capabilities.{thinking, effort, structured_outputs
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 2: llm_settings router — GET (masked) / PATCH (encrypt + D-03 gate) / test-connection / models</name>
+  <name>Task 2: llm_settings router — workspace-scoped (D-01) GET (masked) / PATCH (encrypt + D-03 gate) / test-connection / models</name>
   <read_first>
     - app/routers/workspace.py (full file — auth_dep, _require_jwt, cross-tenant WHERE, response schema style, HTTPException code/message shape)
     - app/services/encryption.py (encrypt_api_key/decrypt_api_key — from 18-02; if 18-02 not merged yet, use encrypt_session/decrypt_session which exist unconditionally)
@@ -152,19 +153,20 @@ Anthropic /v1/models: returns capabilities.{thinking, effort, structured_outputs
     - .planning/phases/18-switchable-llm-provider/18-RESEARCH.md § Test Connection Probe + § Storage Pattern + § Model Listing
   </read_first>
   <behavior>
+    - All endpoints resolve exactly one config row per workspace, keyed on `ctx.workspace_id` — the workspace-level setting scope (D-01: no per-agent granularity; every agent/campaign in the workspace shares this one config).
     - GET /api/v1/workspace/llm-settings, no row: returns {provider:'openai', model: settings.openai_model (or null), api_key_status:'unset', api_key_prefix: null, temperature:null, reasoning_effort:null, max_tokens:null}. Never a full key.
-    - PATCH with {provider:'anthropic', model:'claude-sonnet-4-5', api_key:'sk-ant-...'}: upserts the row, stores api_key_encrypted (Fernet), api_key_prefix masked, api_key_status stays 'unset' until test-connection sets 'valid'. Returns masked body.
+    - PATCH with {provider:'anthropic', model:'claude-sonnet-4-5', api_key:'sk-ant-...'}: upserts THE workspace row (D-01 one-per-workspace), stores api_key_encrypted (Fernet), api_key_prefix masked, api_key_status stays 'unset' until test-connection sets 'valid'. Returns masked body.
     - PATCH selecting a non-openai provider or a non-default model WITHOUT any stored key AND without an api_key in the body -> 400 KEY_REQUIRED (D-03: switching needs a key).
     - POST /test-connection: builds the provider client (mocked in tests), does a cheap probe (models.list or 1-token completion); success -> set api_key_status='valid', return {status:'valid'}; key-level error -> set api_key_status='invalid', return {status:'invalid'}.
     - GET /models?provider=...: uses the stored/decrypted key (or body key) to list models via SDK, runs filter_models, returns the filtered ids. /models failure -> soft 200 with empty list + a note (never 500-crash the settings page).
-    - All endpoints: cross-tenant guard WHERE workspace_id == ctx.workspace_id; JWT-only for PATCH/test-connection (mirror _require_jwt).
+    - All endpoints: cross-tenant guard WHERE workspace_id == ctx.workspace_id (D-01 isolation); JWT-only for PATCH/test-connection (mirror _require_jwt).
   </behavior>
   <action>
-    Create `app/routers/llm_settings.py` with `router = APIRouter(prefix="/api/v1", tags=["llm-settings"])` and endpoints on `/workspace/llm-settings`:
+    Create `app/routers/llm_settings.py` with `router = APIRouter(prefix="/api/v1", tags=["llm-settings"])` and endpoints on `/workspace/llm-settings`. All endpoints are workspace-scoped by `ctx.workspace_id` (D-01 — one LLM config per workspace, no per-agent override this phase):
     - Pydantic schemas: `LLMSettingsResponse` (provider, model, api_key_prefix, api_key_status, temperature, reasoning_effort, max_tokens — NO full key field ever), `LLMSettingsUpdate` (all optional: provider, model, api_key, temperature, reasoning_effort, max_tokens), `TestConnectionResponse` (status: 'valid'|'invalid', detail: Optional[str]), `ModelListResponse` (models: list[str], note: Optional[str]).
-    - `_get_or_none(db, workspace_id)` helper: SELECT LLMSettings WHERE workspace_id.
+    - `_get_or_none(db, workspace_id)` helper: SELECT LLMSettings WHERE workspace_id == ctx.workspace_id (D-01 scope).
     - `GET /workspace/llm-settings` (auth_dep): row absent -> response with defaults (provider 'openai', model settings.openai_model, status 'unset'). Present -> map columns, `api_key_prefix` only (NEVER decrypt into the response).
-    - `PATCH /workspace/llm-settings` (auth_dep + _require_jwt): upsert. D-03 gate: if the effective provider != 'openai' OR the effective model differs from the platform default AND there is neither a stored `api_key_encrypted` nor an `api_key` in the body -> raise HTTPException 400 `{"code":"KEY_REQUIRED","message":"An API key is required to switch provider/model"}`. When `api_key` present: `api_key_encrypted = encrypt_api_key(body.api_key)`, `api_key_prefix = f"{body.api_key[:6]}...{body.api_key[-4:]}"`, `api_key_status='unset'` (must re-test). Persist knob columns; clamp is enforced at call time (18-02) but ALSO clamp max_tokens here defensively via `app.services.llm.capabilities.clamp_max_tokens` when both model+max_tokens present. Return masked response.
+    - `PATCH /workspace/llm-settings` (auth_dep + _require_jwt): upsert the single workspace row (D-01). D-03 gate: if the effective provider != 'openai' OR the effective model differs from the platform default AND there is neither a stored `api_key_encrypted` nor an `api_key` in the body -> raise HTTPException 400 `{"code":"KEY_REQUIRED","message":"An API key is required to switch provider/model"}`. When `api_key` present: `api_key_encrypted = encrypt_api_key(body.api_key)`, `api_key_prefix = f"{body.api_key[:6]}...{body.api_key[-4:]}"`, `api_key_status='unset'` (must re-test). Persist knob columns; clamp is enforced at call time (18-02) but ALSO clamp max_tokens here defensively via `app.services.llm.capabilities.clamp_max_tokens` when both model+max_tokens present. Return masked response.
     - `POST /workspace/llm-settings/test-connection` (auth_dep + _require_jwt): resolve the key (body override or stored decrypted). Build the provider client (`app.services.llm.get_provider` / a small local `_probe(provider, key)` that calls `models.list()`), await a cheap probe. On success: UPDATE api_key_status='valid', return {status:'valid'}. On `is_key_level_error`: UPDATE api_key_status='invalid', return {status:'invalid', detail:...}. On transient/other error: return {status:'invalid', detail:'probe failed'} WITHOUT flipping to invalid permanently is acceptable — but at minimum never leak the key in `detail`.
     - `GET /workspace/llm-settings/models` (auth_dep, query `provider`): decrypt stored key (or 400 KEY_REQUIRED if none), call the provider SDK `models.list()`, extract ids, `filter_models(ids, provider=provider)`, return. On provider error: return `ModelListResponse(models=[], note="model list unavailable")` with 200 (D-Discretion soft-fail; test-connection is the authoritative validity signal).
     - NEVER log the api key; never put it in any HTTPException detail.
@@ -176,13 +178,14 @@ Anthropic /v1/models: returns capabilities.{thinking, effort, structured_outputs
   </verify>
   <acceptance_criteria>
     - `app/routers/llm_settings.py` contains `router = APIRouter(` and endpoints `/workspace/llm-settings`, `/workspace/llm-settings/test-connection`, `/workspace/llm-settings/models`
+    - GET/PATCH are workspace-scoped: every LLMSettings query filters `WHERE workspace_id == ctx.workspace_id` (D-01 one-config-per-workspace, cited in the router/behavior) — grep confirms `ctx.workspace_id` used on the settings query
     - PATCH uses `encrypt_api_key` (or `encrypt_session`) — grep the file for `encrypt_`
     - No endpoint returns the full key: the response schema `LLMSettingsResponse` has NO field named `api_key` (only `api_key_prefix`) — grep confirms absence of a plaintext key field
     - D-03 gate present: grep `KEY_REQUIRED`
     - `app/main.py` contains `llm_settings` in the import block and `app.include_router(llm_settings.router)`
     - `tests/test_llm_settings_api.py` passes (exit 0), including `test_test_connection` and `test_workspace_isolation`
   </acceptance_criteria>
-  <done>Workspace-scoped settings API: masked GET, encrypting PATCH with D-03 key gate, test-connection probe, filtered live model list; registered in main.py; settings-API tests GREEN.</done>
+  <done>Workspace-scoped (D-01) settings API: masked GET, encrypting PATCH with D-03 key gate, test-connection probe, filtered live model list; registered in main.py; settings-API tests GREEN.</done>
 </task>
 
 </tasks>
@@ -190,6 +193,7 @@ Anthropic /v1/models: returns capabilities.{thinking, effort, structured_outputs
 <verification>
 - `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_llm_settings_api.py tests/test_llm_models_filter.py -x` — GREEN
 - API never returns the full key (grep response schema for absence of plaintext key field)
+- Endpoints are workspace-scoped by ctx.workspace_id (D-01 one-config-per-workspace)
 - main.py registers the router
 - Cross-tenant isolation asserted by test_workspace_isolation
 </verification>
@@ -198,6 +202,7 @@ Anthropic /v1/models: returns capabilities.{thinking, effort, structured_outputs
 - llm_settings router + models_filter + main.py registration
 - test_llm_settings_api + test_llm_models_filter GREEN
 - Key masked in every response; D-03 key-mandatory gate enforced; no key in logs/details
+- Endpoints workspace-scoped per D-01
 </success_criteria>
 
 <output>
