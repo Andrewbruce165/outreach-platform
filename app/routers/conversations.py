@@ -360,17 +360,25 @@ async def enable_ai(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ) -> ConversationResponse:
-    """INBX-04 / D-03 — reverse switch. NEVER touches status.
+    """INBX-04 / D-03 — reverse switch: turn AI back on and undo a manual takeover.
 
-    Legacy bug fix: legacy router set status='active' here, which destroyed
-    'lead'/'finished'/'manual' markers. Phase 5 keeps the historic status
-    intact — UI may PATCH /{id} explicitly if a status change is desired.
+    The listener only auto-replies when `ai_enabled=true AND status='active'`
+    (services/listener.py). So flipping `ai_enabled=true` alone left a dialog
+    that was 'manual' (from disable-ai) mute — the bot stayed silent despite the
+    UI toggle being on. Reverse the disable-ai takeover by moving
+    'manual' → 'active' as well.
+
+    Legacy bug guard preserved: only 'manual' is reset. Historic markers
+    'lead'/'handoff'/'finished'/'bot_ignored' are left intact (a previous
+    version set status='active' unconditionally and destroyed them) — UI may
+    PATCH /{id} explicitly if a different status change is desired.
     """
     await _load_conversation_or_404(db, ctx, conversation_id)
 
     await db.execute(text("""
         UPDATE conversations
         SET ai_enabled = true,
+            status = CASE WHEN status = 'manual' THEN 'active' ELSE status END,
             paused_at = NULL,
             paused_reason = NULL,
             updated_at = NOW()

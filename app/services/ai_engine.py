@@ -46,6 +46,54 @@ client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # the custom-tool execute_webhook path.
 BUILT_IN_TOOL_NAMES = {"mark_as_lead", "transfer_to_manager", "finish_conversation"}
 
+# --- LLM completion tuning (fix: ai-empty-llm-response, 2026-07-02) ---
+# Reasoning models (gpt-5*, o1/o3/o4*) count HIDDEN reasoning tokens against
+# max_completion_tokens. With a tight cap (was 2000) a hard turn can spend the
+# whole budget on reasoning and return content='' with finish_reason='length'
+# and NO error — which used to be silently dropped (no reply sent, no log).
+# Give generous headroom and cap reasoning effort so budget goes to visible text.
+AI_MAX_COMPLETION_TOKENS = 4000
+AI_MAX_COMPLETION_TOKENS_RETRY = 6000  # empty-response retry: even more headroom
+AI_REASONING_EFFORT = "low"            # first pass
+AI_REASONING_EFFORT_RETRY = "minimal"  # retry: least reasoning, max room for output
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """True for OpenAI reasoning models that split max_completion_tokens between
+    hidden reasoning tokens and visible output and accept `reasoning_effort`.
+    Non-reasoning chat models (gpt-4o*, gpt-4*, gpt-3.5*) reject reasoning_effort
+    with a 400 — callers gate on this before adding the param, so OPENAI_MODEL
+    can be rolled back to gpt-4o-mini without a code change."""
+    m = (model or "").lower()
+    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _build_completion_params(
+    messages: list, *, tools: Optional[list] = None, retry: bool = False
+) -> dict:
+    """Assemble chat.completions params with model-aware reasoning controls.
+
+    Used at BOTH LLM call sites (first turn + tool-result summarisation) so
+    neither can silently drop a reply to reasoning-token starvation. On
+    `retry=True` (prior call returned empty content) the token budget is raised
+    and reasoning effort dropped to 'minimal' so the model spends its budget on
+    visible output rather than hidden reasoning."""
+    params: dict = {
+        "model": settings.openai_model,
+        "messages": messages,
+        "max_completion_tokens": (
+            AI_MAX_COMPLETION_TOKENS_RETRY if retry else AI_MAX_COMPLETION_TOKENS
+        ),
+    }
+    if _is_reasoning_model(settings.openai_model):
+        params["reasoning_effort"] = (
+            AI_REASONING_EFFORT_RETRY if retry else AI_REASONING_EFFORT
+        )
+    if tools:
+        params["tools"] = tools
+        params["tool_choice"] = "auto"
+    return params
+
 # Pitfall 7 — restrictive default descriptions when campaign.*_trigger_hint is NULL.
 # These reduce over-triggering on casual greetings / generic positive replies.
 _BUILTIN_DEFAULT_DESCRIPTIONS = {
@@ -1361,17 +1409,9 @@ class AIEngine:
                 contact_name, len(builtin_tools), len(custom_tools), len(kb_tool), len(all_tools),
             )
 
-            # Параметры запроса
-            request_params = {
-                "model": settings.openai_model,
-                "messages": messages,
-                "max_completion_tokens": 2000,
-            }
-
+            # Параметры запроса (model-aware: reasoning_effort + token headroom)
             # all_tools is always non-empty (built-in always injected per D-12).
-            if all_tools:
-                request_params["tools"] = all_tools
-                request_params["tool_choice"] = "auto"
+            request_params = _build_completion_params(messages, tools=all_tools)
 
             # === Phase 5 ANLX-05: wrap first OpenAI call for llm_calls logging ===
             # Inline await — deterministic, testable (Open Question #3 resolution).
@@ -1408,6 +1448,64 @@ class AIEngine:
 
             text_content = response_message.content
             text_content_clean = text_content.strip() if text_content else None
+
+            # Empty-content guard (fix: ai-empty-llm-response, 2026-07-02).
+            # A reasoning model can burn its whole token budget on hidden
+            # reasoning and return content='' finish_reason='length' with NO
+            # tool_call and NO error. That used to fall through as None →
+            # listener sent nothing → contact ghosted, silently. Log it loudly
+            # and retry ONCE with minimal reasoning + a larger budget so the
+            # model spends tokens on visible output. If the retry surfaces a
+            # tool_call instead, the existing downstream flow handles it.
+            if (
+                not response_message.tool_calls
+                and not text_content_clean
+                and response.choices[0].finish_reason == "length"
+            ):
+                logger.error(
+                    "⚠️ Пустой ответ LLM (finish_reason=length) для %s — модель %s "
+                    "исчерпала бюджет на reasoning. Ретрай: reasoning=%s, %d токенов.",
+                    contact_name, settings.openai_model,
+                    AI_REASONING_EFFORT_RETRY, AI_MAX_COMPLETION_TOKENS_RETRY,
+                )
+                retry_params = _build_completion_params(
+                    messages, tools=all_tools, retry=True
+                )
+                _start_ts_r = time.perf_counter()
+                _log_error_r: Optional[str] = None
+                response_retry = None
+                try:
+                    response_retry = await client.chat.completions.create(**retry_params)
+                except Exception as _e:
+                    _log_error_r = str(_e)[:500]
+                    raise
+                finally:
+                    _latency_ms_r = int((time.perf_counter() - _start_ts_r) * 1000)
+                    await log_llm_call(
+                        workspace_id=None,
+                        conversation_id=conversation_id,
+                        model=retry_params["model"],
+                        prompt=retry_params,
+                        response=response_retry,
+                        latency_ms=_latency_ms_r,
+                        error=_log_error_r,
+                    )
+                response = response_retry
+                response_message = response.choices[0].message
+                text_content = response_message.content
+                text_content_clean = text_content.strip() if text_content else None
+                logger.info(
+                    "🔁 Ретрай LLM для %s: content=%r finish_reason=%s tool_calls=%s",
+                    contact_name, text_content_clean,
+                    response.choices[0].finish_reason,
+                    bool(response_message.tool_calls),
+                )
+                if not text_content_clean and not response_message.tool_calls:
+                    logger.error(
+                        "❌ Ретрай LLM тоже пустой для %s — ответ не отправлен. "
+                        "finish_reason=%s. Проверьте лимит токенов/модель.",
+                        contact_name, response.choices[0].finish_reason,
+                    )
 
             # Нет tool_calls — обычный текстовый ответ
             if not response_message.tool_calls:
@@ -1544,11 +1642,9 @@ class AIEngine:
                 })
 
             # === Phase 5 ANLX-05: wrap second OpenAI call (tool result summarisation) ===
-            _second_params = {
-                "model": settings.openai_model,
-                "messages": messages,
-                "max_completion_tokens": 2000,
-            }
+            # Same model-aware reasoning/token controls as the first call (no tools
+            # on the summarisation pass) — fix: ai-empty-llm-response, 2026-07-02.
+            _second_params = _build_completion_params(messages)
             _start_ts_2 = time.perf_counter()
             _log_error_2: Optional[str] = None
             response2 = None
@@ -1575,6 +1671,14 @@ class AIEngine:
                 reply = reply.strip()
             if reply:
                 logger.info(f"✅ Ответ сгенерирован: {reply[:50]}...")
+            elif response2.choices[0].finish_reason == "length":
+                # Never silently drop the tool-result summary either
+                # (fix: ai-empty-llm-response, 2026-07-02).
+                logger.error(
+                    "⚠️ Пустой ответ LLM на суммаризации tool-результатов для %s "
+                    "(finish_reason=length) — ответ не отправлен. Модель %s, %d токенов.",
+                    contact_name, settings.openai_model, AI_MAX_COMPLETION_TOKENS,
+                )
 
             return reply
 

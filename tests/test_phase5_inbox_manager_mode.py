@@ -89,12 +89,22 @@ async def test_disable_ai_cancels_pending_queue(
 # ── Test 10: enable-ai preserves historic status (D-03) ──────────────────────
 
 
-@pytest.mark.parametrize("initial_status", ["lead", "handoff", "finished", "manual"])
-async def test_enable_ai_preserves_historic_status(
+# enable-ai reverses a 'manual' takeover (→ 'active') but preserves every other
+# historic marker. 'manual' is the ONLY status that maps to 'active'; the rest
+# stay put so lead/handoff/finished/bot_ignored are never destroyed.
+@pytest.mark.parametrize("initial_status,expected_status", [
+    ("lead", "lead"),
+    ("handoff", "handoff"),
+    ("finished", "finished"),
+    ("bot_ignored", "bot_ignored"),
+    ("manual", "active"),  # takeover reversed — else the bot stays mute (listener gate)
+])
+async def test_enable_ai_reverses_manual_preserves_others(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
-    test_conversation_factory, initial_status,
+    test_conversation_factory, initial_status, expected_status,
 ):
-    """D-03: enable-ai must NEVER touch status — only ai_enabled / paused fields."""
+    """enable-ai: 'manual' → 'active' (undo takeover so the listener resumes AI),
+    all other statuses preserved; ai_enabled=true and paused fields cleared."""
     conv = await test_conversation_factory(
         contact_phone=f"+7999{abs(hash(initial_status)) % 10_000_000:07d}",
         status=initial_status, ai_enabled=False,
@@ -117,6 +127,6 @@ async def test_enable_ai_preserves_historic_status(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ai_enabled"] is True
-    assert body["status"] == initial_status  # D-03 — preserved
+    assert body["status"] == expected_status
     assert body["paused_at"] is None
     assert body["paused_reason"] is None
