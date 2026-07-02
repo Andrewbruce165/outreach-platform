@@ -227,7 +227,7 @@ function AiLlmTab() {
   }, [data]);
 
   // D-03 gate: a switch (provider/model) needs a key to be stored OR just entered.
-  const keyStored = data?.api_key_status === "valid" || data?.api_key_status === "invalid";
+  const keyStored = data?.api_key_prefix != null;
   const hasKey = keyStored || apiKey.trim().length > 0;
 
   // Live model list — fetched for the *currently selected* provider. OpenAI can
