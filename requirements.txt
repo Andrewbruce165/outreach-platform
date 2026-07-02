@@ -26,6 +26,7 @@ email-validator==2.1.0
 python-dotenv==1.0.0
 httpx==0.26.0
 openai>=1.40.0,<2.0.0
+anthropic>=0.69,<1.0
 qrcode[pil]==7.4.2
 
 # Testing (Phase 1 Wave 0)
