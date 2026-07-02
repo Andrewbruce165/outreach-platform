@@ -489,11 +489,11 @@ Plans:
 **Goal:** Переключение LLM-модели прямо из UI: (1) выбор провайдера в настройках — пока только Claude (Anthropic) и OpenAI; (2) выбор конкретной модели + частичные настройки модели из нашего конфига (temperature, reasoning effort, token budget и т.п.); (3) подстановка API-ключа для работы выбранного провайдера; (4) AI-ответчик в чате работает через ту LLM, которая выбрана. Сейчас модель захардкожена через env `OPENAI_MODEL` (gpt-5-mini) — вынести в настройки.
 **Requirements**: LLMP-01, LLMP-02, LLMP-03, LLMP-04, LLMP-05, LLMP-06, LLMP-07, LLMP-08, LLMP-09, LLMP-10, LLMP-11, LLMP-12 (derived during /gsd:plan-phase 18 — see REQUIREMENTS.md §Switchable LLM Provider in UI; tracked via decisions D-01..D-12)
 **Depends on:** Phase 17
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 18-01-infra-migration-and-test-scaffold-PLAN.md — anthropic SDK + migration 044 (llm_settings table + llm_calls.provider/key_source) + ORM mirror + 7 RED test files [Wave 1, no deps] — LLMP-01/04/06/07/08/09/10/11/12 scaffold
+- [x] 18-01-infra-migration-and-test-scaffold-PLAN.md — anthropic SDK + migration 044 (llm_settings table + llm_calls.provider/key_source) + ORM mirror + 7 RED test files [Wave 1, no deps] — LLMP-01/04/06/07/08/09/10/11/12 scaffold
 
 **Wave 2** *(parallel — adapter package vs settings router, no file overlap)*
 - [ ] 18-02-provider-adapter-and-resolution-PLAN.md — app/services/llm/ adapter (base/capabilities/openai_provider/anthropic_provider/resolve) + Fernet key aliases [Wave 2, depends_on: 18-01] — LLMP-03/04/06/09/10/11

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 18 context gathered
-last_updated: "2026-07-02T08:52:22.764Z"
-last_activity: "2026-07-02 - Completed quick task 260702-c5k: диагноз warmup-стопа — head-of-line blocking в _process_due_sessions (10 неэлиджибл due-сессий забили LIMIT 10; 4 сендера session_expired, вкл. ca-account-1)"
+status: executing
+stopped_at: Completed 18-01-PLAN.md
+last_updated: "2026-07-02T11:09:13.933Z"
+last_activity: 2026-07-02
 progress:
   total_phases: 20
   completed_phases: 17
-  total_plans: 68
-  completed_plans: 67
+  total_plans: 73
+  completed_plans: 68
   percent: 96
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 17 — sender-side-resolve-ladder-with-username-capture-and-import-fallback
+**Current focus:** Phase 18 — switchable-llm-provider
 
 ## Current Position
 
-Phase: 17
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-02 - Completed quick task 260702-c5k: warmup-стоп исправлен (head-of-line fix 6dc751e задеплоен + ops-разблокировка 10 сессий); найдена отдельная Phase-17 регрессия резолва warmup-пиров (на решение)
+Phase: 18 (switchable-llm-provider) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-07-02
 
 Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 plans (17-01 test scaffold, 17-02 checker username capture + gated read complete)
 
@@ -90,6 +90,7 @@ Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 p
 | Phase 17 P02 | 5min | 2 tasks | 1 files |
 | Phase 17 P03 | 6min | 3 tasks | 1 files |
 | Phase 17 P04 | 18min | 3 tasks | 6 files |
+| Phase 18 P01 | 6min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -148,6 +149,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 17]: 17-03: stale captured username (UsernameNotOccupied/Invalid) returns {stale_username:True} and falls through to import tier, never finalizes not_registered (D-09); _get_cached_contact confidence-gates both per-sender and cross-sender false reads (D-12), cache never deleted
 - [Phase 17]: 17-04: UserIsBlockedError caught in send_message+send_file -> code USER_IS_BLOCKED; queue records durable event_type='blocked' (category='restriction', free-form, no migration) in-TX and fails ONLY this item — no auto-pause, no failover, no restriction_status flip (D-16, block != account restriction)
 - [Phase 17]: 17-04: read-only block-rate — sender_block_rate(db, sender_id, window_days=7) helper in restriction_audit.py + GET /senders/{slug}/block-rate (SenderBlockRateResponse blocks_7d/sends_7d/block_rate), workspace-scoped, no control-loop (D-16); US-cannot-resolve-RU country claim reframed as HYPOTHESIS in CLAUDE.md (D-10/SRLD-09); Phase 17 added 0 migrations
+- [Phase 18]: 18-01: llm_settings dedicated table (PK workspace_id, D-01) — absence of row = platform default (D-02); VARCHAR+CHECK not PG enum (ALTER TYPE ADD VALUE blocks transactions, same as campaigns.status); llm_calls.provider/key_source added (D-07); ORM LLMSettings mirrors migration with server_default on every NOT NULL col (Pitfall 5 mig 040/042 drift)
+- [Phase 18]: 18-01: Wave-0 RED scaffold — 7 test files (deferred in-body imports, 896 collected/0 errors); behavioural tests RED (app.services.llm.* absent), Anthropic role-alternation coalescing is first-class RED (debounce → consecutive same-role turns, Anthropic 400s on non-alternating); test_llm_isolation is GREEN preservation guard (Whisper+KB embeddings stay on platform singleton, D-12)
 
 ### Roadmap Evolution
 
@@ -225,6 +228,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-02T08:52:22.751Z
-Stopped at: Phase 18 context gathered
-Resume file: .planning/phases/18-switchable-llm-provider/18-CONTEXT.md
+Last session: 2026-07-02T11:09:02.672Z
+Stopped at: Completed 18-01-PLAN.md
+Resume file: None
