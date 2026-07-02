@@ -148,3 +148,56 @@ async def test_restricted_sender_excluded(async_db_session):
         "spam_limited sender must be excluded from warmup pool selection — "
         "restriction clause not added yet (WARM-14)"
     )
+
+
+# ── Head-of-line guard: ineligible session must advance next_message_at ──────
+
+
+async def test_ineligible_session_reschedules_next_message_at(async_db_session):
+    """A due session whose peer is ineligible (e.g. auth_status='session_expired')
+    must have next_message_at pushed into the FUTURE, not left in the past.
+
+    Regression for the 2026-07-02 warmup stall: _process_session used to `return`
+    on an ineligible peer WITHOUT advancing next_message_at, so the session stayed
+    at the head of the LIMIT-10 due-queue forever and starved every healthy pair.
+    """
+    db = async_db_session
+    wid = await _make_workspace(db)
+
+    # from = eligible active/ok sender; to = session_expired (ineligible).
+    from_id = await _enroll_active_sender(db, wid, f"warm-from-{_uuid.uuid4().hex[:6]}")
+    to_id = await _enroll_active_sender(
+        db, wid, f"warm-dead-{_uuid.uuid4().hex[:6]}", auth_status="session_expired",
+    )
+
+    session_id = str(_uuid.uuid4())
+    await db.execute(text("""
+        INSERT INTO warmup_sessions
+            (id, workspace_id, sender_a_id, sender_b_id, topic,
+             status, messages_sent, target_messages, next_message_at)
+        VALUES (:id, :wid, :a, :b, 'тест',
+                'active', 0, 6, NOW() - INTERVAL '2 hours')
+    """), {"id": session_id, "wid": wid, "a": from_id, "b": to_id})
+    await db.commit()
+
+    from app.services.warmup import warmup_worker
+
+    await warmup_worker._process_session(db, {
+        "id": session_id,
+        "sender_a_id": from_id,
+        "sender_b_id": to_id,
+        "topic": "тест",
+        "messages_sent": 0,
+        "target_messages": 6,
+        "last_sender_id": None,
+    })
+
+    next_at = (await db.execute(
+        text("SELECT next_message_at FROM warmup_sessions WHERE id = :id"),
+        {"id": session_id},
+    )).scalar()
+    from datetime import datetime, timezone
+    assert next_at > datetime.now(timezone.utc), (
+        "ineligible session must advance next_message_at into the future so it "
+        "leaves the head of the due-queue (head-of-line guard)"
+    )

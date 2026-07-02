@@ -367,10 +367,26 @@ class WarmupWorker:
         to_sender   = senders_map[to_id]
 
         if not from_sender["is_eligible"] or not to_sender["is_eligible"]:
+            # Head-of-line guard: сдвигаем next_message_at ВПЕРЁД перед выходом.
+            # Иначе перманентно-неэлиджибл сессия (session_expired / paused peer)
+            # навсегда остаётся в голове LIMIT-10 due-очереди _process_due_sessions
+            # и морит голодом здоровые пары (весь warmup встаёт). Откладываем на
+            # ~30–45 мин (с джиттером): когда аккаунт восстановится, сессия просто
+            # продолжится на ближайшем due-тике. Зеркалит FloodWait/daily-limit
+            # reschedule ниже.
+            retry_at = datetime.now(timezone.utc) + timedelta(
+                seconds=30 * 60 + random.randint(0, 15 * 60)
+            )
+            await db.execute(
+                text("UPDATE warmup_sessions SET next_message_at = :t, updated_at = NOW() WHERE id = :sid"),
+                {"t": retry_at, "sid": session["id"]}
+            )
+            await db.commit()
             logger.warning(
                 f"🔥 Warmup {session['id'][:8]}: один из аккаунтов не eligible "
                 f"(from lifecycle={from_sender['lifecycle_status']} auth={from_sender['auth_status']}, "
-                f"to lifecycle={to_sender['lifecycle_status']} auth={to_sender['auth_status']})"
+                f"to lifecycle={to_sender['lifecycle_status']} auth={to_sender['auth_status']}), "
+                f"откладываем до {retry_at:%H:%M} UTC"
             )
             return
 
