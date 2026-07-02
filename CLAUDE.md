@@ -38,7 +38,7 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 ## Стек
 
 - Python 3.11+, FastAPI, SQLAlchemy 2.0 async, PostgreSQL 16
-- Telethon (Telegram MTProto), OpenAI (gpt-4o-mini)
+- Telethon (Telegram MTProto), OpenAI (gpt-5-mini — reasoning-модель; env `OPENAI_MODEL`)
 - Docker Compose: 3 сервиса — db, api, listener
 - Фронт: TanStack Start (React, TypeScript, Vite, bun, shadcn), генерится через Lovable. Отдельный репо `AGS-Venture-Lab/aimly-tg-outreach`, локально склонирован сиблингом в `/root/apps/aimly/aimly-tg-outreach`. Деплой — Cloudflare (`wrangler.jsonc`)
 - Хостинг: VPS DigitalOcean
