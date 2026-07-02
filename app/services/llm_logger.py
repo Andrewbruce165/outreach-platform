@@ -37,6 +37,8 @@ async def log_llm_call(
     response: Any,
     latency_ms: int,
     error: Optional[str] = None,
+    provider: Optional[str] = None,
+    key_source: Optional[str] = None,
 ) -> None:
     """Insert one llm_calls row. NEVER raises.
 
@@ -45,9 +47,11 @@ async def log_llm_call(
         conversation_id: FK NOT NULL — required.
         model: e.g. "gpt-5-mini-2025-08-07".
         prompt: Full request_params dict (messages + tools + temperature + model).
-        response: OpenAI ChatCompletion object OR None on error.
-        latency_ms: Total round-trip time of OpenAI call.
-        error: Exception text if OpenAI call failed (truncated to 500 chars by caller).
+        response: OpenAI ChatCompletion object, a normalized LLMResult, OR None on error.
+        latency_ms: Total round-trip time of the LLM call.
+        error: Exception text if the LLM call failed (truncated to 500 chars by caller).
+        provider: 'openai' | 'anthropic' — the provider that served the call (D-07).
+        key_source: 'platform' | 'byok' | 'fallback' — which key was used (D-07).
 
     Returns:
         None. All exceptions are swallowed and warning-logged.
@@ -91,24 +95,39 @@ async def log_llm_call(
 
             if response is not None:
                 try:
-                    msg = response.choices[0].message
-                    response_text = getattr(msg, "content", None)
-                    tcs = getattr(msg, "tool_calls", None)
-                    if tcs:
-                        tool_calls_json = []
-                        for tc in tcs:
-                            tool_calls_json.append({
-                                "id": getattr(tc, "id", None),
-                                "name": getattr(getattr(tc, "function", None), "name", None),
-                                "arguments": getattr(
-                                    getattr(tc, "function", None), "arguments", None
-                                ),
-                            })
-                    usage = getattr(response, "usage", None)
-                    if usage is not None:
-                        prompt_tokens = getattr(usage, "prompt_tokens", None)
-                        completion_tokens = getattr(usage, "completion_tokens", None)
-                        total_tokens = getattr(usage, "total_tokens", None)
+                    if _is_llm_result(response):
+                        # Normalized LLMResult (provider adapter, Phase 18).
+                        response_text = getattr(response, "text", None)
+                        tcs = getattr(response, "tool_calls", None) or []
+                        if tcs:
+                            tool_calls_json = [
+                                {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                                for tc in tcs
+                            ]
+                        usage = getattr(response, "usage", None) or {}
+                        prompt_tokens = usage.get("prompt_tokens")
+                        completion_tokens = usage.get("completion_tokens")
+                        total_tokens = usage.get("total_tokens")
+                    else:
+                        # Legacy OpenAI ChatCompletion object graph.
+                        msg = response.choices[0].message
+                        response_text = getattr(msg, "content", None)
+                        tcs = getattr(msg, "tool_calls", None)
+                        if tcs:
+                            tool_calls_json = []
+                            for tc in tcs:
+                                tool_calls_json.append({
+                                    "id": getattr(tc, "id", None),
+                                    "name": getattr(getattr(tc, "function", None), "name", None),
+                                    "arguments": getattr(
+                                        getattr(tc, "function", None), "arguments", None
+                                    ),
+                                })
+                        usage = getattr(response, "usage", None)
+                        if usage is not None:
+                            prompt_tokens = getattr(usage, "prompt_tokens", None)
+                            completion_tokens = getattr(usage, "completion_tokens", None)
+                            total_tokens = getattr(usage, "total_tokens", None)
                 except (AttributeError, IndexError, TypeError) as e:
                     # T-05-03-PROMPT-LEAK: do NOT log prompt or response content.
                     logger.warning(
@@ -135,6 +154,8 @@ async def log_llm_call(
                 total_tokens=total_tokens,
                 latency_ms=latency_ms,
                 error=error,
+                provider=provider,
+                key_source=key_source,
             ))
             await session.commit()
 
@@ -150,6 +171,20 @@ async def log_llm_call(
             "llm_calls log unexpected error for conv=%s: %s",
             conversation_id, e,
         )
+
+
+def _is_llm_result(obj: Any) -> bool:
+    """Duck-type a normalized LLMResult (Phase 18 provider adapter).
+
+    An LLMResult exposes `.text` + `.tool_calls` + `.usage` and does NOT have the
+    OpenAI `.choices` attribute. Duck-typing (not isinstance) keeps the logger
+    import-light and tolerant of dataclass/subclass variations.
+    """
+    return (
+        hasattr(obj, "text")
+        and hasattr(obj, "tool_calls")
+        and not hasattr(obj, "choices")
+    )
 
 
 def _to_jsonb(obj: Any) -> Any:
