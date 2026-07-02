@@ -15,9 +15,9 @@ autonomous: true
 requirements: [LLMP-06, LLMP-07, LLMP-11, LLMP-12]
 must_haves:
   truths:
-    - "The chat answerer's three LLM calls all route through the resolved workspace provider/model/knobs"
+    - "The chat answerer's three LLM calls all route through the resolved workspace provider/model/knobs (D-11)"
     - "The second (tool-summarization) pass appends a provider-neutral assistant turn (not a raw OpenAI SDK object) so both providers can translate it"
-    - "Warmup routes through the same workspace-aware provider factory (single tone everywhere)"
+    - "Warmup routes through the same workspace-aware provider factory (single tone everywhere) — D-11"
     - "On a key-level error the answerer falls back to the platform OpenAI default and continues; key flagged invalid"
     - "llm_logger records provider + key_source on every logged call"
     - "Whisper transcription and KB embeddings still use the platform OpenAI singleton regardless of provider choice"

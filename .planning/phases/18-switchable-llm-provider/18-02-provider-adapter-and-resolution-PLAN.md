@@ -20,7 +20,7 @@ must_haves:
     - "Consecutive same-role messages are coalesced before Anthropic messages.create (alternation constraint) so multi-turn debounced conversations never 400"
     - "Both providers normalize their response into a single LLMResult{text, tool_calls, finish_reason, usage}"
     - "Temperature is never sent to OpenAI reasoning models; max_tokens for reasoning models is clamped to >=4000"
-    - "resolve_llm_config returns platform default when no llm_settings row exists"
+    - "resolve_llm_config returns platform default (OPENAI_API_KEY + settings.openai_model) when no llm_settings row exists — D-02"
     - "is_key_level_error is True only for 401/403/insufficient_quota/402 — never transient 429/5xx"
   artifacts:
     - path: "app/services/llm/base.py"
