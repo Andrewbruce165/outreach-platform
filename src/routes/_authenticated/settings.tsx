@@ -216,18 +216,51 @@ function AiLlmTab() {
   const [temperature, setTemperature] = useState<number>(1);
   const [reasoningEffort, setReasoningEffort] = useState<string>("medium");
   const [maxTokens, setMaxTokens] = useState<number>(REASONING_FLOOR);
+  // Connection must be verified before saving. Cleared on any form change.
+  const [testedOk, setTestedOk] = useState<boolean>(false);
+
+  // Seed form from server settings for the currently-active provider only.
+  function seedFromServer(next: LlmSettings) {
+    setProvider(next.provider ?? "openai");
+    setModel(next.model ?? "");
+    setTemperature(next.temperature ?? 1);
+    setReasoningEffort(next.reasoning_effort ?? "medium");
+    setMaxTokens(next.max_tokens ?? REASONING_FLOOR);
+    setApiKey("");
+    // A stored valid key means we already have a proven connection on the server.
+    setTestedOk(next.api_key_status === "valid");
+  }
 
   useEffect(() => {
     if (!data) return;
-    setProvider(data.provider ?? "openai");
-    setModel(data.model ?? "");
-    setTemperature(data.temperature ?? 1);
-    setReasoningEffort(data.reasoning_effort ?? "medium");
-    setMaxTokens(data.max_tokens ?? REASONING_FLOOR);
+    seedFromServer(data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  // D-03 gate: a switch (provider/model) needs a key to be stored OR just entered.
-  const keyStored = data?.api_key_prefix != null;
+  function onProviderChange(next: LlmProvider) {
+    setProvider(next);
+    setTestedOk(false);
+    if (data && data.provider === next) {
+      // Coming back to the stored provider — restore its saved values.
+      setModel(data.model ?? "");
+      setTemperature(data.temperature ?? 1);
+      setReasoningEffort(data.reasoning_effort ?? "medium");
+      setMaxTokens(data.max_tokens ?? REASONING_FLOOR);
+      setApiKey("");
+      setTestedOk(data.api_key_status === "valid");
+    } else {
+      // No saved data for this provider — show an empty form.
+      setModel("");
+      setTemperature(1);
+      setReasoningEffort("medium");
+      setMaxTokens(REASONING_FLOOR);
+      setApiKey("");
+    }
+  }
+
+  // Is the currently-selected provider the one stored on the server?
+  const isStoredProvider = data?.provider === provider;
+  const keyStored = isStoredProvider && data?.api_key_prefix != null;
   const hasKey = keyStored || apiKey.trim().length > 0;
 
   // Live model list — fetched for the *currently selected* provider. OpenAI can
@@ -250,12 +283,19 @@ function AiLlmTab() {
         body: { provider, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}) },
       }),
     onSuccess: (r) => {
-      if (r.status === "valid") toast.success("Ключ валиден");
-      else toast.error(r.detail ? `Ключ не прошёл: ${r.detail}` : "Ключ невалиден");
+      if (r.status === "valid") {
+        setTestedOk(true);
+        toast.success("Connection verified");
+      } else {
+        setTestedOk(false);
+        toast.error(r.detail ? `Connection failed: ${r.detail}` : "Connection failed");
+      }
       qc.invalidateQueries({ queryKey: ["llm-settings"] });
     },
-    onError: (e: unknown) =>
-      toast.error(e instanceof ApiError ? e.message : "Проверка не удалась"),
+    onError: (e: unknown) => {
+      setTestedOk(false);
+      toast.error(e instanceof ApiError ? e.message : "Test failed");
+    },
   });
 
   const save = useMutation({
@@ -266,19 +306,14 @@ function AiLlmTab() {
       }),
     onSuccess: () => {
       track("settings_changed", { tab: "ai-llm" });
-      toast.success("Настройки LLM сохранены");
+      toast.success("LLM settings saved");
       setApiKey("");
       qc.invalidateQueries({ queryKey: ["llm-settings"] });
       qc.invalidateQueries({ queryKey: ["llm-models"] });
     },
     onError: (e: unknown) =>
-      toast.error(e instanceof ApiError ? e.message : "Не удалось сохранить"),
+      toast.error(e instanceof ApiError ? e.message : "Could not save"),
   });
-
-  function saveKey() {
-    if (!apiKey.trim()) return;
-    save.mutate({ provider, api_key: apiKey.trim() });
-  }
 
   function saveConfig() {
     // D-10: warn (do not block) if a reasoning model is below the floor. The
@@ -286,7 +321,7 @@ function AiLlmTab() {
     const belowFloor = hasReasoningFloor(provider, model || null) && maxTokens < REASONING_FLOOR;
     if (belowFloor) {
       toast.warning(
-        `Бюджет токенов ниже рекомендованного минимума (${REASONING_FLOOR}) для reasoning-модели — сервер поднимет до ${REASONING_FLOOR}.`,
+        `Token budget is below the recommended minimum (${REASONING_FLOOR}) for reasoning models — the server will raise it to ${REASONING_FLOOR}.`,
       );
     }
     const payload: Partial<LlmSettings> & { api_key?: string } = {
@@ -308,23 +343,21 @@ function AiLlmTab() {
   const showReasoningEffort = supportsReasoningEffort(provider, model || null);
   const reasoningFloor = hasReasoningFloor(provider, model || null);
   const belowFloorWarning = reasoningFloor && maxTokens < REASONING_FLOOR;
+  const canSave = testedOk && hasKey && !save.isPending;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Card
-        title="Провайдер и ключ"
-        sub="AI-ответчик чата и warmup используют выбранного провайдера и модель."
+        title="Provider and key"
+        sub="The AI auto-responder and warmup use the selected provider and model."
       >
         <div className="field" style={{ marginBottom: 16 }}>
-          <label className="field__label" htmlFor="llm-provider">Провайдер</label>
+          <label className="field__label" htmlFor="llm-provider">Provider</label>
           <select
             id="llm-provider"
             className="input"
             value={provider}
-            onChange={(e) => {
-              setProvider(e.target.value as LlmProvider);
-              setModel(""); // model list is provider-specific; reset on switch.
-            }}
+            onChange={(e) => onProviderChange(e.target.value as LlmProvider)}
           >
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic (Claude)</option>
@@ -332,7 +365,7 @@ function AiLlmTab() {
         </div>
 
         <div className="field" style={{ marginBottom: 8 }}>
-          <label className="field__label" htmlFor="llm-key">API-ключ</label>
+          <label className="field__label" htmlFor="llm-key">API key</label>
           <div style={{ display: "flex", gap: 8 }}>
             <input
               id="llm-key"
@@ -340,25 +373,23 @@ function AiLlmTab() {
               type="password"
               autoComplete="off"
               placeholder={
-                data?.api_key_prefix
-                  ? `Сохранён: ${data.api_key_prefix}…`
-                  : "Вставьте ключ провайдера"
+                keyStored
+                  ? `Saved: ${data?.api_key_prefix}…`
+                  : "Paste your provider key"
               }
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setTestedOk(false);
+              }}
             />
-            <button
-              className="btn btn--primary"
-              disabled={!apiKey.trim() || save.isPending}
-              onClick={saveKey}
-            >
-              {save.isPending ? "…" : "Сохранить ключ"}
-            </button>
           </div>
           <div className="field__hint" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <KeyStatusBadge status={data?.api_key_status ?? "unset"} />
-            {data?.api_key_prefix && (
-              <span className="mono muted">{data.api_key_prefix}…</span>
+            <KeyStatusBadge
+              status={isStoredProvider ? data?.api_key_status ?? "unset" : "unset"}
+            />
+            {keyStored && (
+              <span className="mono muted">{data?.api_key_prefix}…</span>
             )}
           </div>
         </div>
@@ -366,24 +397,29 @@ function AiLlmTab() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
           <button
             className="btn btn--ghost"
-            disabled={testConn.isPending || (!hasKey)}
+            disabled={testConn.isPending || !hasKey}
             onClick={() => testConn.mutate()}
           >
             {testConn.isPending ? (
               <>
-                <Loader2 size={13} className="animate-spin" /> Проверяем…
+                <Loader2 size={13} className="animate-spin" /> Testing…
               </>
             ) : (
-              "Проверить соединение"
+              "Test connection"
             )}
           </button>
           {!hasKey && (
-            <span className="field__hint">Введите ключ, чтобы проверить.</span>
+            <span className="field__hint">Enter a key to test.</span>
+          )}
+          {hasKey && testedOk && (
+            <span className="field__hint" style={{ color: "var(--success, #1a7f37)" }}>
+              Connection verified.
+            </span>
           )}
         </div>
       </Card>
 
-      <Card title="Модель" sub="Живой список, отфильтрованный до чат-моделей с поддержкой инструментов.">
+      <Card title="Model" sub="Live list filtered to chat models with tool support.">
         {!hasKey ? (
           // D-03 gate — mirror the backend KEY_REQUIRED so the user never hits a raw 400.
           <div className="field__hint" style={{ color: "var(--warning, #a86200)" }}>
@@ -392,16 +428,19 @@ function AiLlmTab() {
         ) : (
           <>
             <div className="field" style={{ marginBottom: 12 }}>
-              <label className="field__label" htmlFor="llm-model">Модель</label>
+              <label className="field__label" htmlFor="llm-model">Model</label>
               <select
                 id="llm-model"
                 className="input"
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                onChange={(e) => {
+                  setModel(e.target.value);
+                  setTestedOk(false);
+                }}
                 disabled={!hasKey}
               >
                 <option value="">
-                  {modelsLoading ? "Загрузка…" : "Платформенная по умолчанию"}
+                  {modelsLoading ? "Loading…" : "Platform default"}
                 </option>
                 {(modelList?.models ?? []).map((m) => (
                   <option key={m} value={m}>{m}</option>
@@ -413,19 +452,22 @@ function AiLlmTab() {
               </select>
               {modelList?.note && (
                 <div className="field__hint">
-                  {modelList.note} — можно ввести идентификатор модели вручную ниже.
+                  {modelList.note} — you can enter a model identifier manually below.
                 </div>
               )}
             </div>
             {modelList?.note && (
               <div className="field" style={{ marginBottom: 12 }}>
-                <label className="field__label" htmlFor="llm-model-manual">Модель вручную</label>
+                <label className="field__label" htmlFor="llm-model-manual">Model (manual)</label>
                 <input
                   id="llm-model-manual"
                   className="input"
-                  placeholder="напр. claude-3-5-sonnet-latest"
+                  placeholder="e.g. claude-3-5-sonnet-latest"
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setTestedOk(false);
+                  }}
                 />
               </div>
             )}
@@ -434,7 +476,7 @@ function AiLlmTab() {
       </Card>
 
       {hasKey && (
-        <Card title="Настройки модели" sub="Показаны только те, что поддерживает выбранная модель.">
+        <Card title="Model settings" sub="Only options supported by the selected model are shown.">
           {showTemperature && (
             <div className="field" style={{ marginBottom: 16 }}>
               <label className="field__label" htmlFor="llm-temp">
@@ -450,7 +492,7 @@ function AiLlmTab() {
                 onChange={(e) => setTemperature(Number(e.target.value))}
               />
               <div className="field__hint">
-                Рекомендованный диапазон 0–{tempMax} для {provider === "anthropic" ? "Claude" : "OpenAI"}.
+                Recommended range 0–{tempMax} for {provider === "anthropic" ? "Claude" : "OpenAI"}.
               </div>
             </div>
           )}
@@ -472,7 +514,7 @@ function AiLlmTab() {
           )}
 
           <div className="field" style={{ marginBottom: 16 }}>
-            <label className="field__label" htmlFor="llm-maxtok">Бюджет ответа (max tokens)</label>
+            <label className="field__label" htmlFor="llm-maxtok">Response budget (max tokens)</label>
             <input
               id="llm-maxtok"
               className="input"
@@ -484,36 +526,44 @@ function AiLlmTab() {
             />
             <div className="field__hint">
               {reasoningFloor
-                ? `Рекомендованный диапазон ${REASONING_FLOOR}–${MAX_TOKENS_CEILING} для reasoning-модели.`
-                : `Рекомендованный диапазон до ${MAX_TOKENS_CEILING}.`}
+                ? `Recommended range ${REASONING_FLOOR}–${MAX_TOKENS_CEILING} for reasoning models.`
+                : `Recommended range up to ${MAX_TOKENS_CEILING}.`}
             </div>
             {belowFloorWarning && (
               <div className="field__hint" style={{ color: "var(--warning, #a86200)" }}>
-                Ниже рекомендованного минимума {REASONING_FLOOR} — reasoning-модель может вернуть
-                пустой ответ. Сервер поднимет значение до {REASONING_FLOOR}.
+                Below the recommended minimum of {REASONING_FLOOR} — a reasoning model may return
+                an empty response. The server will raise the value to {REASONING_FLOOR}.
               </div>
             )}
           </div>
 
           <button
             className="btn btn--primary"
-            disabled={save.isPending || !hasKey}
+            disabled={!canSave}
             onClick={saveConfig}
+            title={!testedOk ? "Test the connection first" : undefined}
           >
-            {save.isPending ? "Сохранение…" : "Сохранить настройки"}
+            {save.isPending ? "Saving…" : "Save settings"}
           </button>
+          {!testedOk && (
+            <div className="field__hint" style={{ marginTop: 8 }}>
+              Test the connection successfully before saving.
+            </div>
+          )}
         </Card>
       )}
     </div>
   );
 }
 
+
 function KeyStatusBadge({ status }: { status: "unset" | "valid" | "invalid" }) {
   const map = {
-    unset: { label: "не задан", color: "var(--muted, #888)" },
-    valid: { label: "валиден", color: "var(--success, #1a7f37)" },
-    invalid: { label: "невалиден", color: "var(--danger, #cf222e)" },
+    unset: { label: "not set", color: "var(--muted, #888)" },
+    valid: { label: "valid", color: "var(--success, #1a7f37)" },
+    invalid: { label: "invalid", color: "var(--danger, #cf222e)" },
   } as const;
+
   const s = map[status];
   return (
     <span
