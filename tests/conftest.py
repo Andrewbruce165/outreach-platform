@@ -220,6 +220,16 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_044.exists():
             await asyncpg_conn.execute(_mig_044.read_text())
 
+        # 045: Phase 19 no-reply follow-up + auto-finish. conversations.pings_sent and
+        # the four campaigns.follow_up_* columns come from ORM create_all (ADD COLUMN
+        # IF NOT EXISTS are no-ops here), but the conversations.status CHECK extension
+        # (adds 'no_reply') is SQL-only — apply the migration so the test DB accepts
+        # status='no_reply'. Exists-guard so this conftest change stays green until
+        # migrations/045_follow_up.sql lands.
+        _mig_045 = PROJECT_ROOT / "migrations" / "045_follow_up.sql"
+        if _mig_045.exists():
+            await asyncpg_conn.execute(_mig_045.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
