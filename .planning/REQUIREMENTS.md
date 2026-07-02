@@ -217,7 +217,7 @@
 
 - [x] **LLMP-01**: Per-workspace `llm_settings` row (PK `workspace_id`, mirrors `warmup_settings`) holds provider/model/knobs + Fernet-encrypted key + key-status; migration `044_llm_settings.sql` idempotent, auto-applied; ORM `LLMSettings` mirror with `server_default` on every NOT NULL column (ORM-drift lesson mig 040/042) (D-01, D-04).
 - [ ] **LLMP-02**: Default-off resolution — no `llm_settings` row (or no valid key) resolves to the platform OpenAI key + `settings.openai_model`, byte-identical to today; nothing breaks for existing workspaces (D-02).
-- [ ] **LLMP-03**: Own API key is mandatory to switch provider/model — PATCH without a stored/entered key → 400 `KEY_REQUIRED`; the UI blocks the switch until a key is present (D-03).
+- [x] **LLMP-03**: Own API key is mandatory to switch provider/model — PATCH without a stored/entered key → 400 `KEY_REQUIRED`; the UI blocks the switch until a key is present (D-03).
 - [x] **LLMP-04**: Key stored Fernet-encrypted at rest (reuse `app/services/encryption.py`); only a masked `api_key_prefix` is ever returned in API responses; the key is never written to logs or error details (D-04).
 - [ ] **LLMP-05**: Test-connection endpoint probes the chosen provider (cheap `models.list`) and reports valid/invalid, flipping `api_key_status` accordingly (D-05).
 - [x] **LLMP-06**: Runtime key-level error (401/403/`insufficient_quota`/402) on a byok call → fallback to the platform OpenAI default (dialog continues) + flag `api_key_status='invalid'`; transient 429/5xx do NOT fall back (Pitfall 6 — no client-traffic leak) (D-06).
@@ -393,7 +393,7 @@
 | SRLD-09 | Phase 17 | Complete |
 | LLMP-01 | Phase 18 | Complete |
 | LLMP-02 | Phase 18 | Pending |
-| LLMP-03 | Phase 18 | Pending |
+| LLMP-03 | Phase 18 | Complete |
 | LLMP-04 | Phase 18 | Complete |
 | LLMP-05 | Phase 18 | Pending |
 | LLMP-06 | Phase 18 | Complete |
