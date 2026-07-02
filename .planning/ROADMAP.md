@@ -489,7 +489,7 @@ Plans:
 **Goal:** Переключение LLM-модели прямо из UI: (1) выбор провайдера в настройках — пока только Claude (Anthropic) и OpenAI; (2) выбор конкретной модели + частичные настройки модели из нашего конфига (temperature, reasoning effort, token budget и т.п.); (3) подстановка API-ключа для работы выбранного провайдера; (4) AI-ответчик в чате работает через ту LLM, которая выбрана. Сейчас модель захардкожена через env `OPENAI_MODEL` (gpt-5-mini) — вынести в настройки.
 **Requirements**: LLMP-01, LLMP-02, LLMP-03, LLMP-04, LLMP-05, LLMP-06, LLMP-07, LLMP-08, LLMP-09, LLMP-10, LLMP-11, LLMP-12 (derived during /gsd:plan-phase 18 — see REQUIREMENTS.md §Switchable LLM Provider in UI; tracked via decisions D-01..D-12)
 **Depends on:** Phase 17
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -500,7 +500,7 @@ Plans:
 - [x] 18-03-settings-api-model-listing-test-connection-PLAN.md — workspace-scoped llm-settings router (GET masked / PATCH encrypt+D-03 gate / test-connection / live model filter) + main.py registration [Wave 2, depends_on: 18-01] — LLMP-01/02/03/04/05/08
 
 **Wave 3** *(blocked on Wave 2 — wires the adapter into the hot answerer path)*
-- [ ] 18-04-wire-answerer-warmup-and-logger-PLAN.md — route generate_response (3 call sites) + warmup through the adapter + D-06 fallback + llm_logger provider/key_source; Whisper/embeddings stay platform (D-12) [Wave 3, depends_on: 18-02, 18-03] — LLMP-06/07/11/12
+- [x] 18-04-wire-answerer-warmup-and-logger-PLAN.md — route generate_response (3 call sites) + warmup through the adapter + D-06 fallback + llm_logger provider/key_source; Whisper/embeddings stay platform (D-12) [Wave 3, depends_on: 18-02, 18-03] — LLMP-06/07/11/12
 
 **Wave 4** *(frontend + handoff, human-verify)*
 - [ ] 18-05-openapi-handoff-and-frontend-settings-PLAN.md — regenerate openapi/types + sibling-repo AI/LLM Settings section (provider/model/key/knobs + green corridor + Test connection) + human UAT [Wave 4, depends_on: 18-03, 18-04] — LLMP-03/05/08/09/10/11
