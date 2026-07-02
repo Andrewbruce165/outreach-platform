@@ -137,3 +137,38 @@ def get_provider(config: LLMConfig) -> LLMProvider:
         api_key=config.decrypted_key or os.environ.get("OPENAI_API_KEY"),
         model=config.model,
     )
+
+
+async def probe_key(provider: str, api_key: str) -> bool:
+    """D-05 test-connection probe — cheapest possible auth check for a BYO key.
+
+    Builds a provider SDK client and calls `models.list()` (a GET that only needs the
+    key to be valid — no completion tokens spent). Returns True on success; a bad key
+    raises the SDK's AuthenticationError/PermissionDeniedError which the caller catches
+    to report {status:'invalid'}. The api key is NEVER logged here (this module has zero
+    logging on purpose — the plaintext BYO key can never reach app logs)."""
+    if provider == "anthropic":
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+    else:
+        client = openai.AsyncOpenAI(api_key=api_key)
+    await client.models.list()
+    return True
+
+
+async def list_model_ids(provider: str, api_key: str) -> list:
+    """List the raw model ids for a provider via the SDK `models.list()` (D-08).
+
+    Returns the UNFILTERED id strings; the caller runs `filter_models` to keep only
+    chat-with-tools families. Any SDK error propagates so the caller can soft-fail
+    (empty list + a note) instead of 500-crashing the settings page. Key never logged."""
+    if provider == "anthropic":
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+    else:
+        client = openai.AsyncOpenAI(api_key=api_key)
+    page = await client.models.list()
+    ids: list = []
+    for m in getattr(page, "data", []) or []:
+        mid = getattr(m, "id", None)
+        if mid:
+            ids.append(mid)
+    return ids

@@ -27,6 +27,7 @@ from app.routers import (
     folders,
     health,
     knowledge_bases,  # Phase 16 — RAG knowledge bases
+    llm_settings,  # Phase 18 — switchable LLM provider settings
     onboarding,
     send,
     senders,
@@ -196,6 +197,7 @@ app.include_router(analytics.router)  # Phase 5 — analytics (4 endpoints) + 05
 app.include_router(telemetry.router)  # Phase 05.1 — UI-SPEC §9 telemetry + core-value KPI
 app.include_router(warmup.router)  # Phase 15 — warmup tab (workspace-scoped, D-05)
 app.include_router(knowledge_bases.router)  # Phase 16 — RAG knowledge bases
+app.include_router(llm_settings.router)  # Phase 18 — switchable LLM provider settings
 
 
 @app.get("/")
