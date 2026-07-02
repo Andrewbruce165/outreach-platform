@@ -27,6 +27,7 @@ _Block: Sender Pool Resilience & Failover (post-v1) — design: `.planning/propo
 - [x] **Phase 15: Account Warmup via Inter-Account AI Chat** — продуктизация взаимного AI-прогрева аккаунтов (переписка между своими аккаунтами через AI, безопасный набор активности) + отдельная UI-вкладка, изолированная от основного флоу аутрича (completed 2026-06-29)
 - [x] **Phase 16: RAG Knowledge Bases for Agents** — базы знаний для агентов на pgvector (гибридный keyword+vector поиск) (completed 2026-06-30)
 - [x] **Phase 17: Sender-side resolve ladder with username capture and import fallback** — чекер → чистый фильтр + захват @username; отправитель сам резолвит по лестнице кэш→ResolveUsername→ImportContacts (лениво перед отправкой), фолбэк на phone-резолв; чинит инцидент «Barter - ВЭД хук» (22 живых РФ-номера упали на ResolvePhone) — **planned (4 plans, waves 1→3, SRLD-01..09)** (completed 2026-06-30)
+- [ ] **Phase 18: Switchable LLM Provider in UI** — выбор провайдера (Claude/OpenAI) и модели в настройках + частичные настройки модели из конфига + API-ключ провайдера; чат/AI-ответчик работает через выбранную LLM
 
 ## Phase Details
 
@@ -482,6 +483,16 @@ Plans:
 - [x] 17-04-block-capture-and-docs-PLAN.md — UserIsBlockedError capture → durable 'blocked' event + read-only block-rate endpoint (D-15/D-16) + CLAUDE.md country-hypothesis softening (D-10) [Wave 3, depends_on: 17-01, 17-03] — SRLD-08, SRLD-09
 
 **NB:** Phase 17 adds 0 migrations — all storage reuses existing columns.
+
+### Phase 18: Switchable LLM Provider in UI
+
+**Goal:** Переключение LLM-модели прямо из UI: (1) выбор провайдера в настройках — пока только Claude (Anthropic) и OpenAI; (2) выбор конкретной модели + частичные настройки модели из нашего конфига (temperature, reasoning effort, token budget и т.п.); (3) подстановка API-ключа для работы выбранного провайдера; (4) AI-ответчик в чате работает через ту LLM, которая выбрана. Сейчас модель захардкожена через env `OPENAI_MODEL` (gpt-5-mini) — вынести в настройки.
+**Requirements**: TBD
+**Depends on:** Phase 17
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 18 to break down)
 
 ---
 
