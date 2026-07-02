@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: verifying
 stopped_at: 18-05 automatable tasks done (handoff + frontend AI/LLM); Task 3 human-verify pending
-last_updated: "2026-07-02T12:02:01.907Z"
+last_updated: "2026-07-02T13:08:16.068Z"
 last_activity: 2026-07-02
 progress:
   total_phases: 20
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 18 (switchable-llm-provider) — EXECUTING
-Plan: 5 of 5
+Phase: 18
+Plan: Not started
 Status: 18-05 automatable tasks complete (handoff regen + frontend AI/LLM section); Task 3 = BLOCKING human-verify of the end-to-end OpenAI↔Claude switch (deploy api+listener + real Anthropic key + llm_calls check) — awaiting user
 Last activity: 2026-07-02
 
