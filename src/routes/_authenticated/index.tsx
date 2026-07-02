@@ -605,7 +605,7 @@ function FilterSelect({
   options: { value: string; label: string }[];
 }) {
   return (
-    <label style={{ display: "grid", rowGap: 4 }}>
+    <label style={{ display: "grid", rowGap: 4, minWidth: 0 }}>
       <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
         {label}
       </span>
@@ -619,6 +619,9 @@ function FilterSelect({
           padding: "0 8px",
           fontSize: 13,
           background: "white",
+          width: "100%",
+          minWidth: 0,
+          textOverflow: "ellipsis",
         }}
       >
         <option value="">All</option>
