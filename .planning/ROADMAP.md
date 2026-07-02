@@ -505,6 +505,16 @@ Plans:
 **Wave 4** *(frontend + handoff, human-verify)*
 - [x] 18-05-openapi-handoff-and-frontend-settings-PLAN.md — regenerate openapi/types + sibling-repo AI/LLM Settings section (provider/model/key/knobs + green corridor + Test connection) + human UAT [Wave 4, depends_on: 18-03, 18-04] — LLMP-03/05/08/09/10/11
 
+### Phase 19: No Reply Follow-Up and Auto-Finish
+
+**Goal:** Contacts we messaged and who haven't replied get a "no reply" state; campaigns gain an Enable Follow Up toggle with a user-defined ping interval and an auto-finish after N hours without reply, configurable in the campaign create/edit form.
+**Requirements**: TBD
+**Depends on:** Phase 18
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 19 to break down)
+
 ---
 
 ## Progress
