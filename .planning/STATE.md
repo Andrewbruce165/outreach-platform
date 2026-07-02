@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 18-02-PLAN.md
-last_updated: "2026-07-02T11:21:46.773Z"
+stopped_at: Completed 18-03-PLAN.md
+last_updated: "2026-07-02T11:29:02.608Z"
 last_activity: 2026-07-02
 progress:
   total_phases: 20
   completed_phases: 17
   total_plans: 73
-  completed_plans: 69
+  completed_plans: 70
   percent: 96
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 18 (switchable-llm-provider) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-07-02
 
@@ -92,6 +92,7 @@ Progress: [██████████] 96% (65/68 plans) — Phase 17: 2/4 p
 | Phase 17 P04 | 18min | 3 tasks | 6 files |
 | Phase 18 P01 | 6min | 3 tasks | 12 files |
 | Phase 18 P02 | 7min | 3 tasks | 7 files |
+| Phase 18 P03 | 4min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -155,6 +156,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 18]: 18-02: provider-adapter package app/services/llm/ built to the committed RED tests verbatim (supports_temperature, positional clamp_max_tokens(model,value)/effort_to_budget(effort,max_tokens), provider ctors take model=, expose build_params/complete/normalize_response); normalize_response returns provider-NATIVE values (Anthropic ToolCall.arguments=dict, finish_reason=raw stop_reason), cross-provider mapping in LLMResult.finish_reason_normalized so the empty-response 'length' retry works for both
 - [Phase 18]: 18-02: AnthropicProvider._coalesce_roles merges consecutive same-role plain-text turns with '\n\n' before messages.create so the 3-5min debounce (consecutive inbound user turns from get_conversation_history) never 400s on the alternation constraint (research line 153); OpenAI needs no coalescing
 - [Phase 18]: 18-02: resolve_llm_config default-off (D-02/D-03) — absent row / non-'valid' status / NULL key => PLATFORM_DEFAULT byte-identical to today; is_key_level_error verbatim taxonomy 401/403/insufficient_quota/402 only, transient 429/5xx/conn False (Pitfall 6); resolve.py has ZERO logging so the decrypted BYO key can never leak; encrypt_api_key/decrypt_api_key reuse the same Fernet (D-04)
+- [Phase 18]: 18-03: workspace-scoped LLM settings API (app/routers/llm_settings.py) — masked GET (D-02 default-off, model=None when no row), encrypting PATCH with D-03 KEY_REQUIRED switch gate (encrypt_api_key Fernet D-04), test-connection via monkeypatchable resolve.probe_key flipping api_key_status valid/invalid (D-05), /models via resolve.list_model_ids + filter (D-08, soft-fails empty+note); all keyed on ctx.workspace_id (D-01)
+- [Phase 18]: 18-03: model filter reconciled — models_filter.filter_models(model_ids, provider=) canonical impl (plan artifact) + capabilities.filter_chat_models(provider, model_ids) alias (RED-test import); keeps gpt-4o/gpt-5/o* + claude-*, drops embeddings/whisper/tts/dall-e/realtime/transcribe
 
 ### Roadmap Evolution
 
@@ -232,6 +235,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-02T11:21:34.384Z
-Stopped at: Completed 18-02-PLAN.md
+Last session: 2026-07-02T11:28:53.252Z
+Stopped at: Completed 18-03-PLAN.md
 Resume file: None
