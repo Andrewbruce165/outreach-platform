@@ -5879,9 +5879,31 @@
           "analytics"
         ],
         "summary": "Workspace Analytics",
-        "description": "ANLX-01 — метрики workspace юзера (all-time, real-time).",
+        "description": "ANLX-01 — метрики workspace юзера (real-time).\n\n``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.",
         "operationId": "workspace_analytics_api_v1_analytics_workspace_get",
         "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "1d",
+                    "7d",
+                    "30d",
+                    "90d"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
           {
             "name": "authorization",
             "in": "header",
@@ -5945,7 +5967,7 @@
           "analytics"
         ],
         "summary": "Campaign Analytics",
-        "description": "ANLX-02 — метрики одной кампании. 404 на cross-workspace campaign.",
+        "description": "ANLX-02 — метрики одной кампании. 404 на cross-workspace campaign.\n\n``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.",
         "operationId": "campaign_analytics_api_v1_analytics_campaigns__campaign_id__get",
         "parameters": [
           {
@@ -5956,6 +5978,28 @@
               "type": "string",
               "format": "uuid",
               "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "1d",
+                    "7d",
+                    "30d",
+                    "90d"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           },
           {
@@ -6021,7 +6065,7 @@
           "analytics"
         ],
         "summary": "Agent Analytics",
-        "description": "ANLX-04 — метрики одного агента. 404 на cross-workspace agent.\n\nPer D-16: ``agent.campaign_count`` лежит в /api/v1/agents (Phase 3) — НЕ здесь.",
+        "description": "ANLX-04 — метрики одного агента. 404 на cross-workspace agent.\n\nPer D-16: ``agent.campaign_count`` лежит в /api/v1/agents (Phase 3) — НЕ здесь.\n``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.",
         "operationId": "agent_analytics_api_v1_analytics_agents__agent_id__get",
         "parameters": [
           {
@@ -6032,6 +6076,28 @@
               "type": "string",
               "format": "uuid",
               "title": "Agent Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "1d",
+                    "7d",
+                    "30d",
+                    "90d"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           },
           {
@@ -6097,7 +6163,7 @@
           "analytics"
         ],
         "summary": "Sender Analytics",
-        "description": "ANLX-03 — метрики одного sender'а. 404 на cross-workspace sender.\n\nPer D-16: sender errors (FloodWait/Failed/auth) лежат на странице sender\n(Phase 2 SNDR-03) — НЕ здесь.",
+        "description": "ANLX-03 — метрики одного sender'а. 404 на cross-workspace sender.\n\nPer D-16: sender errors (FloodWait/Failed/auth) лежат на странице sender\n(Phase 2 SNDR-03) — НЕ здесь.\n``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.",
         "operationId": "sender_analytics_api_v1_analytics_senders__sender_id__get",
         "parameters": [
           {
@@ -6108,6 +6174,28 @@
               "type": "string",
               "format": "uuid",
               "title": "Sender Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "1d",
+                    "7d",
+                    "30d",
+                    "90d"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           },
           {
