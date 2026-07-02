@@ -67,3 +67,14 @@ def effort_to_budget(effort: Optional[str], max_tokens: int) -> int:
     if budget <= 0:
         return 0
     return min(budget, max(0, max_tokens - _THINKING_HEADROOM))
+
+
+def filter_chat_models(provider: str, model_ids: list) -> list:
+    """D-08 server-side model-list filter — keep only chat-with-tools families.
+
+    The single filter implementation lives in `models_filter.filter_models`; this is
+    the (provider, model_ids) alias the RED tests + the settings router import. Imported
+    lazily to keep this pure module free of any circular-import risk."""
+    from app.services.llm.models_filter import filter_models
+
+    return filter_models(list(model_ids), provider=provider)
