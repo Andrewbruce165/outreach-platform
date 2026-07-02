@@ -125,6 +125,28 @@ Task 3 is a `checkpoint:human-verify` (gate=blocking) and is NOT auto-approvable
 *Phase: 18-switchable-llm-provider*
 *Completed (automatable tasks): 2026-07-02*
 
+## Task 3 — Human-Verify Result: APPROVED (2026-07-02)
+
+End-to-end switch verified live by the user (workspace bb96789d): Anthropic key saved +
+test-connection → `valid`; model `claude-sonnet-5` selected (temperature 0.4,
+reasoning_effort medium, max_tokens 4000); test contact messaged; `llm_calls` shows
+4 consecutive rows `provider='anthropic', key_source='byok', model='claude-sonnet-5'`
+(12:53–12:55 UTC) with zero listener errors.
+
+**Two live bugs found and fixed during UAT** (both in `anthropic_provider.build_params`,
+each rebuilt into the listener and re-verified live):
+1. `85b041c` — Anthropic 400s when `thinking` is enabled AND `temperature != 1`; the two
+   are now mutually exclusive (thinking wins, mirrors the OpenAI reasoning exclusion D-09).
+2. `c050ab4` + `7e7ad6b` — Claude-5-generation models (claude-sonnet-5 etc., + Opus 4.7/4.8)
+   reject `{"type":"enabled","budget_tokens":N}` entirely; they need
+   `thinking={"type":"adaptive"}` + `output_config.effort` (low/medium/high), which SDK
+   0.115.1 lacks a kwarg for — sent via the `extra_body` passthrough. Shape live-verified
+   against the real API before deploy. New gates: `anthropic_uses_adaptive_thinking()`,
+   `effort_to_anthropic_level()` in capabilities.py; 6 new regression tests (13/13 green).
+
+Deploy note: api + listener were rebuilt during UAT (migration 044 auto-applied: "44
+applied"); required a disk cleanup (orphaned agent/worktree images + build cache, ~10GB).
+
 ## Self-Check: PASSED
 
 - Created/modified files verified present on disk (openapi.json, types/api.ts, sibling settings.tsx + error-codes.ts) + this SUMMARY.
