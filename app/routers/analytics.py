@@ -145,12 +145,32 @@ async def _compute_cards(
     db: AsyncSession,
     workspace_id: UUID,
     scope: Optional[tuple[str, UUID]] = None,
+    since: Optional[str] = None,
 ) -> AnalyticsCards:
     """Run 4 raw-SQL COUNT'ов для одного scope.
 
     ``scope=None``       → workspace-only (no extra column filter).
     ``scope=(col, val)`` → дополнительный ``AND c.{col} = :scope_val`` per
     whitelist ``_ALLOWED_SCOPE_COLUMNS``.
+
+    ``since=None``          → all-time (текущее поведение, байт-в-байт).
+    ``since in _SINCE_DAYS`` → период-чувствительные метрики фильтруются окном
+    в ``_SINCE_DAYS[since]`` дней. Значение дней подставляется ТОЛЬКО через
+    bind-param ``:days`` (как в /analytics/llm), никогда f-string.
+
+    Что фильтрует окно (при since != None):
+    - sent + replied     → ``m.created_at >= NOW() - :days days``
+    - leads + finishes    → ``c.updated_at >= NOW() - :days days``
+    - llm_spend          → ``lc.created_at >= NOW() - :days days``
+
+    Допущения периодной фильтрации:
+    (а) leads/finishes фильтруются по ``c.updated_at`` — момент последнего
+        изменения строки ≈ момент смены статуса; отдельного status-change
+        timestamp в схеме нет, updated_at (onupdate=func.now()) — лучшее прокси.
+    (б) ``contacts_messaged`` / ``registered_contacts`` период НЕ применяется —
+        это прогресс кампании (числитель/знаменатель охвата папки),
+        period-agnostic по определению: сколько всего контактов достигнуто /
+        сколько всего целевых, а не «за последние N дней».
 
     Per D-13: real-time COUNT() per request. Per D-16: identical AnalyticsCards
     shape per scope. Per Pitfall 8: ``c.status != 'bot_ignored'`` исключает
@@ -177,6 +197,20 @@ async def _compute_cards(
     # contacts в папке — warmup его не касается, поэтому туда clause не добавляем.
     scope_clause += _EXCLUDE_INTERNAL_CLAUSE
 
+    # Период-фильтрующие clause'ы (пустые при since=None → all-time, байт-в-байт).
+    # Значение дней ТОЛЬКО через :days bind-param (никогда f-string) — как в
+    # /analytics/llm. ``:days`` не появляется в SQL там, где clause пустой →
+    # безопасно даже если ключ добавлен в params.
+    msg_time_clause = ""
+    conv_time_clause = ""
+    llm_time_clause = ""
+    if since is not None:
+        days = _SINCE_DAYS[since]
+        params["days"] = str(days)
+        msg_time_clause = " AND m.created_at >= NOW() - (:days || ' days')::INTERVAL"
+        conv_time_clause = " AND c.updated_at >= NOW() - (:days || ' days')::INTERVAL"
+        llm_time_clause = " AND lc.created_at >= NOW() - (:days || ' days')::INTERVAL"
+
     # 1. Sent — source = messages (C-01: единственный источник, содержащий
     # outbound от queue worker + listener self-checks + UI manager-send D-04).
     sent = (await db.execute(text(f"""
@@ -187,6 +221,7 @@ async def _compute_cards(
           AND c.status != 'bot_ignored'
           {scope_clause}
           AND m.direction = 'outbound'
+          {msg_time_clause}
     """), params)).scalar() or 0
 
     # 2. Replied — D-15 two figures в одном SELECT (один проход по индексу).
@@ -201,6 +236,7 @@ async def _compute_cards(
           {scope_clause}
           AND m.direction = 'inbound'
           AND m.sent_by = 'contact'
+          {msg_time_clause}
     """), params)).first()
 
     # 3. Leads — Pitfall 9: status='lead' strict EQ (НЕ включает 'finished').
@@ -211,6 +247,7 @@ async def _compute_cards(
           AND c.status = 'lead'
           AND c.status != 'bot_ignored'
           {scope_clause}
+          {conv_time_clause}
     """), params)).scalar() or 0
 
     # 4. Finishes — status='finished' strict EQ.
@@ -220,6 +257,7 @@ async def _compute_cards(
           AND c.status = 'finished'
           AND c.status != 'bot_ignored'
           {scope_clause}
+          {conv_time_clause}
     """), params)).scalar() or 0
 
     conv_count = (replied_row.conv_count if replied_row else 0) or 0
@@ -230,6 +268,9 @@ async def _compute_cards(
     # denominator = registered контакты в папке кампании (как _compute_is_exhausted).
     # Прочие scope (workspace/agent/sender) не имеют единой целевой папки → 0/0,
     # UI для них progress-бар не рисует.
+    # ВАЖНО: период (since) НЕ применяется к прогрессу — это общий охват папки
+    # (сколько всего достигнуто / сколько всего целевых), а не «за N дней».
+    # Поэтому НИ msg_time_clause, НИ conv_time_clause сюда НЕ добавляются.
     contacts_messaged = 0
     registered_contacts = 0
     if scope is not None and scope[0] == "campaign_id":
@@ -265,6 +306,9 @@ async def _compute_cards(
     }
     llm_scope_clause = ""
     llm_params: dict = {"wid": str(workspace_id)}
+    if since is not None:
+        # since != None already validated above → _SINCE_DAYS[since] exists.
+        llm_params["days"] = str(_SINCE_DAYS[since])
     llm_ok = True
     if scope is not None:
         col, val = scope
@@ -282,6 +326,7 @@ async def _compute_cards(
             FROM llm_calls lc
             WHERE lc.workspace_id = :wid
               {llm_scope_clause}
+              {llm_time_clause}
             GROUP BY lc.model
         """), llm_params)).all()
         llm_spend_usd_cents = compute_spend_cents(
@@ -307,45 +352,56 @@ async def _compute_cards(
 
 @router.get("/workspace", response_model=AnalyticsCards)
 async def workspace_analytics(
+    since: Optional[Literal["1d", "7d", "30d", "90d"]] = None,
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ) -> AnalyticsCards:
-    """ANLX-01 — метрики workspace юзера (all-time, real-time)."""
-    return await _compute_cards(db, ctx.workspace_id, scope=None)
+    """ANLX-01 — метрики workspace юзера (real-time).
+
+    ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
+    """
+    return await _compute_cards(db, ctx.workspace_id, scope=None, since=since)
 
 
 @router.get("/campaigns/{campaign_id}", response_model=AnalyticsCards)
 async def campaign_analytics(
     campaign_id: UUID,
+    since: Optional[Literal["1d", "7d", "30d", "90d"]] = None,
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ) -> AnalyticsCards:
-    """ANLX-02 — метрики одной кампании. 404 на cross-workspace campaign."""
+    """ANLX-02 — метрики одной кампании. 404 на cross-workspace campaign.
+
+    ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
+    """
     await _ensure_campaign_in_workspace(db, ctx, campaign_id)
     return await _compute_cards(
-        db, ctx.workspace_id, scope=("campaign_id", campaign_id)
+        db, ctx.workspace_id, scope=("campaign_id", campaign_id), since=since
     )
 
 
 @router.get("/agents/{agent_id}", response_model=AnalyticsCards)
 async def agent_analytics(
     agent_id: UUID,
+    since: Optional[Literal["1d", "7d", "30d", "90d"]] = None,
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ) -> AnalyticsCards:
     """ANLX-04 — метрики одного агента. 404 на cross-workspace agent.
 
     Per D-16: ``agent.campaign_count`` лежит в /api/v1/agents (Phase 3) — НЕ здесь.
+    ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
     """
     await _ensure_agent_in_workspace(db, ctx, agent_id)
     return await _compute_cards(
-        db, ctx.workspace_id, scope=("ai_context_id", agent_id)
+        db, ctx.workspace_id, scope=("ai_context_id", agent_id), since=since
     )
 
 
 @router.get("/senders/{sender_id}", response_model=AnalyticsCards)
 async def sender_analytics(
     sender_id: UUID,
+    since: Optional[Literal["1d", "7d", "30d", "90d"]] = None,
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ) -> AnalyticsCards:
@@ -353,10 +409,11 @@ async def sender_analytics(
 
     Per D-16: sender errors (FloodWait/Failed/auth) лежат на странице sender
     (Phase 2 SNDR-03) — НЕ здесь.
+    ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
     """
     await _ensure_sender_in_workspace(db, ctx, sender_id)
     return await _compute_cards(
-        db, ctx.workspace_id, scope=("sender_id", sender_id)
+        db, ctx.workspace_id, scope=("sender_id", sender_id), since=since
     )
 
 
