@@ -13,7 +13,7 @@ import random
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from openai import AsyncOpenAI, APIError
+from openai import APIError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.errors import FloodWaitError, UserIsBlockedError, RPCError
@@ -21,6 +21,9 @@ from telethon.errors import FloodWaitError, UserIsBlockedError, RPCError
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.telegram import telegram_service
+# Phase 18 D-11: warmup routes through the SAME workspace-aware provider factory
+# as the answerer (single tone everywhere). No standalone AsyncOpenAI here.
+from app.services.llm import resolve_llm_config, get_provider, platform_fallback_config
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -96,7 +99,6 @@ class WarmupWorker:
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._running = False
-        self._openai = AsyncOpenAI()  # api_key читается из OPENAI_API_KEY
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -457,6 +459,8 @@ class WarmupWorker:
             history=history,
             from_sender_id=from_id,
             system_prompt=ws_prompt,
+            db=db,
+            workspace_id=from_sender["workspace_id"],  # D-11: same provider as the answerer
         )
         if not message_text:
             logger.warning(f"🔥 GPT вернул None для сессии {session['id'][:8]}, пропускаем")
@@ -629,12 +633,22 @@ class WarmupWorker:
         history: list[dict],
         from_sender_id: str,
         system_prompt: Optional[str] = None,
+        db: Optional[AsyncSession] = None,
+        workspace_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Сгенерировать следующее warmup-сообщение через GPT.
+        """Сгенерировать следующее warmup-сообщение через выбранный провайдер.
 
         Phase 15 (D-10): system_prompt передаётся per-workspace (резолвится в
         _process_session через _get_warmup_content). При отсутствии — дефолт
         WARMUP_SYSTEM_PROMPT, поведение без настроек неизменно.
+
+        Phase 18 (D-11): маршрутизируется через ту же workspace-aware фабрику
+        провайдеров, что и ответчик (единый тон везде). При отсутствии workspace_id
+        — платформенный дефолт (OpenAI). Warmup НЕ получает D-06 fallback: ошибка
+        ключа просто возвращает None для этого сообщения (best-effort). Warmup-вызовы
+        НЕ логируются в llm_calls (D-09..D-12, поведение Phase 5 неизменно).
+        Роль-чередование (подряд одинаковые роли из истории) обрабатывает
+        AnthropicProvider._coalesce_roles прозрачно — extra merge не нужен.
         """
         prompt_template = system_prompt or WARMUP_SYSTEM_PROMPT
         try:
@@ -655,14 +669,26 @@ class WarmupWorker:
                     "content": f"Начни разговор на тему «{topic}». Напиши первое сообщение."
                 })
 
-            response = await self._openai.chat.completions.create(
-                model=settings.openai_model,
-                messages=messages,
+            # Phase 18 D-11: resolve the workspace's chosen provider/model/knobs.
+            if db is not None and workspace_id:
+                cfg = await resolve_llm_config(db, workspace_id)
+            else:
+                cfg = platform_fallback_config(settings)
+                cfg.key_source = "platform"
+            provider = get_provider(cfg)
+
+            result = await provider.complete(
+                system=messages[0]["content"],
+                messages=messages[1:],
+                tools=None,
+                max_tokens=cfg.max_tokens or 1024,
+                temperature=cfg.temperature,
+                reasoning_effort=cfg.reasoning_effort,
             )
-            return response.choices[0].message.content.strip()
+            return result.text.strip() if result.text else None
 
         except APIError as e:
-            logger.error(f"🔥 OpenAI ошибка при генерации warmup: {e}")
+            logger.error(f"🔥 LLM ошибка при генерации warmup: {e}")
             return None
         except Exception as e:
             logger.error(f"🔥 Неожиданная ошибка при генерации warmup: {e}", exc_info=True)
