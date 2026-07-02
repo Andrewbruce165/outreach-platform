@@ -95,6 +95,29 @@ async def test_anthropic_adapter_builds_native_params():
     assert "temperature" not in params
 
 
+async def test_anthropic_thinking_excludes_temperature():
+    """Anthropic rejects any request where `thinking` is enabled AND `temperature`
+    is set to something other than 1 (400 invalid_request_error, hit in 18-05 live
+    UAT: reasoning_effort='medium' + temperature=0.4 -> 400, contact never got a
+    reply). When reasoning_effort maps to a budget > 0, thinking must be enabled
+    and temperature must be omitted entirely, even if the caller passed one."""
+    from app.services.llm.anthropic_provider import AnthropicProvider
+
+    provider = AnthropicProvider(api_key="sk-ant-test", model="claude-sonnet-4-5")
+    params = provider.build_params(
+        system=_SYSTEM,
+        messages=[{"role": "user", "content": "Привет"}],
+        tools=None,
+        max_tokens=4000,
+        temperature=0.4,
+        reasoning_effort="medium",
+    )
+
+    assert "thinking" in params
+    assert params["thinking"]["type"] == "enabled"
+    assert "temperature" not in params
+
+
 async def test_anthropic_coalesces_consecutive_same_role():
     """The debounce case: get_conversation_history can produce two inbound (user) turns
     in a row. Anthropic 400s on non-alternating roles (research line 153), so the adapter

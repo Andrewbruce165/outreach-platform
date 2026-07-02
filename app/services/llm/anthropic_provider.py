@@ -158,11 +158,13 @@ class AnthropicProvider:
         translated_tools = _translate_tools(tools)
         if translated_tools:
             params["tools"] = translated_tools
-        if temperature is not None:
-            params["temperature"] = temperature
+        # Anthropic rejects temperature != 1 whenever thinking is enabled, so the two
+        # are mutually exclusive here (mirrors the OpenAI reasoning-model exclusion, D-09).
         budget = effort_to_budget(reasoning_effort, clamped)
         if budget > 0:
             params["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        elif temperature is not None:
+            params["temperature"] = temperature
         return params
 
     def normalize_response(self, resp) -> LLMResult:
