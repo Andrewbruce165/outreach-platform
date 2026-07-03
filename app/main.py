@@ -17,6 +17,7 @@ from app.services.onboarding_state import onboarding_cleanup_worker
 from app.services.contact_check_worker import contact_check_worker
 from app.services.campaign_enqueue import campaign_enqueue_worker  # Phase 4 D-17
 from app.services.kb_ingest_worker import kb_ingest_worker  # Phase 16 — KB ingest pipeline
+from app.services.follow_up import follow_up_worker  # Phase 19 — no-reply follow-up + auto-finish
 from app.routers import (
     agents,
     analytics,  # Phase 5 — new (4 read-only endpoints)
@@ -66,11 +67,14 @@ async def lifespan(app: FastAPI):
     logger.info("Campaign enqueue worker started")
     kb_ingest_worker.start()  # Phase 16 — KB ingest pipeline
     logger.info("Knowledge ingest worker started")
+    follow_up_worker.start()  # Phase 19 — no-reply follow-up + auto-finish
+    logger.info("Follow-up worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await follow_up_worker.stop()  # Phase 19 — no-reply follow-up + auto-finish
     await kb_ingest_worker.stop()  # Phase 16 — KB ingest pipeline
     await campaign_enqueue_worker.stop()  # Phase 4 D-17
     await contact_check_worker.stop()
