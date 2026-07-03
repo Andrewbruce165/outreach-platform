@@ -1548,17 +1548,30 @@ async def enqueue_file(
 
 
 async def _queue_position(db: AsyncSession, sender_id, item_id) -> int:
-    """How many pending items are ahead of this one for the same sender."""
+    """How many pending items are ahead of this one for the same sender.
+
+    'Ahead' mirrors the worker pick order (priority DESC, created_at ASC):
+    a row is ahead if it has higher COALESCE(priority, 0), or the same
+    priority but an earlier created_at. NULL priority is treated as 0 via
+    COALESCE on BOTH sides (the old (priority, created_at) tuple comparison
+    was inverted AND NULL-blind — a NULL priority made it count nothing).
+    """
+    ref = (await db.execute(
+        text("SELECT COALESCE(priority, 0) AS p, created_at AS c "
+             "FROM message_queue WHERE id = :iid"),
+        {"iid": str(item_id)},
+    )).first()
+    if ref is None:
+        return 1
     r = await db.execute(
         text("""
             SELECT COUNT(*) FROM message_queue
             WHERE sender_id = :sid
               AND status = 'pending'
-              AND (priority, created_at) > (
-                  SELECT priority, created_at FROM message_queue WHERE id = :iid
-              )
+              AND ( COALESCE(priority, 0) > :p
+                    OR (COALESCE(priority, 0) = :p AND created_at < :c) )
         """),
-        {"sid": str(sender_id), "iid": str(item_id)}
+        {"sid": str(sender_id), "p": ref.p, "c": ref.c},
     )
     return (r.scalar() or 0) + 1  # 1-based
 
