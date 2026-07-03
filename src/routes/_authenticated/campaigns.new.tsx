@@ -132,6 +132,11 @@ function CampaignBuilder() {
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(30);
   // Phase 12 NDLG-06: per-attached-account daily new-dialog cap. Default 50.
   const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(50);
+  // Phase 19 NORP-13: no-reply follow-up + auto-finish. Off by default (D-08/D-12).
+  const [followUpEnabled, setFollowUpEnabled] = useState(false);
+  const [followUpIntervalHours, setFollowUpIntervalHours] = useState(24);
+  const [followUpMaxPings, setFollowUpMaxPings] = useState(2);
+  const [autoFinishHours, setAutoFinishHours] = useState(72);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
   // Phase 11 D-13: lead_trigger_hint now also absorbs migrated success_criteria.
@@ -198,6 +203,10 @@ function CampaignBuilder() {
     allow_recontact: allowRecontact,
     recontact_min_age_days: recontactMinAgeDays,
     max_new_dialogs_per_day: maxNewDialogsPerDay,
+    follow_up_enabled: followUpEnabled,
+    follow_up_interval_hours: followUpIntervalHours,
+    follow_up_max_pings: followUpMaxPings,
+    auto_finish_hours: autoFinishHours,
     audience_hints: audienceHints || null,
     primary_goal: primaryGoal || null,
     // Phase 11 D-04/D-06: drop stages with empty instruction before saving
@@ -570,6 +579,14 @@ function CampaignBuilder() {
                   setRecontactMinAgeDays={setRecontactMinAgeDays}
                   maxNewDialogsPerDay={maxNewDialogsPerDay}
                   setMaxNewDialogsPerDay={setMaxNewDialogsPerDay}
+                  followUpEnabled={followUpEnabled}
+                  setFollowUpEnabled={setFollowUpEnabled}
+                  followUpIntervalHours={followUpIntervalHours}
+                  setFollowUpIntervalHours={setFollowUpIntervalHours}
+                  followUpMaxPings={followUpMaxPings}
+                  setFollowUpMaxPings={setFollowUpMaxPings}
+                  autoFinishHours={autoFinishHours}
+                  setAutoFinishHours={setAutoFinishHours}
                 />
               )}
               {cur.id === "integrations" && (
@@ -1238,6 +1255,14 @@ function ScheduleStep({
   setRecontactMinAgeDays,
   maxNewDialogsPerDay,
   setMaxNewDialogsPerDay,
+  followUpEnabled,
+  setFollowUpEnabled,
+  followUpIntervalHours,
+  setFollowUpIntervalHours,
+  followUpMaxPings,
+  setFollowUpMaxPings,
+  autoFinishHours,
+  setAutoFinishHours,
 }: {
   days: string[];
   setDays: (v: string[]) => void;
@@ -1255,6 +1280,14 @@ function ScheduleStep({
   setRecontactMinAgeDays: (v: number) => void;
   maxNewDialogsPerDay: number;
   setMaxNewDialogsPerDay: (v: number) => void;
+  followUpEnabled: boolean;
+  setFollowUpEnabled: (v: boolean) => void;
+  followUpIntervalHours: number;
+  setFollowUpIntervalHours: (v: number) => void;
+  followUpMaxPings: number;
+  setFollowUpMaxPings: (v: number) => void;
+  autoFinishHours: number;
+  setAutoFinishHours: (v: number) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1416,6 +1449,96 @@ function ScheduleStep({
             рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана
           </span>
         )}
+      </div>
+
+      {/* Phase 19 NORP-13: no-reply follow-up + auto-finish (D-08/D-12). */}
+      <div className="field">
+        <label
+          className="field__label"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        >
+          <span>Follow Up при отсутствии ответа</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={followUpEnabled}
+            onClick={() => setFollowUpEnabled(!followUpEnabled)}
+            style={{
+              width: 44,
+              height: 24,
+              borderRadius: 999,
+              background: followUpEnabled ? "var(--tg-blue)" : "var(--bg-soft)",
+              position: "relative",
+              transition: "background 120ms",
+              border: "1px solid var(--border, rgba(0,0,0,.1))",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: followUpEnabled ? 22 : 2,
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: "white",
+                transition: "left 120ms",
+                boxShadow: "0 1px 2px rgba(0,0,0,.2)",
+              }}
+            />
+          </button>
+        </label>
+        <span className="field__hint">
+          Кому написали и ждём ответа — получают статус «no reply». Если включено, aimly
+          пингует их через заданный интервал (с того же аккаунта), пока не ответят или не
+          исчерпаются пинги.
+        </span>
+      </div>
+
+      {followUpEnabled && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="field">
+            <label className="field__label">Интервал пинга (часы)</label>
+            <input
+              className="input"
+              type="number"
+              min={4}
+              max={168}
+              value={followUpIntervalHours}
+              onChange={(e) => setFollowUpIntervalHours(Number(e.target.value))}
+            />
+            <span className="field__hint">Через сколько часов пинговать. 4–168, по умолчанию 24.</span>
+          </div>
+          <div className="field">
+            <label className="field__label">Максимум пингов</label>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={5}
+              value={followUpMaxPings}
+              onChange={(e) => setFollowUpMaxPings(Number(e.target.value))}
+            />
+            <span className="field__hint">Сколько раз пинговать. 1–5, по умолчанию 2.</span>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-finish: closes silent dialogs — sits with the finish criteria (CONTEXT.md). */}
+      <div className="field">
+        <label className="field__label">Авто-финиш без ответа (часы)</label>
+        <input
+          className="input"
+          type="number"
+          min={24}
+          max={720}
+          value={autoFinishHours}
+          onChange={(e) => setAutoFinishHours(Number(e.target.value))}
+        />
+        <span className="field__hint">
+          Если контакт молчит столько часов — диалог закрывается со статусом «finished»
+          (в finish-webhook уходит reason=&quot;no_reply&quot;). 24–720, по умолчанию 72.
+        </span>
       </div>
 
       <div

@@ -7516,6 +7516,32 @@
             "description": "Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=50; soft-warn >50; hard cap 100.",
             "default": 50
           },
+          "follow_up_enabled": {
+            "type": "boolean",
+            "title": "Follow Up Enabled",
+            "default": false
+          },
+          "follow_up_interval_hours": {
+            "type": "integer",
+            "maximum": 168.0,
+            "minimum": 4.0,
+            "title": "Follow Up Interval Hours",
+            "default": 24
+          },
+          "follow_up_max_pings": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Follow Up Max Pings",
+            "default": 2
+          },
+          "auto_finish_hours": {
+            "type": "integer",
+            "maximum": 720.0,
+            "minimum": 24.0,
+            "title": "Auto Finish Hours",
+            "default": 72
+          },
           "dialogue_flow": {
             "anyOf": [
               {
@@ -7802,6 +7828,26 @@
             "type": "integer",
             "title": "Max New Dialogs Per Day",
             "default": 50
+          },
+          "follow_up_enabled": {
+            "type": "boolean",
+            "title": "Follow Up Enabled",
+            "default": false
+          },
+          "follow_up_interval_hours": {
+            "type": "integer",
+            "title": "Follow Up Interval Hours",
+            "default": 24
+          },
+          "follow_up_max_pings": {
+            "type": "integer",
+            "title": "Follow Up Max Pings",
+            "default": 2
+          },
+          "auto_finish_hours": {
+            "type": "integer",
+            "title": "Auto Finish Hours",
+            "default": 72
           },
           "dialogue_flow": {
             "items": {
@@ -8285,6 +8331,56 @@
               }
             ],
             "title": "Max New Dialogs Per Day"
+          },
+          "follow_up_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up Enabled"
+          },
+          "follow_up_interval_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 168.0,
+                "minimum": 4.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up Interval Hours"
+          },
+          "follow_up_max_pings": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up Max Pings"
+          },
+          "auto_finish_hours": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 720.0,
+                "minimum": 24.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Finish Hours"
           },
           "dialogue_flow": {
             "anyOf": [

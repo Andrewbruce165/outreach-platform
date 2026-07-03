@@ -93,6 +93,11 @@ export function EditCampaignModal({
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(campaign.recontact_min_age_days ?? 30);
   // Phase 12 NDLG-06: per-account daily new-dialog cap
   const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(campaign.max_new_dialogs_per_day ?? 50);
+  // Phase 19 NORP-13: no-reply follow-up + auto-finish (D-08/D-12).
+  const [followUpEnabled, setFollowUpEnabled] = useState(campaign.follow_up_enabled ?? false);
+  const [followUpIntervalHours, setFollowUpIntervalHours] = useState(campaign.follow_up_interval_hours ?? 24);
+  const [followUpMaxPings, setFollowUpMaxPings] = useState(campaign.follow_up_max_pings ?? 2);
+  const [autoFinishHours, setAutoFinishHours] = useState(campaign.auto_finish_hours ?? 72);
   const [startDate, setStartDate] = useState(toDateInput(campaign.start_date));
   const [stopDate, setStopDate] = useState(toDateInput(campaign.stop_date));
   const [audienceHints, setAudienceHints] = useState(campaign.audience_hints ?? "");
@@ -138,6 +143,10 @@ export function EditCampaignModal({
         allow_recontact: allowRecontact,
         recontact_min_age_days: recontactMinAgeDays,
         max_new_dialogs_per_day: maxNewDialogsPerDay,
+        follow_up_enabled: followUpEnabled,
+        follow_up_interval_hours: followUpIntervalHours,
+        follow_up_max_pings: followUpMaxPings,
+        auto_finish_hours: autoFinishHours,
         start_date: startDate ? new Date(startDate).toISOString() : null,
         stop_date: stopDate ? new Date(stopDate).toISOString() : null,
         audience_hints: audienceHints || null,
@@ -176,6 +185,10 @@ export function EditCampaignModal({
         allow_recontact: campaign.allow_recontact ?? false,
         recontact_min_age_days: campaign.recontact_min_age_days ?? 30,
         max_new_dialogs_per_day: campaign.max_new_dialogs_per_day ?? 50,
+        follow_up_enabled: campaign.follow_up_enabled ?? false,
+        follow_up_interval_hours: campaign.follow_up_interval_hours ?? 24,
+        follow_up_max_pings: campaign.follow_up_max_pings ?? 2,
+        auto_finish_hours: campaign.auto_finish_hours ?? 72,
         start_date: origDate(campaign.start_date),
         stop_date: origDate(campaign.stop_date),
         audience_hints: campaign.audience_hints ?? null,
@@ -592,6 +605,95 @@ export function EditCampaignModal({
                 рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана
               </span>
             )}
+          </div>
+
+          {/* Phase 19 NORP-13: no-reply follow-up + auto-finish (D-08/D-12). */}
+          <div className="field">
+            <label
+              className="field__label"
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+            >
+              <span>Follow Up при отсутствии ответа</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={followUpEnabled}
+                onClick={() => setFollowUpEnabled(!followUpEnabled)}
+                style={{
+                  width: 44,
+                  height: 24,
+                  borderRadius: 999,
+                  background: followUpEnabled ? "var(--tg-blue)" : "var(--bg-soft)",
+                  position: "relative",
+                  border: "1px solid var(--border)",
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: followUpEnabled ? 22 : 2,
+                    width: 18,
+                    height: 18,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 120ms",
+                    boxShadow: "0 1px 2px rgba(0,0,0,.2)",
+                  }}
+                />
+              </button>
+            </label>
+            <span className="field__hint">
+              Кому написали и ждём ответа — получают статус «no reply». Если включено, aimly
+              пингует их через интервал (с того же аккаунта), пока не ответят или не исчерпаются пинги.
+            </span>
+          </div>
+
+          {followUpEnabled && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div className="field">
+                <label className="field__label">Интервал пинга (часы)</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={4}
+                  max={168}
+                  value={followUpIntervalHours}
+                  onChange={(e) => setFollowUpIntervalHours(Number(e.target.value))}
+                />
+                <span className="field__hint">4–168, по умолчанию 24.</span>
+              </div>
+              <div className="field">
+                <label className="field__label">Максимум пингов</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={followUpMaxPings}
+                  onChange={(e) => setFollowUpMaxPings(Number(e.target.value))}
+                />
+                <span className="field__hint">1–5, по умолчанию 2.</span>
+              </div>
+            </div>
+          )}
+
+          {/* Auto-finish: closes silent dialogs — sits with finish criteria (CONTEXT.md). */}
+          <div className="field">
+            <label className="field__label">Авто-финиш без ответа (часы)</label>
+            <input
+              className="input"
+              type="number"
+              min={24}
+              max={720}
+              value={autoFinishHours}
+              onChange={(e) => setAutoFinishHours(Number(e.target.value))}
+            />
+            <span className="field__hint">
+              Молчит столько часов — диалог закрывается («finished», в finish-webhook уходит
+              reason=&quot;no_reply&quot;). 24–720, по умолчанию 72.
+            </span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

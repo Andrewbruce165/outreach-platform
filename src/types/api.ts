@@ -2534,6 +2534,26 @@ export interface components {
              * @default 50
              */
             max_new_dialogs_per_day: number;
+            /**
+             * Follow Up Enabled
+             * @default false
+             */
+            follow_up_enabled: boolean;
+            /**
+             * Follow Up Interval Hours
+             * @default 24
+             */
+            follow_up_interval_hours: number;
+            /**
+             * Follow Up Max Pings
+             * @default 2
+             */
+            follow_up_max_pings: number;
+            /**
+             * Auto Finish Hours
+             * @default 72
+             */
+            auto_finish_hours: number;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
@@ -2632,6 +2652,26 @@ export interface components {
              * @default 50
              */
             max_new_dialogs_per_day: number;
+            /**
+             * Follow Up Enabled
+             * @default false
+             */
+            follow_up_enabled: boolean;
+            /**
+             * Follow Up Interval Hours
+             * @default 24
+             */
+            follow_up_interval_hours: number;
+            /**
+             * Follow Up Max Pings
+             * @default 2
+             */
+            follow_up_max_pings: number;
+            /**
+             * Auto Finish Hours
+             * @default 72
+             */
+            auto_finish_hours: number;
             /** Dialogue Flow */
             dialogue_flow?: {
                 [key: string]: unknown;
@@ -2779,6 +2819,14 @@ export interface components {
             recontact_min_age_days?: number | null;
             /** Max New Dialogs Per Day */
             max_new_dialogs_per_day?: number | null;
+            /** Follow Up Enabled */
+            follow_up_enabled?: boolean | null;
+            /** Follow Up Interval Hours */
+            follow_up_interval_hours?: number | null;
+            /** Follow Up Max Pings */
+            follow_up_max_pings?: number | null;
+            /** Auto Finish Hours */
+            auto_finish_hours?: number | null;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
