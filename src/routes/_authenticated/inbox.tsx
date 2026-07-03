@@ -381,6 +381,7 @@ function StatusPill({ status }: { status: string }) {
     "no-reply": { bg: "var(--bg-soft)", fg: "var(--text-muted)", label: "No reply" },
     no_reply: { bg: "var(--bg-soft)", fg: "var(--text-muted)", label: "No reply" },
     active: { bg: "var(--tg-blue-soft, #e8f1fc)", fg: "var(--tg-blue, #3390ec)", label: "Active" },
+    telegram_service: { bg: "var(--tg-blue-soft, #e8f1fc)", fg: "var(--tg-blue, #3390ec)", label: "Telegram" },
   };
   const entry = map[s] || {
     bg: "var(--bg-soft)",
