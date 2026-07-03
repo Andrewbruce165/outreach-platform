@@ -1802,6 +1802,139 @@ class AIEngine:
             )
             return None
 
+    async def generate_followup_ping(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+    ) -> Optional[str]:
+        """Phase 19 (D-07): generate a single proactive follow-up ping.
+
+        Mirrors the front half of ``generate_response`` — resolves the campaign+agent
+        context and the Phase-18 LLM provider, assembles the same system prompt +
+        dialog history — but appends a proactive follow-up directive and calls the
+        provider with NO tools (a ping must never trigger lead/handoff/finish). The
+        text is generated at send time so a reply that arrived between scheduling and
+        sending is reflected in the history (see D-17 / queue-snapshots note).
+
+        Args:
+            session: AsyncSession.
+            conversation_id: the conversation to ping.
+
+        Returns:
+            The ping text (non-empty string), or None when the context cannot be
+            resolved (no campaign/agent) or the provider fails — the caller
+            (FollowUpWorker) simply skips this tick and retries next.
+        """
+        try:
+            campaign_context = await get_context_for_conversation(conversation_id, session)
+            # No conversation row, or no agent linked → nothing to speak as. Skip.
+            if not campaign_context or not campaign_context.get("agent_id"):
+                return None
+
+            contact_name = campaign_context.get("contact_name") or "there"
+
+            # Phase 18 D-07: pings honor the workspace's resolved provider/model/key,
+            # exactly like generate_response. Absent/invalid BYO row → platform default
+            # (D-02). The decrypted key is never logged.
+            ws_id = campaign_context.get("workspace_id")
+            if ws_id:
+                llm_cfg = await resolve_llm_config(session, ws_id)
+            else:
+                llm_cfg = platform_fallback_config(settings)
+                llm_cfg.key_source = "platform"
+
+            history = await self.get_conversation_history(
+                session, conversation_id, limit=20
+            )
+            system_prompt = self.build_system_prompt(campaign_context, contact_name)
+
+            # Proactive follow-up directive (final user turn). This is NOT a reply to
+            # an inbound message — the contact went silent — so instruct one short,
+            # natural, on-topic nudge that never repeats the opener verbatim.
+            directive = (
+                "<followup_directive>\n"
+                "The contact has NOT replied. This is a proactive follow-up, not a "
+                "reply to an inbound message. Send exactly ONE short, natural, "
+                "on-topic nudge that moves the conversation forward. Reference the "
+                "dialog so far if there is any. Do NOT repeat the opener verbatim and "
+                "do NOT apologise for writing again. One brief message only.\n"
+                "</followup_directive>"
+            )
+
+            messages = [{"role": "system", "content": system_prompt}]
+            for msg in history:
+                messages.append(msg)
+            messages.append({"role": "user", "content": directive})
+
+            # Provider call with NO tools — a ping never carries lead/handoff/finish.
+            system_str = messages[0]["content"]
+            rest = messages[1:]
+            max_toks = llm_cfg.max_tokens or AI_MAX_COMPLETION_TOKENS
+            effort = llm_cfg.reasoning_effort or AI_REASONING_EFFORT
+
+            provider = get_provider(llm_cfg)
+            # D-12 seam: platform/fallback OpenAI reuses the module-level client so
+            # prod + tests share one client; BYOK OpenAI keeps its own.
+            if isinstance(provider, OpenAIProvider) and llm_cfg.key_source != "byok":
+                provider.client = client
+
+            _start = time.perf_counter()
+            _err: Optional[str] = None
+            _res = None
+            try:
+                _res = await provider.complete(
+                    system=system_str,
+                    messages=rest,
+                    tools=None,
+                    max_tokens=max_toks,
+                    temperature=llm_cfg.temperature,
+                    reasoning_effort=effort,
+                )
+            except Exception as _e:
+                _err = str(_e)[:500]
+                logger.error(
+                    "❌ Ошибка генерации follow-up пинга для %s: %s",
+                    contact_name, type(_e).__name__,
+                )
+                return None
+            finally:
+                _latency = int((time.perf_counter() - _start) * 1000)
+                await log_llm_call(
+                    workspace_id=None,  # llm_logger resolves from conversations
+                    conversation_id=conversation_id,
+                    model=llm_cfg.model,
+                    prompt={
+                        "system": system_str,
+                        "messages": rest,
+                        "tools": None,
+                        "model": llm_cfg.model,
+                        "max_tokens": max_toks,
+                        "reasoning_effort": effort,
+                        "temperature": llm_cfg.temperature,
+                    },
+                    response=_res,
+                    latency_ms=_latency,
+                    error=_err,
+                    provider=llm_cfg.provider,
+                    key_source=llm_cfg.key_source,
+                )
+
+            text_content = (_res.text or "").strip() if _res else ""
+            if not text_content:
+                logger.warning(
+                    "⚠️ Пустой follow-up пинг для %s (finish_reason=%s) — пропуск.",
+                    contact_name, getattr(_res, "finish_reason", None),
+                )
+                return None
+            return text_content
+
+        except Exception as e:  # pragma: no cover — defensive, mirrors generate_response
+            logger.error(
+                "❌ Неожиданная ошибка генерации follow-up пинга для conversation=%s: %s",
+                conversation_id, e, exc_info=True,
+            )
+            return None
+
     async def transcribe_audio(self, audio_path: str) -> Optional[str]:
         """
         Транскрибировать аудио файл в текст через OpenAI Whisper API
