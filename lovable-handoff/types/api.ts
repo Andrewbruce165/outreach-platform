@@ -1402,7 +1402,9 @@ export interface paths {
         };
         /**
          * Workspace Analytics
-         * @description ANLX-01 — метрики workspace юзера (all-time, real-time).
+         * @description ANLX-01 — метрики workspace юзера (real-time).
+         *
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["workspace_analytics_api_v1_analytics_workspace_get"];
         put?: never;
@@ -1423,6 +1425,8 @@ export interface paths {
         /**
          * Campaign Analytics
          * @description ANLX-02 — метрики одной кампании. 404 на cross-workspace campaign.
+         *
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["campaign_analytics_api_v1_analytics_campaigns__campaign_id__get"];
         put?: never;
@@ -1445,6 +1449,7 @@ export interface paths {
          * @description ANLX-04 — метрики одного агента. 404 на cross-workspace agent.
          *
          *     Per D-16: ``agent.campaign_count`` лежит в /api/v1/agents (Phase 3) — НЕ здесь.
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["agent_analytics_api_v1_analytics_agents__agent_id__get"];
         put?: never;
@@ -1468,6 +1473,7 @@ export interface paths {
          *
          *     Per D-16: sender errors (FloodWait/Failed/auth) лежат на странице sender
          *     (Phase 2 SNDR-03) — НЕ здесь.
+         *     ``since`` опционален: отсутствует → all-time; ``1d|7d|30d|90d`` → окно.
          */
         get: operations["sender_analytics_api_v1_analytics_senders__sender_id__get"];
         put?: never;
@@ -1526,8 +1532,9 @@ export interface paths {
          * @description UI-SPEC §5.6 LLM trace tab — top-of-tab aggregates over since-window.
          *
          *     Returns total_calls / avg_latency_ms / prompt_tokens / completion_tokens /
-         *     total_tokens / spend_usd_cents. spend_usd_cents is 0 in v1 — per-model
-         *     pricing is deferred to v2 (RESEARCH §"Backend Gap Map" note).
+         *     total_tokens / spend_usd_cents. spend_usd_cents is real USD spend in cents,
+         *     computed from a per-model GROUP BY over the same since-window and priced via
+         *     app.services.llm_pricing.compute_spend_cents (unknown models → 0 + warning).
          *
          *     scope=workspace counts every LLM call in the workspace. scope=campaign
          *     filters by `llm_calls.campaign_id = :scope_val` (404 if cross-workspace).
@@ -2299,6 +2306,12 @@ export interface components {
          *       (та же семантика, что _compute_is_exhausted, migration 013).
          *     Для workspace/agent/sender scope оба поля = 0 (нет одной целевой папки),
          *     UI не рисует для них progress-бар.
+         *
+         *     ``llm_spend_usd_cents`` = all-time LLM spend в центах (USD) для текущего
+         *     scope (workspace/campaign/agent/sender — фильтр по соответствующей колонке
+         *     llm_calls). All-time (без since-окна), как и остальные карточки (D-14).
+         *     Additive optional-with-default поле — существующие consumer'ы фронта не
+         *     ломаются; фронт делит на 100 для отображения в USD.
          */
         AnalyticsCards: {
             /** Sent */
@@ -2318,6 +2331,11 @@ export interface components {
              * @default 0
              */
             registered_contacts: number;
+            /**
+             * Llm Spend Usd Cents
+             * @default 0
+             */
+            llm_spend_usd_cents: number;
         };
         /**
          * AnalyticsReplied
@@ -2516,6 +2534,26 @@ export interface components {
              * @default 50
              */
             max_new_dialogs_per_day: number;
+            /**
+             * Follow Up Enabled
+             * @default false
+             */
+            follow_up_enabled: boolean;
+            /**
+             * Follow Up Interval Hours
+             * @default 24
+             */
+            follow_up_interval_hours: number;
+            /**
+             * Follow Up Max Pings
+             * @default 2
+             */
+            follow_up_max_pings: number;
+            /**
+             * Auto Finish Hours
+             * @default 72
+             */
+            auto_finish_hours: number;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
@@ -2614,6 +2652,26 @@ export interface components {
              * @default 50
              */
             max_new_dialogs_per_day: number;
+            /**
+             * Follow Up Enabled
+             * @default false
+             */
+            follow_up_enabled: boolean;
+            /**
+             * Follow Up Interval Hours
+             * @default 24
+             */
+            follow_up_interval_hours: number;
+            /**
+             * Follow Up Max Pings
+             * @default 2
+             */
+            follow_up_max_pings: number;
+            /**
+             * Auto Finish Hours
+             * @default 72
+             */
+            auto_finish_hours: number;
             /** Dialogue Flow */
             dialogue_flow?: {
                 [key: string]: unknown;
@@ -2761,6 +2819,14 @@ export interface components {
             recontact_min_age_days?: number | null;
             /** Max New Dialogs Per Day */
             max_new_dialogs_per_day?: number | null;
+            /** Follow Up Enabled */
+            follow_up_enabled?: boolean | null;
+            /** Follow Up Interval Hours */
+            follow_up_interval_hours?: number | null;
+            /** Follow Up Max Pings */
+            follow_up_max_pings?: number | null;
+            /** Auto Finish Hours */
+            auto_finish_hours?: number | null;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
@@ -6808,7 +6874,9 @@ export interface operations {
     };
     workspace_analytics_api_v1_analytics_workspace_get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
@@ -6840,7 +6908,9 @@ export interface operations {
     };
     campaign_analytics_api_v1_analytics_campaigns__campaign_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
@@ -6874,7 +6944,9 @@ export interface operations {
     };
     agent_analytics_api_v1_analytics_agents__agent_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
@@ -6908,7 +6980,9 @@ export interface operations {
     };
     sender_analytics_api_v1_analytics_senders__sender_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                since?: ("1d" | "7d" | "30d" | "90d") | null;
+            };
             header?: {
                 authorization?: string | null;
                 "x-workspace-key"?: string | null;
