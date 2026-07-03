@@ -519,6 +519,16 @@ Plans:
 - [x] 19-04-PLAN.md — FollowUpWorker (timer state machine: no_reply flip, ping, auto-finish, webhook reason=no_reply) + lifespan + config knob (Wave 3)
 - [x] 19-05-PLAN.md — openapi.json regen + campaign form Follow Up block (cross-repo, human-verify) (Wave 4)
 
+### Phase 20: Account Profile Management
+
+**Goal:** Editable Telegram account profile (name, username, bio, photo, linked email if possible, 2FA) from the account edit view, plus richer account cards (photo, name, username, phone, update/delete/reauth) on the accounts list page.
+**Requirements**: TBD
+**Depends on:** Phase 19
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 20 to break down)
+
 ---
 
 ## Progress

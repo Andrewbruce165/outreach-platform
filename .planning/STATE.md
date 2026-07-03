@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 19-05-PLAN.md (Phase 19 complete)
+stopped_at: Phase 20 context gathered
 last_updated: "2026-07-03T10:20:29.030Z"
 last_activity: 2026-07-03
 progress:
@@ -187,6 +187,7 @@ See full log: PROJECT.md → Key Decisions
 - Phase 16 added (2026-06-30): RAG Knowledge Bases for Agents — RAG-база знаний для AI-агентов. Логика: (1) отдельная UI-вкладка **Knowledge Bases**, где пользователь создаёт изолированные KB и загружает в каждую данные; (2) KB подключается **на уровне агента**, который ходит в неё по необходимости (retrieval при генерации). KB workspace-scoped, связь M:N агент↔KB. Предв. scope: модель данных (`knowledge_bases`/`kb_documents`/`kb_chunks`/`agent_knowledge_bases`), ingest-пайплайн (парсинг→чанкинг→эмбеддинги), хранилище векторов (предпочтительно pgvector в существующем PostgreSQL — решить D-NN), retrieval в listener/AI-сервисе. Depends on Phase 3 (Agents/AIContext — точка привязки) + Phase 1 (Workspace scoping). Requirements TBD (derived в /gsd:plan-phase 16).
 - Phase 18 added (2026-07-02): Switchable LLM Provider in UI — переключение LLM прямо из UI: (1) выбор провайдера в настройках (пока только Claude/Anthropic и OpenAI); (2) выбор конкретной модели + частичные настройки модели из конфига (temperature, reasoning effort, token budget и т.п.); (3) API-ключ для работы выбранного провайдера; (4) AI-ответчик в чате использует выбранную LLM. Сейчас модель захардкожена через env `OPENAI_MODEL` (gpt-5-mini, reasoning — см. memory `project-ai-answerer-runs-gpt5-mini-reasoning.md`); AI-вызовы идут через `ai_engine`/listener, warmup делит ту же модель. Requirements TBD (определить в discuss-phase).
 - Phase 19 added (2026-07-02): No Reply Follow-Up and Auto-Finish — статус «no reply» вешается всем, кому мы написали и ждём ответа. В кампанию добавляется параметр **Enable Follow Up**: если включён, пользователь задаёт интервал — через сколько пинговать. **Auto-finish через N часов** без ответа — N задаёт пользователь там же, где описывает критерии финиша, в настройках кампании (форма создания и редактирования). Requirements TBD (определить в discuss-phase).
+- Phase 20 added (2026-07-03): Account Profile Management — расширение управления подключёнными Telegram-аккаунтами. При редактировании аккаунта: менять имя, username, описание профиля (bio), фото, связанный email (если Telegram API это позволяет), 2FA-пароль. Плюс обновление карточек на странице списка аккаунтов — фото, имя, username, телефон, действия (обновить/удалить/реавторизация). Depends on Phase 19. Requirements TBD (определить в discuss-phase).
 
 ### Pending Todos
 
@@ -255,5 +256,5 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 ## Session Continuity
 
 Last session: 2026-07-03T10:00:09.417Z
-Stopped at: Completed 19-05-PLAN.md (Phase 19 complete)
-Resume file: None
+Stopped at: Phase 20 context gathered
+Resume file: .planning/phases/20-account-profile-management/20-CONTEXT.md
