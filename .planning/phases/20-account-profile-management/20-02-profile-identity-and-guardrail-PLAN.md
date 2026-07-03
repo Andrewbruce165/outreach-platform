@@ -310,7 +310,7 @@ Ensure `ProfileUpdate`, `UsernameCheckResponse`, `ProfileWarningItem`, `ProfileU
     - `grep -n '@router.get("/senders/{slug}/username-check"' app/routers/senders.py` matches
     - `_check_profile_cooldown` raises 409 with code `TOO_FREQUENT` for username; name/bio are exempt (only `_HARD_BLOCK_FIELDS`)
     - `_sender_to_response` passes `has_photo=` and `tg_username=` to SenderResponse
-    - `grep -nE "(^|[^A-Za-z])WarningItem\(" app/routers/senders.py` returns NO match (the bare rate-limit WarningItem is never constructed on the profile path; advisories use ProfileWarningItem — the regex excludes the ProfileWarningItem prefix)
+    - `grep -nE '(^|[^A-Za-z])WarningItem\(' app/routers/senders.py` returns exactly ONE match, at the pre-existing _validate_rate_limits soft-cap append (~line 198) — no NEW bare WarningItem( constructions added by this task (advisories use ProfileWarningItem; the regex excludes the ProfileWarningItem prefix)
     - test_update_name_bio, test_username, test_cooldown_block, test_warmup_advisory_not_blocking all pass
   </acceptance_criteria>
   <done>PATCH /profile + /username-check live; guardrail hard-blocks username/photo <1h and never blocks name/bio; D-09 advisory surfaced in warnings[]; the four identity/guardrail tests GREEN.</done>

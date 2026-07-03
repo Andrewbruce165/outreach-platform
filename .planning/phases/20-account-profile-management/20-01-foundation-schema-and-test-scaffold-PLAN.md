@@ -210,7 +210,7 @@ Confirm `EmailStr` is imported from pydantic at the top of the file; if not, add
     - `grep -n "EmailStr" app/schemas/__init__.py` shows it imported
     - `pytest tests/test_account_profile.py --collect-only` exits 0 (module imports cleanly; no collection error)
   </acceptance_criteria>
-  <done>SenderResponse exposes tg_username/tg_bio/has_photo/profile_field_changed_at; the 5 new request/response schemas exist and import cleanly.</done>
+  <done>SenderResponse exposes tg_username/tg_bio/has_photo/profile_field_changed_at; the 7 new schema classes (ProfileUpdate, ProfileWarningItem, ProfileUpdateResponse, UsernameCheckResponse, TwoFAPasswordUpdate, RecoveryEmailStart, RecoveryEmailConfirm) exist and import cleanly.</done>
 </task>
 
 <task type="auto">
