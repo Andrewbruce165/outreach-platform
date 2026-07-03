@@ -100,11 +100,17 @@ function InboxPage() {
   // since the backend has no mark-as-read endpoint in v1.
   const viewedRef = useRef<Set<string>>(new Set());
 
+  const isTelegramTab = statusFilter === "telegram";
+
   const listQ = useQuery({
-    queryKey: ["conversations", { search }],
+    queryKey: ["conversations", { search, status: isTelegramTab ? "telegram_service" : null }],
     queryFn: () =>
       api<ConversationList>("/api/v1/conversations", {
-        query: { limit: 100, ...(search ? { search } : {}) },
+        query: {
+          limit: 100,
+          ...(search ? { search } : {}),
+          ...(isTelegramTab ? { status: "telegram_service" } : {}),
+        },
       }),
     refetchInterval: 10_000,
   });
@@ -126,9 +132,9 @@ function InboxPage() {
   const conversations = useMemo(
     () =>
       allConversations
-        .filter((c) => campaignFilter === "all" || c.campaign_id === campaignFilter)
+        .filter((c) => isTelegramTab || campaignFilter === "all" || c.campaign_id === campaignFilter)
         .filter((c) => matchesStatus(c, statusFilter)),
-    [allConversations, campaignFilter, statusFilter],
+    [allConversations, campaignFilter, statusFilter, isTelegramTab],
   );
 
   useEffect(() => {
