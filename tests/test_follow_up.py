@@ -258,3 +258,156 @@ async def test_paused_frozen(test_running_campaign_factory, test_conversation_fa
         "SELECT pings_sent FROM conversations WHERE id = :id"
     ), {"id": str(conv["id"])})).first()
     assert row.pings_sent == 0
+
+
+# ── NORP-08: queue pre-send guard cancels a follow-up ping on reply-since ──────
+
+async def _seed_followup_item(
+    db, workspace_id, sender_id, campaign_id, phone, *, created_ago_hours=2,
+):
+    """INSERT a follow-up ping queue item (status='processing') whose created_at
+    is in the past, tagged extra_data.kind='followup'. Returns the item id."""
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+    item_id = _uuid.uuid4()
+    await db.execute(text("""
+        INSERT INTO message_queue
+            (id, workspace_id, sender_id, campaign_id, item_type, status,
+             recipient_phone, message_text, extra_data, created_at)
+        VALUES (:id, :wid, :sid, :cid, 'message', 'processing',
+                :phone, 'ping', CAST(:extra AS JSONB), :created)
+    """), {
+        "id": str(item_id),
+        "wid": str(workspace_id),
+        "sid": str(sender_id),
+        "cid": str(campaign_id),
+        "phone": phone,
+        "extra": '{"kind": "followup"}',
+        "created": datetime.now(timezone.utc) - timedelta(hours=created_ago_hours),
+    })
+    await db.commit()
+    return item_id
+
+
+async def test_guard_cancels_ping_when_reply_since_scheduled(
+    async_db_session, test_workspace, test_sender_factory,
+    test_conversation_factory, test_campaign_factory, monkeypatch,
+):
+    """D-17 second guard: a follow-up ping is CANCELLED (not sent) at send time
+    when the contact has replied after the ping was scheduled."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.queue import queue_worker
+
+    sender = await test_sender_factory()
+    camp = await test_campaign_factory()
+    phone = "+79008880001"
+    conv = await test_conversation_factory(
+        sender=sender, campaign_id=camp["id"], contact_phone=phone,
+        contact_telegram_id=880001, status="no_reply", ai_enabled=True,
+    )
+    # Inbound reply arrived NOW — newer than the ping's created_at (2h ago).
+    await async_db_session.execute(text("""
+        INSERT INTO messages (workspace_id, conversation_id, direction,
+                              message_text, sent_by, created_at)
+        VALUES (:wid, :cid, 'inbound', 'ответил', 'contact', NOW())
+    """), {"wid": str(test_workspace.id), "cid": str(conv["id"])})
+    await async_db_session.commit()
+
+    item_id = await _seed_followup_item(
+        async_db_session, test_workspace.id, sender.id, camp["id"], phone,
+    )
+
+    send_mock = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.queue.telegram_service.get_client",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr("app.services.queue.telegram_service.send_message", send_mock)
+    monkeypatch.setattr("app.services.queue.telegram_service.send_file", AsyncMock())
+
+    await queue_worker._QueueWorker__send_item_inner(item_id)
+
+    row = (await async_db_session.execute(text(
+        "SELECT status, error_message FROM message_queue WHERE id = :id"
+    ), {"id": str(item_id)})).first()
+    assert str(row.status).endswith("cancelled")
+    assert row.error_message == "contact replied since ping scheduled"
+    send_mock.assert_not_called()
+
+
+async def test_guard_cancels_ping_when_conversation_left_active(
+    async_db_session, test_workspace, test_sender_factory,
+    test_conversation_factory, test_campaign_factory, monkeypatch,
+):
+    """D-06 / D-17: a follow-up ping is cancelled when the conversation is no
+    longer active/no_reply (taken over / finished / handed off) — even without a
+    reply-since message."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.queue import queue_worker
+
+    sender = await test_sender_factory()
+    camp = await test_campaign_factory()
+    phone = "+79008880002"
+    await test_conversation_factory(
+        sender=sender, campaign_id=camp["id"], contact_phone=phone,
+        contact_telegram_id=880002, status="finished", ai_enabled=True,
+    )
+
+    item_id = await _seed_followup_item(
+        async_db_session, test_workspace.id, sender.id, camp["id"], phone,
+    )
+
+    send_mock = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.queue.telegram_service.get_client",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr("app.services.queue.telegram_service.send_message", send_mock)
+    monkeypatch.setattr("app.services.queue.telegram_service.send_file", AsyncMock())
+
+    await queue_worker._QueueWorker__send_item_inner(item_id)
+
+    row = (await async_db_session.execute(text(
+        "SELECT status FROM message_queue WHERE id = :id"
+    ), {"id": str(item_id)})).first()
+    assert str(row.status).endswith("cancelled")
+    send_mock.assert_not_called()
+
+
+async def test_guard_lets_ping_through_when_no_reply_since(
+    async_db_session, test_workspace, test_sender_factory,
+    test_conversation_factory, test_campaign_factory, monkeypatch,
+):
+    """D-17: a follow-up ping into a still-silent no_reply conversation is NOT
+    cancelled by the guard — the ping proceeds to send (telegram mock called)."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.queue import queue_worker
+
+    sender = await test_sender_factory()
+    camp = await test_campaign_factory()
+    phone = "+79008880003"
+    await test_conversation_factory(
+        sender=sender, campaign_id=camp["id"], contact_phone=phone,
+        contact_telegram_id=880003, status="no_reply", ai_enabled=True,
+    )
+
+    item_id = await _seed_followup_item(
+        async_db_session, test_workspace.id, sender.id, camp["id"], phone,
+    )
+
+    send_mock = AsyncMock(return_value={"success": True, "telegram_message_id": 42})
+    monkeypatch.setattr(
+        "app.services.queue.telegram_service.get_client",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr("app.services.queue.telegram_service.send_message", send_mock)
+    monkeypatch.setattr("app.services.queue.telegram_service.send_file", AsyncMock())
+
+    await queue_worker._QueueWorker__send_item_inner(item_id)
+
+    row = (await async_db_session.execute(text(
+        "SELECT status FROM message_queue WHERE id = :id"
+    ), {"id": str(item_id)})).first()
+    # NOT cancelled by the follow-up guard.
+    assert not str(row.status).endswith("cancelled")
+    send_mock.assert_awaited()

@@ -790,6 +790,74 @@ class QueueWorker:
                 return
             # === End Phase 5 pre-send guard ===
 
+            # === Phase 19 D-17 (second guard): follow-up replied-since re-check ===
+            # A follow-up ping is snapshotted at enqueue time (the queue never
+            # re-runs the LLM). This sibling guard is the safety net that makes
+            # that acceptable: right before sending a PING, cancel it if the
+            # contact has replied since it was scheduled, OR the conversation has
+            # left active/no_reply (taken over / finished / handed off, D-06).
+            #
+            # Gated STRICTLY on extra_data.kind == 'followup' (Pitfall 1) so
+            # normal openers/replies bypass this entirely. One extra SELECT +
+            # conditional UPDATE — CLAUDE.md empirical intervals untouched.
+            is_followup = (
+                isinstance(item.extra_data, dict)
+                and item.extra_data.get("kind") == "followup"
+            )
+            if is_followup:
+                fu_row = (await db.execute(text("""
+                    SELECT id, status
+                    FROM conversations
+                    WHERE workspace_id = :wid
+                      AND sender_id = :sid
+                      AND contact_phone = :phone
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                """), {
+                    "wid": str(item.workspace_id),
+                    "sid": str(item.sender_id),
+                    "phone": item.recipient_phone,
+                })).first()
+
+                cancel_ping = False
+                if fu_row is not None:
+                    # Left active/no_reply → contact taken over / finished / handed off.
+                    if fu_row.status not in ("active", "no_reply"):
+                        cancel_ping = True
+                    else:
+                        # Replied since the ping was scheduled?
+                        replied = (await db.execute(text("""
+                            SELECT 1 FROM messages
+                            WHERE conversation_id = :conv_id
+                              AND direction = 'inbound'
+                              AND created_at > :ping_created_at
+                            LIMIT 1
+                        """), {
+                            "conv_id": str(fu_row.id),
+                            "ping_created_at": item.created_at,
+                        })).first()
+                        if replied is not None:
+                            cancel_ping = True
+
+                if cancel_ping:
+                    logger.info(
+                        "⏭️  Follow-up guard: cancelling ping %s — contact replied "
+                        "since scheduling or conversation left active/no_reply",
+                        str(item.id)[:8],
+                    )
+                    await db.execute(
+                        update(MessageQueue)
+                        .where(MessageQueue.id == item.id)
+                        .values(
+                            status=QueueItemStatus.cancelled,
+                            error_message="contact replied since ping scheduled",
+                            finished_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    await db.commit()
+                    return
+            # === End Phase 19 follow-up guard ===
+
             client = None
             try:
                 client = await telegram_service.get_client(sender.slug, sender.session_string, proxy=sender.proxy)
