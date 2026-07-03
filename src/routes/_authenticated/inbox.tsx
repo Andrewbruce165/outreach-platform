@@ -491,8 +491,10 @@ function ConvList({
       <div style={{ padding: "4px 14px 10px" }}>
         <div style={{ position: "relative" }}>
           <select
-            value={campaignFilter}
+            value={statusFilter === "telegram" ? "all" : campaignFilter}
             onChange={(e) => onCampaignFilter(e.target.value)}
+            disabled={statusFilter === "telegram"}
+            title={statusFilter === "telegram" ? "Not applicable to Telegram service messages" : undefined}
             style={{
               width: "100%",
               height: 32,
@@ -501,9 +503,10 @@ function ConvList({
               borderRadius: 7,
               border: "1px solid var(--border)",
               background: "var(--bg)",
-              color: "var(--text)",
+              color: statusFilter === "telegram" ? "var(--text-faint)" : "var(--text)",
               appearance: "none",
-              cursor: "pointer",
+              cursor: statusFilter === "telegram" ? "not-allowed" : "pointer",
+              opacity: statusFilter === "telegram" ? 0.6 : 1,
             }}
           >
             <option value="all">All campaigns</option>
