@@ -31,6 +31,9 @@ All visual tokens (color, spacing, type, components) come from the live `aimly.c
 ### 4. `edit_2fa(email=...)` cannot run in one request → the recovery-email flow is **two-step in the UI**
 Per RESEARCH §Pitfall 2 (CRITICAL): password-only 2FA change is one request; setting/changing the **recovery email** is a two-step flow (start → Telegram emails a code → confirm). The form must model this explicitly (see Interaction Contracts §C4). This is the single biggest interaction-design constraint of the phase.
 
+### 5. The profile modal spans TWO independent backend flows → TWO scoped save actions (no single generic Save)
+Surface 3 groups **Section A — Профиль** (identity fields; persisted via a `PATCH /senders/{slug}` profile call) and **Section B — Безопасность (2FA)** (persisted via `POST /senders/{slug}/2fa` for the password path and the two-step recovery-email endpoints). These are **independent submissions with independent success toasts**, so each section carries its **own scoped primary button** — there is **no single "Сохранить" that persists everything**. See Surface 3, Interaction Contracts §C4, and the Copywriting Contract.
+
 ---
 
 ## Design System
@@ -41,17 +44,17 @@ Per RESEARCH §Pitfall 2 (CRITICAL): password-only 2FA change is one request; se
 | Preset | `components.json`: style `new-york`, baseColor `slate`, cssVariables `true`, no third-party registries (`"registries": {}`) |
 | Component library | Radix-based shadcn primitives in `src/components/ui/` (full set present), **BUT** all app screens render through the hand-authored `aimly.css` utility classes. **Mirror `accounts.tsx` — use `aimly.css` classes, not bare shadcn primitives** — for visual consistency. |
 | Icon library | `lucide-react` (`components.json: iconLibrary: lucide`, v0.575) |
-| Font | `--font` = "Geist", SF Pro Text, system-ui fallback; mono `--mono` = "Geist Mono". Base `14px` / line-height `1.45`. |
+| Font | `--font` = "Geist", SF Pro Text, system-ui fallback; mono `--mono` = "Geist Mono". Content body copy 13px / line-height 1.45 (see Typography). |
 
 **Established patterns to reuse (do not re-invent) — all live in the current `accounts.tsx`:**
 - **Page shell:** `<Topbar title right>` + `<div className="scroll" style={{ flex:1, padding:24, background:"var(--bg-soft)" }}>`.
 - **Table:** `<div className="card"><table className="tbl">…</table></div>`; one `SenderRow` per account.
 - **Avatar:** existing `.avatar .avatar--sm` (24px) with initials + status dot overlay (`accounts.tsx` line 337). Phase 20 swaps the initials-only avatar for **cached photo when present, initials fallback otherwise** — same class, same status-dot overlay.
-- **Kebab actions menu:** `.tb__icon-btn` (MoreHorizontal) → `.ob__menuScrim` + `.ob__menu` with `<button>` rows (icon + label); danger item = `is-danger` class. Phase 20 adds/repurposes items here.
-- **Modal:** `.modal__scrim` + `.modal` (+ `.modal--wide` `max-width:720px` for the profile form). Header `.modal__head` (h3 + `.tb__icon-btn` close), body `.modal__body`. Footer: right-aligned `btn btn--ghost` (Отмена) + `btn btn--primary` (Сохранить).
-- **Form field:** `.field` wrapper → `.field__label` (12px/500) + control (`.input` / `.textarea` / `.select`, height 38px) + optional `.field__hint` (11.5px muted). (`aimly.css` lines 516-534.) The existing modal uses `.ob__input`; new fields should use the canonical `.field` + `.input` idiom.
+- **Kebab actions menu:** `.tb__icon-btn` (MoreHorizontal, `aria-label="Actions"` — already present line 441) → `.ob__menuScrim` + `.ob__menu` with `<button>` rows (icon + label); danger item = `is-danger` class. Phase 20 adds/repurposes items here.
+- **Modal:** `.modal__scrim` + `.modal` (+ `.modal--wide` `max-width:720px` for the profile form). Header `.modal__head` (h3 + `.tb__icon-btn` close, `aria-label="Close"` — already present line 803). Body `.modal__body`. Footer per section (see Surface 3).
+- **Form field:** `.field` wrapper → `.field__label` + control (`.input` / `.textarea` / `.select`, height 38px) + optional `.field__hint` (11.5px muted). (`aimly.css` lines 516-534.) The existing minimal modal uses `.ob__input`; new fields should use the canonical `.field` + `.input` idiom.
 - **Photo upload:** reuse the **exact** `.ct__dropzone` pattern + hidden `<input type="file" accept="image/*">` from `contacts.tsx` — click-to-pick + drag-drop + `Loader2.ob__spin` while uploading.
-- **Segmented / role toggle:** existing `.ob__roles`/`.ob__role.is-active` pattern (used for Sender/Checker) — reuse if any segmented choice is needed (e.g. 2FA "set vs change" is auto-derived, not a toggle).
+- **Segmented / role toggle:** existing `.ob__roles`/`.ob__role.is-active` pattern (Sender/Checker) — reuse if a segmented choice is needed (2FA "set vs change" is auto-derived from whether 2FA exists, not a toggle).
 - **Status pills:** `.pill .pill--green/orange/red/blue/ghost/purple` + `.pill__dot` (`accounts.tsx` `statusStyle` map).
 - **Toasts:** `sonner` (`toast.success` / `toast.error`) after every mutation; invalidate `queryKey:["senders"]`.
 - **Error envelope:** `ApiError` → `error.message`; inline banner `color: var(--danger)` + `AlertCircle` icon (pattern at `accounts.tsx` line 167 / 586).
@@ -62,6 +65,8 @@ Per RESEARCH §Pitfall 2 (CRITICAL): password-only 2FA change is one request; se
 ## Phase 20 UI Surfaces
 
 Four surfaces, all in the existing light theme, all inside `src/routes/_authenticated/accounts.tsx` (+ small helpers):
+
+**Visual hierarchy & focal point:** In the enriched account row, the **cached avatar photo is the primary visual anchor** (leftmost, with its status-dot overlay) — the eye lands on it first, then reads name → `@username` → phone rightward. In the profile modal, hierarchy is established by the **two uppercase section labels (`Профиль`, `Безопасность (2FA)`) that split the form into two scannable blocks**, each with its own scoped primary action; the modal title is the top-level heading. Icon-only controls (kebab `MoreHorizontal`, modal close `X`) carry `aria-label` fallbacks (already present in `accounts.tsx`).
 
 ### Surface 1 — Enriched account row (`SenderRow`, D-10/D-13)
 The `Account` cell (`accounts.tsx` lines 333-360) gains:
@@ -77,30 +82,32 @@ The existing menu has: `Изменить` · `Обновить статус` · 
 4. **`Удалить`** (`Trash2`, `is-danger`) — unchanged existing delete (confirm() dialog stays).
 
 ### Surface 3 — Profile edit modal (`.modal--wide`, D-01…D-05)
-Replaces the current minimal `EditSenderModal` (name+role only) with a full profile editor, organised into two visually separated sections (use a `.field`-group per section with a small uppercase section label in the Label tier):
+Replaces the current minimal `EditSenderModal` (name+role only) with a full profile editor, organised into two visually separated sections. Each section is a `.field`-group headed by a small **uppercase section label** (Label tier) and carries its **own scoped primary action** (Reconciliation §5) — the two flows submit and toast independently.
 
-**Section A — Профиль** (identity)
+**Section A — Профиль** (identity; one `PATCH /senders/{slug}` profile submit)
 | Field | Control | Guardrail |
 |-------|---------|-----------|
 | Имя | `.input` (first name) | warning-only (D-07) |
 | Фамилия | `.input` (last name, optional) | warning-only (D-07) |
-| Username | `.input`, prefixed `@`, with an inline availability check | **hard 1h block** (D-08) |
+| Username | `.input`, prefixed `@`, with inline availability check | **hard 1h block** (D-08) |
 | Описание (bio) | `.textarea`, `maxLength=70`, live char counter `n/70` in `.field__hint` | warning-only (D-07) |
 | Фото профиля | current avatar preview + `.ct__dropzone` (Загрузить) + `Удалить фото` ghost button when a photo exists | **hard 1h block** (D-08) |
 
-**Section B — Безопасность (2FA)** (D-03/D-04/D-05)
+Section A footer: `Отмена` (`btn--ghost`, dismiss) + **`Сохранить профиль`** (`btn--primary`; pending `Сохранение…`; disabled while a username/photo hard-block is active). Success toast `Профиль обновлён`.
+
+**Section B — Безопасность (2FA)** (D-03/D-04/D-05; independent submits)
 | Field | Control | Notes |
 |-------|---------|-------|
 | Текущий пароль 2FA | `.input type=password` | **Shown only if the account already has 2FA** (D-04). Required to submit any 2FA/email change. Never stored (D-03). |
-| Новый пароль 2FA | `.input type=password` (+ optional подсказка/hint field) | Set-new flow when no 2FA yet (no current-password field). |
-| Email для восстановления | `.input type=email` + two-step confirm (see Interaction Contract C4) | Telegram sends a code; a second confirm step is required. |
+| Новый пароль 2FA | `.input type=password` (+ optional подсказка/hint field) | Set-new flow when no 2FA yet (no current-password field). Primary action **`Обновить пароль 2FA`** (`POST /senders/{slug}/2fa`); success toast `Пароль 2FA обновлён`. |
+| Email для восстановления | `.input type=email` + two-step confirm (Interaction Contract §C4) | Step-1 action **`Отправить код подтверждения`**; step-2 action **`Подтвердить email`**; success toast `Email восстановления обновлён`. |
 
-Footer: `Отмена` (`btn--ghost`) + `Сохранить` (`btn--primary`, disabled while any hard-block is active or a mutation is pending). The Save button label stays `Сохранить`; while pending `Сохранение…`.
+Section B has **no combined save with Section A** — the password path and the email path are each their own scoped primary button.
 
 ### Surface 4 — Guardrail warning modal / inline block (D-06/D-07/D-08/D-09)
-Reuse the seed's warning-modal pattern. Two severities (see Interaction Contracts §C3):
+Reuse the seed's warning-modal pattern. Two severities (Interaction Contracts §C3):
 - **Advisory (warning-only):** name/bio changes, and any change on a warmup / <7-day account (D-07/D-09) → a confirm-style warning the user can dismiss and proceed.
-- **Hard block:** username/photo changed <1h ago (D-08) → the field's Save path is **disabled with a live countdown**; the user cannot proceed until the timer elapses.
+- **Hard block:** username/photo changed <1h ago (D-08) → that field's save path is **disabled with a live countdown**; the user cannot proceed until the timer elapses.
 
 ---
 
@@ -113,17 +120,17 @@ Reuse the seed's warning-modal pattern. Two severities (see Interaction Contract
 - `Обновить профиль` calls the resync endpoint (backend does `GetFullUser` + `download_profile_photo`). Async; optimistic spinner in the menu item; on success refresh the row from `["senders"]` and toast `Профиль обновлён`; on error toast `error.message`. Does **not** open the edit form.
 
 ### C3 — Frequency guardrail (D-06/D-07/D-08/D-09)
-- **Per-field cooldown** is read from the sender's `profile_field_changed_at` state (backend). The UI must reproduce the block/warn logic client-side for immediate feedback AND respect the backend's 409/422 as the source of truth:
-  - **username / photo changed <1h ago → HARD BLOCK.** Disable that field's save affordance; show a live `mm:ss` countdown message; re-enable when it hits zero. If the user somehow submits, the backend returns 409 `TOO_FREQUENT` (or equivalent) → surface the same countdown copy.
+- **Per-field cooldown** is read from the sender's `profile_field_changed_at` state (backend). The UI reproduces the block/warn logic client-side for immediate feedback AND respects the backend's 409/422 as the source of truth:
+  - **username / photo changed <1h ago → HARD BLOCK.** Disable that field's save affordance; show a live `mm:ss` countdown message; re-enable at zero. If submitted anyway, the backend returns 409 `TOO_FREQUENT` (or equivalent) → surface the same countdown copy.
   - **name / bio → WARNING ONLY.** Show the advisory once before save; never block (D-07).
   - **warmup (`lifecycle_status='warmup'`) OR account < 7 days old (`created_at`) → advisory line appended** to the warning modal; still **not blocked** (D-09).
 - The warning modal is a lightweight confirm (reuse `confirm()` or an AlertDialog per existing convention); the hard block is inline field state, not a modal.
 
 ### C4 — 2FA recovery-email two-step flow (D-02/D-03/D-04, RESEARCH §Pitfall 2 + §Open Question 1)
-- **Password-only change:** single submit → success toast. Wrong current password → inline field error `Неверный текущий пароль 2FA` (backend `PASSWORD_INVALID`).
+- **Password-only change (Section B primary `Обновить пароль 2FA`):** single submit → success toast `Пароль 2FA обновлён`. Wrong current password → inline field error `Неверный текущий пароль 2FA` (backend `PASSWORD_INVALID`).
 - **Recovery-email change (two steps):**
-  1. **Start:** user enters new email (+ current password if 2FA already set) → submit → backend returns `EMAIL_CONFIRMATION_SENT` + `code_length`. UI transitions the email field into a **confirmation state**: show `Мы отправили код на {email}. Введите его ниже.` + a code `.input` (length hint = `code_length`) + `Подтвердить email` button + `Отправить снова` ghost link.
-  2. **Confirm:** user enters the emailed code → submit → success toast `Email восстановления обновлён`. Invalid/expired code → inline error.
+  1. **Start (`Отправить код подтверждения`):** user enters new email (+ current password if 2FA already set) → backend returns `EMAIL_CONFIRMATION_SENT` + `code_length`. UI transitions the email field into a **confirmation state**: `Мы отправили код на {email}. Введите его ниже.` + a code `.input` (length hint = `code_length`) + `Подтвердить email` button + `Отправить снова` ghost link.
+  2. **Confirm (`Подтвердить email`):** user enters the emailed code → success toast `Email восстановления обновлён`. Invalid/expired code → inline error.
 - **`TOO_FRESH` (D-09 intersection):** a freshly-onboarded / freshly-password-set account may return 409 `TOO_FRESH` with seconds → surface `Telegram временно блокирует смену email на новом аккаунте. Попробуйте через {N}.`
 - No 2FA password is ever persisted or echoed back; the current-password field is transient (D-03).
 
@@ -156,16 +163,18 @@ Component-intrinsic dimensions inherited from the design system (not free spacin
 
 ## Typography
 
-Inherited from `aimly.css`. **Exactly 4 distinct font sizes.** Page-title and label tiers are differentiated by WEIGHT + LETTER-SPACING + UPPERCASE, not by an additional size. Two weights in practice: regular (400) + semibold (600); medium (500) for labels/active-nav folds into the semibold family for the 2-weight rule.
+Inherited from `aimly.css`. **Exactly 4 distinct font sizes and exactly 2 font weights** are in the contract: **regular 400** and **semibold 600**. Type roles are differentiated by SIZE + LETTER-SPACING + CASE — never by a third weight.
 
 | Role | Size | Weight | Line Height | Differentiation |
 |------|------|--------|-------------|-----------------|
-| Label (uppercase metric/section/table-head, `.field__label`, `.field__hint`) | 11.5–12px | 500–600 | 1.3 | uppercase + letter-spacing `0.05–0.06em` (metric/section labels); field labels 12px/500 — distinguished from Body by weight + letter-spacing, not a separate size |
-| Body | 13px | 400 | 1.45 | default text, field/input values, table cells, muted hints, menu items |
-| Heading (card/section title, modal title `.modal__head h3`, empty-state h3, page title) | 14px | 600 | 1.2 | distinguished from card titles by weight context + position |
-| Display (metric value, `MiniMetric` value) | 24–26px | 600 | 1.1 | the single large numeric/stat tier (`tabular-nums`); the accounts MiniMetric uses 24px |
+| Label (uppercase section/metric labels + form field labels `.field__label`/`.field__hint`) | 11.5–12px | 600 | 1.3 | The two label sub-uses are differentiated by **case + letter-spacing + size**, not weight: uppercase section/metric labels add letter-spacing `0.05–0.06em`; form field labels are 12px sentence-case with no extra tracking. Both semibold 600. |
+| Body | 13px | 400 | 1.45 | default text, field/input values, table cells, muted hints, `@username`, menu items — the base content text tier |
+| Heading (card/section title, modal title `.modal__head h3`, empty-state h3, page title) | 14px | 600 | 1.2 | the 14px tier; distinguished from Body by size + weight |
+| Display (metric value, `MiniMetric` value) | 24–26px | 600 | 1.1 | the single large numeric/stat tier (`tabular-nums`); accounts `MiniMetric` uses 24px |
 
-Base document size 14px / 1.45. Numeric values use `.num` / `.mono` (`tabular-nums`). No new type tiers are introduced by Phase 20.
+**Weight reconciliation (2-weight rule):** the contract declares **only 400 and 600**. Where the inherited `aimly.css` renders certain labels / nav / `.field__label` at the intermediate **500**, that is a **component-intrinsic value owned by the shared design system** (the same category as the 44px tab height and the 18px `.tb__title`) — it is **not** a weight this phase's new markup introduces. All **new Phase 20 markup uses 400 (regular) or 600 (semibold) only.**
+
+Body copy is the **base content text tier at 13px / 1.45**; the **14px** tier is reserved for **headings** (card/section/modal titles, page title), not for base body text. (The document root em on `html, body` is 14px — a shell-level base owned by the shared layout, distinct from the 13px content body tier used across the app's screens.) Numeric values use `.num` / `.mono` (`tabular-nums`). No new type tiers or weights are introduced by Phase 20.
 
 ---
 
@@ -180,7 +189,7 @@ Existing light-theme Telegram-blue palette (`aimly.css :root`, verified values).
 | Accent (10%) | `--tg-blue #3390ec` (+ `--tg-blue-soft #e8f3fe` / `--tg-blue-softer #f3f9ff`) | see reserved-for list |
 | Destructive | `--danger #e13b30` (+ `--danger-soft #fde8e6`) | delete photo, delete account, hard-block/error states, invalid-username/2FA errors |
 
-**Accent (`--tg-blue`) reserved for:** primary CTA buttons (`btn--primary`: "Сохранить", "Подтвердить email"); the "Connect account" top-right CTA; active dropzone hover (`.ct__dropzone:hover`); input focus ring; the avatar initials-fallback bg (`--tg-blue-soft` on `--tg-blue`); username-available hint uses `--success` not accent; the `warmup` status pill (`pill--blue`). **Never** apply accent to all interactive elements — the kebab, "Отмена", "Удалить фото", and "Отправить снова" are `btn--ghost` / `ob__link` (bordered/neutral).
+**Accent (`--tg-blue`) reserved for:** primary CTA buttons (`btn--primary`: "Сохранить профиль", "Обновить пароль 2FA", "Отправить код подтверждения", "Подтвердить email"); the "Connect account" top-right CTA; active dropzone hover (`.ct__dropzone:hover`); input focus ring; the avatar initials-fallback bg (`--tg-blue-soft` on `--tg-blue`); the `warmup` status pill (`pill--blue`). **Never** apply accent to all interactive elements — the kebab, "Отмена", "Удалить фото", and "Отправить снова" are `btn--ghost` / `ob__link` (bordered/neutral).
 
 **Semantic status colors (encode meaning, not part of the 10% accent budget):**
 - `--success #4dcd5e` (+ `--success-soft`) → `Active` status, username `Свободно`, resync success, 2FA/email saved.
@@ -196,11 +205,16 @@ App copy is mixed RU/EN matching existing screens: page/nav titles & object noun
 
 | Element | Copy |
 |---------|------|
-| Primary CTA (profile form) | `Сохранить` (pending: `Сохранение…`) |
+| Section A primary CTA (profile save) | `Сохранить профиль` (pending: `Сохранение…`) |
+| Section B primary CTA (2FA password) | `Обновить пароль 2FA` |
+| Section B primary CTA (email step 1) | `Отправить код подтверждения` |
+| Section B primary CTA (email step 2) | `Подтвердить email` |
+| Modal dismiss (both sections) | `Отмена` (`btn--ghost`) |
 | Profile edit entry (kebab) | `Изменить профиль` |
 | Manual resync (kebab, D-12) | `Обновить профиль` |
 | Resync success toast | `Профиль обновлён` |
 | Resync error toast | `error.message` (fallback `Не удалось обновить профиль`) |
+| Profile save success toast (Section A) | `Профиль обновлён` |
 | Photo upload button | `Загрузить фото` · dropzone: `Перетащите фото сюда или нажмите, чтобы выбрать (JPG/PNG, до 5 МБ)` |
 | Photo delete button | `Удалить фото` (`btn--ghost`, danger text) |
 | Section A heading | `Профиль` |
@@ -209,10 +223,10 @@ App copy is mixed RU/EN matching existing screens: page/nav titles & object noun
 | Bio field label / hint | label `Описание` · hint `{n}/70` char counter |
 | Current-2FA field label (D-04) | `Текущий пароль 2FA` (shown only if 2FA already set) |
 | New-2FA field label | `Новый пароль 2FA` |
+| 2FA password saved toast | `Пароль 2FA обновлён` |
 | Recovery-email field label | `Email для восстановления` |
 | Email code-sent state (C4) | `Мы отправили код на {email}. Введите его ниже.` + `Подтвердить email` + `Отправить снова` |
 | Email confirmed toast | `Email восстановления обновлён` |
-| 2FA password saved toast | `Пароль 2FA обновлён` |
 | Advisory — name/bio (D-07) | `Слишком частая смена имени или описания может насторожить Telegram. Продолжить?` |
 | Advisory — warmup/age (D-09) | `Аккаунт ещё прогревается (моложе 7 дней). Резкие изменения профиля повышают риск ограничений. Продолжить?` |
 | Hard block — username (D-08) | `Username можно менять не чаще раза в час. Попробуйте снова через {mm:ss}.` |
