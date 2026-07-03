@@ -199,17 +199,73 @@ class CheckerService:
             self._locks[checker_slug] = asyncio.Lock()
         return self._locks[checker_slug]
 
-    async def _get_client(self, encrypted_session: str, proxy: dict | None = None) -> TelegramClient:
-        """Create a connected Telethon client for the checker account."""
+    async def _flag_checker_auth(self, sender_id: str | None, auth_status: str) -> None:
+        """WR-06: flag a dead checker's auth_status BY ID (not slug — WR-14 shows slug
+        is not globally unique). No-op when sender_id is unknown (e.g. probe path)."""
+        if not sender_id:
+            return
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                await db.execute(
+                    text("UPDATE senders SET auth_status = :st WHERE id = :sid"),
+                    {"st": auth_status, "sid": sender_id},
+                )
+        logger.warning("[checker] auth_status for %s -> %s", sender_id, auth_status)
+
+    async def _get_client(
+        self,
+        encrypted_session: str,
+        proxy: dict | None = None,
+        sender_id: str | None = None,
+        sender_slug: str | None = None,
+    ) -> TelegramClient:
+        """Create a connected Telethon client for the checker account.
+
+        WR-06: classify auth failures exactly like ``TelegramService.get_client`` — a
+        dead / unauthorized / banned session flips ``senders.auth_status`` BY ID (so
+        the ``_tick`` JOIN-LATERAL gate ``auth_status='ok'`` excludes it on the next
+        tick, closing the 5s hot loop that re-claimed the same contacts) and raises
+        the typed ``SessionAuthError``. When ``sender_id`` is None (the
+        ``probe_control`` call site) NO DB write happens — the probe swallows the
+        error as a miss. Imports are inside the method to avoid an import cycle
+        (mirrors how telegram.py imports Sender lazily)."""
+        from telethon.errors import UserDeactivatedBanError
+
+        from app.services.telegram import AUTH_ERRORS, SessionAuthError
+
         session_string = decrypt_session(encrypted_session)
         client = make_telegram_client(
             StringSession(session_string),
             proxy=proxy,
         )
-        await client.connect()
-        if not await client.is_user_authorized():
+
+        try:
+            await client.connect()
+        except AUTH_ERRORS as e:
+            await self._flag_checker_auth(sender_id, "session_expired")
+            raise SessionAuthError(sender_slug or "checker", "session_expired", str(e))
+        except UserDeactivatedBanError as e:
+            await self._flag_checker_auth(sender_id, "banned")
+            raise SessionAuthError(sender_slug or "checker", "banned", str(e))
+
+        try:
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                await self._flag_checker_auth(sender_id, "session_expired")
+                raise SessionAuthError(
+                    sender_slug or "checker", "session_expired", "Session is not authorized"
+                )
+        except SessionAuthError:
+            raise
+        except AUTH_ERRORS as e:
             await client.disconnect()
-            raise Exception("Checker session is not authorized. Re-authenticate.")
+            await self._flag_checker_auth(sender_id, "session_expired")
+            raise SessionAuthError(sender_slug or "checker", "session_expired", str(e))
+        except UserDeactivatedBanError as e:
+            await client.disconnect()
+            await self._flag_checker_auth(sender_id, "banned")
+            raise SessionAuthError(sender_slug or "checker", "banned", str(e))
+
         return client
 
     async def _lookup_cache(self, workspace_id: str, phone: str) -> Optional[dict]:
@@ -422,7 +478,10 @@ class CheckerService:
 
         client: Optional[TelegramClient] = None
         try:
-            client = await self._get_client(encrypted_session, proxy=proxy)
+            client = await self._get_client(
+                encrypted_session, proxy=proxy,
+                sender_id=checker_id, sender_slug=checker_slug,
+            )
 
             for i, phone in enumerate(phones):
                 # 1. Try cache first (workspace-isolated cross-sender lookup)
@@ -570,7 +629,10 @@ class CheckerService:
 
         client: Optional[TelegramClient] = None
         try:
-            client = await self._get_client(encrypted_session, proxy=proxy)
+            client = await self._get_client(
+                encrypted_session, proxy=proxy,
+                sender_id=checker_id, sender_slug=checker_slug,
+            )
 
             for i, uname in enumerate(usernames):
                 bare = uname.lstrip("@")

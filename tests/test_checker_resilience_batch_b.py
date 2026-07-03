@@ -229,3 +229,117 @@ async def test_check_phones_invalid_not_cached_and_threaded(mock_telethon_client
     assert res["error"] == "invalid_phone", "the batch producer must thread error='invalid_phone' (IN-02)"
     assert res["is_registered"] is False
     save_mock.assert_not_awaited(), "an invalid number must NOT be cached (IN-02)"
+
+
+# ─── WR-06: dead-session classification (checker side) ───────────────────────
+
+
+def _dead_client():
+    """A Telethon client mock whose is_user_authorized() returns False (dead session)."""
+    client = AsyncMock()
+    client.connect = AsyncMock(return_value=None)
+    client.disconnect = AsyncMock(return_value=None)
+    client.is_user_authorized = AsyncMock(return_value=False)
+    return client
+
+
+async def test_dead_session_flags_auth_by_id(
+    async_db_session, test_workspace, test_checker, monkeypatch
+):
+    """WR-06: _get_client(sender_id=<id>) on an unauthorized session flips
+    senders.auth_status='session_expired' BY ID and raises SessionAuthError — so the
+    next _tick LATERAL gate (auth_status='ok') excludes the checker, closing the 5s
+    hot loop."""
+    from app.services import checker as checker_module
+    from app.services.checker import checker_service
+    from app.services.telegram import SessionAuthError
+
+    checker_id = str(test_checker.id)
+    client = _dead_client()
+    monkeypatch.setattr(checker_module, "make_telegram_client", lambda *a, **k: client)
+    monkeypatch.setattr(checker_module, "decrypt_session", lambda s: "")  # StringSession("") = fresh empty session
+
+    with pytest.raises(SessionAuthError):
+        await checker_service._get_client(
+            "enc", sender_id=checker_id, sender_slug="dead-checker"
+        )
+
+    row = (
+        await async_db_session.execute(
+            text("SELECT auth_status FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.auth_status == "session_expired", (
+        "a dead checker session must flip auth_status by id (WR-06)"
+    )
+
+
+async def test_banned_session_flags_banned(
+    async_db_session, test_workspace, test_checker, monkeypatch
+):
+    """WR-06: a UserDeactivatedBanError on connect flips auth_status='banned'."""
+    from telethon.errors import UserDeactivatedBanError
+
+    from app.services import checker as checker_module
+    from app.services.checker import checker_service
+    from app.services.telegram import SessionAuthError
+
+    checker_id = str(test_checker.id)
+    client = AsyncMock()
+    client.disconnect = AsyncMock(return_value=None)
+
+    async def _banned_connect():
+        raise UserDeactivatedBanError(request=None)
+
+    client.connect = _banned_connect
+    monkeypatch.setattr(checker_module, "make_telegram_client", lambda *a, **k: client)
+    monkeypatch.setattr(checker_module, "decrypt_session", lambda s: "")  # StringSession("") = fresh empty session
+
+    with pytest.raises(SessionAuthError):
+        await checker_service._get_client(
+            "enc", sender_id=checker_id, sender_slug="banned-checker"
+        )
+
+    row = (
+        await async_db_session.execute(
+            text("SELECT auth_status FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.auth_status == "banned", "a banned session must flip auth_status='banned' (WR-06)"
+
+
+async def test_get_client_none_sender_no_write(
+    async_db_session, test_workspace, test_checker, monkeypatch
+):
+    """WR-06: _get_client(sender_id=None) — the probe_control path — still raises the
+    typed error but performs NO DB write (the probe swallows it as a miss)."""
+    from app.services import checker as checker_module
+    from app.services.checker import checker_service
+    from app.services.telegram import SessionAuthError
+
+    checker_id = str(test_checker.id)
+    before = (
+        await async_db_session.execute(
+            text("SELECT auth_status FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+
+    client = _dead_client()
+    monkeypatch.setattr(checker_module, "make_telegram_client", lambda *a, **k: client)
+    monkeypatch.setattr(checker_module, "decrypt_session", lambda s: "")  # StringSession("") = fresh empty session
+
+    with pytest.raises(SessionAuthError):
+        await checker_service._get_client("enc", sender_id=None, sender_slug="probe")
+
+    after = (
+        await async_db_session.execute(
+            text("SELECT auth_status FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert after.auth_status == before.auth_status, (
+        "sender_id=None must perform NO auth_status write (probe path)"
+    )
