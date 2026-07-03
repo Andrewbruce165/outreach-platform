@@ -315,11 +315,11 @@ class CampaignEnqueueWorker:
                             INSERT INTO message_queue
                                 (workspace_id, campaign_id, sender_id, item_type, status,
                                  recipient_phone, recipient_name, message_text,
-                                 scheduled_at, created_at)
+                                 priority, scheduled_at, created_at)
                             VALUES
                                 (:wid, :cid, :sid, 'message', 'pending',
                                  :phone, :name, :text,
-                                 :scheduled, NOW())
+                                 :priority, :scheduled, NOW())
                         """),
                         {
                             "wid": str(c.workspace_id),
@@ -328,6 +328,7 @@ class CampaignEnqueueWorker:
                             "phone": identity,
                             "name": contact.full_name or "",
                             "text": rendered,
+                            "priority": 0,  # WR-02: explicit default; NULL sorted first under ORDER BY priority DESC
                             "scheduled": scheduled_at,
                         },
                     )

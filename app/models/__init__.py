@@ -264,7 +264,7 @@ class MessageQueue(Base):
 
     # Payload — for messages
     message_text = Column(Text)
-    as_draft = Column(Boolean, default=False)
+    as_draft = Column(Boolean, default=False, server_default=text("false"))  # WR-02: DB default matches migration 047
 
     # Payload — for files
     file_url = Column(Text)
@@ -278,7 +278,7 @@ class MessageQueue(Base):
     callback_url = Column(Text, nullable=True)
 
     # Queue management
-    priority = Column(Integer, default=0)  # higher = processed first within same sender
+    priority = Column(Integer, default=0, server_default="0")  # WR-02: higher = processed first within same sender (DB default matches migration 047)
     scheduled_at = Column(DateTime(timezone=True), server_default=func.now())  # not before this time
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     started_at = Column(DateTime(timezone=True))
@@ -290,7 +290,7 @@ class MessageQueue(Base):
     result_recipient_name = Column(String(100))
     result_recipient_username = Column(String(50))
     error_message = Column(Text)
-    attempts = Column(Integer, default=0)
+    attempts = Column(Integer, default=0, server_default="0")  # WR-02: DB default matches migration 047
 
     # Phase 4 (D-16 + AUDIT Q1 override): campaign_id NULLable + ON DELETE SET NULL.
     # NULL means legacy/orphaned queue item after campaign hard-delete (D-07).
