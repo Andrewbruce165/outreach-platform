@@ -914,6 +914,7 @@ CONVERSATION_STATUSES = {
     "handoff",
     "finished",
     "bot_ignored",
+    "telegram_service",
 }
 
 

@@ -733,10 +733,14 @@ class TelegramListener:
                 logger.debug(f"🔥 internal warmup traffic dropped (tg_id={sender.id})")
                 return
 
-            # Пропускаем системные сообщения Telegram (+42777, id=777000)
+            # Сервисные сообщения Telegram (+42777, id=777000): login/auth-коды.
+            # НЕ дропаем — сохраняем под status='telegram_service' для отдельной
+            # вкладки в inbox. AI НЕ запускаем, antispam/bot-ветки не трогаем.
             TELEGRAM_SERVICE_PHONES = {"+42777", "42777"}
             if phone in TELEGRAM_SERVICE_PHONES or sender.id == 777000:
-                logger.info(f"📨 Пропускаем сервисное сообщение Telegram от {phone} (id={sender.id})")
+                await self._handle_telegram_service_message(
+                    sender_info, sender, event, name, phone
+                )
                 return
 
             # Групповые чаты и каналы: только помечаем прочитанным, AI не запускаем
@@ -1227,6 +1231,89 @@ class TelegramListener:
                 )
         except Exception as e:
             logger.error("Bot filter failed: %s", e, exc_info=True)
+
+    async def _handle_telegram_service_message(
+        self,
+        sender_info: dict,
+        sender,           # Telethon User object (id 777000 / +42777)
+        event,            # Telethon NewMessage event
+        name: str,
+        phone: str,
+    ) -> None:
+        """Persist Telegram service-account (777000 / +42777) login/auth-code
+        notifications under status='telegram_service' so the inbox can render a
+        dedicated 'Telegram' tab.
+
+        Mirrors _handle_bot_message: NO AI dispatch, NO enqueue, NEVER touches
+        sender restriction/lifecycle status. UPDATE guard (Pitfall 3): only
+        downgrades from status='active' — preserves any historic status.
+        Isolated AsyncSessionLocal so a transient failure never poisons the loop.
+        """
+        try:
+            async with AsyncSessionLocal() as session:
+                existing = (await session.execute(text("""
+                    SELECT id, status FROM conversations
+                    WHERE sender_id = :sid AND contact_telegram_id = :tid
+                """), {
+                    "sid": str(sender_info["id"]),
+                    "tid": sender.id,
+                })).fetchone()
+
+                if existing is None:
+                    conv_id = uuid.uuid4()
+                    await session.execute(text("""
+                        INSERT INTO conversations (
+                            id, workspace_id, sender_id, contact_phone, contact_name,
+                            contact_telegram_id, ai_enabled, status, paused_at, paused_reason
+                        )
+                        VALUES (
+                            :id, :wid, :sid, :phone, :name, :tid,
+                            false, 'telegram_service', NOW(),
+                            'Telegram service account (login/auth codes)'
+                        )
+                    """), {
+                        "id": str(conv_id),
+                        "wid": str(sender_info["workspace_id"]),
+                        "sid": str(sender_info["id"]),
+                        "phone": phone,
+                        "name": name,
+                        "tid": sender.id,
+                    })
+                else:
+                    conv_id = existing.id
+                    # Pitfall 3 guard: only downgrade from 'active'.
+                    if existing.status == 'active':
+                        await session.execute(text("""
+                            UPDATE conversations
+                            SET status = 'telegram_service',
+                                ai_enabled = false,
+                                paused_at = NOW(),
+                                paused_reason = 'Telegram service account (login/auth codes)',
+                                updated_at = NOW()
+                            WHERE id = :cid
+                        """), {"cid": str(conv_id)})
+
+                # Save inbound message history regardless (manager can read the code).
+                await session.execute(text("""
+                    INSERT INTO messages
+                        (workspace_id, conversation_id, direction, message_text,
+                         sent_by, telegram_message_id)
+                    VALUES (:wid, :cid, 'inbound', :txt, 'contact', :tmid)
+                    ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+                """), {
+                    "wid": str(sender_info["workspace_id"]),
+                    "cid": str(conv_id),
+                    "txt": event.text or "<media>",
+                    "tmid": event.id,
+                })
+                await session.commit()
+
+                logger.info(
+                    "📥 Telegram service message stored: %s (%s) → conv=%s",
+                    name, phone, str(conv_id)[:8],
+                )
+        except Exception as e:
+            logger.error("Telegram service message store failed: %s", e, exc_info=True)
 
     async def handle_outgoing_message(self, event, sender_info: dict):
         """Обработка исходящего сообщения (отправленного вручную)"""
