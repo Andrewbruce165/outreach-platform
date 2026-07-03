@@ -112,11 +112,15 @@ def _is_throttle_signal(summary: dict) -> bool:
       1. FloodWait — ``summary['flood_wait_hit']`` is True (the checker hit a
          contacts-API FloodWait mid-batch; its partial results are untrustworthy).
       2. Anomalous all-empty — a LIVE (non-``from_cache``) batch of meaningful size
-         (``>= ANOMALY_MIN_BATCH``) where EVERY live result came back not_registered
-         (``registered == 0`` and ``not_registered == live count``). This is the
-         14-04 signature (checked=20..30 reg=0). Only live results count toward the
-         anomaly — an all-cache batch tests nothing about the checker's current
-         health (Pitfall 1), and a tiny batch is plausibly legitimately empty.
+         (``>= ANOMALY_MIN_BATCH``) where EVERY live result came back not_registered.
+         This is the 14-04 signature (checked=20..30 reg=0). Only LIVE results count
+         toward the anomaly — an all-cache batch tests nothing about the checker's
+         current health (Pitfall 1), and a tiny batch is plausibly legitimately empty.
+         CR-02: the anomaly is judged from live results ONLY — NOT from
+         ``summary['registered']`` (which counts cache hits too). A throttled batch of
+         20+ false LIVE negatives plus a couple of cache-served positives would have
+         ``registered > 0`` and so escaped the old gate, finalizing 20+ false
+         negatives at high confidence.
     """
     if summary.get("flood_wait_hit"):
         return True
@@ -124,10 +128,8 @@ def _is_throttle_signal(summary: dict) -> bool:
     live = [r for r in results if not r.get("from_cache")]
     if len(live) < ANOMALY_MIN_BATCH:
         return False
-    # All live results negative and none registered → anomalous empty rate.
-    if summary.get("registered", 0) == 0 and all(
-        not r.get("is_registered") for r in live
-    ):
+    # Every LIVE result negative → anomalous empty rate (cache hits are irrelevant).
+    if not any(r.get("is_registered") for r in live):
         return True
     return False
 
@@ -557,10 +559,15 @@ class ContactCheckWorker:
     async def probe_checker(self, checker_id: str) -> bool:
         """Run a live control-probe for one checker; track consecutive misses.
 
-        RESV-01/D-05. Resolves a small control sample via
-        ``checker_service.check_phones`` (which, post-Task-1, hits Telegram live for
-        cache-miss control numbers). A control number resolving ``not_registered``
-        is a MISS. Misses are counted PER checker, CONSECUTIVE, on the singleton's
+        RESV-01/D-05/CR-01/IN-01. Resolves a small control sample via
+        ``checker_service.probe_control`` — the LIVE-ONLY primitive that hits
+        Telegram on every control number and NEVER reads/writes ``contacts_cache``.
+        (The old ``check_phones`` path consulted the cache, so a throttled checker
+        "passed" the probe on stale cached hits and one bad live resolve of a control
+        number could cache ``is_registered=false`` and cascade-park the whole pool.)
+        A control number resolving ``not_registered`` — OR a flood-interrupted /
+        truncated / empty probe — is a MISS. Misses are counted PER checker,
+        CONSECUTIVE, on the singleton's
         ``_consecutive_misses`` dict; a clean probe RESETS the counter to 0.
 
         On ``>= 2`` consecutive misses (D-05 — a single miss is noise) the checker
@@ -589,9 +596,7 @@ class ContactCheckWorker:
             return False
 
         try:
-            summary = await checker_service.check_phones(
-                workspace_id=str(row.workspace_id),
-                checker_id=checker_id,
+            summary = await checker_service.probe_control(
                 checker_slug=row.slug,
                 encrypted_session=row.session_string,
                 phones=sample,
@@ -602,9 +607,17 @@ class ContactCheckWorker:
             return False
 
         results = summary.get("results", [])
-        # MISS if ANY control number (known-live) comes back not_registered. The
-        # control set is verified-live, so a healthy checker resolves them all.
-        miss = any(not r.get("is_registered") for r in results) if results else False
+        # MISS if the probe hit a FloodWait, was truncated (fewer results than the
+        # sampled control numbers), came back empty, or ANY control number
+        # (known-live) resolved not_registered. The control set is verified-live, so
+        # a healthy checker resolves them ALL — a flood/truncated/empty probe proves
+        # nothing about health and must NOT count as clean.
+        miss = (
+            bool(summary.get("flood_wait_hit"))
+            or len(results) < len(sample)
+            or any(not r.get("is_registered") for r in results)
+            or not results
+        )
 
         if not miss:
             self._consecutive_misses[checker_id] = 0
@@ -746,9 +759,7 @@ class ContactCheckWorker:
             if not sample:
                 return
             try:
-                summary = await checker_service.check_phones(
-                    workspace_id=str(r.workspace_id),
-                    checker_id=str(r.id),
+                summary = await checker_service.probe_control(
                     checker_slug=r.slug,
                     encrypted_session=r.session_string,
                     phones=sample,
@@ -758,7 +769,16 @@ class ContactCheckWorker:
                 logger.warning("recovery probe for checker %s raised: %s", r.id, exc)
                 continue
             results = summary.get("results", [])
-            clean = bool(results) and all(res.get("is_registered") for res in results)
+            # CR-01: a recovery probe only counts as CLEAN if it hit Telegram live
+            # for the FULL control sample with no flood and every number registered.
+            # A flood-interrupted or truncated recovery probe must NOT fake-recover a
+            # still-throttled checker back into rotation.
+            clean = (
+                not summary.get("flood_wait_hit")
+                and len(results) == len(sample)
+                and bool(results)
+                and all(res.get("is_registered") for res in results)
+            )
             if not clean:
                 continue
             async with AsyncSessionLocal() as db:
@@ -844,6 +864,12 @@ class ContactCheckWorker:
                 if res is None:
                     # Не обработан (partial из-за FloodWait) — оставляем pending.
                     continue
+                # IN-08 / D-09 forensics: a cache-served result was NOT resolved live
+                # by THIS checker — it came from another sender's cache row. Stamp
+                # resolver=NULL for cache hits so resolver-provenance is not corrupted
+                # by a checker claiming a resolve it never performed. (tg_resolved_by
+                # is UUID NULL — a string marker won't fit; NULL is the correct value.)
+                resolver = None if res.get("from_cache") else checker_id
                 if res.get("error"):
                     await db.execute(
                         text(
@@ -874,7 +900,7 @@ class ContactCheckWorker:
                                 tg_telegram_id = :tid,
                                 tg_username_resolved = :uname,
                                 tg_confidence = :confidence,
-                                tg_resolved_by = :checker_id,
+                                tg_resolved_by = :resolver,
                                 tg_probe_state = :probe_state,
                                 tg_checked_at = NOW(),
                                 updated_at = NOW()
@@ -885,7 +911,7 @@ class ContactCheckWorker:
                             "tid": res.get("telegram_id"),
                             "uname": res.get("username"),
                             "confidence": None if suspect else "high",
-                            "checker_id": checker_id,
+                            "resolver": resolver,
                             "probe_state": probe_state,
                             "cid": str(item.contact_id),
                         },
@@ -900,13 +926,13 @@ class ContactCheckWorker:
                             SET tg_status = 'pending',
                                 tg_checked_at = NULL,
                                 tg_probe_state = 'suspect',
-                                tg_resolved_by = :checker_id,
+                                tg_resolved_by = :resolver,
                                 tg_confidence = NULL,
                                 updated_at = NOW()
                             WHERE id = :cid
                             """
                         ),
-                        {"checker_id": checker_id, "cid": str(item.contact_id)},
+                        {"resolver": resolver, "cid": str(item.contact_id)},
                     )
                 else:
                     # Clean checker — finalize not_registered with high-confidence
@@ -917,14 +943,14 @@ class ContactCheckWorker:
                             UPDATE contacts
                             SET tg_status = 'not_registered',
                                 tg_confidence = 'high',
-                                tg_resolved_by = :checker_id,
+                                tg_resolved_by = :resolver,
                                 tg_probe_state = 'clean',
                                 tg_checked_at = NOW(),
                                 updated_at = NOW()
                             WHERE id = :cid
                             """
                         ),
-                        {"checker_id": checker_id, "cid": str(item.contact_id)},
+                        {"resolver": resolver, "cid": str(item.contact_id)},
                     )
             await db.commit()
 

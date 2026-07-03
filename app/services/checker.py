@@ -320,12 +320,16 @@ class CheckerService:
           - NEVER mutates ``contacts`` rows (the control numbers are real ``registered``
             Barter rows — they must not be touched).
 
-        Returns ``{"results": [{"phone", "is_registered"}...], "checked": int}``.
-        A control number that comes back ``is_registered=False`` is a MISS (the
-        caller counts consecutive misses per checker). Does not log session strings.
+        Returns ``{"results": [{"phone", "is_registered"}...], "checked": int,
+        "flood_wait_hit": bool}``. A control number that comes back
+        ``is_registered=False`` is a MISS (the caller counts consecutive misses per
+        checker); a truncated/short batch (fewer results than ``phones``) or
+        ``flood_wait_hit=True`` is ALSO a miss (a flood-interrupted probe proves
+        nothing about health). Does not log session strings.
         """
         async with self._get_lock(checker_slug):
             results: list[dict] = []
+            flood_wait_hit = False
             client: Optional[TelegramClient] = None
             try:
                 client = await self._get_client(encrypted_session, proxy=proxy)
@@ -356,6 +360,7 @@ class CheckerService:
                             settings.contact_check_pace_high,
                         ))
             except FloodWaitError as exc:
+                flood_wait_hit = True
                 logger.warning(
                     f"[checker:{checker_slug}] probe_control FloodWait after "
                     f"{len(results)}/{len(phones)} — sleeping {exc.seconds}s"
@@ -369,7 +374,7 @@ class CheckerService:
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(f"[checker:{checker_slug}] probe_control disconnect error: {exc}")
 
-            return {"checked": len(results), "results": results}
+            return {"checked": len(results), "results": results, "flood_wait_hit": flood_wait_hit}
 
     async def _check_phones_locked(
         self,

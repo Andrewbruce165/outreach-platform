@@ -300,8 +300,10 @@ async def test_clean_recovery_preserves_trip_count(
     await async_db_session.commit()
 
     worker = ContactCheckWorker()
+    # Batch A (quick 260703-j25): _recover_checkers now probes via the LIVE-ONLY
+    # probe_control (not the cache-consulting check_phones). Patch that primitive.
     with patch(
-        "app.services.contact_check_worker.checker_service.check_phones",
+        "app.services.contact_check_worker.checker_service.probe_control",
         new=AsyncMock(side_effect=lambda phones, **kw: _clean_probe_summary(phones)),
     ):
         await worker._recover_checkers()

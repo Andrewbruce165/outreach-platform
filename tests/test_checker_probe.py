@@ -51,13 +51,12 @@ async def test_two_misses_flags(async_db_session, test_workspace, test_checker):
 
     async def _one_miss():
         # A control number (known-live) resolving as not_registered = a miss.
+        # Post-Batch-A the probe goes through the LIVE-ONLY probe_control primitive.
         with patch(
-            "app.services.contact_check_worker.checker_service.check_phones",
+            "app.services.contact_check_worker.checker_service.probe_control",
             new=AsyncMock(
                 return_value={
                     "checked": 1,
-                    "registered": 0,
-                    "not_registered": 1,
                     "flood_wait_hit": False,
                     "results": [{"phone": "+79990000001", "is_registered": False}],
                 }
@@ -102,12 +101,10 @@ async def test_single_miss_no_flag(async_db_session, test_workspace, test_checke
 
     checker_id = str(test_checker.id)
     with patch(
-        "app.services.contact_check_worker.checker_service.check_phones",
+        "app.services.contact_check_worker.checker_service.probe_control",
         new=AsyncMock(
             return_value={
                 "checked": 1,
-                "registered": 0,
-                "not_registered": 1,
                 "flood_wait_hit": False,
                 "results": [{"phone": "+79990000001", "is_registered": False}],
             }
@@ -704,3 +701,214 @@ async def test_rested_checker_reselected_without_recovery_probe(
         )
     ).fetchone()
     assert resolved.n == 2, "both contacts resolve once the rest has elapsed"
+
+
+# ─── Batch A (quick 260703-j25): live-only probes + live-only throttle signal ──
+#
+# CR-01/IN-01: probe_checker + _recover_checkers must probe via the LIVE-ONLY
+#   probe_control (never the cache-consulting check_phones), and a flood-interrupted
+#   / truncated / empty probe is a MISS (not treated as clean).
+# CR-02: _is_throttle_signal must judge the all-empty anomaly from LIVE results
+#   ONLY — never from summary['registered'] (which counts cache hits). A poisoned
+#   batch of 20+ false live negatives plus a couple of cache-served positives (so
+#   registered > 0) must STILL be caught.
+# IN-08: cache-served results carry tg_resolved_by=NULL (covered by the
+#   provenance assertion in test_probe_uses_probe_control_not_cache's sibling below).
+
+
+def _mixed_stale_cache_summary(n_live: int = 10) -> dict:
+    """Live results ALL registered (healthy) PLUS stale cache-hit negatives — a
+    throttled-looking cache must NOT drag a healthy live batch into 'throttle'."""
+    live = [
+        {"phone": f"+7999100{i:04d}", "is_registered": True, "from_cache": False}
+        for i in range(n_live)
+    ]
+    cached = [
+        {"phone": f"+7999200{i:04d}", "is_registered": False, "from_cache": True}
+        for i in range(3)
+    ]
+    return {
+        "checked": n_live + 3,
+        "registered": n_live,
+        "not_registered": 3,
+        "flood_wait_hit": False,
+        "results": live + cached,
+    }
+
+
+async def test_throttle_signal_ignores_stale_cache(async_db_session):
+    """CR-02: a batch whose LIVE results are all registered is NOT a throttle
+    signal, even with stale cache-hit negatives present."""
+    from app.services.contact_check_worker import _is_throttle_signal
+
+    assert _is_throttle_signal(_mixed_stale_cache_summary()) is False
+
+
+async def test_throttle_signal_poisoned_live_despite_cache_positives(async_db_session):
+    """CR-02 (the core fix): >= ANOMALY_MIN_BATCH LIVE not_registered results fire
+    the signal even when cache-served positives make summary['registered'] > 0 —
+    the exact case the old `registered == 0` gate let through."""
+    from app.services.contact_check_worker import _is_throttle_signal, ANOMALY_MIN_BATCH
+
+    live = [
+        {"phone": f"+7999300{i:04d}", "is_registered": False, "from_cache": False}
+        for i in range(ANOMALY_MIN_BATCH + 2)
+    ]
+    cache_pos = [
+        {"phone": f"+7999400{i:04d}", "is_registered": True, "from_cache": True}
+        for i in range(2)
+    ]
+    summary = {
+        "checked": len(live) + 2,
+        # cache hits — the OLD code's `registered == 0` gate would MISS this batch.
+        "registered": 2,
+        "not_registered": len(live),
+        "flood_wait_hit": False,
+        "results": live + cache_pos,
+    }
+    assert _is_throttle_signal(summary) is True
+
+
+async def test_throttle_signal_flood(async_db_session):
+    """flood_wait_hit=True fires regardless of results/size."""
+    from app.services.contact_check_worker import _is_throttle_signal
+
+    assert _is_throttle_signal({"checked": 0, "results": [], "flood_wait_hit": True}) is True
+
+
+async def test_throttle_signal_all_cache_not_flag(async_db_session):
+    """A batch with ONLY cache-hit results (no live) tests nothing about the
+    checker's current health → NOT a throttle signal."""
+    from app.services.contact_check_worker import _is_throttle_signal, ANOMALY_MIN_BATCH
+
+    cached = [
+        {"phone": f"+7999500{i:04d}", "is_registered": False, "from_cache": True}
+        for i in range(ANOMALY_MIN_BATCH + 5)
+    ]
+    summary = {
+        "checked": len(cached),
+        "registered": 0,
+        "not_registered": len(cached),
+        "flood_wait_hit": False,
+        "results": cached,
+    }
+    assert _is_throttle_signal(summary) is False
+
+
+async def test_probe_uses_probe_control_not_cache(
+    async_db_session, test_workspace, test_checker
+):
+    """CR-01/IN-01: the control-probe hits the LIVE-ONLY probe_control and NEVER the
+    cache-consulting check_phones / _lookup_cache / _save_cache."""
+    from app.services.contact_check_worker import run_control_probe
+
+    checker_id = str(test_checker.id)
+
+    def _clean(**kw):
+        # One registered result per sampled phone → no miss, no degradation.
+        phones = kw["phones"]
+        return {
+            "checked": len(phones),
+            "results": [{"phone": p, "is_registered": True} for p in phones],
+            "flood_wait_hit": False,
+        }
+
+    with patch(
+        "app.services.contact_check_worker.checker_service.probe_control",
+        new=AsyncMock(side_effect=_clean),
+    ) as probe_mock, patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(),
+    ) as check_mock, patch(
+        "app.services.contact_check_worker.checker_service._lookup_cache",
+        new=AsyncMock(),
+    ) as lookup_mock, patch(
+        "app.services.contact_check_worker.checker_service._save_cache",
+        new=AsyncMock(),
+    ) as save_mock:
+        degraded = await run_control_probe(checker_id=checker_id)
+
+    assert degraded is False
+    probe_mock.assert_awaited()
+    check_mock.assert_not_awaited()
+    lookup_mock.assert_not_awaited()
+    save_mock.assert_not_awaited()
+
+
+async def test_flood_probe_counts_as_miss(
+    async_db_session, test_workspace, test_checker
+):
+    """CR-01: a flood-interrupted probe (empty results + flood_wait_hit) is a MISS,
+    not clean. Two consecutive flood probes flag the checker spam_limited."""
+    from app.services.contact_check_worker import run_control_probe
+
+    checker_id = str(test_checker.id)
+    flood = {"checked": 0, "results": [], "flood_wait_hit": True}
+
+    with patch(
+        "app.services.contact_check_worker.checker_service.probe_control",
+        new=AsyncMock(return_value=flood),
+    ):
+        await run_control_probe(checker_id=checker_id)  # miss #1 — noise, no flag
+        row1 = (
+            await async_db_session.execute(
+                text("SELECT restriction_status FROM senders WHERE id = :id"),
+                {"id": checker_id},
+            )
+        ).fetchone()
+        assert row1.restriction_status == "none", "single flood miss must not flag (D-05)"
+
+        await run_control_probe(checker_id=checker_id)  # miss #2 — consecutive → flag
+
+    row2 = (
+        await async_db_session.execute(
+            text("SELECT restriction_status FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row2.restriction_status == "spam_limited"
+
+
+async def test_cache_hit_stamps_null_provenance(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """IN-08: a cache-served result finalizes with tg_resolved_by=NULL (the checker
+    did not resolve it live), while a live result stamps the checker id."""
+    from app.services.contact_check_worker import apply_results_with_confidence
+
+    contacts = await test_contacts_factory(count=2, tg_status="pending")
+    live_c, cache_c = contacts[0], contacts[1]
+
+    summary = {
+        "checked": 2,
+        "registered": 2,
+        "not_registered": 0,
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": live_c.phone, "is_registered": True, "telegram_id": 111, "from_cache": False},
+            {"phone": cache_c.phone, "is_registered": True, "telegram_id": 222, "from_cache": True},
+        ],
+    }
+    items = [
+        type("It", (), {"contact_id": live_c.id, "phone": live_c.phone, "username": None}),
+        type("It", (), {"contact_id": cache_c.id, "phone": cache_c.phone, "username": None}),
+    ]
+
+    await apply_results_with_confidence(
+        items, summary, checker_id=str(test_checker.id), probe_state="clean"
+    )
+
+    live_row = (
+        await async_db_session.execute(
+            text("SELECT tg_resolved_by FROM contacts WHERE id = :id"),
+            {"id": str(live_c.id)},
+        )
+    ).fetchone()
+    cache_row = (
+        await async_db_session.execute(
+            text("SELECT tg_resolved_by FROM contacts WHERE id = :id"),
+            {"id": str(cache_c.id)},
+        )
+    ).fetchone()
+    assert str(live_row.tg_resolved_by) == str(test_checker.id), "live resolve stamps checker id"
+    assert cache_row.tg_resolved_by is None, "cache hit must stamp tg_resolved_by=NULL (IN-08)"
