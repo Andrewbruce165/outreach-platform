@@ -681,6 +681,12 @@ async def test_campaign_factory(
         tools=None,
         status: str = "draft",
         description: str | None = None,
+        # Phase 19 (NORP) follow-up / auto-finish fields (migration 045).
+        follow_up_enabled: bool = False,
+        follow_up_interval_hours: int = 24,
+        follow_up_max_pings: int = 2,
+        auto_finish_hours: int = 72,
+        webhook_url: str | None = None,
     ) -> dict:
         counter["n"] += 1
         if name is None:
@@ -698,14 +704,15 @@ async def test_campaign_factory(
                 start_date, stop_date, message_template,
                 lead_webhook_url, handoff_webhook_url, finish_webhook_url,
                 lead_trigger_hint, handoff_trigger_hint, finish_trigger_hint,
-                tools
+                tools, follow_up_enabled, follow_up_interval_hours,
+                follow_up_max_pings, auto_finish_hours, webhook_url
             ) VALUES (
                 :wid, :aid, :fid, :name, :desc, :status,
                 :tz, :wstart, :wend, :wmask,
                 :sd, :stop, :tpl,
                 :lwurl, :hwurl, :fwurl,
                 :lhint, :hhint, :fhint,
-                CAST(:tools AS JSONB)
+                CAST(:tools AS JSONB), :fu_en, :fu_int, :fu_max, :fu_af, :wurl
             ) RETURNING id, workspace_id, agent_id, folder_id, name, status,
                        timezone, work_hour_start, work_hour_end, work_days_mask,
                        message_template, created_at
@@ -730,6 +737,11 @@ async def test_campaign_factory(
             "hhint": handoff_trigger_hint,
             "fhint": finish_trigger_hint,
             "tools": json.dumps(tools or []),
+            "fu_en": follow_up_enabled,
+            "fu_int": follow_up_interval_hours,
+            "fu_max": follow_up_max_pings,
+            "fu_af": auto_finish_hours,
+            "wurl": webhook_url,
         })).first()
         await async_db_session.commit()
         return {
@@ -904,6 +916,7 @@ async def test_conversation_factory(
     import uuid as _uuid
 
     counter = {"n": 0}
+    created_ids: list[str] = []
 
     async def _make(
         sender=None,
@@ -950,9 +963,46 @@ async def test_conversation_factory(
             "status": status,
         })).first()
         await async_db_session.commit()
+        created_ids.append(str(row.id))
         return dict(row._mapping)
 
-    return _make
+    yield _make
+
+    # Teardown: the factory COMMITS rows into the shared (non-rolled-back) test DB,
+    # so a conversation with a status added by a LATER migration (e.g. 'no_reply'
+    # from migration 045) would survive and violate an EARLIER constraint when a
+    # migration-reapply test (test_phase5_migration_017) rebuilds the old
+    # conversations_status_check — the resulting aborted transaction then poisons a
+    # pooled connection and cascades ("cannot use Connection.transaction() in a
+    # manually started transaction"). Delete what we created to keep the shared DB
+    # clean across tests.
+    # Only 'no_reply' rows (a status added by migration 045) are removed: they are
+    # the sole offender for test_phase5_migration_017's constraint-reapply, and
+    # deleting ONLY them avoids unblocking the re-contact dedup that count-based
+    # tests (test_recontact / test_campaign_enqueue_worker) rely on from leftover
+    # 'active'/'finished' conversations in the shared DB.
+    if created_ids:
+        try:
+            offenders = (await async_db_session.execute(
+                _t("SELECT id FROM conversations "
+                   "WHERE id = ANY(CAST(:ids AS uuid[])) AND status = 'no_reply'"),
+                {"ids": created_ids},
+            )).scalars().all()
+            offenders = [str(x) for x in offenders]
+            if offenders:
+                # Remove dependent messages first (FK conversation_id) so the
+                # conversation DELETE isn't blocked and rolled back.
+                await async_db_session.execute(
+                    _t("DELETE FROM messages WHERE conversation_id = ANY(CAST(:ids AS uuid[]))"),
+                    {"ids": offenders},
+                )
+                await async_db_session.execute(
+                    _t("DELETE FROM conversations WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                    {"ids": offenders},
+                )
+                await async_db_session.commit()
+        except Exception:
+            await async_db_session.rollback()
 
 
 @pytest_asyncio.fixture
