@@ -698,6 +698,12 @@ class CampaignCreate(BaseModel):
         description="Daily new-dialog cap per sender within this campaign (D-12). "
                     "Green corridor <=50; soft-warn >50; hard cap 100.",
     )
+    # ── Phase 19 NORP-02/NORP-05 follow-up + auto-finish (D-08/D-12). ──
+    # Toggle defaults OFF; bounds enforced at the API layer (Pydantic), no DB CHECK.
+    follow_up_enabled: bool = False
+    follow_up_interval_hours: int = Field(default=24, ge=4, le=168)
+    follow_up_max_pings: int = Field(default=2, ge=1, le=5)
+    auto_finish_hours: int = Field(default=72, ge=24, le=720)
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     # dialogue_flow: ordered conversation stages (max 7 — T2 size guard).
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
@@ -763,6 +769,11 @@ class CampaignUpdate(BaseModel):
     recontact_min_age_days: Optional[int] = Field(default=None, ge=1, le=365)
     # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14) — partial PATCH. ──
     max_new_dialogs_per_day: Optional[int] = Field(default=None, ge=1, le=100)
+    # ── Phase 19 NORP-02/NORP-05 follow-up + auto-finish (D-08/D-12) — partial PATCH. ──
+    follow_up_enabled: Optional[bool] = None
+    follow_up_interval_hours: Optional[int] = Field(default=None, ge=4, le=168)
+    follow_up_max_pings: Optional[int] = Field(default=None, ge=1, le=5)
+    auto_finish_hours: Optional[int] = Field(default=None, ge=24, le=720)
     # ── Phase 11 campaign fields (D-04/D-12/D-14) — partial PATCH. ──
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
     arguments_facts: Optional[str] = None
@@ -820,6 +831,11 @@ class CampaignResponse(BaseModel):
     recontact_min_age_days: int = 30
     # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14). ──
     max_new_dialogs_per_day: int = 50
+    # ── Phase 19 NORP-02/NORP-05 follow-up + auto-finish (D-08/D-12). ──
+    follow_up_enabled: bool = False
+    follow_up_interval_hours: int = 24
+    follow_up_max_pings: int = 2
+    auto_finish_hours: int = 72
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     dialogue_flow: List[dict] = Field(default_factory=list)
     arguments_facts: Optional[str] = None
