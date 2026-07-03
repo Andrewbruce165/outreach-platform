@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 19-05-PLAN.md (Phase 19 complete)
-last_updated: "2026-07-03T10:02:59.027Z"
-last_activity: 2026-07-03 - Completed plan 19-05 (openapi regen + Follow Up campaign form, human-verified)
+last_updated: "2026-07-03T10:20:29.030Z"
+last_activity: 2026-07-03
 progress:
   total_phases: 21
   completed_phases: 19
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 19 — COMPLETE (all 5 plans)
-Plan: 19-05 complete (Wave 4) — Phase 19 done
+Phase: 19
+Plan: Not started
 Status: 19-05 done — regenerated lovable-handoff/openapi.json OFFLINE (app.openapi() in test container) with the 4 follow_up_* campaign fields + no_reply status, and added the Follow Up settings block (Enable toggle default OFF + interval 4–168h / max pings 1–5 / auto-finish 24–720h numeric inputs) to BOTH the create (campaigns.new.tsx) and edit (EditCampaignModal.tsx) campaign forms in the sibling frontend repo, wired through the create/update mutation, TS types regenerated, tsc clean (D-08/D-12/NORP-13). Cross-repo isolation preserved: openapi→outreach-platform (a6644fd), form+types→aimly-tg-outreach (f5b975e). Task 3 human-verify gate APPROVED by user (create/edit persistence + bounds + live no_reply/ping/auto-finish flow confirmed). Phase 19 (No Reply Follow-Up and Auto-Finish) now COMPLETE end-to-end: schema (19-01), API+AI (19-02), listener/queue guards (19-03), FollowUpWorker (19-04), product surface (19-05).
-Last activity: 2026-07-03 - Completed plan 19-05 (openapi regen + Follow Up campaign form, human-verified)
+Last activity: 2026-07-03
 
 Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05: schema, API+AI, listener/queue guards, FollowUpWorker, openapi+form)
 
