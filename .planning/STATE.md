@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Phase 20 UI-SPEC approved
-last_updated: "2026-07-03T20:37:00.000Z"
-last_activity: "2026-07-03 - Completed quick task 260703-rm3: Batch B checker/worker resilience — FloodWait cap, dead-session auth flip, import cleanup, empty-control-set rest-only degrade, invalid_phone→error, deterministic LATERAL rotation"
+last_updated: "2026-07-03T21:05:39.000Z"
+last_activity: "2026-07-03 - Completed quick task 260703-ssv: Batch C+D queue fixes — message_queue priority/attempts/as_draft DB defaults+backfill (mig 047, WR-02), priority-aware NULL-safe _queue_position (WR-03), durable non-blocking senders.long_pause_until replacing inline asyncio.sleep head-of-line block (mig 048, WR-04); deployed to prod, migrations applied clean, 0 NULL-priority rows"
 progress:
   total_phases: 22
   completed_phases: 19
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 Phase: 19
 Plan: Not started
 Status: 19-05 done — regenerated lovable-handoff/openapi.json OFFLINE (app.openapi() in test container) with the 4 follow_up_* campaign fields + no_reply status, and added the Follow Up settings block (Enable toggle default OFF + interval 4–168h / max pings 1–5 / auto-finish 24–720h numeric inputs) to BOTH the create (campaigns.new.tsx) and edit (EditCampaignModal.tsx) campaign forms in the sibling frontend repo, wired through the create/update mutation, TS types regenerated, tsc clean (D-08/D-12/NORP-13). Cross-repo isolation preserved: openapi→outreach-platform (a6644fd), form+types→aimly-tg-outreach (f5b975e). Task 3 human-verify gate APPROVED by user (create/edit persistence + bounds + live no_reply/ping/auto-finish flow confirmed). Phase 19 (No Reply Follow-Up and Auto-Finish) now COMPLETE end-to-end: schema (19-01), API+AI (19-02), listener/queue guards (19-03), FollowUpWorker (19-04), product surface (19-05).
-Last activity: 2026-07-03 - Completed quick task 260703-j25: Batch A checker fix — live-only probes + live-only throttle signal + NULL cache provenance
+Last activity: 2026-07-03 - Completed quick task 260703-ssv: Batch C+D queue fixes — priority DB defaults+backfill (WR-02), priority-aware NULL-safe _queue_position (WR-03), durable non-blocking long-pause (WR-04); deployed to prod
 
 Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05: schema, API+AI, listener/queue guards, FollowUpWorker, openapi+form)
 
