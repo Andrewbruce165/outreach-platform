@@ -103,15 +103,17 @@ async def list_conversations(
 ) -> ConversationListResponse:
     """INBX-01 + INBX-05 — list workspace conversations with filters.
 
-    D-17: status=None → hide status='bot_ignored'.
+    D-17: status=None → hide status='bot_ignored' and status='telegram_service'
+    (Telegram login/auth-code notifications live in their own 'Telegram' tab,
+    reached via ?status=telegram_service).
     Warmup-pair exclude preserved from legacy (workspace boundary added).
     """
     where_clauses = ["c.workspace_id = :wid"]
     params: dict = {"wid": str(ctx.workspace_id), "limit": limit, "offset": offset}
 
-    # D-17: hide bot_ignored unless caller explicitly asks for it.
+    # D-17: hide bot_ignored + telegram_service unless caller explicitly asks.
     if status is None:
-        where_clauses.append("c.status != 'bot_ignored'")
+        where_clauses.append("c.status NOT IN ('bot_ignored', 'telegram_service')")
     else:
         where_clauses.append("c.status = :status")
         params["status"] = status

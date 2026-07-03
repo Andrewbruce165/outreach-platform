@@ -230,6 +230,13 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_045.exists():
             await asyncpg_conn.execute(_mig_045.read_text())
 
+        # 046 (adds 'telegram_service' to conversations_status_check) is SQL-only —
+        # apply so the test DB accepts the Telegram service-account status. Exists-
+        # guard keeps this green until migrations/046_telegram_service_status.sql lands.
+        _mig_046 = PROJECT_ROOT / "migrations" / "046_telegram_service_status.sql"
+        if _mig_046.exists():
+            await asyncpg_conn.execute(_mig_046.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.

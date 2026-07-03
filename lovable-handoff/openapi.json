@@ -4950,7 +4950,7 @@
           "conversations"
         ],
         "summary": "List Conversations",
-        "description": "INBX-01 + INBX-05 — list workspace conversations with filters.\n\nD-17: status=None → hide status='bot_ignored'.\nWarmup-pair exclude preserved from legacy (workspace boundary added).",
+        "description": "INBX-01 + INBX-05 — list workspace conversations with filters.\n\nD-17: status=None → hide status='bot_ignored' and status='telegram_service'\n(Telegram login/auth-code notifications live in their own 'Telegram' tab,\nreached via ?status=telegram_service).\nWarmup-pair exclude preserved from legacy (workspace boundary added).",
         "operationId": "list_conversations_api_v1_conversations_get",
         "parameters": [
           {

@@ -119,6 +119,48 @@ async def test_list_status_bot_ignored_explicit(
     assert "+79991111103" in phones
 
 
+# ── 4b. quick-260703-goh: hide telegram_service by default ────────────────────
+
+
+async def test_list_hides_telegram_service_by_default(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_conversation_factory,
+):
+    """Default response hides status='telegram_service' (Telegram tab only)."""
+    await test_conversation_factory(contact_phone="+79991111201", status="active")
+    await test_conversation_factory(
+        contact_phone="+79991111202", status="telegram_service", ai_enabled=False
+    )
+    await _bind(async_db_session, test_workspace.id, "u-tg-hide")
+
+    r = await async_client.get(
+        "/api/v1/conversations", headers=_auth_headers(valid_supabase_jwt, "u-tg-hide")
+    )
+    assert r.status_code == 200
+    phones = {c["contact_phone"] for c in r.json()["conversations"]}
+    assert "+79991111201" in phones
+    assert "+79991111202" not in phones
+
+
+async def test_list_status_telegram_service_explicit(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_conversation_factory,
+):
+    """?status=telegram_service returns exactly those rows → the Telegram tab."""
+    await test_conversation_factory(
+        contact_phone="+79991111203", status="telegram_service", ai_enabled=False
+    )
+    await _bind(async_db_session, test_workspace.id, "u-tg-exp")
+
+    r = await async_client.get(
+        "/api/v1/conversations?status=telegram_service",
+        headers=_auth_headers(valid_supabase_jwt, "u-tg-exp"),
+    )
+    assert r.status_code == 200
+    phones = {c["contact_phone"] for c in r.json()["conversations"]}
+    assert "+79991111203" in phones
+
+
 # ── 5. Warmup-pair exclude ────────────────────────────────────────────────────
 
 
