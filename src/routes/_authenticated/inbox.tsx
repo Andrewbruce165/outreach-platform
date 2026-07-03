@@ -67,11 +67,13 @@ const STATUS_FILTERS = [
   { id: "handoff", label: "Handoff" },
   { id: "no-reply", label: "No reply" },
   { id: "finished", label: "Finished" },
+  { id: "telegram", label: "Telegram" },
 ] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number]["id"];
 
 function matchesStatus(c: Conversation, f: StatusFilter): boolean {
   if (f === "all") return true;
+  if (f === "telegram") return true; // fetched via server-side status param
   const s = (c.status || "").toLowerCase();
   if (f === "active") {
     return !["finished", "handoff", "stopped", "closed"].includes(s);
