@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Phase 20 context gathered
+stopped_at: Phase 20 UI-SPEC approved
 last_updated: "2026-07-03T20:37:00.000Z"
 last_activity: "2026-07-03 - Completed quick task 260703-rm3: Batch B checker/worker resilience — FloodWait cap, dead-session auth flip, import cleanup, empty-control-set rest-only degrade, invalid_phone→error, deterministic LATERAL rotation"
 progress:
-  total_phases: 21
+  total_phases: 22
   completed_phases: 19
   total_plans: 78
   completed_plans: 77
@@ -257,6 +257,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-03T10:00:09.417Z
-Stopped at: Phase 20 context gathered
-Resume file: .planning/phases/20-account-profile-management/20-CONTEXT.md
+Last session: 2026-07-03T13:35:36.381Z
+Stopped at: Phase 20 UI-SPEC approved
+Resume file: .planning/phases/20-account-profile-management/20-UI-SPEC.md
