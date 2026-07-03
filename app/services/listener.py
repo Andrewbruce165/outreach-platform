@@ -947,6 +947,16 @@ class TelegramListener:
 
             logger.info(f"✅ Сообщение сохранено в conversation {conversation_id[:8]}...")
 
+            # === Phase 19 D-03 / D-17: genuine contact reply ===
+            # A real inbound message reverts a no_reply conversation back to
+            # 'active' and cancels this conversation's pending follow-up pings.
+            # MUST run BEFORE the AI-dispatch check below: `conv` was read by
+            # get_or_create_conversation before this revert (Pitfall 4), so we
+            # also update the local dict so the normal answerer fires this turn.
+            revert = await handle_no_reply_revert(conversation_id)
+            if revert["reverted"]:
+                conv["status"] = "active"
+
             # === Проверяем AI и добавляем в буфер ===
             ai_context_id = conv["ai_context_id"] or sender_info.get("ai_context_id")
 
@@ -1751,6 +1761,87 @@ class TelegramListener:
         self._connected_sender_ids.clear()
         self._proxy_snapshot.clear()
         self._sender_id_to_slug.clear()
+
+
+async def handle_no_reply_revert(conversation_id: str) -> dict:
+    """Phase 19 D-03 / D-17 (first guard) — react to a genuine contact reply.
+
+    Called from handle_incoming_message when an inbound contact message arrives.
+    Two effects, both scoped to this conversation:
+
+    1. **D-03 revert:** if the conversation is in the follow-up ``no_reply`` state,
+       flip it back to ``active`` so the normal AI answerer fires again. Guarded on
+       ``status = 'no_reply'`` (a manual/lead/finished/handoff status is preserved).
+    2. **D-17 first guard:** cancel this conversation's *pending* follow-up ping
+       queue rows (``status='cancelled'``) so a ping scheduled hours ago can never
+       land in a dialog the contact has already answered. Scoped to the
+       conversation's sender_id + recipient_phone (+ campaign_id when set), matching
+       the antispam queue-cancel precedent in ``_handle_antispam_signal``.
+
+    Returns a dict ``{"reverted": bool, "cancelled": int}``. Never raises — a
+    transient failure here must not poison the listener's incoming path (the
+    inbound message is already saved by the caller).
+    """
+    reverted = False
+    cancelled = 0
+    try:
+        async with AsyncSessionLocal() as session:
+            row = (await session.execute(text("""
+                SELECT sender_id, contact_phone, campaign_id, status
+                FROM conversations WHERE id = :cid
+            """), {"cid": str(conversation_id)})).first()
+
+            if row is None:
+                return {"reverted": False, "cancelled": 0}
+
+            # 1. D-03 revert no_reply -> active (guarded so it can't clobber
+            #    manual/lead/finished/handoff/bot_ignored states).
+            if row.status == "no_reply":
+                await session.execute(text("""
+                    UPDATE conversations
+                    SET status = 'active', updated_at = NOW()
+                    WHERE id = :cid AND status = 'no_reply'
+                """), {"cid": str(conversation_id)})
+                reverted = True
+
+            # 2. D-17 first guard: cancel this conversation's pending pings.
+            #    Scope to sender + recipient_phone (+ campaign when known) and
+            #    status='pending' — the sent opener is already 'sent', so pending
+            #    rows for an in-conversation contact are follow-up pings.
+            cancel_params = {
+                "sid": str(row.sender_id),
+                "phone": row.contact_phone,
+            }
+            campaign_filter = ""
+            if row.campaign_id is not None:
+                campaign_filter = " AND campaign_id = :cid_campaign"
+                cancel_params["cid_campaign"] = str(row.campaign_id)
+
+            cancelled_rows = await session.execute(text(f"""
+                UPDATE message_queue
+                SET status = 'cancelled',
+                    finished_at = NOW(),
+                    error_message = 'contact replied'
+                WHERE sender_id = :sid
+                  AND recipient_phone = :phone
+                  AND status = 'pending'{campaign_filter}
+                RETURNING id
+            """), cancel_params)
+            cancelled = len(cancelled_rows.fetchall())
+
+            await session.commit()
+
+        if reverted or cancelled:
+            logger.info(
+                "↩️  no_reply revert conv=%s reverted=%s cancelled_pings=%d",
+                str(conversation_id)[:8], reverted, cancelled,
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"❌ handle_no_reply_revert failed for conversation "
+            f"{str(conversation_id)[:8]}: {e}", exc_info=True
+        )
+    return {"reverted": reverted, "cancelled": cancelled}
 
 
 async def main():

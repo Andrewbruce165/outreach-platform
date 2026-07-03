@@ -183,17 +183,50 @@ async def test_finish_reason_marker(test_running_campaign_factory, test_conversa
 
 # ── NORP-07: an inbound reply reverts no_reply -> active and cancels pings ─────
 
-async def test_reply_cancels_pings(test_conversation_factory):
-    """RED until Plan 19-03 wires the listener revert.
+async def test_reply_cancels_pings(
+    test_running_campaign_factory, test_conversation_factory,
+    test_queue_item_factory, async_db_session,
+):
+    """Plan 19-03 (D-03 + D-17 first guard): an inbound reply reverts a no_reply
+    conversation back to 'active' AND cancels its pending follow-up pings.
 
-    When a no_reply conversation receives an inbound reply, the listener flips it
-    back to 'active' (or 'manual') so it exits the follow-up loop.
+    Seed: a running campaign, a no_reply conversation for one contact, and a
+    pending follow-up ping already scheduled in message_queue for that contact.
+    handle_no_reply_revert must (a) flip the conversation to 'active' and (b)
+    cancel the pending ping (status='cancelled', never sent).
     """
-    from app.services.listener import handle_no_reply_revert  # RED: not built yet
+    from app.services.listener import handle_no_reply_revert
 
-    conv = await test_conversation_factory(status="no_reply")
-    await handle_no_reply_revert(conv["id"])
-    assert conv["id"] is not None  # active-revert assertion in 19-03
+    camp, senders = await test_running_campaign_factory()
+    sender = senders[0]
+    phone = "+79005551234"
+
+    conv = await test_conversation_factory(
+        sender=sender, campaign_id=camp["id"], status="no_reply",
+        contact_phone=phone,
+    )
+    # A pending follow-up ping already scheduled for this contact.
+    await test_queue_item_factory(
+        camp["id"], sender.id, phone, status="pending", with_cca=False,
+    )
+
+    result = await handle_no_reply_revert(conv["id"])
+
+    assert result["reverted"] is True
+    assert result["cancelled"] == 1
+
+    # (a) conversation reverted no_reply -> active so the normal answerer fires.
+    conv_row = (await async_db_session.execute(text(
+        "SELECT status FROM conversations WHERE id = :id"
+    ), {"id": str(conv["id"])})).first()
+    assert conv_row.status == "active"
+
+    # (b) the pending ping is cancelled (never sent).
+    q_row = (await async_db_session.execute(text(
+        "SELECT status FROM message_queue "
+        "WHERE sender_id = :sid AND recipient_phone = :phone"
+    ), {"sid": str(sender.id), "phone": phone})).first()
+    assert str(q_row.status).endswith("cancelled")
 
 
 # ── NORP-12: a paused campaign's conversations get NO ping (frozen) ────────────
