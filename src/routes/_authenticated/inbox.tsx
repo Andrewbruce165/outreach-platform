@@ -67,11 +67,13 @@ const STATUS_FILTERS = [
   { id: "handoff", label: "Handoff" },
   { id: "no-reply", label: "No reply" },
   { id: "finished", label: "Finished" },
+  { id: "telegram", label: "Telegram" },
 ] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number]["id"];
 
 function matchesStatus(c: Conversation, f: StatusFilter): boolean {
   if (f === "all") return true;
+  if (f === "telegram") return true; // fetched via server-side status param
   const s = (c.status || "").toLowerCase();
   if (f === "active") {
     return !["finished", "handoff", "stopped", "closed"].includes(s);
@@ -98,11 +100,17 @@ function InboxPage() {
   // since the backend has no mark-as-read endpoint in v1.
   const viewedRef = useRef<Set<string>>(new Set());
 
+  const isTelegramTab = statusFilter === "telegram";
+
   const listQ = useQuery({
-    queryKey: ["conversations", { search }],
+    queryKey: ["conversations", { search, status: isTelegramTab ? "telegram_service" : null }],
     queryFn: () =>
       api<ConversationList>("/api/v1/conversations", {
-        query: { limit: 100, ...(search ? { search } : {}) },
+        query: {
+          limit: 100,
+          ...(search ? { search } : {}),
+          ...(isTelegramTab ? { status: "telegram_service" } : {}),
+        },
       }),
     refetchInterval: 10_000,
   });
@@ -124,9 +132,9 @@ function InboxPage() {
   const conversations = useMemo(
     () =>
       allConversations
-        .filter((c) => campaignFilter === "all" || c.campaign_id === campaignFilter)
+        .filter((c) => isTelegramTab || campaignFilter === "all" || c.campaign_id === campaignFilter)
         .filter((c) => matchesStatus(c, statusFilter)),
-    [allConversations, campaignFilter, statusFilter],
+    [allConversations, campaignFilter, statusFilter, isTelegramTab],
   );
 
   useEffect(() => {
@@ -373,6 +381,7 @@ function StatusPill({ status }: { status: string }) {
     "no-reply": { bg: "var(--bg-soft)", fg: "var(--text-muted)", label: "No reply" },
     no_reply: { bg: "var(--bg-soft)", fg: "var(--text-muted)", label: "No reply" },
     active: { bg: "var(--tg-blue-soft, #e8f1fc)", fg: "var(--tg-blue, #3390ec)", label: "Active" },
+    telegram_service: { bg: "var(--tg-blue-soft, #e8f1fc)", fg: "var(--tg-blue, #3390ec)", label: "Telegram" },
   };
   const entry = map[s] || {
     bg: "var(--bg-soft)",
@@ -483,8 +492,10 @@ function ConvList({
       <div style={{ padding: "4px 14px 10px" }}>
         <div style={{ position: "relative" }}>
           <select
-            value={campaignFilter}
+            value={statusFilter === "telegram" ? "all" : campaignFilter}
             onChange={(e) => onCampaignFilter(e.target.value)}
+            disabled={statusFilter === "telegram"}
+            title={statusFilter === "telegram" ? "Not applicable to Telegram service messages" : undefined}
             style={{
               width: "100%",
               height: 32,
@@ -493,9 +504,10 @@ function ConvList({
               borderRadius: 7,
               border: "1px solid var(--border)",
               background: "var(--bg)",
-              color: "var(--text)",
+              color: statusFilter === "telegram" ? "var(--text-faint)" : "var(--text)",
               appearance: "none",
-              cursor: "pointer",
+              cursor: statusFilter === "telegram" ? "not-allowed" : "pointer",
+              opacity: statusFilter === "telegram" ? 0.6 : 1,
             }}
           >
             <option value="all">All campaigns</option>
