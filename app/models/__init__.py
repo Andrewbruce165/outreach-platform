@@ -105,6 +105,12 @@ class Sender(Base):
     # never touches restriction_status/lifecycle_status/restricted_until and writes no
     # sender_restriction_events row; a checker waking from rest is just re-selected.
     checker_rest_until = Column(DateTime(timezone=True), nullable=True)  # benign post-batch rest (NOT a restriction)
+    # Migration 048 (quick-260703-ssv / WR-04): durable non-blocking long-pause
+    # marker. Replaces the inline asyncio.sleep(long_pause) that stalled the whole
+    # shared queue tick. _tick excludes a sender while long_pause_until > NOW(), so
+    # the pause survives a process restart (re-read from DB each tick, no in-memory
+    # state) and doubles as the "already paused, don't re-trigger" guard.
+    long_pause_until = Column(DateTime(timezone=True), nullable=True)  # WR-04: durable non-blocking long-pause marker
     # Migration 036 (quick-260629-b7j): per-checker CONSECUTIVE contacts-API trip
     # counter for the ESCALATING backoff. Each spam_limited trip increments it; the
     # cooldown is base * 2^(trip-1) capped at contact_check_max_backoff_seconds; a

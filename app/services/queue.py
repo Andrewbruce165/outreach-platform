@@ -260,11 +260,16 @@ class QueueWorker:
                         c.stop_date AS c_stop
                     FROM message_queue mq
                     JOIN campaigns c ON c.id = mq.campaign_id
+                    JOIN senders s ON s.id = mq.sender_id
                     WHERE mq.status = 'pending'
                       AND mq.scheduled_at <= NOW()
                       AND mq.campaign_id IS NOT NULL
                       AND c.status = 'running'
                       AND (c.start_date IS NULL OR NOW() >= c.start_date)
+                      -- WR-04: durably skip senders in a long human-like pause.
+                      -- Re-read from the DB every tick (no in-memory state) so the
+                      -- pause survives a process restart; other senders keep sending.
+                      AND (s.long_pause_until IS NULL OR s.long_pause_until <= NOW())
                     ORDER BY mq.scheduled_at ASC
                     LIMIT :batch
                 """),
@@ -329,6 +334,18 @@ class QueueWorker:
         """
         pause_every = random.randint(LONG_PAUSE_EVERY_MIN, LONG_PAUSE_EVERY_MAX)
         async with AsyncSessionLocal() as db:
+            # WR-04 double-fire guard: if a long pause is already active, do NOT
+            # re-trigger (and never extend it). The static 30-min sent count keeps
+            # satisfying the modulo on consecutive ticks, so without this guard the
+            # pause would re-fire every tick while the sender is already paused.
+            still_paused = (await db.execute(
+                text("SELECT long_pause_until IS NOT NULL AND long_pause_until > NOW() "
+                     "FROM senders WHERE id = :sid"),
+                {"sid": str(sender_id)},
+            )).scalar()
+            if still_paused:
+                return None
+
             # Count messages sent in the last 30 minutes (rolling activity window)
             r = await db.execute(
                 text("""
@@ -354,11 +371,22 @@ class QueueWorker:
         # Check if a long human-like pause is due (outside the DB transaction)
         long_pause = await self._get_long_pause_seconds(sender_id)
         if long_pause:
+            # WR-04: persist a durable marker instead of blocking with
+            # asyncio.sleep(long_pause). The inline sleep stalled EVERY sender in
+            # EVERY workspace on the shared tick (head-of-line blocking). _tick
+            # excludes this sender until long_pause_until expires; other senders
+            # keep sending, and the pause survives a process restart.
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    text("UPDATE senders SET long_pause_until = NOW() + make_interval(secs => :dur) WHERE id = :sid"),
+                    {"dur": long_pause, "sid": str(sender_id)},
+                )
+                await db.commit()
             logger.info(
-                f"Sender {sender_id}: long pause {long_pause}s "
-                f"(human-behaviour pattern break)"
+                f"Sender {sender_id}: long pause {long_pause}s set "
+                f"(durable, non-blocking)"
             )
-            await asyncio.sleep(long_pause)
+            return
 
         # ── Phase 13 (PACE-03..07, D-05/D-06/D-08/D-10): even-pacing pre-query ──
         # Compute the "expected-by-now" new-dialog count for THIS sender's active
