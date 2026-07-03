@@ -522,12 +522,25 @@ Plans:
 ### Phase 20: Account Profile Management
 
 **Goal:** Editable Telegram account profile (name, username, bio, photo, linked email if possible, 2FA) from the account edit view, plus richer account cards (photo, name, username, phone, update/delete/reauth) on the accounts list page.
-**Requirements**: TBD
+**Requirements**: PROF-01, PROF-02, PROF-03, PROF-04, PROF-05, PROF-06, PROF-07, PROF-08, PROF-09 (derived during /gsd:plan-phase 20 — see REQUIREMENTS.md §Account Profile Management; tracked via decisions D-01..D-14)
 **Depends on:** Phase 19
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 20 to break down)
+**Wave 1**
+- [ ] 20-01-foundation-schema-and-test-scaffold-PLAN.md — migration 047 (5 cached-profile columns) + ORM mirror + Pydantic schemas + Wave-0 RED test scaffold [Wave 1, no deps] — PROF-01
+
+**Wave 2** *(blocked on 20-01 — shared telegram.py/senders.py spine)*
+- [ ] 20-02-profile-identity-and-guardrail-PLAN.md — update_profile/check_username/set_username + PATCH /profile + /username-check + guardrail (D-08 hard-block / D-09 advisory) + onboarding cache [Wave 2, depends_on: 20-01] — PROF-02, PROF-03, PROF-08
+
+**Wave 3** *(blocked on 20-02 — shares telegram.py/senders.py)*
+- [ ] 20-03-photo-and-resync-PLAN.md — set/delete_profile_photo + resync_profile + photo upload/delete/serve + resync endpoints (D-08/D-11/D-12) [Wave 3, depends_on: 20-02] — PROF-04, PROF-06, PROF-07
+
+**Wave 4** *(blocked on 20-03 — shares telegram.py/senders.py)*
+- [ ] 20-04-two-fa-and-recovery-email-PLAN.md — edit_2fa password path + raw two-request recovery-email confirm flow + 3 endpoints (D-03/D-04/D-05) [Wave 4, depends_on: 20-03] — PROF-05
+
+**Wave 5** *(frontend + handoff, human-verify)*
+- [ ] 20-05-frontend-and-handoff-PLAN.md — openapi/types regen + enriched accounts.tsx (row/kebab/two-section modal/guardrails) + human UAT (cross-repo) [Wave 5, depends_on: 20-02, 20-03, 20-04] — PROF-09
 
 ---
 

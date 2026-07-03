@@ -450,3 +450,23 @@
 *2026-06-30 — derived SRLD-01..09 (Sender-side Resolve Ladder) during Phase 17 planning*
 *2026-07-02 — derived LLMP-01..12 (Switchable LLM Provider in UI) during Phase 18 planning*
 *2026-07-02 — derived NORP-01..13 (No Reply Follow-Up and Auto-Finish) during Phase 19 planning*
+
+---
+
+## Phase 20: Account Profile Management (PROF-01..09)
+
+*Derived during /gsd:plan-phase 20 from CONTEXT.md decisions D-01..D-14. Promotes + expands seed `.planning/seeds/account-profile-self-serve.md` (PROF-01, was v2-scoped); user explicitly added 2FA + recovery email (D-01). Phase adds ONE migration (047).*
+
+- **PROF-01**: Cached profile columns on `senders` — `tg_username VARCHAR(32)`, `tg_bio VARCHAR(140)`, `tg_photo BYTEA`, `tg_photo_mime VARCHAR(32)`, `profile_field_changed_at JSONB NOT NULL DEFAULT '{}'` — idempotent migration `047_account_profile.sql`, auto-applied; ORM `Sender` mirror with `server_default=text("'{}'::jsonb")` on the JSONB (ORM-drift lesson mig 040/042) (D-10/D-11)
+- **PROF-02**: Edit first/last name + bio via `account.UpdateProfileRequest` (only changed fields passed; `None` leaves a field untouched); warning-only, NEVER blocked (D-07); `AboutTooLongError` → 400 `BIO_TOO_LONG`
+- **PROF-03**: Edit username via `account.CheckUsernameRequest` pre-check + `account.UpdateUsernameRequest`; taken → 400 `USERNAME_TAKEN`, invalid → 400 `USERNAME_INVALID`, current username → success no-op (`UsernameNotModifiedError`), clear via `""`; changed <1h ago → 409 `TOO_FREQUENT` HARD block (D-08)
+- **PROF-04**: Upload profile photo (`client.upload_file` → `photos.UploadProfilePhotoRequest`, cache Telegram's own normalized avatar) + delete (fresh `get_profile_photos` → `photos.DeletePhotosRequest`); ≤5 MB + jpg/png validated BEFORE the Telegram call (413 `FILE_TOO_LARGE` / 422 `UNSUPPORTED_FILE_TYPE`); changed <1h ago → 409 HARD block (D-08)
+- **PROF-05**: 2FA password set/change via `client.edit_2fa` (NO email → one stateless request; set-new when no 2FA, current required to change — D-04) + recovery-email set/change via the raw two-request confirm flow (`GetPasswordRequest` + `compute_check` + `UpdatePasswordSettingsRequest` → catch `EmailUnconfirmedError` → later `ConfirmPasswordEmailRequest`); wrong current → 400 `PASSWORD_INVALID`; `PasswordTooFreshError`/`SessionTooFreshError` → 409 `TOO_FRESH`; the 2FA password is NEVER persisted (D-03/D-05)
+- **PROF-06**: Manual resync (`get_me` + `users.GetFullUserRequest` + `download_profile_photo(file=bytes)`) refreshes cached `tg_username`/`tg_bio`/`tg_photo`; read-only, no cooldown/stamp; the repurposed card "Update" action (D-12)
+- **PROF-07**: Cached photo served via authenticated workspace-scoped `GET /senders/{slug}/photo` returning raw bytes + mime; NEVER a raw blob URL, NEVER base64-inlined into the list; list JSON carries only `has_photo: bool` (D-11)
+- **PROF-08**: Onboarding finalize populates the profile cache (`tg_username` at minimum) on BOTH the fresh-create and the plain-flow re-auth-upsert paths (D-10)
+- **PROF-09**: Frontend — enriched `SenderRow` (cached avatar photo + `@username`), kebab `Изменить профиль` (edit modal) / `Обновить профиль` (resync), two-section profile modal (Section A identity = one scoped save + Section B 2FA password + two-step recovery email, each its own scoped primary button), D-06/D-07/D-08/D-09 warning/hard-block guardrails; regen `lovable-handoff/openapi.json` + types (cross-repo, sibling `aimly-tg-outreach`), human-UAT (D-13/D-14)
+
+**Guardrail decisions:** D-08 (username/photo 1h HARD block) covered by PROF-03/PROF-04 backend + PROF-09 UI; D-09 (warmup / <7-day advisory, NOT blocked) covered by PROF-02 backend advisory + PROF-09 UI.
+
+*2026-07-03 — derived PROF-01..09 (Account Profile Management) during Phase 20 planning.*
