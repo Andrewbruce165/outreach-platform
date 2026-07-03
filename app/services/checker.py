@@ -65,6 +65,13 @@ from app.services.telegram import make_telegram_client
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# WR-05: Telethon auto-sleeps FloodWaits <= flood_sleep_threshold (60s); a RAISED
+# FloodWait is longer than that. Cap the inline block so a multi-hour wait can't
+# freeze the single-coroutine ContactCheckWorker — the checker is parked with a
+# durable cooldown by the inline degrade path (_maybe_degrade_on_signal), which is
+# where long waits belong. flood_wait_hit=True is still returned (partial batch).
+_FLOOD_WAIT_INLINE_CAP = 60
+
 
 async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dict:
     """Resolve a single phone LIVE: ResolvePhone first, importContacts fallback.
@@ -95,6 +102,7 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     so the worker's ``res.get("username")`` never KeyErrors.
     """
     from telethon.tl.functions.contacts import (
+        DeleteByPhonesRequest,
         DeleteContactsRequest,
         ImportContactsRequest,
         ResolvePhoneRequest,
@@ -116,7 +124,11 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     except FloodWaitError:
         raise  # caller handles FloodWait — never mask it
     except PhoneNumberInvalidError:
-        return {"is_registered": False, "telegram_id": None, "username": None}
+        # IN-02: a syntactically invalid number is a HARD error (garbage input),
+        # NOT a clean "not registered" verdict. Tag it so the batch producer skips
+        # the cache write and the worker finalizes tg_status='error' (never
+        # not_registered/high — which would silently swallow a bad-data row).
+        return {"is_registered": False, "telegram_id": None, "username": None, "error": "invalid_phone"}
     except PhoneNotOccupiedError:
         resolve_empty = True
     except Exception as exc:  # noqa: BLE001
@@ -132,10 +144,16 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     # 2. Fallback: importContacts — surfaces a private/registered user that
     #    ResolvePhone could not see. Its own failure is non-fatal (→ not registered).
     imported_user = None
+    import_completed = False
     try:
         res = await client(ImportContactsRequest(contacts=[
             InputPhoneContact(client_id=0, phone=phone, first_name="Check", last_name="")
         ]))
+        # WR-07: the import HAS completed (Telegram stored the phone as a saved
+        # contact) the moment ImportContactsRequest returns — even when NO user
+        # surfaced. Mark it BEFORE inspecting res.users so the finally cleans up
+        # the saved phone in BOTH branches.
+        import_completed = True
         if res and getattr(res, "users", None):
             imported_user = res.users[0]
     except FloodWaitError:
@@ -143,16 +161,23 @@ async def resolve_phone_with_fallback(client: TelegramClient, phone: str) -> dic
     except Exception as exc:  # noqa: BLE001 — import fallback must not crash the batch
         logger.warning("importContacts fallback failed for a phone: %s", exc)
         return {"is_registered": False, "telegram_id": None, "username": None}
+    finally:
+        # MANDATORY cleanup (D-02 / Pitfall 4) — runs in finally per the docstring contract.
+        # WR-07: clean BOTH branches — DeleteContacts for a surfaced user, DeleteByPhones
+        # for an empty import (Telegram still stored the phone as a saved contact even when
+        # no user surfaced — the shadow-ban accelerator). Guard on import_completed so a
+        # flood/failed import (nothing added) fires no extra contacts-API call.
+        if import_completed:
+            try:
+                if imported_user is not None:
+                    await client(DeleteContactsRequest(id=[imported_user]))
+                else:
+                    await client(DeleteByPhonesRequest(phones=[phone]))
+            except Exception as exc:  # noqa: BLE001 — cleanup failure logged, not fatal
+                logger.warning("import-fallback address-book cleanup failed for a phone: %s", exc)
 
     if imported_user is None:
         return {"is_registered": False, "telegram_id": None, "username": None}
-
-    # 3. MANDATORY cleanup (D-02 / Pitfall 4): remove the imported contact so the
-    #    checker's address book / behavioural profile stays clean.
-    try:
-        await client(DeleteContactsRequest(id=[imported_user]))
-    except Exception as exc:  # noqa: BLE001 — cleanup failure is logged, not fatal
-        logger.warning("DeleteContacts cleanup after import failed: %s", exc)
 
     return {
         "is_registered": True,
@@ -363,9 +388,13 @@ class CheckerService:
                 flood_wait_hit = True
                 logger.warning(
                     f"[checker:{checker_slug}] probe_control FloodWait after "
-                    f"{len(results)}/{len(phones)} — sleeping {exc.seconds}s"
+                    f"{len(results)}/{len(phones)} — sleeping "
+                    f"{min(exc.seconds, _FLOOD_WAIT_INLINE_CAP)}s (cap {_FLOOD_WAIT_INLINE_CAP}s, "
+                    f"raised wait {exc.seconds}s)"
                 )
-                await asyncio.sleep(exc.seconds)
+                # WR-05: cap the inline block. Batch-A-safe — ONLY the sleep
+                # duration changes; flood_wait_hit=True (a probe MISS) is unchanged.
+                await asyncio.sleep(min(exc.seconds, _FLOOD_WAIT_INLINE_CAP))
             finally:
                 if client:
                     try:
@@ -418,6 +447,7 @@ class CheckerService:
                     is_registered = resolved["is_registered"]
                     telegram_id = resolved["telegram_id"]
                     username = resolved["username"]
+                    error = resolved.get("error")
                 except FloodWaitError:
                     raise  # propagate to outer except FloodWaitError handler
                 except Exception as exc:
@@ -428,16 +458,24 @@ class CheckerService:
                     logger.error(f"[checker:{checker_slug}] Unexpected ResolvePhone error for {phone}: {exc}", exc_info=True)
                     raise
 
-                # 3. Save to cache
-                await self._save_cache(workspace_id, checker_id, phone, is_registered, telegram_id, username)
+                # 3. Save to cache — but NOT for a hard error (IN-02). An invalid
+                #    number is not a resolvable verdict; caching it as not_registered
+                #    would poison the cache and let a campaign finalize a garbage row.
+                if not error:
+                    await self._save_cache(workspace_id, checker_id, phone, is_registered, telegram_id, username)
 
-                results.append({
+                entry = {
                     "phone": phone,
                     "is_registered": is_registered,
                     "telegram_id": telegram_id,
                     "username": username,
                     "from_cache": False,
-                })
+                }
+                # IN-02: propagate the error tag so _apply_results finalizes
+                # tg_status='error' (the previously-unreachable error branch).
+                if error:
+                    entry["error"] = error
+                results.append(entry)
                 logger.debug(f"[checker:{checker_slug}] {phone} → registered={is_registered}")
 
                 # 4. Polite delay between Telegram requests (skip after last item).
@@ -455,9 +493,13 @@ class CheckerService:
             wait_sec = exc.seconds
             logger.warning(
                 f"[checker:{checker_slug}] FloodWait hit after {len(results)}/{len(phones)} phones "
-                f"— sleeping {wait_sec}s then stopping batch"
+                f"— sleeping {min(wait_sec, _FLOOD_WAIT_INLINE_CAP)}s (cap {_FLOOD_WAIT_INLINE_CAP}s, "
+                f"raised wait {wait_sec}s) then stopping batch"
             )
-            await asyncio.sleep(wait_sec)
+            # WR-05: cap the inline block — a multi-hour raised FloodWait must not
+            # freeze the single-coroutine worker. flood_wait_hit=True is returned so
+            # the caller degrades the checker with a durable cooldown.
+            await asyncio.sleep(min(wait_sec, _FLOOD_WAIT_INLINE_CAP))
             # Partial result — remaining phones are not checked
         finally:
             if client:
@@ -589,9 +631,11 @@ class CheckerService:
             flood_wait_hit = True
             logger.warning(
                 f"[checker:{checker_slug}] FloodWait hit after {len(results)}/{len(usernames)} usernames "
-                f"— sleeping {exc.seconds}s then stopping batch"
+                f"— sleeping {min(exc.seconds, _FLOOD_WAIT_INLINE_CAP)}s (cap {_FLOOD_WAIT_INLINE_CAP}s, "
+                f"raised wait {exc.seconds}s) then stopping batch"
             )
-            await asyncio.sleep(exc.seconds)
+            # WR-05: cap the inline block (see _check_phones_locked).
+            await asyncio.sleep(min(exc.seconds, _FLOOD_WAIT_INLINE_CAP))
         finally:
             if client:
                 try:
