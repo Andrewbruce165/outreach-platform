@@ -285,6 +285,11 @@ class ContactCheckWorker:
                                   WHERE cc.sender_id = senders.id
                                     AND cc.updated_at >= date_trunc('day', now())
                               ) < :daily_cap
+                            -- IN-03: deterministic rotation — prefer never-rested
+                            -- (NULL) / longest-rested checkers, tie-break by id.
+                            -- checker_rest_until is filtered in the WHERE so ORDER BY
+                            -- may reference it though it is not in the SELECT list.
+                            ORDER BY checker_rest_until NULLS FIRST, id
                             LIMIT 1
                         ) s ON TRUE
                         WHERE c.tg_status = 'pending'
@@ -388,6 +393,11 @@ class ContactCheckWorker:
                         f"❌ ContactCheckWorker: checker={first.checker_slug} phones failed: {exc}",
                         exc_info=True,
                     )
+                    # WR-06: back off a persistently-failing checker (auth-dead is
+                    # flagged by _get_client + excluded by the LATERAL gate;
+                    # network/frozen is covered here) via checker_rest_until so the
+                    # worker does not re-claim the same contacts every ~5s poll tick.
+                    await self._rest_checker(str(checker_id))
 
             if username_items:
                 try:
@@ -417,6 +427,10 @@ class ContactCheckWorker:
                         f"❌ ContactCheckWorker: checker={first.checker_slug} usernames failed: {exc}",
                         exc_info=True,
                     )
+                    # WR-06: back off a persistently-failing checker (see the phones
+                    # branch) via checker_rest_until. Resting twice if both branches
+                    # fail just re-stamps the same value — harmless.
+                    await self._rest_checker(str(checker_id))
 
             # Plan 14-07 (Q3): after a non-raising batch, put the checker on a benign
             # post-batch rest so the worker cannot chain batch-after-batch on this ONE
@@ -441,9 +455,14 @@ class ContactCheckWorker:
 
         return processed
 
-    async def _rest_checker(self, checker_id: str) -> None:
+    async def _rest_checker(self, checker_id: str, seconds: int | None = None) -> None:
         """Benign post-batch REST (Plan 14-07, Q3): stamp checker_rest_until = NOW() +
-        contact_check_rest_seconds for one checker, in its own short transaction.
+        rest for one checker, in its own short transaction.
+
+        ``seconds`` overrides the default ``contact_check_rest_seconds`` — WR-08 uses
+        it to apply the longer ``contact_check_cooldown_seconds`` as a rest-only
+        degrade when the control set is empty (a spam_limited flag would be permanent
+        without a control set to recover from). The default path is unchanged.
 
         SEPARATE from the restriction machinery (``_flag_checker_degraded`` /
         ``_recover_checkers``): this sets ONLY ``checker_rest_until`` and never touches
@@ -453,7 +472,7 @@ class ContactCheckWorker:
         re-selected directly (no recovery control-probe — that path keys on
         ``restricted_until``, which this never sets).
         """
-        rest_seconds = get_settings().contact_check_rest_seconds
+        rest_seconds = seconds if seconds is not None else get_settings().contact_check_rest_seconds
         async with AsyncSessionLocal() as db:
             async with db.begin():
                 await db.execute(
@@ -721,6 +740,22 @@ class ContactCheckWorker:
         """
         if not _is_throttle_signal(summary):
             return probe_state
+        if not _CONTROL_SET:
+            # WR-08: with no control set, _recover_checkers can never clear a
+            # spam_limited flag → it would be PERMANENT. Degrade REST-ONLY
+            # (self-clearing via checker_rest_until) + ERROR log; the batch still
+            # finalizes suspect (rollback), so no false negative is committed.
+            if checker_id not in self._degraded_this_tick:
+                logger.error(
+                    "checker %s tripped the inline throttle signal but the CONTROL SET IS "
+                    "EMPTY — recovery impossible; applying REST-ONLY degrade (NOT spam_limited) "
+                    "so it self-clears. Ship app/data/control_set_known_live.txt.", checker_id,
+                )
+                await self._rest_checker(
+                    checker_id, seconds=get_settings().contact_check_cooldown_seconds
+                )
+                self._degraded_this_tick.add(checker_id)
+            return "suspect"
         if checker_id not in self._degraded_this_tick:
             checked = summary.get("checked", 0)
             raw_text = (
@@ -754,10 +789,23 @@ class ContactCheckWorker:
                 """)
             )).fetchall()
 
+        # WR-08: nothing to recover.
+        if not rows:
+            return
+        # WR-08: compute the control sample ONCE before the loop. On an empty/missing
+        # control-set, WARN and early-return so recovery is DISABLED cleanly — never
+        # abort mid-loop (the old per-iteration `return` skipped every checker AFTER
+        # the first if the sample was empty). One sample for all checkers in a pass is
+        # intended (FIXPLAN) — every control number is known-live.
+        sample = self._probe_sample()
+        if not sample:
+            logger.warning(
+                "checker recovery DISABLED: control-set empty/missing — cannot re-probe "
+                "%d cooled-down checker(s)", len(rows),
+            )
+            return
+
         for r in rows:
-            sample = self._probe_sample()
-            if not sample:
-                return
             try:
                 summary = await checker_service.probe_control(
                     checker_slug=r.slug,

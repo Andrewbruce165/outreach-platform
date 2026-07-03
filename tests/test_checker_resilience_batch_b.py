@@ -343,3 +343,178 @@ async def test_get_client_none_sender_no_write(
     assert after.auth_status == before.auth_status, (
         "sender_id=None must perform NO auth_status write (probe path)"
     )
+
+
+# ─── WR-08: recovery early-return on empty sample ────────────────────────────
+
+
+async def test_recovery_empty_sample_early_return(
+    async_db_session, test_workspace, test_checker, monkeypatch
+):
+    """WR-08: _recover_checkers with an empty control sample WARNs and returns WITHOUT
+    probing — a cooled-down spam_limited checker is NOT fake-recovered (it stays
+    spam_limited until a real control set exists), and the empty sample never aborts
+    recovery of the remaining checkers mid-loop (it is computed once, before the loop)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    # A degraded checker whose cooldown has elapsed → a recovery candidate.
+    await async_db_session.execute(
+        text(
+            "UPDATE senders SET restriction_status = 'spam_limited', "
+            "lifecycle_status = 'paused', "
+            "restricted_until = NOW() - INTERVAL '1 minute' WHERE id = :id"
+        ),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    worker = ContactCheckWorker()
+    monkeypatch.setattr(worker, "_probe_sample", lambda: [])
+
+    with patch(
+        "app.services.contact_check_worker.checker_service.probe_control",
+        new=AsyncMock(),
+    ) as probe_mock:
+        await worker._recover_checkers()
+        probe_mock.assert_not_awaited()
+
+    row = (
+        await async_db_session.execute(
+            text("SELECT restriction_status FROM senders WHERE id = :id"),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.restriction_status == "spam_limited", (
+        "empty-sample recovery must NOT fake-recover the checker (WR-08)"
+    )
+
+
+# ─── WR-08: empty-control-set inline degrade is REST-ONLY ─────────────────────
+
+
+async def test_empty_control_set_rest_only_degrade(
+    async_db_session, test_workspace, test_checker, monkeypatch
+):
+    """WR-08: with an EMPTY control set, an inline throttle signal degrades the checker
+    REST-ONLY (checker_rest_until set) — NOT spam_limited (which would be permanent
+    without a control set to recover from). The batch still finalizes suspect."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    # _CONTROL_SET is a MODULE global (read directly, not via self) — patch it there.
+    monkeypatch.setattr("app.services.contact_check_worker._CONTROL_SET", [])
+
+    checker_id = str(test_checker.id)
+    worker = ContactCheckWorker()
+
+    state = await worker._maybe_degrade_on_signal(
+        checker_id, {"flood_wait_hit": True, "checked": 10, "results": []}, "clean"
+    )
+    assert state == "suspect", "the batch must still finalize suspect (rollback)"
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, lifecycle_status, checker_rest_until "
+                "FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.restriction_status == "none", "empty-control-set degrade must NOT set spam_limited"
+    assert row.lifecycle_status != "paused", "empty-control-set degrade must NOT pause the checker"
+    assert row.checker_rest_until is not None, "empty-control-set degrade must set checker_rest_until"
+
+
+# ─── IN-03: deterministic LATERAL rotation ───────────────────────────────────
+
+
+async def test_lateral_orders_by_rest_nulls_first(
+    async_db_session, test_workspace, test_sender_factory, test_contacts_factory
+):
+    """IN-03: with two eligible checkers — one with checker_rest_until NULL, one with a
+    past rest — the LATERAL selection (ORDER BY checker_rest_until NULLS FIRST, id)
+    routes the pending contact to the NULL-rest checker (deterministic rotation)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    null_rest = await test_sender_factory(role="checker", slug="in03-null-rest")
+    past_rest = await test_sender_factory(role="checker", slug="in03-past-rest")
+    await async_db_session.execute(
+        text("UPDATE senders SET checker_rest_until = NOW() - INTERVAL '1 minute' WHERE id = :id"),
+        {"id": str(past_rest.id)},
+    )
+    await async_db_session.commit()
+
+    contact = await test_contacts_factory(count=1, tg_status="pending")
+
+    async def _echo(phones, **kw):
+        return {
+            "checked": len(phones),
+            "registered": len(phones),
+            "not_registered": 0,
+            "flood_wait_hit": False,
+            "results": [
+                {"phone": p, "is_registered": True, "telegram_id": 5000 + i, "from_cache": False}
+                for i, p in enumerate(phones)
+            ],
+        }
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=_echo),
+    ):
+        await worker._tick()
+
+    row = (
+        await async_db_session.execute(
+            text("SELECT tg_status, tg_resolved_by FROM contacts WHERE id = :id"),
+            {"id": str(contact.id)},
+        )
+    ).fetchone()
+    assert row.tg_status == "registered"
+    assert str(row.tg_resolved_by) == str(null_rest.id), (
+        "the NULL-rest checker must win (ORDER BY checker_rest_until NULLS FIRST) — IN-03"
+    )
+
+
+# ─── WR-06: _tick backs off a persistently-failing checker ───────────────────
+
+
+async def test_tick_backoff_on_batch_failure(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """WR-06: when a resolve batch raises, _tick backs the checker off via
+    checker_rest_until (so it is not re-claimed every ~5s tick) and the contact stays
+    pending for a healthy checker to pick up."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    contact = await test_contacts_factory(count=1, tg_status="pending")
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.check_phones",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        await worker._tick()
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT checker_rest_until, (checker_rest_until > NOW()) AS fut "
+                "FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.checker_rest_until is not None, "a failing batch must back off the checker (WR-06)"
+    assert row.fut is True, "the backoff rest must be in the future"
+
+    c = (
+        await async_db_session.execute(
+            text("SELECT tg_status FROM contacts WHERE id = :id"),
+            {"id": str(contact.id)},
+        )
+    ).fetchone()
+    assert c.tg_status == "pending", "a failed batch leaves the contact pending"
