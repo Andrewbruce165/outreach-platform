@@ -136,6 +136,10 @@ async def notify_signal(
             "source": contact.get("source"),
             "custom": contact.get("custom") or {},
         },
+        # Phase 19 (D-09): the auto-finish path (FollowUpWorker) fires this same
+        # 'finish' event with reason='no_reply' as the machine-readable marker so
+        # downstream (n8n) can distinguish a no-reply auto-finish from a
+        # conversational finish. No new field is needed — reason carries it.
         "reason": reason or "",
         "message_history_excerpt": excerpt,
         "timestamp": datetime.now(timezone.utc).isoformat(),

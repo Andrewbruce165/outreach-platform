@@ -121,6 +121,16 @@ class Settings(BaseSettings):
         description="Max contacts processed per campaign per tick.",
     )
 
+    # Phase 19 (D-02/D-08): FollowUpWorker tick — sweeps eligible conversations of
+    # running follow-up-enabled campaigns and applies the auto-finish-first /
+    # ping-else state machine. Interval bounds are in hours; a 5-min tick is fine.
+    follow_up_tick_seconds: int = Field(
+        default=300,
+        validation_alias="FOLLOW_UP_TICK_SECONDS",
+        description="Polling interval for FollowUpWorker tick (seconds). "
+                    "Interval bounds are in hours; a 5-min tick is fine.",
+    )
+
     # Migration 028: sender write-restriction reconcile (spam-limit / freeze).
     restriction_recheck_interval_seconds: int = Field(
         default=6 * 60 * 60,
