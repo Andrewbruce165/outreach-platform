@@ -518,3 +518,48 @@ async def test_tick_backoff_on_batch_failure(
         )
     ).fetchone()
     assert c.tg_status == "pending", "a failed batch leaves the contact pending"
+
+
+# ─── IN-02 consumer: invalid_phone → tg_status='error' ───────────────────────
+
+
+async def test_invalid_phone_finalizes_error(
+    async_db_session, test_workspace, test_checker, test_contacts_factory
+):
+    """IN-02 consumer: a result carrying error='invalid_phone' finalizes the contact
+    as tg_status='error' with tg_error containing 'invalid_phone' — the previously
+    unreachable error branch in _apply_results now fires (the error key arrives from
+    the batch producer, Task 1)."""
+    from app.services.contact_check_worker import apply_results_with_confidence
+
+    contact = await test_contacts_factory(count=1, tg_status="pending")
+    summary = {
+        "checked": 1,
+        "registered": 0,
+        "not_registered": 0,
+        "flood_wait_hit": False,
+        "results": [
+            {
+                "phone": contact.phone,
+                "is_registered": False,
+                "error": "invalid_phone",
+                "from_cache": False,
+            },
+        ],
+    }
+    items = [
+        type("It", (), {"contact_id": contact.id, "phone": contact.phone, "username": None}),
+    ]
+
+    await apply_results_with_confidence(
+        items, summary, checker_id=str(test_checker.id), probe_state="clean"
+    )
+
+    row = (
+        await async_db_session.execute(
+            text("SELECT tg_status, tg_error FROM contacts WHERE id = :id"),
+            {"id": str(contact.id)},
+        )
+    ).fetchone()
+    assert row.tg_status == "error", "invalid_phone must finalize tg_status='error' (IN-02)"
+    assert "invalid_phone" in (row.tg_error or ""), "tg_error must record the invalid_phone cause"
