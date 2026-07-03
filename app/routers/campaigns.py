@@ -346,6 +346,11 @@ async def _campaign_to_response(
         recontact_min_age_days=campaign.recontact_min_age_days,
         # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
         max_new_dialogs_per_day=campaign.max_new_dialogs_per_day,
+        # Phase 19 NORP-02/NORP-05: follow-up + auto-finish (D-08/D-12).
+        follow_up_enabled=campaign.follow_up_enabled,
+        follow_up_interval_hours=campaign.follow_up_interval_hours,
+        follow_up_max_pings=campaign.follow_up_max_pings,
+        auto_finish_hours=campaign.auto_finish_hours,
         # Phase 11 campaign fields (D-04/D-12/D-14).
         dialogue_flow=campaign.dialogue_flow or [],
         arguments_facts=campaign.arguments_facts,
@@ -467,6 +472,11 @@ async def create_campaign(
         recontact_min_age_days=payload.recontact_min_age_days,
         # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
         max_new_dialogs_per_day=payload.max_new_dialogs_per_day,
+        # Phase 19 NORP-02/NORP-05: follow-up + auto-finish (D-08/D-12).
+        follow_up_enabled=payload.follow_up_enabled,
+        follow_up_interval_hours=payload.follow_up_interval_hours,
+        follow_up_max_pings=payload.follow_up_max_pings,
+        auto_finish_hours=payload.auto_finish_hours,
         # Phase 11 campaign fields (D-04/D-12/D-14).
         dialogue_flow=[s.model_dump() for s in payload.dialogue_flow] if payload.dialogue_flow else [],
         arguments_facts=payload.arguments_facts,
@@ -958,6 +968,11 @@ async def duplicate_campaign(
         # 026: per-campaign re-contact policy — copy for parity with src.
         allow_recontact=src.allow_recontact,
         recontact_min_age_days=src.recontact_min_age_days,
+        # Phase 19 NORP-02/NORP-05: follow-up + auto-finish — copy for parity with src.
+        follow_up_enabled=src.follow_up_enabled,
+        follow_up_interval_hours=src.follow_up_interval_hours,
+        follow_up_max_pings=src.follow_up_max_pings,
+        auto_finish_hours=src.auto_finish_hours,
         # Phase 11 campaign fields (D-04/D-12/D-14) — copy for parity with src.
         dialogue_flow=src.dialogue_flow or [],
         arguments_facts=src.arguments_facts,
