@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 19-04-PLAN.md
-last_updated: "2026-07-03T09:23:58.987Z"
-last_activity: 2026-07-03 - Completed plan 19-04 (FollowUpWorker tick state machine + lifespan)
+status: verifying
+stopped_at: Completed 19-05-PLAN.md (Phase 19 complete)
+last_updated: "2026-07-03T10:02:59.027Z"
+last_activity: 2026-07-03 - Completed plan 19-05 (openapi regen + Follow Up campaign form, human-verified)
 progress:
   total_phases: 21
-  completed_phases: 18
+  completed_phases: 19
   total_plans: 78
   completed_plans: 77
-  percent: 97
+  percent: 99
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 19
-Plan: 19-04 complete (Wave 3)
-Status: 19-04 done — FollowUpWorker (asyncio tick + FOR UPDATE OF c SKIP LOCKED) drives the auto-finish-first/ping-else state machine anchored to the lazily-derived last outbound; auto-finish flips finished + cancels pings + fires finish webhook reason='no_reply' (D-08/D-09/NORP-06/09/10/11), ping flips active→no_reply + generate_followup_ping + enqueue kind='followup' to owning sender + pings_sent++ (D-02/D-13/D-14/NORP-04), skips restricted sender + double-enqueue guard (NORP-12); follow_up_tick_seconds knob + lifespan register/stop. Full backend suite GREEN (939 passed, 1 pre-existing WARM-14 out-of-scope). Only 19-05 (UI) remains in Phase 19.
-Last activity: 2026-07-03 - Completed plan 19-04 (FollowUpWorker tick state machine + lifespan)
+Phase: 19 — COMPLETE (all 5 plans)
+Plan: 19-05 complete (Wave 4) — Phase 19 done
+Status: 19-05 done — regenerated lovable-handoff/openapi.json OFFLINE (app.openapi() in test container) with the 4 follow_up_* campaign fields + no_reply status, and added the Follow Up settings block (Enable toggle default OFF + interval 4–168h / max pings 1–5 / auto-finish 24–720h numeric inputs) to BOTH the create (campaigns.new.tsx) and edit (EditCampaignModal.tsx) campaign forms in the sibling frontend repo, wired through the create/update mutation, TS types regenerated, tsc clean (D-08/D-12/NORP-13). Cross-repo isolation preserved: openapi→outreach-platform (a6644fd), form+types→aimly-tg-outreach (f5b975e). Task 3 human-verify gate APPROVED by user (create/edit persistence + bounds + live no_reply/ping/auto-finish flow confirmed). Phase 19 (No Reply Follow-Up and Auto-Finish) now COMPLETE end-to-end: schema (19-01), API+AI (19-02), listener/queue guards (19-03), FollowUpWorker (19-04), product surface (19-05).
+Last activity: 2026-07-03 - Completed plan 19-05 (openapi regen + Follow Up campaign form, human-verified)
 
-Progress: [██████████] 97% — Phase 19: 19-01/02/03/04 complete (schema, API+AI, listener/queue guards, FollowUpWorker)
+Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05: schema, API+AI, listener/queue guards, FollowUpWorker, openapi+form)
 
 ## Performance Metrics
 
@@ -99,6 +99,7 @@ Progress: [██████████] 97% — Phase 19: 19-01/02/03/04 comp
 | Phase 19 P02 | 15min | 3 tasks | 4 files |
 | Phase 19 P03 | 12min | 2 tasks | 3 files |
 | Phase 19 P04 | 90min | 3 tasks | 5 files |
+| Phase 19 P05 | 35min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -171,6 +172,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 19]: 19-02: 4 follow-up campaign fields (enabled/interval/max_pings/auto_finish) with API-layer Pydantic bounds (D-12, no DB CHECK); ai_engine.generate_followup_ping reuses context + Phase-18 provider, tools=None, returns None on missing agent context (D-07)
 - [Phase 19]: 19-03: incoming reply reverts no_reply->active before AI-dispatch + updates local conv dict (Pitfall 4); listener cancels pending pings (D-17 first guard) scoped to sender+phone+campaign; queue pre-send D-17 second guard gated on extra_data.kind=='followup' cancels ping on reply-since OR conversation left active/no_reply; empirical intervals untouched
 - [Phase 19]: 19-04: FollowUpWorker asyncio tick (FOR UPDATE OF c SKIP LOCKED) applies auto-finish-first/ping-else anchored to lazily-derived last-outbound; auto-finish flips finished + cancels pings + fires finish webhook reason='no_reply' (D-08/D-09), ping flips active->no_reply + generate_followup_ping + enqueue kind='followup' to owning sender + pings_sent++ (D-02/D-13/D-14), skips restricted sender + double-enqueue; follow_up_tick_seconds knob + lifespan registration. Fixed shared-DB pool poisoning: no_reply committed rows broke migration-017 constraint-reapply -> scoped test_conversation_factory teardown to no_reply only.
+- [Phase 19]: 19-05: openapi.json regenerated OFFLINE via app.openapi() in the test container (Phase 16/18 precedent, no un-gated prod deploy) carrying the 4 follow_up_* fields + no_reply status; Follow Up form block (toggle default OFF + interval 4–168h/max pings 1–5/auto-finish 24–720h, mirroring recontact/max_new_dialogs_per_day pattern) added to create+edit campaign forms in sibling repo; cross-repo commit isolation preserved (openapi→outreach-platform a6644fd, form+types→aimly-tg-outreach f5b975e); human-verify gate APPROVED. Phase 19 complete (NORP-13).
 
 ### Roadmap Evolution
 
@@ -251,6 +253,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-03T09:23:45.482Z
-Stopped at: Completed 19-04-PLAN.md
+Last session: 2026-07-03T10:00:09.417Z
+Stopped at: Completed 19-05-PLAN.md (Phase 19 complete)
 Resume file: None
