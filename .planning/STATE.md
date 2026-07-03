@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 19-02-PLAN.md
-last_updated: "2026-07-03T08:18:42.342Z"
-last_activity: "2026-07-02 - Completed quick task 260702-kf2: KPI-карточки дашборда реагируют на фильтры и период (since-параметр в analytics cards + фронт)"
+stopped_at: Completed 19-02-PLAN.md and 19-03-PLAN.md (Wave 2, parallel)
+last_updated: "2026-07-03T08:19:20.467Z"
+last_activity: "2026-07-03 - Completed plans 19-02 (follow-up API + ping generator) and 19-03 (listener revert + queue guard, NORP-07/08)"
 progress:
   total_phases: 21
   completed_phases: 18
   total_plans: 78
-  completed_plans: 74
+  completed_plans: 75
   percent: 96
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 19
-Plan: 19-02 complete (wave 2, parallel with 19-03)
-Status: 19-02 done — 4 follow-up campaign fields exposed through the API (create/update/response/duplicate + Pydantic bounds, NORP-02) and ai_engine.generate_followup_ping added (provider-routed, tool-free, NORP-05). NORP-04 (FollowUpWorker) + NORP-07 (listener revert) still RED, land in 19-04/19-03.
-Last activity: 2026-07-03 - Completed plan 19-02 (follow-up API fields + AI ping generator)
+Plan: 19-02 and 19-03 complete (Wave 2, parallel)
+Status: 19-02 done — 4 follow-up campaign fields exposed through the API (create/update/response/duplicate + Pydantic bounds, NORP-02) and ai_engine.generate_followup_ping added (provider-routed, tool-free, NORP-05). 19-03 done — listener reverts no_reply→active + cancels pending pings on genuine reply (D-03/D-17 first guard, NORP-07), queue pre-send replied-since guard for follow-up pings (D-17 second guard, NORP-08). NORP-04/06/12 (FollowUpWorker) still RED, land in 19-04.
+Last activity: 2026-07-03 - Completed plans 19-02 (follow-up API fields + AI ping generator) and 19-03 (listener revert + queue guard)
 
-Progress: [██████████] 95% — Phase 19: 19-01 (schema foundation) + 19-02 (follow-up API + ping generator) complete
+Progress: [██████████] 96% — Phase 19: 19-01/19-02/19-03 complete (schema, API+AI, listener/queue guards)
 
 ## Performance Metrics
 
@@ -95,7 +95,9 @@ Progress: [██████████] 95% — Phase 19: 19-01 (schema found
 | Phase 18 P03 | 4min | 2 tasks | 5 files |
 | Phase 18 P04 | 22min | 4 tasks | 7 files |
 | Phase 18 P05 | 5min | 2 tasks | 4 files |
+| Phase 19 P01 | 6min | 3 tasks | 4 files |
 | Phase 19 P02 | 15min | 3 tasks | 4 files |
+| Phase 19 P03 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -166,6 +168,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 18]: 18-04: D-06 fallback = key-level error on a byok call flags api_key_status='invalid' (_flag_key_invalid best-effort) + retries once on platform OpenAI (key_source='fallback'); transient 429/5xx re-raise unchanged. warmup routes through the same factory (D-11) but gets NO fallback (best-effort None). llm_logger persists provider+key_source and reads LLMResult (D-07).
 - [Phase 18]: 18-05: handoff regenerated OFFLINE via app.openapi() in the test container (no prod-api rebuild, Phase-16 precedent) + llm-settings paths in openapi/types; sibling AI/LLM Settings tab — provider select, masked BYO key + status badge + Test connection, live provider-filtered model list (+manual fallback on note), D-09 capability-gated knobs (temp non-reasoning-OpenAI+Claude, effort reasoning+Claude, max-tokens), D-10 green corridor (floor 4000/ceiling 32000, warn-not-block), D-03 key gate surfacing KEY_REQUIRED. Task 3 end-to-end switch = BLOCKING human-verify (auto_advance off), NOT executed.
 - [Phase 19]: 19-02: 4 follow-up campaign fields (enabled/interval/max_pings/auto_finish) with API-layer Pydantic bounds (D-12, no DB CHECK); ai_engine.generate_followup_ping reuses context + Phase-18 provider, tools=None, returns None on missing agent context (D-07)
+- [Phase 19]: 19-03: incoming reply reverts no_reply->active before AI-dispatch + updates local conv dict (Pitfall 4); listener cancels pending pings (D-17 first guard) scoped to sender+phone+campaign; queue pre-send D-17 second guard gated on extra_data.kind=='followup' cancels ping on reply-since OR conversation left active/no_reply; empirical intervals untouched
 
 ### Roadmap Evolution
 
@@ -246,6 +249,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-03T08:18:42.328Z
-Stopped at: Completed 19-02-PLAN.md
+Last session: 2026-07-03T08:19:20.455Z
+Stopped at: Completed 19-02-PLAN.md and 19-03-PLAN.md (Wave 2, parallel)
 Resume file: None
