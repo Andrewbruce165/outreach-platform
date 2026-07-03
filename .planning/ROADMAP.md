@@ -510,10 +510,10 @@ Plans:
 **Goal:** Contacts we messaged and who haven't replied get a "no reply" state; campaigns gain an Enable Follow Up toggle with a user-defined ping interval and an auto-finish after N hours without reply, configurable in the campaign create/edit form.
 **Requirements**: NORP-01..NORP-13
 **Depends on:** Phase 18
-**Plans:** 5 plans (waves 1→4)
+**Plans:** 1/5 plans executed
 
 Plans:
-- [ ] 19-01-PLAN.md — Migration 045 (no_reply status CHECK + conversations.pings_sent + 4 campaign follow-up columns) + ORM mirrors + RED test scaffold (Wave 1)
+- [x] 19-01-PLAN.md — Migration 045 (no_reply status CHECK + conversations.pings_sent + 4 campaign follow-up columns) + ORM mirrors + RED test scaffold (Wave 1)
 - [ ] 19-02-PLAN.md — Campaign follow-up API fields (bounds) + ai_engine.generate_followup_ping (Wave 2)
 - [ ] 19-03-PLAN.md — Listener revert no_reply→active + cancel pending pings (D-03/D-17) + queue pre-send replied-since guard (Wave 2)
 - [ ] 19-04-PLAN.md — FollowUpWorker (timer state machine: no_reply flip, ping, auto-finish, webhook reason=no_reply) + lifespan + config knob (Wave 3)
