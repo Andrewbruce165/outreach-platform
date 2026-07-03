@@ -117,6 +117,64 @@ async def test_campaign_follow_up_fields(
     assert camp["follow_up_enabled"] is True
 
 
+# ── NORP-05: ai_engine.generate_followup_ping (D-07) ──────────────────────────
+
+async def test_generate_followup_ping_returns_text(
+    test_running_campaign_factory, test_conversation_factory, async_db_session,
+    monkeypatch,
+):
+    """Plan 19-02 (D-07): generate_followup_ping reuses prompt assembly + the
+    Phase-18 resolved provider and returns non-empty ping text with NO tools.
+
+    The provider is stubbed (no network); we assert (a) a non-empty string comes
+    back and (b) the completion was invoked with tools=None (a ping never carries
+    lead/handoff/finish tools).
+    """
+    from app.services import ai_engine as ai_engine_mod
+    from app.services.llm.base import LLMResult
+
+    captured = {}
+
+    class _StubProvider:
+        async def complete(self, *, system, messages, tools, max_tokens,
+                           temperature=None, reasoning_effort=None):
+            captured["tools"] = tools
+            captured["system"] = system
+            captured["messages"] = messages
+            return LLMResult(text="Здравствуйте! Всё ещё актуально?", finish_reason="stop")
+
+    monkeypatch.setattr(ai_engine_mod, "get_provider", lambda cfg: _StubProvider())
+
+    camp, senders = await test_running_campaign_factory()
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="no_reply",
+        contact_name="Иван",
+    )
+
+    ping = await ai_engine_mod.ai_engine.generate_followup_ping(
+        async_db_session, conv["id"]
+    )
+    assert ping is not None
+    assert ping.strip() != ""
+    # A ping must never carry tools (no lead/handoff/finish on a proactive nudge).
+    assert captured["tools"] in (None, [])
+
+
+async def test_generate_followup_ping_no_context_returns_none(
+    test_conversation_factory, async_db_session,
+):
+    """Plan 19-02 (D-07): a conversation with no campaign/agent context yields
+    None so the caller (FollowUpWorker) simply skips the ping."""
+    from app.services import ai_engine as ai_engine_mod
+
+    # No campaign_id and no ai_context_id → no agent to speak as.
+    conv = await test_conversation_factory(status="no_reply")
+    ping = await ai_engine_mod.ai_engine.generate_followup_ping(
+        async_db_session, conv["id"]
+    )
+    assert ping is None
+
+
 # ── NORP-04: FollowUpWorker pings on interval ──────────────────────────────────
 
 async def test_ping_on_interval(test_running_campaign_factory, test_conversation_factory):
