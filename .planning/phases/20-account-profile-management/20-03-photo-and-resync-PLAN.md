@@ -67,7 +67,7 @@ async def upload_document(slug: str, file: UploadFile = File(...), ctx: AuthCtx 
 - upload:  `input_file = await client.upload_file(io.BytesIO(raw), file_name=...)` → `await client(photos.UploadProfilePhotoRequest(file=input_file))`
 - delete:  `photos = await client.get_profile_photos('me', limit=1)` → `await client(photos.DeletePhotosRequest(id=[photos[0]]))` (fetch fresh — Pitfall 6 file_reference expiry)
 - resync:  `me = await client.get_me()` (.username/.first_name/.last_name) ; `full = await client(users.GetFullUserRequest('me'))` (.full_user.about) ; `photo_bytes = await client.download_profile_photo('me', file=bytes)` (bytes | None)
-<!-- guardrail helpers ALREADY EXIST from 20-02 in senders.py: _check_profile_cooldown / _stamp_profile_change / _profile_advisory ; _sender_to_response already carries has_photo -->
+<!-- guardrail helpers ALREADY EXIST from 20-02 in senders.py: _check_profile_cooldown / _stamp_profile_change / _profile_advisory (returns list[ProfileWarningItem] — NOT the rate-limit WarningItem) ; _sender_to_response already carries has_photo -->
 </interfaces>
 </context>
 
@@ -173,7 +173,7 @@ async def resync_profile(self, sender_slug, encrypted_session, *, proxy=None) ->
     - .planning/phases/20-account-profile-management/20-UI-SPEC.md (§Interaction Contracts C1 serve / C2 resync / C6 photo validation)
   </read_first>
   <action>
-In `app/routers/senders.py`. Ensure `from fastapi import UploadFile, File, Response` (add to the existing fastapi import) and `SenderResponse` is imported.
+In `app/routers/senders.py`. Ensure `from fastapi import UploadFile, File, Response` (add to the existing fastapi import) and `SenderResponse` + `ProfileUpdateResponse` are imported (ProfileUpdateResponse carries ProfileWarningItem advisories — NOT the D-14 rate-limit WarningItem).
 
 Add module constants near the guardrail helpers:
 ```python
@@ -183,7 +183,7 @@ ALLOWED_PHOTO_MIME = {"image/jpeg", "image/png"}
 
 1. **POST upload** (multipart). Validate size/mime BEFORE the Telegram call; cooldown check BEFORE upload:
 ```python
-@router.post("/senders/{slug}/photo", response_model=SenderCreateResponse)
+@router.post("/senders/{slug}/photo", response_model=ProfileUpdateResponse)
 async def upload_sender_photo(slug: str, file: UploadFile = File(...), ctx: AuthCtx = Depends(auth_dep), db: AsyncSession = Depends(get_db)):
     from app.services.telegram import telegram_service, SessionAuthError
     sender = await _load_sender_by_slug(db, ctx, slug)
@@ -203,12 +203,12 @@ async def upload_sender_photo(slug: str, file: UploadFile = File(...), ctx: Auth
     sender.tg_photo_mime = res.get("photo_mime") or file.content_type
     _stamp_profile_change(sender, "photo")
     await db.commit(); await db.refresh(sender)
-    return SenderCreateResponse(sender=_sender_to_response(sender), warnings=_profile_advisory(sender))
+    return ProfileUpdateResponse(sender=_sender_to_response(sender), warnings=_profile_advisory(sender))
 ```
 
 2. **DELETE photo** (delete counts as a "change" → cooldown + stamp):
 ```python
-@router.delete("/senders/{slug}/photo", response_model=SenderCreateResponse)
+@router.delete("/senders/{slug}/photo", response_model=ProfileUpdateResponse)
 async def delete_sender_photo(slug: str, ctx: AuthCtx = Depends(auth_dep), db: AsyncSession = Depends(get_db)):
     from app.services.telegram import telegram_service, SessionAuthError
     sender = await _load_sender_by_slug(db, ctx, slug)
@@ -223,7 +223,7 @@ async def delete_sender_photo(slug: str, ctx: AuthCtx = Depends(auth_dep), db: A
     sender.tg_photo_mime = None
     _stamp_profile_change(sender, "photo")
     await db.commit(); await db.refresh(sender)
-    return SenderCreateResponse(sender=_sender_to_response(sender), warnings=_profile_advisory(sender))
+    return ProfileUpdateResponse(sender=_sender_to_response(sender), warnings=_profile_advisory(sender))
 ```
 
 3. **GET serve** (D-11 — auth-gated bytes, never a raw URL; 404 when no cached photo):

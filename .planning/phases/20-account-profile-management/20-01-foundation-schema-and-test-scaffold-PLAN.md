@@ -25,7 +25,7 @@ must_haves:
       provides: "Sender ORM mirror of the 5 new columns with server_default on the JSONB"
       contains: "profile_field_changed_at"
     - path: "app/schemas/__init__.py"
-      provides: "ProfileUpdate / UsernameCheckResponse / TwoFAPasswordUpdate / RecoveryEmailStart / RecoveryEmailConfirm schemas + SenderResponse profile fields"
+      provides: "ProfileUpdate / UsernameCheckResponse / TwoFAPasswordUpdate / RecoveryEmailStart / RecoveryEmailConfirm / ProfileWarningItem / ProfileUpdateResponse schemas + SenderResponse profile fields"
       contains: "class ProfileUpdate"
     - path: "tests/test_account_profile.py"
       provides: "Wave-0 RED scaffold covering PROF-01..08 + D-08/D-09"
@@ -162,6 +162,20 @@ class ProfileUpdate(BaseModel):
     about: Optional[str] = Field(None, max_length=70)          # bio; AboutTooLongError is the premium backstop
     username: Optional[str] = Field(None, max_length=32)
 
+class ProfileWarningItem(BaseModel):
+    """D-09 advisory for profile edits. DISTINCT from the PRE-EXISTING rate-limit
+    WarningItem (lines ~82-87: field/value/recommended_max, D-14) — that schema is
+    shaped for numeric soft-caps and MUST NOT be reused or modified here."""
+    code: str
+    message: str
+    severity: Literal["warning"] = "warning"
+
+class ProfileUpdateResponse(BaseModel):
+    """Response for PATCH /senders/{slug}/profile and POST/DELETE /senders/{slug}/photo:
+    sender + D-09 advisory warnings (ProfileWarningItem, NOT the rate-limit WarningItem)."""
+    sender: SenderResponse
+    warnings: List[ProfileWarningItem] = []
+
 class UsernameCheckResponse(BaseModel):
     """GET /senders/{slug}/username-check?username= (C5)."""
     available: bool
@@ -191,6 +205,7 @@ Confirm `EmailStr` is imported from pydantic at the top of the file; if not, add
   <acceptance_criteria>
     - `app/schemas/__init__.py` grep `class ProfileUpdate` returns a match
     - `app/schemas/__init__.py` grep `class TwoFAPasswordUpdate` and `class RecoveryEmailStart` and `class RecoveryEmailConfirm` and `class UsernameCheckResponse` each return a match
+    - `app/schemas/__init__.py` grep `class ProfileWarningItem` and `class ProfileUpdateResponse` each return a match; `ProfileUpdateResponse` contains `warnings: List[ProfileWarningItem]`; the PRE-EXISTING `class WarningItem` (field/value/recommended_max) is byte-identical to before (git diff shows no change to it)
     - `app/schemas/__init__.py` grep `has_photo: bool = False` returns a match inside SenderResponse
     - `grep -n "EmailStr" app/schemas/__init__.py` shows it imported
     - `pytest tests/test_account_profile.py --collect-only` exits 0 (module imports cleanly; no collection error)

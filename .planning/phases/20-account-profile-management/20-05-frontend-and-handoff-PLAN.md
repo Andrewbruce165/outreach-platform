@@ -57,11 +57,11 @@ CROSS-REPO ISOLATION (CLAUDE.md + memory feedback-parallel-agent-careful-commits
 <interfaces>
 <!-- Handoff regen precedent (18-05 / 19-05): regenerate OFFLINE via app.openapi() in the TEST container — no un-gated prod api rebuild. -->
 <!-- Backend endpoints added by 20-02..20-04 (all under /api/v1, workspace-scoped via auth_dep): -->
-  PATCH  /senders/{slug}/profile            {first_name?, last_name?, about?, username?} -> SenderCreateResponse
+  PATCH  /senders/{slug}/profile            {first_name?, last_name?, about?, username?} -> ProfileUpdateResponse {sender, warnings: ProfileWarningItem[]}
   GET    /senders/{slug}/username-check?username=  -> {available, reason}
   POST   /senders/{slug}/resync             -> SenderResponse
-  POST   /senders/{slug}/photo              (multipart file) -> SenderCreateResponse
-  DELETE /senders/{slug}/photo              -> SenderCreateResponse
+  POST   /senders/{slug}/photo              (multipart file) -> ProfileUpdateResponse {sender, warnings: ProfileWarningItem[]}
+  DELETE /senders/{slug}/photo              -> ProfileUpdateResponse {sender, warnings: ProfileWarningItem[]}
   GET    /senders/{slug}/photo              -> raw bytes (image)
   POST   /senders/{slug}/2fa                {current_password?, new_password, hint?}
   POST   /senders/{slug}/2fa/recovery-email {current_password?, email} -> {status, code_length}

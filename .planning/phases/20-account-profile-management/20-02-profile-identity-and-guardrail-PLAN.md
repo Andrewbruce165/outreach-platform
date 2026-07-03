@@ -184,7 +184,7 @@ async def set_username(self, sender_slug, encrypted_session, username, *, proxy=
   <name>Task 2: Guardrail helpers + PATCH /profile + username-check endpoints</name>
   <read_first>
     - app/routers/senders.py (_load_sender_by_slug ~238; _sender_to_response ~116; update_sender PATCH ~440; spambot-check try/except/finally shape ~655-745; imports block top of file)
-    - app/schemas/__init__.py (ProfileUpdate, UsernameCheckResponse, SenderResponse, SenderCreateResponse, WarningItem — added in 20-01)
+    - app/schemas/__init__.py (ProfileUpdate, UsernameCheckResponse, ProfileWarningItem, ProfileUpdateResponse — added in 20-01. CAUTION: the PRE-EXISTING `WarningItem` at ~lines 82-87 is the D-14 rate-limit shape {field:str, value:int, recommended_max:int} — constructing it with code=/message= raises pydantic.ValidationError; use ProfileWarningItem for advisories and leave WarningItem + the `_validate_rate_limits` path untouched)
     - .planning/phases/20-account-profile-management/20-CONTEXT.md (D-06/D-07/D-08/D-09 guardrail decisions)
     - .planning/phases/20-account-profile-management/20-UI-SPEC.md (§Interaction Contracts C3 + C5 + §Copywriting error strings)
   </read_first>
@@ -237,12 +237,13 @@ def _check_profile_cooldown(sender: Sender, field: str) -> None:
             "field": field,
         })
 
-def _profile_advisory(sender: Sender) -> list[WarningItem]:
-    """D-09 advisory (NEVER blocks): warmup OR account < 7 days old."""
-    warnings: list[WarningItem] = []
+def _profile_advisory(sender: Sender) -> list[ProfileWarningItem]:
+    """D-09 advisory (NEVER blocks): warmup OR account < 7 days old.
+    Returns ProfileWarningItem (code/message) — NOT the rate-limit WarningItem (D-14 shape)."""
+    warnings: list[ProfileWarningItem] = []
     young = sender.created_at is not None and (datetime.now(timezone.utc) - sender.created_at) < timedelta(days=7)
     if sender.lifecycle_status == "warmup" or young:
-        warnings.append(WarningItem(code="PROFILE_WARMUP_ADVISORY",
+        warnings.append(ProfileWarningItem(code="PROFILE_WARMUP_ADVISORY",
             message="Аккаунт ещё прогревается (моложе 7 дней). Резкие изменения профиля повышают риск ограничений."))
     return warnings
 ```
@@ -262,9 +263,9 @@ async def username_check(slug: str, username: str, ctx: AuthCtx = Depends(auth_d
     return UsernameCheckResponse(available=res["available"], reason=res.get("reason"))
 ```
 
-4. **Add `PATCH /senders/{slug}/profile`** (response_model=SenderCreateResponse). Order of operations: cooldown check (username) → Telegram writes → stamp + cache refresh → commit → advisory warnings.
+4. **Add `PATCH /senders/{slug}/profile`** (response_model=ProfileUpdateResponse). Order of operations: cooldown check (username) → Telegram writes → stamp + cache refresh → commit → advisory warnings.
 ```python
-@router.patch("/senders/{slug}/profile", response_model=SenderCreateResponse)
+@router.patch("/senders/{slug}/profile", response_model=ProfileUpdateResponse)
 async def update_profile(slug: str, request: ProfileUpdate, ctx: AuthCtx = Depends(auth_dep), db: AsyncSession = Depends(get_db)):
     from app.services.telegram import telegram_service, SessionAuthError
     sender = await _load_sender_by_slug(db, ctx, slug)
@@ -294,10 +295,10 @@ async def update_profile(slug: str, request: ProfileUpdate, ctx: AuthCtx = Depen
         raise HTTPException(403, detail={"code": "AUTH_ERROR", "message": f"Session auth failed: {e.auth_status}", "auth_status": e.auth_status})
     await db.commit()
     await db.refresh(sender)
-    return SenderCreateResponse(sender=_sender_to_response(sender), warnings=_profile_advisory(sender))
+    return ProfileUpdateResponse(sender=_sender_to_response(sender), warnings=_profile_advisory(sender))
 ```
 
-Ensure `ProfileUpdate`, `UsernameCheckResponse`, `WarningItem`, `SenderCreateResponse` are added to the schema import block at the top of senders.py.
+Ensure `ProfileUpdate`, `UsernameCheckResponse`, `ProfileWarningItem`, `ProfileUpdateResponse` are added to the schema import block at the top of senders.py. Do NOT touch the existing `WarningItem` import or the `_validate_rate_limits` soft-cap path (~line 198) — that D-14 flow stays byte-identical.
   </action>
   <verify>
     <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_account_profile.py::test_update_name_bio tests/test_account_profile.py::test_username tests/test_account_profile.py::test_cooldown_block tests/test_account_profile.py::test_warmup_advisory_not_blocking -x</automated>
@@ -309,6 +310,7 @@ Ensure `ProfileUpdate`, `UsernameCheckResponse`, `WarningItem`, `SenderCreateRes
     - `grep -n '@router.get("/senders/{slug}/username-check"' app/routers/senders.py` matches
     - `_check_profile_cooldown` raises 409 with code `TOO_FREQUENT` for username; name/bio are exempt (only `_HARD_BLOCK_FIELDS`)
     - `_sender_to_response` passes `has_photo=` and `tg_username=` to SenderResponse
+    - `grep -nE "(^|[^A-Za-z])WarningItem\(" app/routers/senders.py` returns NO match (the bare rate-limit WarningItem is never constructed on the profile path; advisories use ProfileWarningItem — the regex excludes the ProfileWarningItem prefix)
     - test_update_name_bio, test_username, test_cooldown_block, test_warmup_advisory_not_blocking all pass
   </acceptance_criteria>
   <done>PATCH /profile + /username-check live; guardrail hard-blocks username/photo <1h and never blocks name/bio; D-09 advisory surfaced in warnings[]; the four identity/guardrail tests GREEN.</done>
