@@ -280,14 +280,19 @@ async def _compute_pool_health(
 ) -> PoolHealth:
     """POOLV-01: 3-state pool-health aggregate in one SELECT over the attached pool.
 
-    total = COUNT(*), active = restriction_status='none', paused = everything
+    total = COUNT(*), active = truly-sendable (IN-10: restriction_status='none'
+    AND auth_status='ok' AND lifecycle_status='active'), paused = everything
     restricted, earliest_resume_at = MIN(restricted_until) among the restricted
     senders (OQ#4 recheck horizon). Empty pool → all zeros / None.
     """
     row = (await db.execute(text("""
         SELECT
             COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE s.restriction_status = 'none') AS active,
+            COUNT(*) FILTER (
+                WHERE s.restriction_status = 'none'
+                  AND s.auth_status = 'ok'
+                  AND s.lifecycle_status = 'active'
+            ) AS active,
             COUNT(*) FILTER (WHERE s.restriction_status <> 'none') AS paused,
             MIN(s.restricted_until)
                 FILTER (WHERE s.restriction_status <> 'none') AS earliest_resume_at
@@ -314,6 +319,10 @@ async def _campaign_to_response(
         is_exhausted = False
     else:
         is_exhausted = await _compute_is_exhausted(db, campaign.id, campaign.folder_id)
+    # WR-12b: read-time count of failed queue rows (COUNT(*), not a stored column).
+    failed_count = (await db.execute(text(
+        "SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid AND status = 'failed'"
+    ), {"cid": str(campaign.id)})).scalar() or 0
     return CampaignResponse(
         id=campaign.id,
         workspace_id=campaign.workspace_id,
@@ -365,6 +374,7 @@ async def _campaign_to_response(
         paused_at=campaign.paused_at,
         attached_senders=attached,
         is_exhausted=is_exhausted,
+        failed_count=failed_count,
         pool_health=pool_health,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,
@@ -372,14 +382,26 @@ async def _campaign_to_response(
 
 
 async def _check_sender_lock(
-    db: AsyncSession, ctx: AuthCtx, campaign_id: UUID
+    db: AsyncSession, ctx: AuthCtx, campaign_id: UUID,
+    only_sender_id: Optional[UUID] = None,
 ) -> list[dict]:
     """Return list of {sender_id, campaign_id, campaign_name} conflicts.
 
     Conflict = another running campaign in same workspace shares ≥1 sender with this one.
     Empty list = lock OK.
+
+    IN-05: when ``only_sender_id`` is supplied (the attach flow), the scan is
+    restricted to that single sender so attaching a conflict-free sender to a
+    campaign that already contains a DIFFERENT sender locked in another running
+    campaign does NOT falsely 409 — only the newly-attached sender is checked.
+    start/resume pass no ``only_sender_id`` and keep checking the full pool.
     """
-    rows = await db.execute(text("""
+    params = {"cid": str(campaign_id), "wid": str(ctx.workspace_id)}
+    only_filter = ""
+    if only_sender_id is not None:
+        only_filter = "AND cs.sender_id = :only_sender_id"
+        params["only_sender_id"] = str(only_sender_id)
+    rows = await db.execute(text(f"""
         SELECT cs.sender_id, c.id, c.name
         FROM campaign_senders cs
         JOIN campaigns c ON c.id = cs.campaign_id
@@ -389,8 +411,9 @@ async def _check_sender_lock(
           AND c.status = 'running'
           AND c.id != :cid
           AND c.workspace_id = :wid
+          {only_filter}
         ORDER BY c.name
-    """), {"cid": str(campaign_id), "wid": str(ctx.workspace_id)})
+    """), params)
     return [
         {"sender_id": str(r[0]), "campaign_id": str(r[1]), "campaign_name": r[2]}
         for r in rows.fetchall()
@@ -706,6 +729,41 @@ class _RerenderResponse(BaseModel):
     rerendered: int
 
 
+class _RequeueFailedResponse(BaseModel):
+    """POST /campaigns/{id}/requeue-failed result."""
+    requeued_count: int
+
+
+@router.post("/{campaign_id}/requeue-failed", response_model=_RequeueFailedResponse)
+async def requeue_failed(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """WR-12b: re-pend all status='failed' queue rows for this campaign.
+
+    A transient outage / restriction batch can leave items terminally failed;
+    this re-pends them (status='pending', attempts=0, error_message/finished_at
+    cleared, scheduled_at=NOW()) so the dispatcher retries them without a full
+    re-enqueue from the folder. Workspace-scoped (404 for another workspace's
+    campaign). Returns {"requeued_count": N}.
+    """
+    c = await _load_campaign(db, ctx, campaign_id)
+    result = await db.execute(text("""
+        UPDATE message_queue
+        SET status='pending', attempts=0, error_message=NULL,
+            finished_at=NULL, scheduled_at=NOW()
+        WHERE campaign_id = :cid AND status = 'failed'
+    """), {"cid": str(c.id)})
+    await db.commit()
+    count = result.rowcount or 0
+    logger.info(
+        "[campaigns] requeue-failed workspace=%s id=%s — %d item(s)",
+        ctx.workspace_id, campaign_id, count,
+    )
+    return _RequeueFailedResponse(requeued_count=count)
+
+
 @router.post("/{campaign_id}/rerender-pending", response_model=_RerenderResponse)
 async def rerender_pending(
     campaign_id: UUID,
@@ -985,11 +1043,24 @@ async def duplicate_campaign(
         status="draft",
     )
     db.add(new_c)
-    await db.flush()
-
-    # Sender pool is NOT copied: the duplicate starts empty so accounts held by
-    # the source's running campaign don't appear locked/undeletable in the copy.
-    await db.commit()
+    # IN-06: the TOCTOU name-pick loop above can still lose a race to a concurrent
+    # create/duplicate — the unique index is the race-safe backstop. Translate its
+    # IntegrityError into 409 (was surfacing as a raw 500).
+    try:
+        await db.flush()
+        # Sender pool is NOT copied: the duplicate starts empty so accounts held by
+        # the source's running campaign don't appear locked/undeletable in the copy.
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        msg = str(e.orig).lower()
+        if "idx_campaigns_workspace_name" in msg or "duplicate" in msg:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "CAMPAIGN_NAME_DUPLICATE",
+                        "message": f"Campaign '{candidate}' already exists"},
+            )
+        raise
     await db.refresh(new_c)
     logger.info(
         f"[campaigns] duplicated workspace={ctx.workspace_id} "
@@ -1037,7 +1108,9 @@ async def attach_sender(
     await db.flush()
 
     # D-02: insert-then-check-then-rollback so the incoming sender is in scope.
-    conflicts = await _check_sender_lock(db, ctx, c.id)
+    # IN-05: only the newly-attached sender is checked — a pre-existing sender in
+    # this pool that happens to be locked elsewhere must not block the attach.
+    conflicts = await _check_sender_lock(db, ctx, c.id, only_sender_id=payload.sender_id)
     if conflicts:
         await db.rollback()
         raise HTTPException(

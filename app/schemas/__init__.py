@@ -909,6 +909,10 @@ class CampaignResponse(BaseModel):
     paused_at: Optional[datetime] = None
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
     is_exhausted: bool = False
+    # WR-12b: number of status='failed' queue rows for this campaign. Computed at
+    # read time (COUNT(*), not a stored column) so the UI can surface a "retry
+    # failed" affordance backed by POST /campaigns/{id}/requeue-failed.
+    failed_count: int = 0
     # POOLV-01: numeric pool-health aggregate (active/paused/total + earliest
     # resume horizon). Computed in one pass in _campaign_to_response; badge color
     # derived on the frontend (presentation-free API).
