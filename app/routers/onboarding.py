@@ -326,6 +326,9 @@ async def _create_sender_from_session(
 
     tg_id = getattr(me, "id", None)
     first_name = getattr(me, "first_name", None) or ""
+    # Phase 20 (PROF-08): cache the account's @username onto the sender at finalize
+    # so the account list has it without a manual resync (D-10). None = no public handle.
+    tg_username = getattr(me, "username", None)
     suffix = str(tg_id) if tg_id is not None else str(session_row.id)[:8]
     slug = f"sender-{suffix}"
 
@@ -344,6 +347,8 @@ async def _create_sender_from_session(
         row.auth_status = "ok"
         if tg_id is not None:
             row.telegram_id = tg_id
+        if tg_username is not None:
+            row.tg_username = tg_username  # PROF-08: refresh cached handle on re-auth upsert
         if session_row.proxy is not None:
             row.proxy = session_row.proxy
         await db.commit()
@@ -370,6 +375,7 @@ async def _create_sender_from_session(
         proxy=session_row.proxy,
         auth_status="ok",
         lifecycle_status="active",
+        tg_username=tg_username,  # PROF-08: cache @username at onboarding finalize
         # rate_per_* server_default = 4 / 20 / 150 (migration 013)
     )
     db.add(sender)
