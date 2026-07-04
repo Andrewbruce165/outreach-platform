@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 20-03-PLAN.md
-last_updated: "2026-07-04T09:18:47.336Z"
+stopped_at: Completed 20-04-PLAN.md
+last_updated: "2026-07-04T09:45:56.911Z"
 last_activity: 2026-07-04
 progress:
   total_phases: 22
   completed_phases: 19
   total_plans: 83
-  completed_plans: 80
+  completed_plans: 81
   percent: 99
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 20 (account-profile-management) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-07-04
 
@@ -103,6 +103,7 @@ Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05:
 | Phase 20 P01 | 10min | 3 tasks | 5 files |
 | Phase 20 P02 | 18min | 3 tasks | 4 files |
 | Phase 20 P03 | 9min | 2 tasks | 2 files |
+| Phase 20 P04 | 22min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -182,6 +183,9 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 20]: 20-02: implemented to the authoritative RED test contract over the plan's suggested code — endpoint builds UpdateProfileRequest positionally, service methods RAISE (not {success:False}), router calls update_username (test-patched name, set_username is canonical impl it delegates to), username-check falls back to available on unreachable session; dropped ProfileUpdate.about max_length so oversized bio → endpoint 400 BIO_TOO_LONG (not 422)
 - [Phase 20]: 20-03: profile-photo lifecycle — POST/DELETE/GET /senders/{slug}/photo (multipart upload caches Telegram's normalized avatar, size 413/mime 422 validated before Telegram call, D-08 photo cooldown on UPLOAD only) + auth-gated BYTEA serve via Response (D-11) + POST /resync pulling live username/bio/photo into cache (D-12). PROF-04/06/07 closed.
 - [Phase 20]: 20-03: implemented to the RED test contract (like 20-02) — canonical set_profile_photo/delete_profile_photo/resync_profile + alias upload_profile_photo/delete_profile_photos/fetch_profile (test-patched names); router relies on raised exceptions not res.get('success'); DELETE /photo stamps but does NOT cooldown-block (de-escalation); upload validates size/mime before cooldown so bad input returns 413/422 not a stale 409.
+- [Phase 20]: 20-04: PROF-05 closed — POST /senders/{slug}/2fa (edit_2fa one-shot set/change, wrong pw→400 PASSWORD_INVALID, password NEVER persisted D-03) + two-request recovery-email (POST /2fa/recovery-email → EMAIL_CONFIRMATION_SENT+code_length via EmailUnconfirmedError pivot, POST /2fa/recovery-email/confirm → ConfirmPasswordEmailRequest→400 EMAIL_CODE_INVALID)
+- [Phase 20]: 20-04: implemented to the RED test contract (like 20-02/20-03) — canonical change_2fa_password/start_recovery_email/confirm_recovery_email + router-facing edit_2fa/set_recovery_email aliases (test-patched names); router raise-based (mocks return bare {ok:True}/{code_length:6}), never res.get('success'); _status_for_profile_error (TOO_FRESH→409/FLOOD_WAIT→429/else 400) wired as single source of truth inside refactored _raise_profile_telegram_error
+- [Phase 20]: 20-04: full-suite red (91F+86E) is shared-DB test-ordering pollution (auth/me workspace-create fails deep in 900+ session, cascades to ~40 files incl. Phase-5 untouched ones), NOT a 20-04 regression — 2FA writes nothing to DB (D-03); all my-domain files GREEN in isolation (45 passed) + flagged files 28 passed as a group; logged to deferred-items.md, exacerbated by parallel quick-260704 buc/buq/bty merges
 
 ### Roadmap Evolution
 
@@ -270,6 +274,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-04T09:18:34.900Z
-Stopped at: Completed 20-03-PLAN.md
+Last session: 2026-07-04T09:45:40.218Z
+Stopped at: Completed 20-04-PLAN.md
 Resume file: None
