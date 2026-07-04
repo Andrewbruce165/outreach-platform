@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 20-02-PLAN.md
-last_updated: "2026-07-04T09:06:16.604Z"
+stopped_at: Completed 20-03-PLAN.md
+last_updated: "2026-07-04T09:18:34.923Z"
 last_activity: 2026-07-04
 progress:
   total_phases: 22
   completed_phases: 19
   total_plans: 83
-  completed_plans: 79
+  completed_plans: 80
   percent: 99
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 20 (account-profile-management) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-07-04
 
@@ -102,6 +102,7 @@ Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05:
 | Phase 19 P05 | 35min | 3 tasks | 5 files |
 | Phase 20 P01 | 10min | 3 tasks | 5 files |
 | Phase 20 P02 | 18min | 3 tasks | 4 files |
+| Phase 20 P03 | 9min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -236,6 +237,7 @@ None yet.
 | 260703-j25 | Батч A ревью checker+campaigns (CR-01/CR-02/IN-01/IN-08): `probe_checker`/`_recover_checkers` больше не читают/пишут `contacts_cache` через `check_phones` — переведены на live-only `CheckerService.probe_control`; flood/truncated/пустая проба = MISS, не clean (убивает cascade-park через отравленный контрольный номер). `_is_throttle_signal` судит аномалию только по live-результатам (снят гейт `summary["registered"]==0`) — смешанный cache/live отравленный батч теперь ловится. `_apply_results` пишет `tg_resolved_by=NULL` для cache-hit результатов (не портит D-09 forensics). Прод: 24 отравленные control-строки в `contacts_cache` найдены и удалены (бэкап `outreach_20260703_141416.sql.gz`). Полный сьют зелёный (946 passed/1 skipped, 1 pre-existing unrelated WARM-14 failure). Задеплоено (api+listener). Живой recheck не прогнать — весь пул чекеров запаркован (0 pending) | 2026-07-03 | e8c1c67 | [260703-j25-batch-a-checker-fix-plan-replace-check-p](./quick/260703-j25-batch-a-checker-fix-plan-replace-check-p/) |
 | 260703-rm3 | Батч B ревью checker+campaigns — устойчивость (WR-05/WR-06/WR-07/WR-08/IN-02/IN-03), без миграции. **WR-05:** инлайн-FloodWait капнут `min(exc.seconds,60)` во всех 3 хендлерах (`_check_phones_locked`/`_check_usernames_locked`/`probe_control`) — многочасовой wait больше не морозит однокорутинный воркер (частичный батч `flood_wait_hit=True`, деградация паркует чекер durable-кулдауном). **WR-06:** `_get_client` классифицирует auth/ban/unauthorized как `TelegramService.get_client` — флип `auth_status` ПО ID (`_flag_checker_auth`, WR-14) + `SessionAuthError` → LATERAL-гейт исключает мёртвый чекер (закрыт 5с hot-loop); `_tick` except-ветки бэкоффят чекер через `checker_rest_until`. **WR-07:** пустой ImportContacts чистит сохранённый телефон через `DeleteByPhonesRequest`; оба клинапа в `finally` (guard `import_completed` — flood не триггерит лишний вызов). **WR-08:** `_recover_checkers` считает control-сэмпл до цикла + early-return c WARNING на пустом (не рвёт recovery остальных); пустой control-set → инлайн-деградация REST-ONLY (`checker_rest_until`), НЕ `spam_limited` (иначе неснимаемо без control-set). **IN-02:** `PhoneNumberInvalidError` тегируется `error='invalid_phone'` → `_apply_results` финализирует `tg_status='error'`. **IN-03:** LATERAL `ORDER BY checker_rest_until NULLS FIRST, id` (детерминированная ротация). 14 новых тестов; целевой прогон 50 passed (Batch B + весь checker-сьют). Полный сьют = pre-existing каскад (71 failed/80 errors — baseline 08d567d воспроизводит идентично, дельта Batch B = +14 passed; корень `test_phase5_migration_017` pooled-conn poisoning, вне объёма → deferred-items.md). **НЕ задеплоено** (деплой api+listener отдельно после merge) | 2026-07-03 | cd44d47..193e654 | [260703-rm3-b-wr-05-wr-06-wr-08-wr-07-in-02-in-03](./quick/260703-rm3-b-wr-05-wr-06-wr-08-wr-07-in-02-in-03/) |
 | 260703-ssv | Батч C+D ревью checker+campaigns — очередь: приоритет и head-of-line (WR-02/WR-03/WR-04). **WR-02:** `message_queue.priority/attempts/as_draft` получили DB `DEFAULT` (mig 047) + бэкфилл NULL→0/false; ORM `server_default`; `campaign_enqueue.py` явно передаёт `priority` в INSERT. **WR-03:** `_queue_position` переписан на `COALESCE(priority,0)` с обеих сторон + правильный «ahead»-предикат (выше приоритет ИЛИ тот же приоритет раньше по `created_at`) — старая инвертированная NULL-слепая формула считала мимо позицию/ETA. **WR-04:** инлайн `asyncio.sleep(long_pause)` в общем тике очереди (стопорил ВСЕХ сендеров всех воркспейсов пока один паузился, 3-10 мин) заменён на durable `senders.long_pause_until` (mig 048) — `_tick` исключает запаузенного сендера через JOIN (переживает рестарт, без in-memory состояния), `_get_long_pause_seconds` не повторно триггерит паузу пока она активна (фикс двойного срабатывания на статичном 30-мин счётчике). Эмпирические константы (4/20/150, LONG_PAUSE_EVERY 12-25, LONG_PAUSE 180-600с) не тронуты. 34 целевых теста зелёные (TDD RED→GREEN для WR-03). Задеплоено (api+listener); live sanity: 0 NULL-priority строк, миграции 047+048 применены, `senders.long_pause_until` создан | 2026-07-03 | 95ef8c8..f16266d | [260703-ssv-close-batch-c-queue-priority-position-wr](./quick/260703-ssv-close-batch-c-queue-priority-position-wr/) |
+| 260704-bty | Батч H ревью checker+campaigns — мёртвый код (WR-01). Удалены `app/routers/queue.py` и `app/routers/proxy_pool.py`: оба импортировали несуществующий `app.routers.auth` (несобираемый код), ни один не подключён в `main.py` (только сервис `app.services.queue` живой и используется). Не тронуты: `app/services/queue.py`, `ProxyPool` ORM-модель, таблица `proxy_pool`. Полный сьют: 939 passed/1 skipped/1 failed (единственный fail — предсуществующий RED-скаффолд WARM-14, не связан; воспроизведён идентично и с восстановленными файлами). Выполнено в изолированном worktree, смёржено в main (`f3caa7c`) | 2026-07-04 | a4aebaf..f3caa7c | [260704-bty-batch-h-routers-queue-py-routers-proxy-p](./quick/260704-bty-batch-h-routers-queue-py-routers-proxy-p/) |
 
 ### Hotfix Log — 2026-05-26 (ui-data-missing incident)
 
@@ -264,6 +266,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-04T09:06:03.213Z
-Stopped at: Completed 20-02-PLAN.md
+Last session: 2026-07-04T09:18:34.900Z
+Stopped at: Completed 20-03-PLAN.md
 Resume file: None
