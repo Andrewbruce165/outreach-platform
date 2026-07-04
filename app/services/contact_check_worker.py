@@ -620,6 +620,7 @@ class ContactCheckWorker:
                 encrypted_session=row.session_string,
                 phones=sample,
                 proxy=row.proxy,
+                checker_id=checker_id,  # WR-14: lock on id, not (non-unique) slug
             )
         except Exception as exc:  # noqa: BLE001 — a probe error must not kill the tick
             logger.warning("control-probe for checker %s raised: %s", checker_id, exc)
@@ -812,6 +813,7 @@ class ContactCheckWorker:
                     encrypted_session=r.session_string,
                     phones=sample,
                     proxy=r.proxy,
+                    checker_id=str(r.id),  # WR-14: lock on id, not (non-unique) slug
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("recovery probe for checker %s raised: %s", r.id, exc)

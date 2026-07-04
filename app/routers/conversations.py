@@ -465,6 +465,7 @@ async def send_message_from_ui(
     # 4. Telethon send OUTSIDE transaction.
     result = await telegram_service.send_message_by_telegram_id(
         sender_slug=row.sender_slug,
+        sender_id=str(row.sender_id),
         encrypted_session=row.session_string,
         telegram_id=row.contact_telegram_id,
         message=payload.message,

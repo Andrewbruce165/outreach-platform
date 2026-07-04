@@ -23,11 +23,16 @@ Divergence from rebalance.py (Pitfall 2 / EDIT 1): moved rows reset
 ``scheduled_at = NOW()`` so they are sendable immediately by the healthy
 receiver — the +24h freeze pause must NOT travel with the row.
 
-Selection (Pitfall 1): we do NOT call ``rotation.get_or_assign_sender`` — its
-stale-CCA short-circuit (rotation.py:71-97) ignores ``restriction_status`` and
-would hand the backlog straight back to the just-frozen sender. We resolve the
-healthy pool ourselves (``restriction_status = 'none'`` excludes the frozen
-sender) and pick a receiver per row via ``rotation._pick_least_loaded``.
+Selection (Pitfall 1): we do NOT call ``rotation.get_or_assign_sender``. Its
+stale-CCA happy-path eligibility gap is now FIXED (WR-13 — rotation.py Step-1
+predicate includes ``role='sender' AND restriction_status='none'``, so it no
+longer hands a sticky contact back to a just-frozen sender). failover.py keeps
+its own separate implementation NOT to route around a live bug, but for its
+distinct bulk-claim concurrency contract: it moves MANY rows across MANY
+campaigns in one pass under per-row ``FOR UPDATE OF mq SKIP LOCKED``, whereas
+rotation.py resolves a single (campaign, contact) pair. We resolve the healthy
+pool ourselves (``restriction_status = 'none'`` excludes the frozen sender) and
+pick a receiver per row via ``rotation._pick_least_loaded``.
 
 Concurrency safety (mirrors rebalance.py / queue.py worker): the movable-row
 claim uses ``status = 'pending'`` + ``FOR UPDATE OF mq SKIP LOCKED`` — rows the

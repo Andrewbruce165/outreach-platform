@@ -855,7 +855,7 @@ async def check_spambot(
     client = None
     try:
         client = await telegram_service.get_client(
-            sender.slug, sender.session_string, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy
         )
         # selfcheck_key passed for intent/forward-compat. NOTE: this endpoint runs
         # in the api process; the SpamBot reply is handled by the listener's

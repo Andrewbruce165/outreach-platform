@@ -190,14 +190,17 @@ class CheckerService:
     """Service for bulk phone-number verification using checker Telegram accounts."""
 
     def __init__(self):
-        # One Lock per checker_slug — prevents concurrent API calls on the same account.
+        # One Lock per checker id — prevents concurrent API calls on the same account.
+        # WR-14: keyed by id (primary key), NOT slug — since migration 014 the slug is
+        # unique only per-workspace, so two workspaces can share a slug and would
+        # otherwise collide on one lock.
         # Single uvicorn worker → asyncio.Lock is sufficient (no distributed lock needed).
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def _get_lock(self, checker_slug: str) -> asyncio.Lock:
-        if checker_slug not in self._locks:
-            self._locks[checker_slug] = asyncio.Lock()
-        return self._locks[checker_slug]
+    def _get_lock(self, key: str) -> asyncio.Lock:
+        if key not in self._locks:
+            self._locks[key] = asyncio.Lock()
+        return self._locks[key]
 
     async def _flag_checker_auth(self, sender_id: str | None, auth_status: str) -> None:
         """WR-06: flag a dead checker's auth_status BY ID (not slug — WR-14 shows slug
@@ -380,7 +383,7 @@ class CheckerService:
             "results": [{"phone": str, "is_registered": bool, "telegram_id": int|None, "username": str|None, "from_cache": bool}, ...]
         }
         """
-        async with self._get_lock(checker_slug):
+        async with self._get_lock(checker_id):
             return await self._check_phones_locked(workspace_id, checker_id, checker_slug, encrypted_session, phones, proxy)
 
     async def probe_control(
@@ -389,6 +392,7 @@ class CheckerService:
         encrypted_session: str,
         phones: list[str],
         proxy: dict | None = None,
+        checker_id: str | None = None,
     ) -> dict:
         """LIVE-only control probe — resolve known-live numbers, bypassing cache.
 
@@ -408,7 +412,9 @@ class CheckerService:
         ``flood_wait_hit=True`` is ALSO a miss (a flood-interrupted probe proves
         nothing about health). Does not log session strings.
         """
-        async with self._get_lock(checker_slug):
+        # WR-14: lock on the checker id when provided (id is globally unique); fall
+        # back to slug only for callers that omit it (preserves old behaviour).
+        async with self._get_lock(checker_id or checker_slug):
             results: list[dict] = []
             flood_wait_hit = False
             client: Optional[TelegramClient] = None
@@ -605,7 +611,7 @@ class CheckerService:
         Returns the same summary shape as ``check_phones`` with one extra field
         per result: ``"username"`` (the bare handle, for matching by the worker).
         """
-        async with self._get_lock(checker_slug):
+        async with self._get_lock(checker_id):
             return await self._check_usernames_locked(
                 workspace_id, checker_id, checker_slug, encrypted_session, usernames, proxy
             )

@@ -156,3 +156,99 @@ async def test_queue_position_null_priority_ordered_as_zero_against_positive(
     assert await _queue_position(async_db_session, sid, hi_item) == 1
     # NULL(→0) priority is behind the positive-priority row.
     assert await _queue_position(async_db_session, sid, null_item) == 2
+
+
+# ─── IN-04: pre-send manual-takeover guard reads the NEWEST conversation row ──
+
+
+async def test_in04_all_ai_enabled_guards_order_by_updated_at_desc():
+    """IN-04 (product-code regression): every pre-send manual-takeover guard that
+    reads ``conversations.ai_enabled`` must ``ORDER BY updated_at DESC`` before
+    ``LIMIT 1`` so the NEWEST conversation row governs the guard when recontact
+    created duplicate (workspace, sender, phone) rows. Before the fix the
+    non-recontact branch used a bare ``LIMIT 1`` (arbitrary row)."""
+    import pathlib
+    import re
+
+    import app.services.queue as queue_mod
+
+    src = pathlib.Path(queue_mod.__file__).read_text()
+    guards: list[str] = []
+    for m in re.finditer(r"SELECT ai_enabled FROM conversations", src):
+        tail = src[m.start():]
+        limit_idx = tail.find("LIMIT 1")
+        assert limit_idx != -1, "an ai_enabled guard query has no LIMIT 1"
+        guards.append(tail[: limit_idx + len("LIMIT 1")])
+
+    # Both the recontact and non-recontact branches read ai_enabled — the test
+    # would have gone RED before the fix (non-recontact branch lacked ORDER BY).
+    assert len(guards) >= 2, f"expected >=2 ai_enabled guards, found {len(guards)}"
+    for block in guards:
+        assert "ORDER BY updated_at DESC" in block, (
+            "a pre-send ai_enabled guard is missing ORDER BY updated_at DESC — it "
+            "would read an arbitrary duplicate conversation row:\n" + block
+        )
+
+
+async def _insert_conversation(
+    db, *, workspace_id, sender_id, contact_phone, ai_enabled, updated_at
+) -> str:
+    """Seed one conversations row with an explicit updated_at + ai_enabled."""
+    cid = str(uuid.uuid4())
+    await db.execute(
+        text("""
+            INSERT INTO conversations (
+                id, workspace_id, sender_id, contact_phone,
+                ai_enabled, status, created_at, updated_at
+            ) VALUES (
+                :cid, :wid, :sid, :phone, :ai_en, 'active', :ts, :ts
+            )
+        """),
+        {
+            "cid": cid, "wid": str(workspace_id), "sid": str(sender_id),
+            "phone": contact_phone, "ai_en": ai_enabled, "ts": updated_at,
+        },
+    )
+    await db.commit()
+    return cid
+
+
+async def test_in04_newest_conversation_ai_enabled_wins(
+    async_db_session, test_sender_factory
+):
+    """IN-04 (behavioural): with two duplicate conversation rows for the same
+    (workspace, sender, phone) the non-recontact guard's ``ORDER BY updated_at
+    DESC LIMIT 1`` returns the NEWEST row's ai_enabled — not an arbitrary one."""
+    sender = await test_sender_factory()
+    wid = sender.workspace_id
+    sid = sender.id
+    phone = "+79993330001"
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+    # Older row: manager had taken over earlier (ai_enabled=False).
+    await _insert_conversation(async_db_session, workspace_id=wid, sender_id=sid,
+                               contact_phone=phone, ai_enabled=False, updated_at=base)
+    # Newest row: a fresh recontact dialog with AI back on (ai_enabled=True).
+    await _insert_conversation(async_db_session, workspace_id=wid, sender_id=sid,
+                               contact_phone=phone, ai_enabled=True,
+                               updated_at=base + timedelta(hours=1))
+
+    # Exact non-recontact guard SQL from queue.py __send_item_inner.
+    guard_sql = text("""
+        SELECT ai_enabled FROM conversations
+        WHERE workspace_id = :wid
+          AND sender_id = :sid
+          AND contact_phone = :phone
+        ORDER BY updated_at DESC LIMIT 1
+    """)
+    params = {"wid": str(wid), "sid": str(sid), "phone": phone}
+
+    ai_enabled = (await async_db_session.execute(guard_sql, params)).scalar()
+    assert ai_enabled is True, "newest conversation (AI re-enabled) must win"
+
+    # Flip: make the NEWEST row the manager-takeover one → guard must read False.
+    await _insert_conversation(async_db_session, workspace_id=wid, sender_id=sid,
+                               contact_phone=phone, ai_enabled=False,
+                               updated_at=base + timedelta(hours=2))
+    ai_enabled = (await async_db_session.execute(guard_sql, params)).scalar()
+    assert ai_enabled is False, "newest conversation (manual takeover) must win"
