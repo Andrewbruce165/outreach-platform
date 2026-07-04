@@ -97,13 +97,25 @@ class CampaignEnqueueWorker:
             campaigns = campaigns_rows.fetchall()
             total_enqueued = 0
             for c in campaigns:
-                # Auto-pause (029): if the campaign can no longer send (no
-                # eligible sender) while work remains, flip it to paused with a
-                # reason so the UI shows it needs attention — then skip enqueue.
-                if await self._maybe_autopause(db, c):
+                # IN-11: one campaign raising must NOT abort the whole tick and
+                # starve the remaining running campaigns. Log, roll back any
+                # half-open TX state on the shared `db` before the next campaign
+                # reuses it, and move on.
+                try:
+                    # Auto-pause (029): if the campaign can no longer send (no
+                    # eligible sender) while work remains, flip it to paused with a
+                    # reason so the UI shows it needs attention — then skip enqueue.
+                    if await self._maybe_autopause(db, c):
+                        continue
+                    enqueued = await self._tick_one_campaign(db, c)
+                    total_enqueued += enqueued
+                except Exception as exc:  # noqa: BLE001 — one bad campaign must not starve the rest
+                    logger.error(
+                        "CampaignEnqueueWorker: campaign %s tick failed: %s",
+                        c.id, exc, exc_info=True,
+                    )
+                    await db.rollback()
                     continue
-                enqueued = await self._tick_one_campaign(db, c)
-                total_enqueued += enqueued
             if total_enqueued > 0:
                 logger.info(
                     "📤 CampaignEnqueueWorker tick: enqueued %s items across %s campaigns",
@@ -310,16 +322,25 @@ class CampaignEnqueueWorker:
 
                     # 3. INSERT queue item.
                     # workspace_id from campaign (defence-in-depth Pitfall 8).
-                    await db.execute(
+                    # WR-09: re-assert campaign status at INSERT time. The running
+                    # campaigns are snapshotted at tick start; if one flips to
+                    # done/stopped/paused between the snapshot and this per-contact
+                    # commit, the INSERT ... SELECT ... WHERE EXISTS adds 0 rows so
+                    # we never create a zombie 'pending' item on a finished
+                    # campaign. Only count an enqueue when a row was actually
+                    # inserted (rowcount == 1); an EXISTS-miss is a no-op.
+                    result = await db.execute(
                         text("""
                             INSERT INTO message_queue
                                 (workspace_id, campaign_id, sender_id, item_type, status,
                                  recipient_phone, recipient_name, message_text,
                                  priority, scheduled_at, created_at)
-                            VALUES
-                                (:wid, :cid, :sid, 'message', 'pending',
-                                 :phone, :name, :text,
-                                 :priority, :scheduled, NOW())
+                            SELECT :wid, :cid, :sid, 'message', 'pending',
+                                   :phone, :name, :text, :priority, :scheduled, NOW()
+                            WHERE EXISTS (
+                                SELECT 1 FROM campaigns
+                                WHERE id = :cid AND status = 'running'
+                            )
                         """),
                         {
                             "wid": str(c.workspace_id),
@@ -332,7 +353,8 @@ class CampaignEnqueueWorker:
                             "scheduled": scheduled_at,
                         },
                     )
-                    enqueued += 1
+                    if result.rowcount == 1:
+                        enqueued += 1
             except Exception as exc:  # noqa: BLE001 — savepoint rolled back; try next
                 logger.error(
                     "CampaignEnqueueWorker: error enqueuing contact %s in campaign %s: %s",

@@ -382,6 +382,95 @@ async def test_worker_start_stop_lifecycle():
     assert worker._task.done() or worker._task.cancelled()
 
 
+async def test_tick_one_campaign_no_op_when_flipped_to_done(
+    async_db_session,
+    test_running_campaign_factory,
+    test_contacts_factory,
+):
+    """WR-09: a campaign that flips out of 'running' between the tick-start
+    snapshot and the per-contact commit gets ZERO queue rows — no zombie pending.
+
+    Mirrors the concurrency race: `_tick` selects running campaigns into `c`
+    snapshots, then a status flip (finish/stop/auto-pause) lands before the
+    per-contact INSERT. The status-gated INSERT ... SELECT ... WHERE EXISTS must
+    add 0 rows and `_tick_one_campaign` must report enqueued == 0.
+    """
+    from app.database import AsyncSessionLocal
+
+    camp, _ = await test_running_campaign_factory(sender_count=1)
+    contact = await test_contacts_factory(count=1, tg_status="registered")
+    await async_db_session.execute(text("""
+        UPDATE contacts SET folder_id = :fid WHERE id = :cid
+    """), {"fid": str(camp["folder_id"]), "cid": str(contact.id)})
+    await async_db_session.commit()
+
+    worker = await _make_worker()
+
+    # Snapshot the campaign row exactly as `_tick`'s running-campaign SELECT does
+    # (status='running' at selection time).
+    async with AsyncSessionLocal() as snap_db:
+        c = (await snap_db.execute(text("""
+            SELECT id, workspace_id, folder_id, message_template, start_date,
+                   allow_recontact, recontact_min_age_days
+            FROM campaigns WHERE id = :cid
+        """), {"cid": str(camp["id"])})).first()
+
+    # Concurrent flip to 'done' AFTER the snapshot.
+    await async_db_session.execute(text("""
+        UPDATE campaigns SET status = 'done' WHERE id = :cid
+    """), {"cid": str(camp["id"])})
+    await async_db_session.commit()
+
+    async with AsyncSessionLocal() as db:
+        enqueued = await worker._tick_one_campaign(db, c)
+    assert enqueued == 0
+
+    cnt = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid
+    """), {"cid": str(camp["id"])})).scalar()
+    assert cnt == 0
+
+
+async def test_tick_continues_after_one_campaign_raises(
+    async_db_session,
+    test_running_campaign_factory,
+    test_contacts_factory,
+    monkeypatch,
+):
+    """IN-11: if `_tick_one_campaign` raises for one campaign, the tick logs +
+    rolls back + still processes the remaining running campaigns (no propagation).
+    """
+    camp1, _ = await test_running_campaign_factory(sender_count=1, name="Raiser")
+    camp2, _ = await test_running_campaign_factory(sender_count=1, name="Survivor")
+    # A registered contact to enqueue (folders are shared in fixtures; the
+    # per-campaign CCA dedup lets camp2 enqueue it regardless of order).
+    contact = await test_contacts_factory(count=1, tg_status="registered")
+    await async_db_session.execute(text("""
+        UPDATE contacts SET folder_id = :fid WHERE id = :cid
+    """), {"fid": str(camp2["folder_id"]), "cid": str(contact.id)})
+    await async_db_session.commit()
+
+    worker = await _make_worker()
+
+    real_tick_one = worker._tick_one_campaign
+
+    async def flaky(db, c):
+        if str(c.id) == str(camp1["id"]):
+            raise RuntimeError("boom in campaign 1")
+        return await real_tick_one(db, c)
+
+    monkeypatch.setattr(worker, "_tick_one_campaign", flaky)
+
+    # Must NOT raise even though camp1 blows up.
+    await worker._tick()
+
+    # camp2 still enqueued its contact.
+    cnt2 = (await async_db_session.execute(text("""
+        SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid
+    """), {"cid": str(camp2["id"])})).scalar()
+    assert cnt2 == 1
+
+
 async def test_worker_move_contact_race(
     async_db_session,
     test_running_campaign_factory,
