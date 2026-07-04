@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, computed_field, conint, conlist, constr, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, HttpUrl, computed_field, conint, conlist, constr, model_validator
 from typing import Any, Literal, Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -163,12 +163,69 @@ class SenderResponse(BaseModel):
     # as sent_today=0). None = sender is free to attach.
     locked_by_campaign_id: Optional[UUID] = None
     locked_by_campaign_name: Optional[str] = None
+    # Phase 20 (PROF-01/07/D-08): cached profile surfaced for the enriched row + edit form.
+    tg_username: Optional[str] = None
+    tg_bio: Optional[str] = None
+    has_photo: bool = False   # list carries only this bool; photo bytes served via GET /senders/{slug}/photo (D-11)
+    # Per-field last-change timestamps (iso8601 strings) so the UI can compute the D-08 1h countdown client-side.
+    profile_field_changed_at: dict = {}
 
 
 class SenderCreateResponse(BaseModel):
     """Возврат create/update sender'а с warnings[] (D-14)."""
     sender: SenderResponse
     warnings: List[WarningItem] = []
+
+
+# === Account Profile Management (Phase 20 — PROF-01..08 + D-08/D-09) ===
+
+class ProfileUpdate(BaseModel):
+    """PATCH /senders/{slug}/profile — Section A identity. Only non-None fields are written.
+    username="" clears the username; username=None leaves it untouched (D-07/D-08)."""
+    first_name: Optional[str] = Field(None, max_length=64)
+    last_name: Optional[str] = Field(None, max_length=64)
+    about: Optional[str] = Field(None, max_length=70)          # bio; AboutTooLongError is the premium backstop
+    username: Optional[str] = Field(None, max_length=32)
+
+
+class ProfileWarningItem(BaseModel):
+    """D-09 advisory for profile edits. DISTINCT from the PRE-EXISTING rate-limit
+    WarningItem (field/value/recommended_max, D-14) — that schema is
+    shaped for numeric soft-caps and MUST NOT be reused or modified here."""
+    code: str
+    message: str
+    severity: Literal["warning"] = "warning"
+
+
+class ProfileUpdateResponse(BaseModel):
+    """Response for PATCH /senders/{slug}/profile and POST/DELETE /senders/{slug}/photo:
+    sender + D-09 advisory warnings (ProfileWarningItem, NOT the rate-limit WarningItem)."""
+    sender: SenderResponse
+    warnings: List[ProfileWarningItem] = []
+
+
+class UsernameCheckResponse(BaseModel):
+    """GET /senders/{slug}/username-check?username= (C5)."""
+    available: bool
+    reason: Optional[str] = None   # 'taken' | 'invalid' | None
+
+
+class TwoFAPasswordUpdate(BaseModel):
+    """POST /senders/{slug}/2fa — password set/change (D-03/D-04). Password never persisted."""
+    current_password: Optional[str] = None   # required only if 2FA already set (D-04)
+    new_password: str = Field(..., min_length=1)
+    hint: Optional[str] = Field(None, max_length=100)
+
+
+class RecoveryEmailStart(BaseModel):
+    """POST /senders/{slug}/2fa/recovery-email — step 1 (D-02/D-04)."""
+    current_password: Optional[str] = None
+    email: EmailStr
+
+
+class RecoveryEmailConfirm(BaseModel):
+    """POST /senders/{slug}/2fa/recovery-email/confirm — step 2 (code only, no SRP)."""
+    code: str = Field(..., min_length=1)
 
 
 class SenderListResponse(BaseModel):
