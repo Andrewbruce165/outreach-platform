@@ -184,7 +184,10 @@ class ProfileUpdate(BaseModel):
     username="" clears the username; username=None leaves it untouched (D-07/D-08)."""
     first_name: Optional[str] = Field(None, max_length=64)
     last_name: Optional[str] = Field(None, max_length=64)
-    about: Optional[str] = Field(None, max_length=70)          # bio; AboutTooLongError is the premium backstop
+    # No field-level max_length: the endpoint enforces the 70-char cap and returns a
+    # structured 400 BIO_TOO_LONG (RED-test contract) rather than a 422 validation error.
+    # AboutTooLongError from Telegram is the premium (140-char) backstop.
+    about: Optional[str] = Field(None)
     username: Optional[str] = Field(None, max_length=32)
 
 

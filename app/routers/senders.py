@@ -25,6 +25,7 @@ Phase 2 ключевые изменения относительно legacy:
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -37,6 +38,9 @@ from app.database import get_db
 from app.models import Sender, ProxyPool, SenderRestrictionEvent
 from app.schemas import (
     AssignProxyRequest,
+    ProfileUpdate,
+    ProfileUpdateResponse,
+    ProfileWarningItem,
     ProxyConfig,
     ProxyPoolCreate,
     ProxyPoolItem,
@@ -49,6 +53,7 @@ from app.schemas import (
     SenderListResponse,
     SenderResponse,
     SenderUpdate,
+    UsernameCheckResponse,
     WarningItem,
 )
 from app.services.encryption import encrypt_session
@@ -157,6 +162,11 @@ def _sender_to_response(
         sent_today=sent_today,
         locked_by_campaign_id=locked_by_campaign_id,
         locked_by_campaign_name=locked_by_campaign_name,
+        # Phase 20 (PROF-01/02/03/07 + D-08): cached Telegram profile fields.
+        tg_username=getattr(sender, "tg_username", None),
+        tg_bio=getattr(sender, "tg_bio", None),
+        has_photo=bool(getattr(sender, "tg_photo", None)),
+        profile_field_changed_at=getattr(sender, "profile_field_changed_at", {}) or {},
     )
 
 
@@ -202,6 +212,131 @@ def _validate_rate_limits(
                 )
             )
     return warnings
+
+
+# ─── Account profile guardrail (Phase 20 — D-06/D-07/D-08/D-09) ───────────────
+
+# Telegram username rule: 5–32 chars, must start with a letter, only [A-Za-z0-9_].
+_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+# Free-account bio cap; AboutTooLongError is the premium (140) backstop.
+_BIO_MAX_LEN = 70
+# D-08: ONLY these fields hard-block when changed <1h ago. name/bio are warning-only (D-07).
+_HARD_BLOCK_FIELDS = {"username", "photo"}
+_HARD_BLOCK_WINDOW = timedelta(hours=1)
+
+
+def _as_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalise a possibly-naive datetime to UTC-aware for safe arithmetic."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _stamp_profile_change(sender: Sender, field: str) -> None:
+    """Record the last-change time for a field. Reassign a NEW dict — SQLAlchemy does
+    not track in-place JSONB mutation (no MutableDict), so mutating in place would not
+    persist on commit."""
+    changed = dict(sender.profile_field_changed_at or {})
+    changed[field] = datetime.now(timezone.utc).isoformat()
+    sender.profile_field_changed_at = changed
+
+
+def _check_profile_cooldown(sender: Sender, field: str) -> None:
+    """D-08 HARD block: username/photo changed <1h ago → 409 TOO_FREQUENT.
+
+    name/bio are warning-only (D-07) → not in _HARD_BLOCK_FIELDS → no-op here.
+    """
+    if field not in _HARD_BLOCK_FIELDS:
+        return
+    ts = (sender.profile_field_changed_at or {}).get(field)
+    if not ts:
+        return
+    try:
+        last = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return
+    last = _as_aware(last)
+    elapsed = datetime.now(timezone.utc) - last
+    if elapsed < _HARD_BLOCK_WINDOW:
+        retry_after = int((_HARD_BLOCK_WINDOW - elapsed).total_seconds())
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "TOO_FREQUENT",
+                "message": (
+                    f"{field} можно менять не чаще раза в час. "
+                    f"Попробуйте снова через {retry_after} c."
+                ),
+                "retry_after": retry_after,
+                "retry_after_seconds": retry_after,
+                "field": field,
+            },
+        )
+
+
+def _profile_advisory(sender: Sender) -> List[ProfileWarningItem]:
+    """D-09 advisory (NEVER blocks): warmup OR account younger than 7 days.
+
+    Returns ProfileWarningItem (code/message) — NOT the rate-limit WarningItem (D-14).
+    """
+    warnings: List[ProfileWarningItem] = []
+    created = _as_aware(getattr(sender, "created_at", None))
+    young = created is not None and (datetime.now(timezone.utc) - created) < timedelta(days=7)
+    if sender.lifecycle_status == "warmup" or young:
+        warnings.append(
+            ProfileWarningItem(
+                code="PROFILE_WARMUP_ADVISORY",
+                message=(
+                    "Аккаунт ещё прогревается (моложе 7 дней). Резкие изменения "
+                    "профиля повышают риск ограничений."
+                ),
+            )
+        )
+    return warnings
+
+
+def _raise_profile_telegram_error(e: Exception) -> None:
+    """Map a Telegram/Telethon profile error to a structured HTTPException.
+
+    Matches on BOTH the exception class name and its message text, so the live
+    Telethon errors (UsernameOccupiedError, AboutTooLongError, FloodWaitError, ...)
+    and a test that raises a bare Exception("USERNAME_OCCUPIED") both resolve to the
+    same code. Unknown errors → 500 PROFILE_UPDATE_FAILED.
+    """
+    blob = f"{type(e).__name__} {e}".upper()
+    table = (
+        ("USERNAME_OCCUPIED", 400, "USERNAME_TAKEN", "Этот username уже занят"),
+        ("USERNAMEOCCUPIED", 400, "USERNAME_TAKEN", "Этот username уже занят"),
+        ("USERNAME_INVALID", 400, "USERNAME_INVALID",
+         "Недопустимый формат username (a-z, 0-9, _, 5–32 символа)"),
+        ("USERNAMEINVALID", 400, "USERNAME_INVALID",
+         "Недопустимый формат username (a-z, 0-9, _, 5–32 символа)"),
+        ("USERNAME_PURCHASE", 400, "USERNAME_PURCHASE_REQUIRED",
+         "Этот username платный (Fragment)"),
+        ("USERNAMEPURCHASE", 400, "USERNAME_PURCHASE_REQUIRED",
+         "Этот username платный (Fragment)"),
+        ("ABOUT_TOO_LONG", 400, "BIO_TOO_LONG",
+         f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)"),
+        ("ABOUTTOOLONG", 400, "BIO_TOO_LONG",
+         f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)"),
+        ("FIRSTNAME_INVALID", 400, "NAME_INVALID", "Недопустимое имя"),
+        ("FIRSTNAMEINVALID", 400, "NAME_INVALID", "Недопустимое имя"),
+        ("FLOOD_WAIT", 429, "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
+        ("FLOODWAIT", 429, "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
+    )
+    for needle, status, code, message in table:
+        if needle in blob:
+            detail = {"code": code, "message": message}
+            if code == "FLOOD_WAIT":
+                secs = getattr(e, "seconds", None)
+                if secs is not None:
+                    detail["retry_after"] = secs
+            raise HTTPException(status_code=status, detail=detail)
+    logger.error(f"[senders] profile telegram error: {type(e).__name__}: {e}")
+    raise HTTPException(
+        status_code=500,
+        detail={"code": "PROFILE_UPDATE_FAILED", "message": str(e)},
+    )
 
 
 async def _check_sender_not_in_running_campaign(
@@ -818,6 +953,132 @@ async def get_block_rate(
         blocks_7d=blocks_7d,
         sends_7d=sends_7d,
         block_rate=(blocks_7d / sends_7d) if sends_7d else 0.0,
+    )
+
+
+# ─── Account profile edit (Phase 20 — PROF-02/03, D-06/07/08/09) ─────────────
+
+
+@router.get("/senders/{slug}/username-check", response_model=UsernameCheckResponse)
+async def username_check(
+    slug: str,
+    username: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Username availability pre-check (C5).
+
+    1. Local format validation (Telegram rules) — invalid → available=False/'invalid'.
+    2. Re-submitting the account's own current username → available (no-op).
+    3. Best-effort live check via CheckUsernameRequest. If the session can't be reached
+       we fall back to the format-valid verdict — the authoritative occupancy check runs
+       at PATCH time (UpdateUsernameRequest → USERNAME_TAKEN).
+    """
+    from app.services.telegram import telegram_service
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    if not username or not _USERNAME_RE.match(username):
+        return UsernameCheckResponse(available=False, reason="invalid")
+
+    if sender.tg_username and username.lower() == sender.tg_username.lower():
+        return UsernameCheckResponse(available=True, reason=None)
+
+    try:
+        res = await telegram_service.check_username(
+            sender.slug, sender.session_string, username, proxy=sender.proxy
+        )
+    except Exception as e:  # noqa: BLE001 — session unreachable → best-effort fall-through
+        logger.info(f"[senders] username-check live probe failed for {slug}: {e}")
+        return UsernameCheckResponse(available=True, reason=None)
+
+    return UsernameCheckResponse(
+        available=bool(res.get("available", True)), reason=res.get("reason")
+    )
+
+
+@router.patch("/senders/{slug}/profile", response_model=ProfileUpdateResponse)
+async def update_sender_profile(
+    slug: str,
+    request: ProfileUpdate,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PATCH Section-A identity: first/last name + bio (warning-only, D-07) and username
+    (1h hard block, D-08). Order: bio-length guard → username cooldown → Telegram writes
+    → cache refresh + stamp → commit → D-09 advisory warnings.
+    """
+    from telethon.tl.functions.account import UpdateProfileRequest
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    # Bio length guard → 400 BIO_TOO_LONG (before any Telegram call).
+    if request.about is not None and len(request.about) > _BIO_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "BIO_TOO_LONG",
+                "message": f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)",
+            },
+        )
+
+    changing_profile = (
+        request.first_name is not None
+        or request.last_name is not None
+        or request.about is not None
+    )
+    changing_username = request.username is not None
+
+    # D-08 hard block for username BEFORE any Telegram call (photo has its own endpoint).
+    if changing_username:
+        _check_profile_cooldown(sender, "username")
+
+    try:
+        if changing_profile:
+            # Only pass fields the user actually changed (None leaves them untouched).
+            req = UpdateProfileRequest(
+                first_name=request.first_name,
+                last_name=request.last_name,
+                about=request.about,
+            )
+            await telegram_service.update_profile(
+                sender.slug, sender.session_string, req, proxy=sender.proxy
+            )
+            if request.first_name is not None:
+                composed = (
+                    (request.first_name or "")
+                    + (" " + request.last_name if request.last_name else "")
+                ).strip()
+                sender.name = composed or sender.name
+                _stamp_profile_change(sender, "name")
+            if request.about is not None:
+                sender.tg_bio = request.about
+                _stamp_profile_change(sender, "bio")
+        if changing_username:
+            await telegram_service.update_username(
+                sender.slug, sender.session_string, request.username, proxy=sender.proxy
+            )
+            sender.tg_username = request.username or None
+            _stamp_profile_change(sender, "username")
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error
+        _raise_profile_telegram_error(e)
+
+    await db.commit()
+    await db.refresh(sender)
+    return ProfileUpdateResponse(
+        sender=_sender_to_response(sender), warnings=_profile_advisory(sender)
     )
 
 
