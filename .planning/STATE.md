@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 20-01-PLAN.md
-last_updated: "2026-07-04T08:45:17.385Z"
+stopped_at: Completed 20-02-PLAN.md
+last_updated: "2026-07-04T09:06:16.604Z"
 last_activity: 2026-07-04
 progress:
   total_phases: 22
   completed_phases: 19
   total_plans: 83
-  completed_plans: 78
+  completed_plans: 79
   percent: 99
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 20 (account-profile-management) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-07-04
 
@@ -101,6 +101,7 @@ Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05:
 | Phase 19 P04 | 90min | 3 tasks | 5 files |
 | Phase 19 P05 | 35min | 3 tasks | 5 files |
 | Phase 20 P01 | 10min | 3 tasks | 5 files |
+| Phase 20 P02 | 18min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -176,6 +177,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 19]: 19-05: openapi.json regenerated OFFLINE via app.openapi() in the test container (Phase 16/18 precedent, no un-gated prod deploy) carrying the 4 follow_up_* fields + no_reply status; Follow Up form block (toggle default OFF + interval 4–168h/max pings 1–5/auto-finish 24–720h, mirroring recontact/max_new_dialogs_per_day pattern) added to create+edit campaign forms in sibling repo; cross-repo commit isolation preserved (openapi→outreach-platform a6644fd, form+types→aimly-tg-outreach f5b975e); human-verify gate APPROVED. Phase 19 complete (NORP-13).
 - [Phase 20]: 20-01: Account profile migration renumbered 047->049 (047/048 taken by quick-260703-ssv); profile_field_changed_at JSONB NOT NULL DEFAULT '{}'::jsonb mirrored with server_default on the ORM (create_all drift guard)
 - [Phase 20]: 20-01: 7 Phase-20 profile schemas + SenderResponse cache fields (tg_username/tg_bio/has_photo/profile_field_changed_at); ProfileWarningItem (D-09) kept DISTINCT from rate-limit WarningItem (D-14); Wave-0 RED scaffold pins PROF-01..08 + D-08/D-09 (PROF-01 GREEN, 8 RED)
+- [Phase 20]: 20-02: PROF-02/03/08 closed — PATCH /senders/{slug}/profile (name/bio warning-only D-07, username 1h hard-block D-08) + GET /username-check (format pre-check + best-effort live probe); TelegramService update_profile(dispatch UpdateProfileRequest)/check_username/set_username per-op; onboarding finalize caches tg_username on create+re-auth (PROF-08)
+- [Phase 20]: 20-02: implemented to the authoritative RED test contract over the plan's suggested code — endpoint builds UpdateProfileRequest positionally, service methods RAISE (not {success:False}), router calls update_username (test-patched name, set_username is canonical impl it delegates to), username-check falls back to available on unreachable session; dropped ProfileUpdate.about max_length so oversized bio → endpoint 400 BIO_TOO_LONG (not 422)
 
 ### Roadmap Evolution
 
@@ -261,6 +264,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-04T08:45:01.405Z
-Stopped at: Completed 20-01-PLAN.md
+Last session: 2026-07-04T09:06:03.213Z
+Stopped at: Completed 20-02-PLAN.md
 Resume file: None
