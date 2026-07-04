@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 20 UI-SPEC approved
-last_updated: "2026-07-03T21:05:39.000Z"
-last_activity: "2026-07-03 - Completed quick task 260703-ssv: Batch C+D queue fixes — message_queue priority/attempts/as_draft DB defaults+backfill (mig 047, WR-02), priority-aware NULL-safe _queue_position (WR-03), durable non-blocking senders.long_pause_until replacing inline asyncio.sleep head-of-line block (mig 048, WR-04); deployed to prod, migrations applied clean, 0 NULL-priority rows"
+status: executing
+stopped_at: Completed 20-01-PLAN.md
+last_updated: "2026-07-04T08:45:17.385Z"
+last_activity: 2026-07-04
 progress:
   total_phases: 22
   completed_phases: 19
-  total_plans: 78
-  completed_plans: 77
+  total_plans: 83
+  completed_plans: 78
   percent: 99
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 18 — switchable-llm-provider
+**Current focus:** Phase 20 — account-profile-management
 
 ## Current Position
 
-Phase: 19
-Plan: Not started
-Status: 19-05 done — regenerated lovable-handoff/openapi.json OFFLINE (app.openapi() in test container) with the 4 follow_up_* campaign fields + no_reply status, and added the Follow Up settings block (Enable toggle default OFF + interval 4–168h / max pings 1–5 / auto-finish 24–720h numeric inputs) to BOTH the create (campaigns.new.tsx) and edit (EditCampaignModal.tsx) campaign forms in the sibling frontend repo, wired through the create/update mutation, TS types regenerated, tsc clean (D-08/D-12/NORP-13). Cross-repo isolation preserved: openapi→outreach-platform (a6644fd), form+types→aimly-tg-outreach (f5b975e). Task 3 human-verify gate APPROVED by user (create/edit persistence + bounds + live no_reply/ping/auto-finish flow confirmed). Phase 19 (No Reply Follow-Up and Auto-Finish) now COMPLETE end-to-end: schema (19-01), API+AI (19-02), listener/queue guards (19-03), FollowUpWorker (19-04), product surface (19-05).
-Last activity: 2026-07-03 - Completed quick task 260703-ssv: Batch C+D queue fixes — priority DB defaults+backfill (WR-02), priority-aware NULL-safe _queue_position (WR-03), durable non-blocking long-pause (WR-04); deployed to prod
+Phase: 20 (account-profile-management) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-07-04
 
 Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05: schema, API+AI, listener/queue guards, FollowUpWorker, openapi+form)
 
@@ -100,6 +100,7 @@ Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05:
 | Phase 19 P03 | 12min | 2 tasks | 3 files |
 | Phase 19 P04 | 90min | 3 tasks | 5 files |
 | Phase 19 P05 | 35min | 3 tasks | 5 files |
+| Phase 20 P01 | 10min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -173,6 +174,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 19]: 19-03: incoming reply reverts no_reply->active before AI-dispatch + updates local conv dict (Pitfall 4); listener cancels pending pings (D-17 first guard) scoped to sender+phone+campaign; queue pre-send D-17 second guard gated on extra_data.kind=='followup' cancels ping on reply-since OR conversation left active/no_reply; empirical intervals untouched
 - [Phase 19]: 19-04: FollowUpWorker asyncio tick (FOR UPDATE OF c SKIP LOCKED) applies auto-finish-first/ping-else anchored to lazily-derived last-outbound; auto-finish flips finished + cancels pings + fires finish webhook reason='no_reply' (D-08/D-09), ping flips active->no_reply + generate_followup_ping + enqueue kind='followup' to owning sender + pings_sent++ (D-02/D-13/D-14), skips restricted sender + double-enqueue; follow_up_tick_seconds knob + lifespan registration. Fixed shared-DB pool poisoning: no_reply committed rows broke migration-017 constraint-reapply -> scoped test_conversation_factory teardown to no_reply only.
 - [Phase 19]: 19-05: openapi.json regenerated OFFLINE via app.openapi() in the test container (Phase 16/18 precedent, no un-gated prod deploy) carrying the 4 follow_up_* fields + no_reply status; Follow Up form block (toggle default OFF + interval 4–168h/max pings 1–5/auto-finish 24–720h, mirroring recontact/max_new_dialogs_per_day pattern) added to create+edit campaign forms in sibling repo; cross-repo commit isolation preserved (openapi→outreach-platform a6644fd, form+types→aimly-tg-outreach f5b975e); human-verify gate APPROVED. Phase 19 complete (NORP-13).
+- [Phase 20]: 20-01: Account profile migration renumbered 047->049 (047/048 taken by quick-260703-ssv); profile_field_changed_at JSONB NOT NULL DEFAULT '{}'::jsonb mirrored with server_default on the ORM (create_all drift guard)
+- [Phase 20]: 20-01: 7 Phase-20 profile schemas + SenderResponse cache fields (tg_username/tg_bio/has_photo/profile_field_changed_at); ProfileWarningItem (D-09) kept DISTINCT from rate-limit WarningItem (D-14); Wave-0 RED scaffold pins PROF-01..08 + D-08/D-09 (PROF-01 GREEN, 8 RED)
 
 ### Roadmap Evolution
 
@@ -258,6 +261,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-03T13:35:36.381Z
-Stopped at: Phase 20 UI-SPEC approved
-Resume file: .planning/phases/20-account-profile-management/20-UI-SPEC.md
+Last session: 2026-07-04T08:45:01.405Z
+Stopped at: Completed 20-01-PLAN.md
+Resume file: None

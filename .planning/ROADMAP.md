@@ -524,11 +524,11 @@ Plans:
 **Goal:** Editable Telegram account profile (name, username, bio, photo, linked email if possible, 2FA) from the account edit view, plus richer account cards (photo, name, username, phone, update/delete/reauth) on the accounts list page.
 **Requirements**: PROF-01, PROF-02, PROF-03, PROF-04, PROF-05, PROF-06, PROF-07, PROF-08, PROF-09 (derived during /gsd:plan-phase 20 — see REQUIREMENTS.md §Account Profile Management; tracked via decisions D-01..D-14)
 **Depends on:** Phase 19
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 20-01-foundation-schema-and-test-scaffold-PLAN.md — migration 047 (5 cached-profile columns) + ORM mirror + Pydantic schemas + Wave-0 RED test scaffold [Wave 1, no deps] — PROF-01
+- [x] 20-01-foundation-schema-and-test-scaffold-PLAN.md — migration 047 (5 cached-profile columns) + ORM mirror + Pydantic schemas + Wave-0 RED test scaffold [Wave 1, no deps] — PROF-01
 
 **Wave 2** *(blocked on 20-01 — shared telegram.py/senders.py spine)*
 - [ ] 20-02-profile-identity-and-guardrail-PLAN.md — update_profile/check_username/set_username + PATCH /profile + /username-check + guardrail (D-08 hard-block / D-09 advisory) + onboarding cache [Wave 2, depends_on: 20-01] — PROF-02, PROF-03, PROF-08
