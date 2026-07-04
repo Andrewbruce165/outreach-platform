@@ -1110,6 +1110,108 @@ class TelegramService:
             if client:
                 await self.disconnect_client(client)
 
+    # ─── Account profile (Phase 20 — PROF-02/03) ────────────────────────────
+    # All three follow the send_message_by_telegram_id client-per-op skeleton:
+    # create via get_client, do the op, ALWAYS disconnect_client in finally.
+    # SessionAuthError (dead session) is NOT caught here — it propagates so the
+    # router maps it to 403 (same contract as the spambot-check handler). Telethon
+    # profile errors (UsernameOccupiedError, AboutTooLongError, FloodWaitError, ...)
+    # also propagate; the router owns the error→HTTP mapping.
+
+    async def update_profile(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        request,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Dispatch a pre-built ``account.UpdateProfileRequest`` via a per-op client.
+
+        The router builds the TL request from only the fields the user actually
+        changed (``None`` leaves a field untouched — RESEARCH anti-pattern) and
+        passes it here; this method owns the client lifecycle only.
+        """
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            await client(request)
+            return {"success": True}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def check_username(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        username: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Live username availability pre-check (``account.CheckUsernameRequest``).
+
+        Returns ``{"available": bool, "reason": 'taken'|'invalid'|None}``. Raises on
+        session/connection failure — the router treats an unreachable session as a
+        best-effort fall-through to the format-only verdict.
+        """
+        from telethon.tl.functions.account import CheckUsernameRequest
+        from telethon.errors import UsernameInvalidError
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            try:
+                available = await client(CheckUsernameRequest(username))
+            except UsernameInvalidError:
+                return {"available": False, "reason": "invalid"}
+            return {"available": bool(available), "reason": None if available else "taken"}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def set_username(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        username: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Set (or clear via ``username=""``) the account username via
+        ``account.UpdateUsernameRequest``.
+
+        Re-submitting the account's current username raises ``UsernameNotModifiedError``
+        which is treated as a success no-op (Pitfall 4). Occupied / invalid / paid-handle
+        errors PROPAGATE — the router maps them to structured HTTP responses.
+        """
+        from telethon.tl.functions.account import UpdateUsernameRequest
+        from telethon.errors import UsernameNotModifiedError
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            try:
+                await client(UpdateUsernameRequest(username))
+            except UsernameNotModifiedError:
+                return {"success": True}  # current username re-submitted = no-op success
+            return {"success": True}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def update_username(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        username: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Router-facing alias for :meth:`set_username` (kept as the router's call
+        target; delegates to the canonical per-op implementation above)."""
+        return await self.set_username(
+            sender_slug, encrypted_session, username, proxy=proxy
+        )
+
 
 # Global instance
 telegram_service = TelegramService()
