@@ -29,6 +29,7 @@ from app.services.queue import enqueue_message
 from app.services.rotation import get_or_assign_sender
 from app.services.template import render_template
 from app.utils.auth import AuthCtx, auth_dep
+from app.utils.phone import normalize_to_e164, is_username_key
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,69 @@ async def send_message(
             },
         )
 
+    # WR-11(a): reject pushes into non-running campaigns. The dispatcher requires
+    # status='running'; an item enqueued into draft/paused/done sits pending forever
+    # (_cancel_pending_queue only fires on already-happened finish/delete transitions).
+    if campaign.status != "running":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CAMPAIGN_NOT_RUNNING",
+                "status": campaign.status,
+                "message": f"Campaign {request.campaign_id} is '{campaign.status}', not 'running' — cannot enqueue",
+            },
+        )
+
+    # WR-10: normalize before recipient_phone becomes the pipeline identity key
+    # (join key across CCA / message_queue / conversations / contacts_cache). Username
+    # keys (already `@handle`) pass through unchanged; phone keys are forced to E.164 so
+    # this never forks identity vs. the CSV-import / UI paths. Use a local recipient_key —
+    # do NOT mutate request.recipient_phone (the Pydantic model is reused for logging).
+    if is_username_key(request.recipient_phone):
+        recipient_key = request.recipient_phone
+    else:
+        recipient_key = normalize_to_e164(request.recipient_phone)
+        if recipient_key is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_PHONE",
+                    "message": f"recipient_phone '{request.recipient_phone}' is not a valid phone number or @username",
+                },
+            )
+
+    # WR-11(b): idempotent replay — an n8n retry for the same (campaign, recipient)
+    # must not create a second queue row (a duplicate cold opener ~40s apart is a spam
+    # signal against the sender). Return the existing pending/processing item instead.
+    existing = (await db.execute(
+        text("""
+            SELECT mq.id, mq.sender_id, mq.scheduled_at, s.slug AS sender_slug
+            FROM message_queue mq
+            JOIN senders s ON s.id = mq.sender_id
+            WHERE mq.campaign_id = :cid AND mq.recipient_phone = :phone
+              AND mq.status IN ('pending', 'processing')
+            ORDER BY mq.created_at DESC
+            LIMIT 1
+        """),
+        {"cid": str(campaign.id), "phone": recipient_key},
+    )).first()
+    if existing is not None:
+        from app.services.queue import _queue_position, _estimate_send_time
+        position = await _queue_position(db, existing.sender_id, existing.id)
+        logger.info(
+            f"[send] idempotent replay: workspace={ctx.workspace_id} campaign={request.campaign_id} "
+            f"to={recipient_key} existing_queue={str(existing.id)[:8]}"
+        )
+        return EnqueueResponse(
+            success=True,
+            queued=True,
+            queue_id=str(existing.id),
+            queue_position=position,
+            sender_slug=existing.sender_slug,
+            estimated_send_at=_estimate_send_time(position),
+            timestamp=datetime.now(timezone.utc),
+        )
+
     # 2. Resolve sender — explicit slug OR per-campaign rotation.
     if request.sender_slug:
         sender_result = await db.execute(
@@ -113,23 +177,29 @@ async def send_message(
                 detail={"code": "SENDER_NOT_FOUND",
                         "message": f"Sender '{request.sender_slug}' not found"},
             )
-        if sender.lifecycle_status != "active" or sender.auth_status != "ok":
+        if (
+            sender.lifecycle_status != "active"
+            or sender.auth_status != "ok"
+            or sender.restriction_status != "none"
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={
                     "code": "SENDER_NOT_READY",
                     "lifecycle_status": sender.lifecycle_status,
                     "auth_status": sender.auth_status,
+                    "restriction_status": sender.restriction_status,
                     "message": (
                         f"Sender '{request.sender_slug}' is not ready "
-                        f"(lifecycle={sender.lifecycle_status}, auth={sender.auth_status})"
+                        f"(lifecycle={sender.lifecycle_status}, auth={sender.auth_status}, "
+                        f"restriction={sender.restriction_status})"
                     ),
                 },
             )
     else:
         # Phase 4 D-06 rotation — per-campaign pool, NOT workspace-wide.
         sender = await get_or_assign_sender(
-            campaign.id, request.recipient_phone, db,
+            campaign.id, recipient_key, db,
         )
         if sender is None:
             raise HTTPException(
@@ -148,13 +218,13 @@ async def send_message(
         message_text = request.message
     else:
         contact_dict = await _lookup_contact_dict(
-            db, ctx.workspace_id, request.recipient_phone, request.recipient_name,
+            db, ctx.workspace_id, recipient_key, request.recipient_name,
         )
         message_text = render_template(
             campaign.message_template,
             contact_dict,
             campaign_id=str(campaign.id),
-            phone=request.recipient_phone,
+            phone=recipient_key,
         )
         if not message_text:
             raise HTTPException(
@@ -172,7 +242,7 @@ async def send_message(
             workspace_id=ctx.workspace_id,
             sender_id=sender.id,
             sender_slug=sender.slug,
-            recipient_phone=request.recipient_phone,
+            recipient_phone=recipient_key,
             recipient_name=request.recipient_name,
             message_text=message_text,
             as_draft=request.as_draft,
@@ -189,7 +259,7 @@ async def send_message(
 
     logger.info(
         f"[send] workspace={ctx.workspace_id} campaign={request.campaign_id} "
-        f"sender={sender.slug} to={request.recipient_phone} queue={info['queue_id'][:8]}"
+        f"sender={sender.slug} to={recipient_key} queue={info['queue_id'][:8]}"
     )
     return EnqueueResponse(
         success=True,
