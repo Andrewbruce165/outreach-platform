@@ -302,19 +302,10 @@ class QueueWorker:
                     eligible_sender_ids.append(r.sender_id)
 
             if items_to_fail:
-                await db.execute(
-                    text("""
-                        UPDATE message_queue
-                        SET status = 'failed',
-                            error_message = 'past_stop_date',
-                            finished_at = NOW()
-                        WHERE id = ANY(:ids)
-                    """),
-                    {"ids": [str(i) for i in items_to_fail]},
-                )
+                await self._fail_past_stop_date_items(db, items_to_fail)
                 await db.commit()
                 logger.info(
-                    f"Marked {len(items_to_fail)} queue items as failed "
+                    f"Marked up to {len(items_to_fail)} queue items as failed "
                     f"(past campaign.stop_date)"
                 )
 
@@ -539,16 +530,7 @@ class QueueWorker:
                     break
 
             if stop_date_failed_ids:
-                await db.execute(
-                    text("""
-                        UPDATE message_queue
-                        SET status = 'failed',
-                            error_message = 'past_stop_date',
-                            finished_at = NOW()
-                        WHERE id = ANY(:ids)
-                    """),
-                    {"ids": [str(i) for i in stop_date_failed_ids]},
-                )
+                await self._fail_past_stop_date_items(db, stop_date_failed_ids)
 
             if item_id is None:
                 await db.commit()
@@ -1257,6 +1239,58 @@ class QueueWorker:
                     ))
                 await self._fail_item(db, item, str(exc))
 
+    async def _fail_past_stop_date_items(self, db: AsyncSession, item_ids: list) -> None:
+        """IN-07: fail past-stop_date queue items and fire a per-item callback.
+
+        (a) The UPDATE carries an ``AND status = 'pending'`` guard so a row that
+            was cancelled (or otherwise moved off 'pending') concurrently between
+            the pick-time SELECT and this UPDATE is NOT clobbered back to 'failed'.
+        (b) For every row that WAS failed and has a non-null ``callback_url`` a
+            fire-and-forget ``_fire_callback(status="failed")`` task is scheduled,
+            mirroring the SessionAuthError branch. ``sender_slug`` is resolved in
+            one query (it is not a column on ``message_queue``).
+
+        Does NOT commit — the caller owns the transaction.
+        """
+        if not item_ids:
+            return
+        failed = (await db.execute(
+            text("""
+                UPDATE message_queue
+                SET status = 'failed',
+                    error_message = 'past_stop_date',
+                    finished_at = NOW()
+                WHERE id = ANY(:ids) AND status = 'pending'
+                RETURNING id, callback_url, recipient_phone, extra_data, sender_id
+            """),
+            {"ids": [str(i) for i in item_ids]},
+        )).fetchall()
+        if not failed:
+            return
+
+        # Resolve sender slugs in one query (sender_slug is not on message_queue).
+        sender_ids = list({str(r.sender_id) for r in failed if r.sender_id is not None})
+        slug_by_id: dict = {}
+        if sender_ids:
+            srows = (await db.execute(
+                text("SELECT id, slug FROM senders WHERE id = ANY(:sids)"),
+                {"sids": sender_ids},
+            )).fetchall()
+            slug_by_id = {str(sr.id): sr.slug for sr in srows}
+
+        for r in failed:
+            if not r.callback_url:
+                continue
+            asyncio.create_task(self._fire_callback(
+                url=r.callback_url,
+                queue_id=str(r.id),
+                status="failed",
+                sender_slug=slug_by_id.get(str(r.sender_id), ""),
+                recipient_phone=r.recipient_phone,
+                error="past_stop_date",
+                extra_data=r.extra_data,
+            ))
+
     async def _fail_item(self, db: AsyncSession, item: MessageQueue, error: str):
         attempts = (item.attempts or 0) + 1
         if attempts >= MAX_ATTEMPTS:
@@ -1300,6 +1334,23 @@ class QueueWorker:
                 extra_data=item.extra_data or {}
             )
             db.add(log_entry)
+
+            # WR-12: a cold terminal fail (never sent for this campaign+phone) must not
+            # permanently absorb the contact. Release its sticky CCA so the enqueue
+            # worker's NOT IN dedup makes it eligible again next tick. Engaged/sent
+            # contacts (a prior 'sent' row exists) are left alone. Same transaction as
+            # the status UPDATE (before the commit below) so it is atomic.
+            if item.campaign_id is not None:
+                has_sent = (await db.execute(text("""
+                    SELECT 1 FROM message_queue
+                    WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'sent'
+                    LIMIT 1
+                """), {"cid": str(item.campaign_id), "phone": item.recipient_phone})).first()
+                if has_sent is None:
+                    await db.execute(text("""
+                        DELETE FROM campaign_contact_assignments
+                        WHERE campaign_id = :cid AND contact_phone = :phone
+                    """), {"cid": str(item.campaign_id), "phone": item.recipient_phone})
 
         await db.commit()
 
@@ -1406,7 +1457,7 @@ class QueueWorker:
                 await db.execute(
                     text("""
                         INSERT INTO messages (conversation_id, direction, message_text, sent_by, telegram_message_id)
-                        VALUES (:cid, 'outbound', :txt, 'human', :mid)
+                        VALUES (:cid, 'outbound', :txt, 'ai', :mid)
                         ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
                     """),
                     {
