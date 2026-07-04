@@ -63,6 +63,7 @@ def _make_mock_client(
     phone_code_hash: str = "hash-default",
     me_id: int = 12345,
     me_first_name: str = "Tester",
+    me_username: str | None = None,
 ):
     """Build a MagicMock that quacks like a Telethon TelegramClient."""
     client = MagicMock(name="MockTelethonClient")
@@ -89,6 +90,7 @@ def _make_mock_client(
     me = MagicMock()
     me.id = me_id
     me.first_name = me_first_name
+    me.username = me_username   # Phase 20 (PROF-08): finalize caches this onto sender.tg_username
     client.get_me = AsyncMock(return_value=me)
 
     qr_login = MagicMock()
@@ -515,3 +517,45 @@ async def test_no_subprocess_or_legacy_dict_in_module():
     assert "subprocess" not in code_only, "subprocess.run anti-pattern must be gone (D-18)"
     assert "_onboarding_sessions" not in code_only, "legacy dict must be gone (D-16)"
     assert "verify_api_key" not in code_only, "legacy verify_api_key import must be gone"
+
+
+# ─── Phase 20 (PROF-08): finalize caches the Telegram profile ─────────────────
+
+
+async def test_finalize_caches_profile(
+    async_client, async_db_session, valid_supabase_jwt, monkeypatch
+):
+    """RED (PROF-08): onboarding finalize (verify-code success) caches the account's
+    @username from get_me() onto the new sender row (sender.tg_username). RED until
+    the downstream Wave plan wires the profile cache into the finalize path."""
+    _clear_in_process_clients()
+    token, ws_id = await _bootstrap_workspace(
+        async_client, valid_supabase_jwt, "finalize-profile"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    client = _make_mock_client(
+        me_id=770077, me_first_name="Profiled", me_username="cachedhandle"
+    )
+    _patch_factory(monkeypatch, client)
+
+    start = await async_client.post(
+        "/api/v1/onboarding/start", headers=headers, json={"phone": "+79007770077"}
+    )
+    sid = start.json()["session_id"]
+
+    r = await async_client.post(
+        "/api/v1/onboarding/verify-code",
+        headers=headers,
+        json={"session_id": sid, "code": "12345"},
+    )
+    assert r.status_code == 200, r.text
+    sender_id = r.json()["sender_id"]
+
+    sender_row = (
+        await async_db_session.execute(
+            select(Sender).where(Sender.id == uuid.UUID(sender_id))
+        )
+    ).scalars().first()
+    assert sender_row is not None
+    assert sender_row.tg_username == "cachedhandle"
