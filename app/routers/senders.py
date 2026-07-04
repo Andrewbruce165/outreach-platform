@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -224,6 +224,10 @@ _BIO_MAX_LEN = 70
 _HARD_BLOCK_FIELDS = {"username", "photo"}
 _HARD_BLOCK_WINDOW = timedelta(hours=1)
 
+# PROF-04 photo upload guards — validated BEFORE any Telegram call (413/422).
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+ALLOWED_PHOTO_MIME = {"image/jpeg", "image/png"}
+
 
 def _as_aware(dt: Optional[datetime]) -> Optional[datetime]:
     """Normalise a possibly-naive datetime to UTC-aware for safe arithmetic."""
@@ -321,6 +325,12 @@ def _raise_profile_telegram_error(e: Exception) -> None:
          f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)"),
         ("FIRSTNAME_INVALID", 400, "NAME_INVALID", "Недопустимое имя"),
         ("FIRSTNAMEINVALID", 400, "NAME_INVALID", "Недопустимое имя"),
+        ("PHOTO_CROP_SIZE_SMALL", 400, "PHOTO_TOO_SMALL", "Фото слишком маленькое"),
+        ("PHOTOCROPSIZESMALL", 400, "PHOTO_TOO_SMALL", "Фото слишком маленькое"),
+        ("PHOTO_EXT_INVALID", 400, "PHOTO_FORMAT_INVALID",
+         "Неподдерживаемый формат. Загрузите JPG или PNG"),
+        ("PHOTOEXTINVALID", 400, "PHOTO_FORMAT_INVALID",
+         "Неподдерживаемый формат. Загрузите JPG или PNG"),
         ("FLOOD_WAIT", 429, "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
         ("FLOODWAIT", 429, "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
     )
@@ -1080,6 +1090,202 @@ async def update_sender_profile(
     return ProfileUpdateResponse(
         sender=_sender_to_response(sender), warnings=_profile_advisory(sender)
     )
+
+
+# ─── Account profile photo (Phase 20 — PROF-04/07, D-08/D-11) ────────────────
+
+
+@router.post("/senders/{slug}/photo", response_model=ProfileUpdateResponse)
+async def upload_sender_photo(
+    slug: str,
+    file: UploadFile = File(...),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-04: upload a new profile photo (multipart).
+
+    Order: size/mime validation (413/422, BEFORE any Telegram call) → D-08 photo
+    cooldown (409, BEFORE the Telegram write) → upload → cache Telegram's normalized
+    avatar (falls back to the raw upload) → per-field stamp → commit → D-09 advisory.
+
+    NB: validation runs before the cooldown so a bad upload always reports the input
+    error, not a stale-cooldown 409.
+    """
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    raw = await file.read()
+    if len(raw) > MAX_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "FILE_TOO_LARGE", "message": "Файл слишком большой (максимум 5 МБ)"},
+        )
+    if file.content_type not in ALLOWED_PHOTO_MIME:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "UNSUPPORTED_FILE_TYPE", "message": "Только JPG или PNG"},
+        )
+
+    # D-08 hard block for photo BEFORE the Telegram write (after input validation).
+    _check_profile_cooldown(sender, "photo")
+
+    try:
+        res = await telegram_service.upload_profile_photo(
+            sender.slug,
+            sender.session_string,
+            raw,
+            file_name=file.filename or "avatar.jpg",
+            proxy=sender.proxy,
+        )
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error (incl. FLOOD_WAIT)
+        _raise_profile_telegram_error(e)
+
+    res = res or {}
+    # Cache Telegram's own normalized avatar when the service returns it; otherwise
+    # fall back to the raw upload bytes (D-11: bytes stay server-side, served via GET).
+    sender.tg_photo = res.get("photo") or raw
+    sender.tg_photo_mime = res.get("photo_mime") or file.content_type
+    _stamp_profile_change(sender, "photo")
+    await db.commit()
+    await db.refresh(sender)
+    return ProfileUpdateResponse(
+        sender=_sender_to_response(sender), warnings=_profile_advisory(sender)
+    )
+
+
+@router.delete("/senders/{slug}/photo", response_model=ProfileUpdateResponse)
+async def delete_sender_photo(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-04: remove the profile photo and clear the cache.
+
+    A delete is a de-escalation (removing, not spamming a fresh image), so it is
+    NOT itself cooldown-blocked — but it DOES stamp the photo field, so a rapid
+    follow-up UPLOAD is still throttled by D-08.
+    """
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    try:
+        res = await telegram_service.delete_profile_photos(
+            sender.slug, sender.session_string, proxy=sender.proxy
+        )
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error (incl. FLOOD_WAIT)
+        _raise_profile_telegram_error(e)
+
+    sender.tg_photo = None
+    sender.tg_photo_mime = None
+    _stamp_profile_change(sender, "photo")
+    await db.commit()
+    await db.refresh(sender)
+    return ProfileUpdateResponse(
+        sender=_sender_to_response(sender), warnings=_profile_advisory(sender)
+    )
+
+
+@router.get("/senders/{slug}/photo")
+async def serve_sender_photo(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-07 / D-11: serve the cached profile photo bytes through an AUTH-GATED
+    endpoint — never a raw blob URL, never base64-inlined into the list. 404 when
+    no photo is cached; a foreign-workspace slug is an opaque 404 (workspace scope).
+
+    The distinct `/photo` suffix keeps this from colliding with GET /senders/{slug}.
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    if not sender.tg_photo:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NO_PHOTO", "message": "No cached photo"},
+        )
+    return Response(content=sender.tg_photo, media_type=sender.tg_photo_mime or "image/jpeg")
+
+
+# ─── Account profile resync (Phase 20 — PROF-06, D-12) ───────────────────────
+
+
+@router.post("/senders/{slug}/resync", response_model=SenderResponse)
+async def resync_sender_profile(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-06 / D-12: pull the live username / bio / photo from Telegram into the
+    cache. This is a READ-from-Telegram (does not open the edit form / does not
+    mutate the account), so it carries NO cooldown and NO per-field stamp.
+    """
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    try:
+        res = await telegram_service.fetch_profile(
+            sender.slug, sender.session_string, proxy=sender.proxy
+        )
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error (incl. FLOOD_WAIT)
+        _raise_profile_telegram_error(e)
+
+    res = res or {}
+    sender.tg_username = res.get("username")
+    sender.tg_bio = res.get("bio")
+    photo = res.get("photo")
+    if photo is not None:
+        sender.tg_photo = photo
+        sender.tg_photo_mime = res.get("photo_mime") or "image/jpeg"
+    elif res.get("has_photo") is False:
+        # Live account has no photo → clear the cache.
+        sender.tg_photo = None
+        sender.tg_photo_mime = None
+    await db.commit()
+    await db.refresh(sender)
+
+    resp = _sender_to_response(sender)
+    # Honour the service's authoritative has_photo when it reports one without
+    # shipping the raw bytes (e.g. a lightweight resync); in prod the derived
+    # bool(tg_photo) already matches.
+    if res.get("has_photo") is not None:
+        resp.has_photo = bool(res.get("has_photo"))
+    return resp
 
 
 # ─── Workspace proxy pool CRUD (D-22) ────────────────────────────────────────
