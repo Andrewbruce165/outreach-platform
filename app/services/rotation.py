@@ -43,10 +43,15 @@ async def get_or_assign_sender(
 
     Algorithm:
         1. Look up existing assignment in ``campaign_contact_assignments``.
-           If found AND the sender is still eligible — return it.
+           If found AND the sender is still eligible — return it. Eligibility
+           (WR-13) matches Step 3 exactly: ``lifecycle_status='active' AND
+           auth_status='ok' AND role='sender' AND restriction_status='none'`` —
+           a spam_limited/frozen or wrong-role sticky sender is NOT returned and
+           falls through to reassignment below.
         2. Resolve campaign's ``workspace_id`` (defence-in-depth).
         3. SELECT active senders from ``campaign_senders`` pool
-           (``auth_status='ok' AND lifecycle_status='active'``).
+           (``auth_status='ok' AND lifecycle_status='active' AND role='sender'
+           AND restriction_status='none'``).
         4. Pick least-loaded sender (least active assignments).
         5. INSERT/UPDATE ``campaign_contact_assignments`` row, race-safe
            via ON CONFLICT DO NOTHING (UNIQUE on campaign_id+phone).
@@ -73,7 +78,8 @@ async def get_or_assign_sender(
         text("""
             SELECT cca.sender_id,
                    c.workspace_id AS workspace_id,
-                   (s.lifecycle_status = 'active' AND s.auth_status = 'ok') AS is_eligible
+                   (s.lifecycle_status = 'active' AND s.auth_status = 'ok'
+                    AND s.role = 'sender' AND s.restriction_status = 'none') AS is_eligible
             FROM campaign_contact_assignments cca
             JOIN campaigns c ON c.id = cca.campaign_id
             JOIN senders s ON s.id = cca.sender_id

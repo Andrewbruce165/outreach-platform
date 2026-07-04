@@ -153,3 +153,80 @@ async def test_rotation_unique_constraint_protects_race(
         {"cid": str(camp["id"]), "p": "+79995554433"},
     )).scalar()
     assert cnt == 1
+
+
+# ─── WR-13: restriction-aware sticky-assignment happy path ───────────────────
+# Distinct from test_rotation_skips_restricted_senders (Step-3 candidate filter,
+# NO existing CCA): these seed an EXISTING sticky CCA pointing at a restricted /
+# wrong-role sender and assert the Step-1 happy path no longer returns it.
+
+
+async def test_rotation_reassigns_sticky_restricted_sender(
+    async_db_session,
+    test_campaign_factory,
+    test_sender_factory,
+    attach_sender_to_campaign,
+):
+    """WR-13: an EXISTING sticky CCA pointing at a spam_limited sender must NOT be
+    returned by the happy path — is_eligible=False → reassign to a healthy pool
+    member and UPDATE the CCA row to the new sender."""
+    s_limited = await test_sender_factory(
+        slug="sticky-limited", restriction_status="spam_limited"
+    )
+    s_healthy = await test_sender_factory(slug="sticky-healthy")
+    camp = await test_campaign_factory(status="running")
+    await attach_sender_to_campaign(camp["id"], s_limited.id)
+    await attach_sender_to_campaign(camp["id"], s_healthy.id)
+
+    phone = "+79995550013"
+    # Seed the sticky assignment pointing at the (now) restricted sender.
+    await async_db_session.execute(text("""
+        INSERT INTO campaign_contact_assignments
+            (workspace_id, campaign_id, contact_phone, sender_id)
+        VALUES (:wid, :cid, :phone, :sid)
+    """), {
+        "wid": str(s_limited.workspace_id), "cid": str(camp["id"]),
+        "phone": phone, "sid": str(s_limited.id),
+    })
+    await async_db_session.commit()
+
+    sender = await get_or_assign_sender(camp["id"], phone, async_db_session)
+    assert sender is not None
+    assert sender.id == s_healthy.id, (
+        "restricted sticky sender must reassign to the healthy pool member"
+    )
+
+    # CCA row was UPDATEd to the healthy sender.
+    new_sid = (await async_db_session.execute(text("""
+        SELECT sender_id FROM campaign_contact_assignments
+        WHERE campaign_id=:cid AND contact_phone=:phone
+    """), {"cid": str(camp["id"]), "phone": phone})).scalar()
+    assert str(new_sid) == str(s_healthy.id)
+
+
+async def test_rotation_returns_healthy_sticky_sender_unchanged(
+    async_db_session,
+    test_campaign_factory,
+    test_sender_factory,
+    attach_sender_to_campaign,
+):
+    """WR-13 no-regression: a fully-healthy sticky sender (active + auth ok +
+    role='sender' + restriction none) is still returned unchanged."""
+    s_healthy = await test_sender_factory(slug="sticky-ok")
+    camp = await test_campaign_factory(status="running")
+    await attach_sender_to_campaign(camp["id"], s_healthy.id)
+
+    phone = "+79995550014"
+    await async_db_session.execute(text("""
+        INSERT INTO campaign_contact_assignments
+            (workspace_id, campaign_id, contact_phone, sender_id)
+        VALUES (:wid, :cid, :phone, :sid)
+    """), {
+        "wid": str(s_healthy.workspace_id), "cid": str(camp["id"]),
+        "phone": phone, "sid": str(s_healthy.id),
+    })
+    await async_db_session.commit()
+
+    sender = await get_or_assign_sender(camp["id"], phone, async_db_session)
+    assert sender is not None
+    assert sender.id == s_healthy.id

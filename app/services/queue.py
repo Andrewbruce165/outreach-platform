@@ -790,12 +790,17 @@ class QueueWorker:
                 """
                 guard_params["age_days"] = recontact_age
             else:
+                # IN-04: recontact deliberately creates duplicate conversation rows
+                # for the same (workspace, sender, phone). Without an explicit order
+                # LIMIT 1 reads an arbitrary row — order by updated_at DESC so the
+                # NEWEST conversation's ai_enabled governs the manual-takeover guard,
+                # mirroring the allow_recontact branch above and the lookup at ~1356.
                 guard_sql = """
                     SELECT ai_enabled FROM conversations
                     WHERE workspace_id = :wid
                       AND sender_id = :sid
                       AND contact_phone = :phone
-                    LIMIT 1
+                    ORDER BY updated_at DESC LIMIT 1
                 """
             guard_row = (await db.execute(text(guard_sql), guard_params)).first()
 
@@ -888,7 +893,7 @@ class QueueWorker:
 
             client = None
             try:
-                client = await telegram_service.get_client(sender.slug, sender.session_string, proxy=sender.proxy)
+                client = await telegram_service.get_client(sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy)
 
                 if item.item_type == QueueItemType.file:
                     result = await telegram_service.send_file(

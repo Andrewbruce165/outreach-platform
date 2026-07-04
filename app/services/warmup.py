@@ -713,6 +713,7 @@ class WarmupWorker:
         try:
             client = await telegram_service.get_client(
                 from_sender["slug"],
+                str(from_sender["id"]),
                 from_sender["session_string"]
             )
 

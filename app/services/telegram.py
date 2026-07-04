@@ -34,7 +34,7 @@ from telethon.errors import (
     AuthKeyPermEmptyError,
     UserDeactivatedBanError,
 )
-from sqlalchemy import select, text
+from sqlalchemy import text
 
 from app.config import get_settings
 from app.services.encryption import decrypt_session
@@ -124,16 +124,23 @@ class SessionAuthError(Exception):
         super().__init__(f"[{slug}] {auth_status}: {detail}")
 
 
-async def _set_auth_status(slug: str, auth_status: str):
-    """Update sender auth_status in DB."""
-    from app.models import Sender
+async def _set_auth_status(sender_id: str, auth_status: str):
+    """Update sender auth_status BY PRIMARY KEY.
+
+    WR-14: since migration 014, ``senders.slug`` is unique only per-workspace, so
+    the same slug can exist in two workspaces. Keying this UPDATE on ``slug`` made
+    ``scalar_one_or_none()`` raise ``MultipleResultsFound`` inside get_client's
+    auth-error handler — replacing ``SessionAuthError`` with an unrelated crash so
+    the queue worker never flipped ``auth_status``. Mirror
+    ``CheckerService._flag_checker_auth`` (checker.py) and update by ``id``.
+    """
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Sender).where(Sender.slug == slug))
-        sender = result.scalar_one_or_none()
-        if sender:
-            sender.auth_status = auth_status
-            await db.commit()
-    logger.warning(f"auth_status for {slug} -> {auth_status}")
+        async with db.begin():
+            await db.execute(
+                text("UPDATE senders SET auth_status = :st WHERE id = :sid"),
+                {"st": auth_status, "sid": sender_id},
+            )
+    logger.warning("auth_status for %s -> %s", sender_id, auth_status)
 
 settings = get_settings()
 
@@ -284,6 +291,7 @@ class TelegramService:
     async def get_client(
         self,
         sender_slug: str,
+        sender_id: str,
         encrypted_session: str,
         proxy: dict | None = None
     ) -> TelegramClient:
@@ -293,11 +301,17 @@ class TelegramService:
         otherwise the persistent connection will steal updates from the listener.
 
         Raises SessionAuthError if the session is dead (expired/revoked/banned).
-        """
-        if sender_slug not in self._locks:
-            self._locks[sender_slug] = asyncio.Lock()
 
-        async with self._locks[sender_slug]:
+        WR-14: the per-account lock and the auth_status update are keyed on
+        ``sender_id`` (primary key), NOT ``sender_slug`` — since migration 014 the
+        slug is unique only per-workspace, so two workspaces can share a slug. The
+        human-readable ``sender_slug`` is still used only for the SessionAuthError
+        message.
+        """
+        if sender_id not in self._locks:
+            self._locks[sender_id] = asyncio.Lock()
+
+        async with self._locks[sender_id]:
             session_string = decrypt_session(encrypted_session)
             client = make_telegram_client(
                 StringSession(session_string),
@@ -307,26 +321,26 @@ class TelegramService:
             try:
                 await client.connect()
             except AUTH_ERRORS as e:
-                await _set_auth_status(sender_slug, "session_expired")
+                await _set_auth_status(sender_id, "session_expired")
                 raise SessionAuthError(sender_slug, "session_expired", str(e))
             except UserDeactivatedBanError as e:
-                await _set_auth_status(sender_slug, "banned")
+                await _set_auth_status(sender_id, "banned")
                 raise SessionAuthError(sender_slug, "banned", str(e))
 
             try:
                 if not await client.is_user_authorized():
                     await client.disconnect()
-                    await _set_auth_status(sender_slug, "session_expired")
+                    await _set_auth_status(sender_id, "session_expired")
                     raise SessionAuthError(sender_slug, "session_expired", "Session is not authorized")
             except SessionAuthError:
                 raise
             except AUTH_ERRORS as e:
                 await client.disconnect()
-                await _set_auth_status(sender_slug, "session_expired")
+                await _set_auth_status(sender_id, "session_expired")
                 raise SessionAuthError(sender_slug, "session_expired", str(e))
             except UserDeactivatedBanError as e:
                 await client.disconnect()
-                await _set_auth_status(sender_slug, "banned")
+                await _set_auth_status(sender_id, "banned")
                 raise SessionAuthError(sender_slug, "banned", str(e))
 
             return client
@@ -1053,6 +1067,7 @@ class TelegramService:
     async def send_message_by_telegram_id(
         self,
         sender_slug: str,
+        sender_id: str,
         encrypted_session: str,
         telegram_id: int,
         message: str,
@@ -1074,7 +1089,7 @@ class TelegramService:
         """
         client = None
         try:
-            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
 
             try:
                 peer = await client.get_input_entity(telegram_id)
