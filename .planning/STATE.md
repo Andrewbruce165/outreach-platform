@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed 20-03-PLAN.md
-last_updated: "2026-07-04T09:18:34.923Z"
+last_updated: "2026-07-04T09:18:47.336Z"
 last_activity: 2026-07-04
 progress:
   total_phases: 22
@@ -180,6 +180,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 20]: 20-01: 7 Phase-20 profile schemas + SenderResponse cache fields (tg_username/tg_bio/has_photo/profile_field_changed_at); ProfileWarningItem (D-09) kept DISTINCT from rate-limit WarningItem (D-14); Wave-0 RED scaffold pins PROF-01..08 + D-08/D-09 (PROF-01 GREEN, 8 RED)
 - [Phase 20]: 20-02: PROF-02/03/08 closed — PATCH /senders/{slug}/profile (name/bio warning-only D-07, username 1h hard-block D-08) + GET /username-check (format pre-check + best-effort live probe); TelegramService update_profile(dispatch UpdateProfileRequest)/check_username/set_username per-op; onboarding finalize caches tg_username on create+re-auth (PROF-08)
 - [Phase 20]: 20-02: implemented to the authoritative RED test contract over the plan's suggested code — endpoint builds UpdateProfileRequest positionally, service methods RAISE (not {success:False}), router calls update_username (test-patched name, set_username is canonical impl it delegates to), username-check falls back to available on unreachable session; dropped ProfileUpdate.about max_length so oversized bio → endpoint 400 BIO_TOO_LONG (not 422)
+- [Phase 20]: 20-03: profile-photo lifecycle — POST/DELETE/GET /senders/{slug}/photo (multipart upload caches Telegram's normalized avatar, size 413/mime 422 validated before Telegram call, D-08 photo cooldown on UPLOAD only) + auth-gated BYTEA serve via Response (D-11) + POST /resync pulling live username/bio/photo into cache (D-12). PROF-04/06/07 closed.
+- [Phase 20]: 20-03: implemented to the RED test contract (like 20-02) — canonical set_profile_photo/delete_profile_photo/resync_profile + alias upload_profile_photo/delete_profile_photos/fetch_profile (test-patched names); router relies on raised exceptions not res.get('success'); DELETE /photo stamps but does NOT cooldown-block (de-escalation); upload validates size/mime before cooldown so bad input returns 413/422 not a stale 409.
 
 ### Roadmap Evolution
 

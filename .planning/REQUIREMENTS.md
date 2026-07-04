@@ -406,10 +406,10 @@
 | PROF-01 | Phase 20 | Complete |
 | PROF-02 | Phase 20 | Complete |
 | PROF-03 | Phase 20 | Complete |
-| PROF-04 | Phase 20 | Pending |
+| PROF-04 | Phase 20 | Complete |
 | PROF-05 | Phase 20 | Pending |
-| PROF-06 | Phase 20 | Pending |
-| PROF-07 | Phase 20 | Pending |
+| PROF-06 | Phase 20 | Complete |
+| PROF-07 | Phase 20 | Complete |
 | PROF-08 | Phase 20 | Complete |
 | PROF-09 | Phase 20 | Pending |
 
