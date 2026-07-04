@@ -46,6 +46,8 @@ from app.schemas import (
     ProxyPoolItem,
     ProxyPoolListResponse,
     RateLimits,
+    RecoveryEmailConfirm,
+    RecoveryEmailStart,
     RestrictionEventResponse,
     SenderBlockRateResponse,
     SenderCreate,
@@ -53,6 +55,7 @@ from app.schemas import (
     SenderListResponse,
     SenderResponse,
     SenderUpdate,
+    TwoFAPasswordUpdate,
     UsernameCheckResponse,
     WarningItem,
 )
@@ -299,49 +302,76 @@ def _profile_advisory(sender: Sender) -> List[ProfileWarningItem]:
     return warnings
 
 
+def _status_for_profile_error(code: str | None) -> int:
+    """HTTP status for a structured profile / 2FA error code (D-05 taxonomy).
+
+    TOO_FRESH → 409 (Telegram temporarily blocks the action on a fresh account /
+    session), FLOOD_WAIT → 429, everything else → 400.
+    """
+    return {"TOO_FRESH": 409, "FLOOD_WAIT": 429}.get(code or "", 400)
+
+
 def _raise_profile_telegram_error(e: Exception) -> None:
-    """Map a Telegram/Telethon profile error to a structured HTTPException.
+    """Map a Telegram/Telethon profile / 2FA error to a structured HTTPException.
 
     Matches on BOTH the exception class name and its message text, so the live
-    Telethon errors (UsernameOccupiedError, AboutTooLongError, FloodWaitError, ...)
-    and a test that raises a bare Exception("USERNAME_OCCUPIED") both resolve to the
-    same code. Unknown errors → 500 PROFILE_UPDATE_FAILED.
+    Telethon errors (UsernameOccupiedError, AboutTooLongError, PasswordHashInvalidError,
+    FloodWaitError, ...) and a test that raises a bare Exception("PASSWORD_HASH_INVALID")
+    both resolve to the same code. The HTTP status is derived from the code via
+    _status_for_profile_error. Unknown errors → 500 PROFILE_UPDATE_FAILED.
     """
     blob = f"{type(e).__name__} {e}".upper()
     table = (
-        ("USERNAME_OCCUPIED", 400, "USERNAME_TAKEN", "Этот username уже занят"),
-        ("USERNAMEOCCUPIED", 400, "USERNAME_TAKEN", "Этот username уже занят"),
-        ("USERNAME_INVALID", 400, "USERNAME_INVALID",
+        ("USERNAME_OCCUPIED", "USERNAME_TAKEN", "Этот username уже занят"),
+        ("USERNAMEOCCUPIED", "USERNAME_TAKEN", "Этот username уже занят"),
+        ("USERNAME_INVALID", "USERNAME_INVALID",
          "Недопустимый формат username (a-z, 0-9, _, 5–32 символа)"),
-        ("USERNAMEINVALID", 400, "USERNAME_INVALID",
+        ("USERNAMEINVALID", "USERNAME_INVALID",
          "Недопустимый формат username (a-z, 0-9, _, 5–32 символа)"),
-        ("USERNAME_PURCHASE", 400, "USERNAME_PURCHASE_REQUIRED",
+        ("USERNAME_PURCHASE", "USERNAME_PURCHASE_REQUIRED",
          "Этот username платный (Fragment)"),
-        ("USERNAMEPURCHASE", 400, "USERNAME_PURCHASE_REQUIRED",
+        ("USERNAMEPURCHASE", "USERNAME_PURCHASE_REQUIRED",
          "Этот username платный (Fragment)"),
-        ("ABOUT_TOO_LONG", 400, "BIO_TOO_LONG",
+        ("ABOUT_TOO_LONG", "BIO_TOO_LONG",
          f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)"),
-        ("ABOUTTOOLONG", 400, "BIO_TOO_LONG",
+        ("ABOUTTOOLONG", "BIO_TOO_LONG",
          f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)"),
-        ("FIRSTNAME_INVALID", 400, "NAME_INVALID", "Недопустимое имя"),
-        ("FIRSTNAMEINVALID", 400, "NAME_INVALID", "Недопустимое имя"),
-        ("PHOTO_CROP_SIZE_SMALL", 400, "PHOTO_TOO_SMALL", "Фото слишком маленькое"),
-        ("PHOTOCROPSIZESMALL", 400, "PHOTO_TOO_SMALL", "Фото слишком маленькое"),
-        ("PHOTO_EXT_INVALID", 400, "PHOTO_FORMAT_INVALID",
+        ("FIRSTNAME_INVALID", "NAME_INVALID", "Недопустимое имя"),
+        ("FIRSTNAMEINVALID", "NAME_INVALID", "Недопустимое имя"),
+        ("PHOTO_CROP_SIZE_SMALL", "PHOTO_TOO_SMALL", "Фото слишком маленькое"),
+        ("PHOTOCROPSIZESMALL", "PHOTO_TOO_SMALL", "Фото слишком маленькое"),
+        ("PHOTO_EXT_INVALID", "PHOTO_FORMAT_INVALID",
          "Неподдерживаемый формат. Загрузите JPG или PNG"),
-        ("PHOTOEXTINVALID", 400, "PHOTO_FORMAT_INVALID",
+        ("PHOTOEXTINVALID", "PHOTO_FORMAT_INVALID",
          "Неподдерживаемый формат. Загрузите JPG или PNG"),
-        ("FLOOD_WAIT", 429, "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
-        ("FLOODWAIT", 429, "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
+        # ─── 2FA + recovery email (Phase 20 — PROF-05, D-03/D-04) ───
+        ("PASSWORD_HASH_INVALID", "PASSWORD_INVALID", "Неверный текущий пароль 2FA"),
+        ("PASSWORDHASHINVALID", "PASSWORD_INVALID", "Неверный текущий пароль 2FA"),
+        ("EMAIL_UNCONFIRMED", "EMAIL_CODE_INVALID", "Неверный или просроченный код"),
+        ("EMAILUNCONFIRMED", "EMAIL_CODE_INVALID", "Неверный или просроченный код"),
+        ("EMAIL_INVALID", "EMAIL_INVALID", "Некорректный email"),
+        ("EMAILINVALID", "EMAIL_INVALID", "Некорректный email"),
+        ("CODE_INVALID", "EMAIL_CODE_INVALID", "Неверный или просроченный код"),
+        ("CODEINVALID", "EMAIL_CODE_INVALID", "Неверный или просроченный код"),
+        ("PASSWORD_TOO_FRESH", "TOO_FRESH",
+         "Telegram временно блокирует это действие на новом аккаунте."),
+        ("PASSWORDTOOFRESH", "TOO_FRESH",
+         "Telegram временно блокирует это действие на новом аккаунте."),
+        ("SESSION_TOO_FRESH", "TOO_FRESH",
+         "Telegram временно блокирует это действие на новой сессии."),
+        ("SESSIONTOOFRESH", "TOO_FRESH",
+         "Telegram временно блокирует это действие на новой сессии."),
+        ("FLOOD_WAIT", "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
+        ("FLOODWAIT", "FLOOD_WAIT", "Слишком часто. Попробуйте позже."),
     )
-    for needle, status, code, message in table:
+    for needle, code, message in table:
         if needle in blob:
             detail = {"code": code, "message": message}
-            if code == "FLOOD_WAIT":
+            if code in ("FLOOD_WAIT", "TOO_FRESH"):
                 secs = getattr(e, "seconds", None)
                 if secs is not None:
                     detail["retry_after"] = secs
-            raise HTTPException(status_code=status, detail=detail)
+            raise HTTPException(status_code=_status_for_profile_error(code), detail=detail)
     logger.error(f"[senders] profile telegram error: {type(e).__name__}: {e}")
     raise HTTPException(
         status_code=500,
@@ -1286,6 +1316,124 @@ async def resync_sender_profile(
     if res.get("has_photo") is not None:
         resp.has_photo = bool(res.get("has_photo"))
     return resp
+
+
+# ─── Account 2FA + recovery email (Phase 20 — PROF-05, D-03/D-04) ────────────
+# SECURITY (D-03): the 2FA password is a transient request field only — it is
+# never written to any DB column here (no `sender.` assignment, no db.commit).
+
+
+@router.post("/senders/{slug}/2fa")
+async def update_sender_2fa(
+    slug: str,
+    request: TwoFAPasswordUpdate,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-05: set (no current_password) or change (with current_password, D-04) the
+    account 2FA password via a single stateless ``edit_2fa`` request. Wrong current
+    password → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03)."""
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    try:
+        await telegram_service.edit_2fa(
+            sender.slug,
+            sender.session_string,
+            current_password=request.current_password,
+            new_password=request.new_password,
+            hint=request.hint or "",
+            proxy=sender.proxy,
+        )
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error
+        _raise_profile_telegram_error(e)
+    # D-03: nothing written to the DB — password is transient.
+    return {"success": True}
+
+
+@router.post("/senders/{slug}/2fa/recovery-email")
+async def start_sender_recovery_email(
+    slug: str,
+    request: RecoveryEmailStart,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-05 step 1: start a recovery-email change. Telegram sends a confirmation
+    code and this returns EMAIL_CONFIRMATION_SENT + code_length so the UI can prompt.
+    The two-request confirm flow lives account-side (see the /confirm endpoint)."""
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    try:
+        res = await telegram_service.set_recovery_email(
+            sender.slug,
+            sender.session_string,
+            current_password=request.current_password,
+            email=str(request.email),
+            proxy=sender.proxy,
+        )
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error
+        _raise_profile_telegram_error(e)
+    # D-03: nothing written to the DB — password is transient.
+    return {"code": "EMAIL_CONFIRMATION_SENT", "code_length": (res or {}).get("code_length")}
+
+
+@router.post("/senders/{slug}/2fa/recovery-email/confirm")
+async def confirm_sender_recovery_email(
+    slug: str,
+    request: RecoveryEmailConfirm,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """PROF-05 step 2: submit the emailed confirmation code
+    (``ConfirmPasswordEmailRequest``). Wrong / expired code → 400 EMAIL_CODE_INVALID."""
+    from app.services.telegram import telegram_service, SessionAuthError
+
+    sender = await _load_sender_by_slug(db, ctx, slug)
+    try:
+        await telegram_service.confirm_recovery_email(
+            sender.slug,
+            sender.session_string,
+            code=request.code,
+            proxy=sender.proxy,
+        )
+    except SessionAuthError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "AUTH_ERROR",
+                "message": f"Session auth failed: {e.auth_status}",
+                "auth_status": e.auth_status,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error
+        _raise_profile_telegram_error(e)
+    # D-03: nothing written to the DB — password is transient.
+    return {"success": True}
 
 
 # ─── Workspace proxy pool CRUD (D-22) ────────────────────────────────────────
