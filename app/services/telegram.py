@@ -1339,6 +1339,166 @@ class TelegramService:
         endpoint calls; delegates to the canonical per-op implementation above)."""
         return await self.resync_profile(sender_slug, encrypted_session, proxy=proxy)
 
+    # ─── Account 2FA + recovery email (Phase 20 — PROF-05, D-03/D-04) ──────────
+    # Same client-per-op skeleton as the identity/photo methods: create via
+    # get_client, do the op, ALWAYS disconnect_client in finally. SessionAuthError
+    # + Telethon errors (PasswordHashInvalidError, EmailInvalidError,
+    # PasswordTooFreshError/SessionTooFreshError, FloodWaitError) PROPAGATE — the
+    # router owns the error→HTTP mapping (_raise_profile_telegram_error).
+    #
+    # SECURITY (D-03): the 2FA password is a transient request-field only. It is
+    # never returned, never logged, never persisted anywhere.
+
+    async def change_2fa_password(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        current_password: str | None = None,
+        new_password: str,
+        hint: str = "",
+        proxy: dict | None = None,
+    ) -> dict:
+        """Set (current_password=None) or change the account's 2FA password via the
+        high-level ``client.edit_2fa`` in ONE stateless request.
+
+        No ``email=`` kwarg is passed → no ``email_code_callback`` is required →
+        edit_2fa completes synchronously (RESEARCH §Pitfall 2, CRITICAL). Recovery
+        email is a separate two-request flow (:meth:`start_recovery_email`).
+
+        Errors PROPAGATE (PasswordHashInvalidError = wrong current password,
+        PasswordTooFreshError/SessionTooFreshError, FloodWaitError) — the router maps
+        them. The password is never logged.
+        """
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            # No email here → no email_code_callback → completes synchronously (Pitfall 2).
+            await client.edit_2fa(
+                current_password=current_password,
+                new_password=new_password,
+                hint=hint or "",
+            )
+            return {"success": True}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def edit_2fa(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        current_password: str | None = None,
+        new_password: str,
+        hint: str = "",
+        proxy: dict | None = None,
+    ) -> dict:
+        """Router-facing alias for :meth:`change_2fa_password` (the name the 2FA
+        endpoint calls; delegates to the canonical per-op implementation above)."""
+        return await self.change_2fa_password(
+            sender_slug,
+            encrypted_session,
+            current_password=current_password,
+            new_password=new_password,
+            hint=hint,
+            proxy=proxy,
+        )
+
+    async def start_recovery_email(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        current_password: str | None = None,
+        email: str,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Step 1 of the recovery-email change — the TWO-request raw flow.
+
+        ``edit_2fa(email=...)`` needs a synchronous ``email_code_callback`` that a
+        per-op disconnect-between-requests client cannot provide (RESEARCH §Pitfall 2),
+        so we drop to the raw functions: ``GetPasswordRequest`` → ``compute_check`` →
+        ``UpdatePasswordSettingsRequest``. Telegram sends the confirmation code and
+        raises ``EmailUnconfirmedError`` — we pivot on it and return the code length so
+        the UI can prompt. The pending-email state now lives account-side on Telegram,
+        so step 2 (:meth:`confirm_recovery_email`) can use a FRESH per-op client.
+
+        Returns ``{"code_length": n}``. Errors PROPAGATE (EmailInvalidError,
+        PasswordHashInvalidError, PasswordTooFreshError/SessionTooFreshError,
+        FloodWaitError). The password is never logged.
+        """
+        from telethon.tl.functions.account import (
+            GetPasswordRequest,
+            UpdatePasswordSettingsRequest,
+        )
+        from telethon.tl.types.account import PasswordInputSettings
+        from telethon.password import compute_check
+        from telethon.errors import EmailUnconfirmedError
+
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            pwd = await client(GetPasswordRequest())
+            srp = compute_check(pwd, current_password or "")
+            try:
+                await client(
+                    UpdatePasswordSettingsRequest(
+                        password=srp,
+                        new_settings=PasswordInputSettings(email=email),
+                    )
+                )
+            except EmailUnconfirmedError as e:
+                # Confirmation code sent by Telegram → pivot to step 2 (Code Example 5).
+                return {"code_length": getattr(e, "code_length", None)}
+            # No exception = no confirmation needed (rare) — treat as already set.
+            return {"code_length": None}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def set_recovery_email(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        current_password: str | None = None,
+        email: str,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Router-facing alias for :meth:`start_recovery_email` (the name the
+        recovery-email endpoint calls; delegates to the canonical per-op impl above)."""
+        return await self.start_recovery_email(
+            sender_slug,
+            encrypted_session,
+            current_password=current_password,
+            email=email,
+            proxy=proxy,
+        )
+
+    async def confirm_recovery_email(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        code: str,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Step 2 of the recovery-email change — submit the emailed code via
+        ``ConfirmPasswordEmailRequest`` on a FRESH per-op client (the pending-email
+        state lives account-side after step 1). Errors PROPAGATE (CodeInvalidError =
+        wrong/expired code, FloodWaitError) — the router maps them."""
+        from telethon.tl.functions.account import ConfirmPasswordEmailRequest
+
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            await client(ConfirmPasswordEmailRequest(code=str(code)))
+            return {"success": True}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
 
 # Global instance
 telegram_service = TelegramService()
