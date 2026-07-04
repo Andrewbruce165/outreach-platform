@@ -1267,6 +1267,728 @@
         }
       }
     },
+    "/api/v1/senders/{slug}/username-check": {
+      "get": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Username Check",
+        "description": "Username availability pre-check (C5).\n\n1. Local format validation (Telegram rules) — invalid → available=False/'invalid'.\n2. Re-submitting the account's own current username → available (no-op).\n3. Best-effort live check via CheckUsernameRequest. If the session can't be reached\n   we fall back to the format-valid verdict — the authoritative occupancy check runs\n   at PATCH time (UpdateUsernameRequest → USERNAME_TAKEN).",
+        "operationId": "username_check_api_v1_senders__slug__username_check_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "username",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsernameCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/senders/{slug}/profile": {
+      "patch": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Update Sender Profile",
+        "description": "PATCH Section-A identity: first/last name + bio (warning-only, D-07) and username\n(1h hard block, D-08). Order: bio-length guard → username cooldown → Telegram writes\n→ cache refresh + stamp → commit → D-09 advisory warnings.",
+        "operationId": "update_sender_profile_api_v1_senders__slug__profile_patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileUpdateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/senders/{slug}/photo": {
+      "post": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Upload Sender Photo",
+        "description": "PROF-04: upload a new profile photo (multipart).\n\nOrder: size/mime validation (413/422, BEFORE any Telegram call) → D-08 photo\ncooldown (409, BEFORE the Telegram write) → upload → cache Telegram's normalized\navatar (falls back to the raw upload) → per-field stamp → commit → D-09 advisory.\n\nNB: validation runs before the cooldown so a bad upload always reports the input\nerror, not a stale-cooldown 409.",
+        "operationId": "upload_sender_photo_api_v1_senders__slug__photo_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_sender_photo_api_v1_senders__slug__photo_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileUpdateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Delete Sender Photo",
+        "description": "PROF-04: remove the profile photo and clear the cache.\n\nA delete is a de-escalation (removing, not spamming a fresh image), so it is\nNOT itself cooldown-blocked — but it DOES stamp the photo field, so a rapid\nfollow-up UPLOAD is still throttled by D-08.",
+        "operationId": "delete_sender_photo_api_v1_senders__slug__photo_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileUpdateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Serve Sender Photo",
+        "description": "PROF-07 / D-11: serve the cached profile photo bytes through an AUTH-GATED\nendpoint — never a raw blob URL, never base64-inlined into the list. 404 when\nno photo is cached; a foreign-workspace slug is an opaque 404 (workspace scope).\n\nThe distinct `/photo` suffix keeps this from colliding with GET /senders/{slug}.",
+        "operationId": "serve_sender_photo_api_v1_senders__slug__photo_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/senders/{slug}/resync": {
+      "post": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Resync Sender Profile",
+        "description": "PROF-06 / D-12: pull the live username / bio / photo from Telegram into the\ncache. This is a READ-from-Telegram (does not open the edit form / does not\nmutate the account), so it carries NO cooldown and NO per-field stamp.",
+        "operationId": "resync_sender_profile_api_v1_senders__slug__resync_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SenderResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/senders/{slug}/2fa": {
+      "post": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Update Sender 2Fa",
+        "description": "PROF-05: set (no current_password) or change (with current_password, D-04) the\naccount 2FA password via a single stateless ``edit_2fa`` request. Wrong current\npassword → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03).",
+        "operationId": "update_sender_2fa_api_v1_senders__slug__2fa_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFAPasswordUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/senders/{slug}/2fa/recovery-email": {
+      "post": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Start Sender Recovery Email",
+        "description": "PROF-05 step 1: start a recovery-email change. Telegram sends a confirmation\ncode and this returns EMAIL_CONFIRMATION_SENT + code_length so the UI can prompt.\nThe two-request confirm flow lives account-side (see the /confirm endpoint).",
+        "operationId": "start_sender_recovery_email_api_v1_senders__slug__2fa_recovery_email_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryEmailStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/senders/{slug}/2fa/recovery-email/confirm": {
+      "post": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Confirm Sender Recovery Email",
+        "description": "PROF-05 step 2: submit the emailed confirmation code\n(``ConfirmPasswordEmailRequest``). Wrong / expired code → 400 EMAIL_CODE_INVALID.",
+        "operationId": "confirm_sender_recovery_email_api_v1_senders__slug__2fa_recovery_email_confirm_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryEmailConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspace/proxies": {
       "get": {
         "tags": [
@@ -4226,6 +4948,82 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/requeue-failed": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Requeue Failed",
+        "description": "WR-12b: re-pend all status='failed' queue rows for this campaign.\n\nA transient outage / restriction batch can leave items terminally failed;\nthis re-pends them (status='pending', attempts=0, error_message/finished_at\ncleared, scheduled_at=NOW()) so the dispatcher retries them without a full\nre-enqueue from the folder. Workspace-scoped (404 for another workspace's\ncampaign). Returns {\"requeued_count\": N}.",
+        "operationId": "requeue_failed_api_v1_campaigns__campaign_id__requeue_failed_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_RequeueFailedResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -9841,6 +10639,20 @@
         ],
         "title": "Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post"
       },
+      "Body_upload_sender_photo_api_v1_senders__slug__photo_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_sender_photo_api_v1_senders__slug__photo_post"
+      },
       "CampaignCreate": {
         "properties": {
           "name": {
@@ -10604,6 +11416,11 @@
             "type": "boolean",
             "title": "Is Exhausted",
             "default": false
+          },
+          "failed_count": {
+            "type": "integer",
+            "title": "Failed Count",
+            "default": 0
           },
           "pool_health": {
             "$ref": "#/components/schemas/PoolHealth"
@@ -12902,6 +13719,106 @@
         "title": "PoolHealth",
         "description": "POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.\n\nPresentation-free — the green/yellow/red badge is derived ON THE FRONTEND\n(paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).\nearliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4\nrecheck horizon); None when no sender is restricted."
       },
+      "ProfileUpdate": {
+        "properties": {
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
+          "about": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "About"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "type": "object",
+        "title": "ProfileUpdate",
+        "description": "PATCH /senders/{slug}/profile — Section A identity. Only non-None fields are written.\nusername=\"\" clears the username; username=None leaves it untouched (D-07/D-08)."
+      },
+      "ProfileUpdateResponse": {
+        "properties": {
+          "sender": {
+            "$ref": "#/components/schemas/SenderResponse"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileWarningItem"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "sender"
+        ],
+        "title": "ProfileUpdateResponse",
+        "description": "Response for PATCH /senders/{slug}/profile and POST/DELETE /senders/{slug}/photo:\nsender + D-09 advisory warnings (ProfileWarningItem, NOT the rate-limit WarningItem)."
+      },
+      "ProfileWarningItem": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "severity": {
+            "type": "string",
+            "const": "warning",
+            "title": "Severity",
+            "default": "warning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ProfileWarningItem",
+        "description": "D-09 advisory for profile edits. DISTINCT from the PRE-EXISTING rate-limit\nWarningItem (field/value/recommended_max, D-14) — that schema is\nshaped for numeric soft-caps and MUST NOT be reused or modified here."
+      },
       "ProxyConfig": {
         "properties": {
           "type": {
@@ -13184,6 +14101,47 @@
         },
         "type": "object",
         "title": "RecheckRequest"
+      },
+      "RecoveryEmailConfirm": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "RecoveryEmailConfirm",
+        "description": "POST /senders/{slug}/2fa/recovery-email/confirm — step 2 (code only, no SRP)."
+      },
+      "RecoveryEmailStart": {
+        "properties": {
+          "current_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Password"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "RecoveryEmailStart",
+        "description": "POST /senders/{slug}/2fa/recovery-email — step 1 (D-02/D-04)."
       },
       "RestrictionEventResponse": {
         "properties": {
@@ -13734,6 +14692,39 @@
               }
             ],
             "title": "Locked By Campaign Name"
+          },
+          "tg_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tg Username"
+          },
+          "tg_bio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tg Bio"
+          },
+          "has_photo": {
+            "type": "boolean",
+            "title": "Has Photo",
+            "default": false
+          },
+          "profile_field_changed_at": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Profile Field Changed At",
+            "default": {}
           }
         },
         "type": "object",
@@ -14147,6 +15138,69 @@
         "title": "ToolSpec",
         "description": "Pydantic validation для campaigns.tools JSONB items (CAMP-15, C-10).\n\nShape matches the internal `webhook_functions` form (AUDIT Section 4).\nNOT OpenAI's JSON Schema form — `ai_engine.build_tools()` converts at runtime.\n\nPhase 05.1 (Pitfall 6): per-tool webhook_url DEPRECATED — campaign-level\nwebhook_url (CampaignCreate.webhook_url) unifies signal + tool dispatch.\nKept Optional for Phase 4 back-compat (test_custom_tools_wiring.py)."
       },
+      "TwoFAPasswordUpdate": {
+        "properties": {
+          "current_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Password"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "New Password"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "type": "object",
+        "required": [
+          "new_password"
+        ],
+        "title": "TwoFAPasswordUpdate",
+        "description": "POST /senders/{slug}/2fa — password set/change (D-03/D-04). Password never persisted."
+      },
+      "UsernameCheckResponse": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available"
+        ],
+        "title": "UsernameCheckResponse",
+        "description": "GET /senders/{slug}/username-check?username= (C5)."
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -14429,6 +15483,20 @@
         ],
         "title": "_AutoFillResponse",
         "description": "Canned defaults so the UI button works without an LLM call (v1 stub).\n\nPhase 11 D-13: success_criteria removed; auto-fill stub returns lead_trigger_hint instead."
+      },
+      "_RequeueFailedResponse": {
+        "properties": {
+          "requeued_count": {
+            "type": "integer",
+            "title": "Requeued Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requeued_count"
+        ],
+        "title": "_RequeueFailedResponse",
+        "description": "POST /campaigns/{id}/requeue-failed result."
       },
       "_RerenderResponse": {
         "properties": {
