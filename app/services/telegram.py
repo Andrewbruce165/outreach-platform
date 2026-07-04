@@ -1212,6 +1212,133 @@ class TelegramService:
             sender_slug, encrypted_session, username, proxy=proxy
         )
 
+    # ─── Account profile photo + resync (Phase 20 — PROF-04/06/07, D-11/D-12) ──
+    # Same client-per-op skeleton as the identity methods above: create via
+    # get_client, do the op, ALWAYS disconnect_client in finally. SessionAuthError
+    # + Telethon errors (PhotoCropSizeSmallError, PhotoExtInvalidError, FloodWaitError)
+    # PROPAGATE — the router owns the error→HTTP mapping (_raise_profile_telegram_error).
+
+    async def set_profile_photo(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        raw_bytes: bytes,
+        *,
+        file_name: str = "avatar.jpg",
+        proxy: dict | None = None,
+    ) -> dict:
+        """Upload a new profile photo, then re-download Telegram's OWN normalized
+        avatar (OQ3: already square-ish / re-encoded) to cache instead of the raw
+        upload. Returns ``{"success": True, "photo": <bytes>, "photo_mime": "image/jpeg"}``.
+        Raises on failure (SessionAuthError + Telethon photo errors propagate)."""
+        import io
+        from telethon.tl.functions.photos import UploadProfilePhotoRequest
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            input_file = await client.upload_file(io.BytesIO(raw_bytes), file_name=file_name)
+            await client(UploadProfilePhotoRequest(file=input_file))
+            # OQ3: cache Telegram's own normalized small avatar, not the raw upload.
+            norm = await client.download_profile_photo('me', file=bytes)
+            return {"success": True, "photo": norm, "photo_mime": "image/jpeg"}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def upload_profile_photo(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        raw_bytes: bytes,
+        *,
+        file_name: str = "avatar.jpg",
+        proxy: dict | None = None,
+    ) -> dict:
+        """Router-facing alias for :meth:`set_profile_photo` (the name the upload
+        endpoint calls; delegates to the canonical per-op implementation above)."""
+        return await self.set_profile_photo(
+            sender_slug, encrypted_session, raw_bytes, file_name=file_name, proxy=proxy
+        )
+
+    async def delete_profile_photo(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Remove the current profile photo. Fetches a FRESH photo object first
+        (``get_profile_photos('me', limit=1)``) so DeletePhotosRequest carries a
+        valid, non-expired file_reference (Pitfall 6). No photo present = no-op success."""
+        from telethon.tl.functions.photos import DeletePhotosRequest
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            photos = await client.get_profile_photos('me', limit=1)   # fresh file_reference (Pitfall 6)
+            if photos:
+                await client(DeletePhotosRequest(id=[photos[0]]))
+            return {"success": True}
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def delete_profile_photos(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Router-facing alias for :meth:`delete_profile_photo` (the name the delete
+        endpoint calls; delegates to the canonical per-op implementation above)."""
+        return await self.delete_profile_photo(sender_slug, encrypted_session, proxy=proxy)
+
+    async def resync_profile(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """D-12: re-fetch the LIVE username / bio / photo from Telegram into the cache.
+
+        Returns ``{"success": True, "username": ..., "bio": ..., "photo": <bytes|None>,
+        "photo_mime": ..., "has_photo": bool}``. GetFullUser is wrapped so a bio-fetch
+        failure degrades to ``bio=None`` without failing the whole resync."""
+        from telethon.tl.functions.users import GetFullUserRequest
+        client = None
+        try:
+            client = await self.get_client(sender_slug, encrypted_session, proxy=proxy)
+            me = await client.get_me()
+            try:
+                full = await client(GetFullUserRequest('me'))
+                bio = getattr(full.full_user, "about", None)
+            except Exception:  # noqa: BLE001 — bio is best-effort; username/photo still resync
+                bio = None
+            photo_bytes = await client.download_profile_photo('me', file=bytes)   # bytes | None
+            return {
+                "success": True,
+                "username": getattr(me, "username", None),
+                "bio": bio,
+                "photo": photo_bytes,
+                "photo_mime": "image/jpeg" if photo_bytes else None,
+                "has_photo": photo_bytes is not None,
+            }
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def fetch_profile(
+        self,
+        sender_slug: str,
+        encrypted_session: str,
+        *,
+        proxy: dict | None = None,
+    ) -> dict:
+        """Router-facing alias for :meth:`resync_profile` (the name the resync
+        endpoint calls; delegates to the canonical per-op implementation above)."""
+        return await self.resync_profile(sender_slug, encrypted_session, proxy=proxy)
+
 
 # Global instance
 telegram_service = TelegramService()
