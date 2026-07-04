@@ -126,6 +126,17 @@ class Sender(Base):
     # NB: ai_context_id dropped (Phase 3 D-04). Sender больше не «знает» агента —
     # связь идёт через Campaign в Phase 4.
 
+    # Phase 20 (PROF-01): cached Telegram profile (mig 049). NULL = not yet cached.
+    tg_username = Column(String(32), nullable=True)
+    tg_bio = Column(String(140), nullable=True)   # free ≤70 / premium ≤140; AboutTooLongError is the runtime backstop
+    tg_photo = Column(LargeBinary, nullable=True)  # small square avatar bytes, served via authenticated endpoint (D-11)
+    tg_photo_mime = Column(String(32), nullable=True)
+    # Per-field cooldown STATE (not a log): {"username": iso8601, "photo": iso8601, "name": ..., "bio": ...}.
+    # server_default MANDATORY (memory project-orm-default-vs-server-default-drift): create_all builds the
+    # test/fresh-DB schema from the ORM, not the migration — a NOT NULL column without server_default breaks
+    # raw INSERTs (_insert_sender_raw) that omit it.
+    profile_field_changed_at = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
     # Relationships
     messages = relationship("MessageLog", back_populates="sender")
     contacts = relationship("ContactCache", back_populates="sender")
