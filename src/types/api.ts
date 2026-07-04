@@ -327,6 +327,184 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/senders/{slug}/username-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Username Check
+         * @description Username availability pre-check (C5).
+         *
+         *     1. Local format validation (Telegram rules) — invalid → available=False/'invalid'.
+         *     2. Re-submitting the account's own current username → available (no-op).
+         *     3. Best-effort live check via CheckUsernameRequest. If the session can't be reached
+         *        we fall back to the format-valid verdict — the authoritative occupancy check runs
+         *        at PATCH time (UpdateUsernameRequest → USERNAME_TAKEN).
+         */
+        get: operations["username_check_api_v1_senders__slug__username_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/senders/{slug}/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Sender Profile
+         * @description PATCH Section-A identity: first/last name + bio (warning-only, D-07) and username
+         *     (1h hard block, D-08). Order: bio-length guard → username cooldown → Telegram writes
+         *     → cache refresh + stamp → commit → D-09 advisory warnings.
+         */
+        patch: operations["update_sender_profile_api_v1_senders__slug__profile_patch"];
+        trace?: never;
+    };
+    "/api/v1/senders/{slug}/photo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve Sender Photo
+         * @description PROF-07 / D-11: serve the cached profile photo bytes through an AUTH-GATED
+         *     endpoint — never a raw blob URL, never base64-inlined into the list. 404 when
+         *     no photo is cached; a foreign-workspace slug is an opaque 404 (workspace scope).
+         *
+         *     The distinct `/photo` suffix keeps this from colliding with GET /senders/{slug}.
+         */
+        get: operations["serve_sender_photo_api_v1_senders__slug__photo_get"];
+        put?: never;
+        /**
+         * Upload Sender Photo
+         * @description PROF-04: upload a new profile photo (multipart).
+         *
+         *     Order: size/mime validation (413/422, BEFORE any Telegram call) → D-08 photo
+         *     cooldown (409, BEFORE the Telegram write) → upload → cache Telegram's normalized
+         *     avatar (falls back to the raw upload) → per-field stamp → commit → D-09 advisory.
+         *
+         *     NB: validation runs before the cooldown so a bad upload always reports the input
+         *     error, not a stale-cooldown 409.
+         */
+        post: operations["upload_sender_photo_api_v1_senders__slug__photo_post"];
+        /**
+         * Delete Sender Photo
+         * @description PROF-04: remove the profile photo and clear the cache.
+         *
+         *     A delete is a de-escalation (removing, not spamming a fresh image), so it is
+         *     NOT itself cooldown-blocked — but it DOES stamp the photo field, so a rapid
+         *     follow-up UPLOAD is still throttled by D-08.
+         */
+        delete: operations["delete_sender_photo_api_v1_senders__slug__photo_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/senders/{slug}/resync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resync Sender Profile
+         * @description PROF-06 / D-12: pull the live username / bio / photo from Telegram into the
+         *     cache. This is a READ-from-Telegram (does not open the edit form / does not
+         *     mutate the account), so it carries NO cooldown and NO per-field stamp.
+         */
+        post: operations["resync_sender_profile_api_v1_senders__slug__resync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/senders/{slug}/2fa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Sender 2Fa
+         * @description PROF-05: set (no current_password) or change (with current_password, D-04) the
+         *     account 2FA password via a single stateless ``edit_2fa`` request. Wrong current
+         *     password → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03).
+         */
+        post: operations["update_sender_2fa_api_v1_senders__slug__2fa_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/senders/{slug}/2fa/recovery-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Sender Recovery Email
+         * @description PROF-05 step 1: start a recovery-email change. Telegram sends a confirmation
+         *     code and this returns EMAIL_CONFIRMATION_SENT + code_length so the UI can prompt.
+         *     The two-request confirm flow lives account-side (see the /confirm endpoint).
+         */
+        post: operations["start_sender_recovery_email_api_v1_senders__slug__2fa_recovery_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/senders/{slug}/2fa/recovery-email/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Sender Recovery Email
+         * @description PROF-05 step 2: submit the emailed confirmation code
+         *     (``ConfirmPasswordEmailRequest``). Wrong / expired code → 400 EMAIL_CODE_INVALID.
+         */
+        post: operations["confirm_sender_recovery_email_api_v1_senders__slug__2fa_recovery_email_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspace/proxies": {
         parameters: {
             query?: never;
@@ -981,6 +1159,32 @@ export interface paths {
         patch: operations["patch_campaign_api_v1_campaigns__campaign_id__patch"];
         trace?: never;
     };
+    "/api/v1/campaigns/{campaign_id}/requeue-failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue Failed
+         * @description WR-12b: re-pend all status='failed' queue rows for this campaign.
+         *
+         *     A transient outage / restriction batch can leave items terminally failed;
+         *     this re-pends them (status='pending', attempts=0, error_message/finished_at
+         *     cleared, scheduled_at=NOW()) so the dispatcher retries them without a full
+         *     re-enqueue from the folder. Workspace-scoped (404 for another workspace's
+         *     campaign). Returns {"requeued_count": N}.
+         */
+        post: operations["requeue_failed_api_v1_campaigns__campaign_id__requeue_failed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/campaigns/{campaign_id}/rerender-pending": {
         parameters: {
             query?: never;
@@ -1198,7 +1402,9 @@ export interface paths {
          * List Conversations
          * @description INBX-01 + INBX-05 — list workspace conversations with filters.
          *
-         *     D-17: status=None → hide status='bot_ignored'.
+         *     D-17: status=None → hide status='bot_ignored' and status='telegram_service'
+         *     (Telegram login/auth-code notifications live in their own 'Telegram' tab,
+         *     reached via ?status=telegram_service).
          *     Warmup-pair exclude preserved from legacy (workspace boundary added).
          */
         get: operations["list_conversations_api_v1_conversations_get"];
@@ -2457,6 +2663,14 @@ export interface components {
              */
             file: string;
         };
+        /** Body_upload_sender_photo_api_v1_senders__slug__photo_post */
+        Body_upload_sender_photo_api_v1_senders__slug__photo_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
         /**
          * CampaignCreate
          * @description POST /api/v1/campaigns body.
@@ -2699,6 +2913,11 @@ export interface components {
              * @default false
              */
             is_exhausted: boolean;
+            /**
+             * Failed Count
+             * @default 0
+             */
+            failed_count: number;
             pool_health: components["schemas"]["PoolHealth"];
             /**
              * Created At
@@ -3586,6 +3805,52 @@ export interface components {
             /** Has Backup — true when the campaign has ≥2 active senders (a failover exists). */
             has_backup?: boolean;
         };
+        /**
+         * ProfileUpdate
+         * @description PATCH /senders/{slug}/profile — Section A identity. Only non-None fields are written.
+         *     username="" clears the username; username=None leaves it untouched (D-07/D-08).
+         */
+        ProfileUpdate: {
+            /** First Name */
+            first_name?: string | null;
+            /** Last Name */
+            last_name?: string | null;
+            /** About */
+            about?: string | null;
+            /** Username */
+            username?: string | null;
+        };
+        /**
+         * ProfileUpdateResponse
+         * @description Response for PATCH /senders/{slug}/profile and POST/DELETE /senders/{slug}/photo:
+         *     sender + D-09 advisory warnings (ProfileWarningItem, NOT the rate-limit WarningItem).
+         */
+        ProfileUpdateResponse: {
+            sender: components["schemas"]["SenderResponse"];
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: components["schemas"]["ProfileWarningItem"][];
+        };
+        /**
+         * ProfileWarningItem
+         * @description D-09 advisory for profile edits. DISTINCT from the PRE-EXISTING rate-limit
+         *     WarningItem (field/value/recommended_max, D-14) — that schema is
+         *     shaped for numeric soft-caps and MUST NOT be reused or modified here.
+         */
+        ProfileWarningItem: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /**
+             * Severity
+             * @default warning
+             * @constant
+             */
+            severity: "warning";
+        };
 
         /** ProxyConfig */
         ProxyConfig: {
@@ -3695,6 +3960,27 @@ export interface components {
             contact_ids?: string[] | null;
             /** Folder Id */
             folder_id?: string | null;
+        };
+        /**
+         * RecoveryEmailConfirm
+         * @description POST /senders/{slug}/2fa/recovery-email/confirm — step 2 (code only, no SRP).
+         */
+        RecoveryEmailConfirm: {
+            /** Code */
+            code: string;
+        };
+        /**
+         * RecoveryEmailStart
+         * @description POST /senders/{slug}/2fa/recovery-email — step 1 (D-02/D-04).
+         */
+        RecoveryEmailStart: {
+            /** Current Password */
+            current_password?: string | null;
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
         };
         /**
          * RestrictionEventResponse
@@ -3936,6 +4222,22 @@ export interface components {
             locked_by_campaign_id?: string | null;
             /** Locked By Campaign Name */
             locked_by_campaign_name?: string | null;
+            /** Tg Username */
+            tg_username?: string | null;
+            /** Tg Bio */
+            tg_bio?: string | null;
+            /**
+             * Has Photo
+             * @default false
+             */
+            has_photo: boolean;
+            /**
+             * Profile Field Changed At
+             * @default {}
+             */
+            profile_field_changed_at: {
+                [key: string]: unknown;
+            };
         };
         /**
          * SenderUpdate
@@ -4077,6 +4379,28 @@ export interface components {
              */
             webhook_method: ("POST" | "GET") | null;
         };
+        /**
+         * TwoFAPasswordUpdate
+         * @description POST /senders/{slug}/2fa — password set/change (D-03/D-04). Password never persisted.
+         */
+        TwoFAPasswordUpdate: {
+            /** Current Password */
+            current_password?: string | null;
+            /** New Password */
+            new_password: string;
+            /** Hint */
+            hint?: string | null;
+        };
+        /**
+         * UsernameCheckResponse
+         * @description GET /senders/{slug}/username-check?username= (C5).
+         */
+        UsernameCheckResponse: {
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -4215,6 +4539,14 @@ export interface components {
             lead_trigger_hint: string;
             /** Tools */
             tools: unknown[];
+        };
+        /**
+         * _RequeueFailedResponse
+         * @description POST /campaigns/{id}/requeue-failed result.
+         */
+        _RequeueFailedResponse: {
+            /** Requeued Count */
+            requeued_count: number;
         };
         /**
          * _RerenderResponse
@@ -4820,6 +5152,334 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SenderBlockRateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    username_check_api_v1_senders__slug__username_check_get: {
+        parameters: {
+            query: {
+                username: string;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsernameCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_sender_profile_api_v1_senders__slug__profile_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    serve_sender_photo_api_v1_senders__slug__photo_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_sender_photo_api_v1_senders__slug__photo_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_sender_photo_api_v1_senders__slug__photo_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_sender_photo_api_v1_senders__slug__photo_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resync_sender_profile_api_v1_senders__slug__resync_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SenderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_sender_2fa_api_v1_senders__slug__2fa_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFAPasswordUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_sender_recovery_email_api_v1_senders__slug__2fa_recovery_email_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryEmailStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_sender_recovery_email_api_v1_senders__slug__2fa_recovery_email_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryEmailConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -6188,6 +6848,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CampaignWriteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    requeue_failed_api_v1_campaigns__campaign_id__requeue_failed_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_RequeueFailedResponse"];
                 };
             };
             /** @description Validation Error */

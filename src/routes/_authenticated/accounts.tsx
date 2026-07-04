@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
   Plus,
@@ -14,30 +14,35 @@ import {
   Filter,
   ShieldCheck,
   History,
+  Upload,
+  Loader2,
   Phone as PhoneIcon,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
-import { api, ApiError } from "@/lib/api";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { api, ApiError, apiBaseUrl } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { components } from "@/types/api";
 
 type Sender = components["schemas"]["SenderResponse"];
 type RestrictionEvent = components["schemas"]["RestrictionEventResponse"];
+type ProfileUpdateResponse = components["schemas"]["ProfileUpdateResponse"];
+type UsernameCheckResponse = components["schemas"]["UsernameCheckResponse"];
+
+/** Recovery-email step-1 response (POST /2fa/recovery-email). Not a named schema. */
+type RecoveryEmailStartResponse = { code?: string | null; code_length?: number | null };
 
 export const Route = createFileRoute("/_authenticated/accounts")({
   component: AccountsPage,
 });
 
 function AccountsPage() {
-  const [modal, setModal] = useState<null | { mode: "new" | "reauth"; phone?: string; slug?: string }>(
-    null,
-  );
+  const [modal, setModal] = useState<null | {
+    mode: "new" | "reauth";
+    phone?: string;
+    slug?: string;
+  }>(null);
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["senders"],
@@ -80,12 +85,37 @@ function AccountsPage() {
               marginBottom: 16,
             }}
           >
-            <MiniMetric label="Connected" value={counts.total} sub="All accounts" color="var(--tg-blue)" />
-            <MiniMetric label="Active" value={counts.active} sub="Sending now" color="var(--success)" />
-            <MiniMetric label="Warm-up" value={counts.warmup} sub="≤ 30 days" color="var(--warning)" />
+            <MiniMetric
+              label="Connected"
+              value={counts.total}
+              sub="All accounts"
+              color="var(--tg-blue)"
+            />
+            <MiniMetric
+              label="Active"
+              value={counts.active}
+              sub="Sending now"
+              color="var(--success)"
+            />
+            <MiniMetric
+              label="Warm-up"
+              value={counts.warmup}
+              sub="≤ 30 days"
+              color="var(--warning)"
+            />
             <MiniMetric label="Paused" value={counts.paused} sub="Idle" color="var(--text-muted)" />
-            <MiniMetric label="Restricted" value={counts.restricted} sub="Spam-limit / frozen" color="var(--orange, var(--warning))" />
-            <MiniMetric label="Errors" value={counts.error} sub="Need attention" color="var(--danger)" />
+            <MiniMetric
+              label="Restricted"
+              value={counts.restricted}
+              sub="Spam-limit / frozen"
+              color="var(--orange, var(--warning))"
+            />
+            <MiniMetric
+              label="Errors"
+              value={counts.error}
+              sub="Need attention"
+              color="var(--danger)"
+            />
           </div>
         )}
 
@@ -129,7 +159,10 @@ function MiniMetric({
   color: string;
 }) {
   return (
-    <div className="card" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+    <div
+      className="card"
+      style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}
+    >
       <span className="muted text-xs" style={{ fontWeight: 500, letterSpacing: 0.2 }}>
         {label}
       </span>
@@ -206,27 +239,27 @@ function FleetTable({
 
   return (
     <TooltipProvider delayDuration={150}>
-    <div className="card">
-      <table className="tbl">
-        <thead>
-          <tr>
-            <th>Account</th>
-            <th>Status</th>
-            <th>Role</th>
-            <th>Today · ceiling</th>
-            <th>Limits (min · hr · day)</th>
-            <th>Proxy</th>
-            <th>Last used</th>
-            <th style={{ width: 40 }} aria-label="actions" />
-          </tr>
-        </thead>
-        <tbody>
-          {senders.map((s) => (
-            <SenderRow key={s.id} sender={s} onReauth={() => onReauth(s)} />
-          ))}
-        </tbody>
-      </table>
-    </div>
+      <div className="card">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Status</th>
+              <th>Role</th>
+              <th>Today · ceiling</th>
+              <th>Limits (min · hr · day)</th>
+              <th>Proxy</th>
+              <th>Last used</th>
+              <th style={{ width: 40 }} aria-label="actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {senders.map((s) => (
+              <SenderRow key={s.id} sender={s} onReauth={() => onReauth(s)} />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </TooltipProvider>
   );
 }
@@ -246,17 +279,20 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed"),
   });
 
-  const refreshMut = useMutation({
-    mutationFn: () => api<Sender>(`/api/v1/senders/${sender.slug}`),
+  // D-12 manual resync: re-fetch the live Telegram profile (username/bio/photo)
+  // via POST /resync. Replaces the old "Обновить статус" (status derives fresh
+  // on every load, so that affordance was redundant).
+  const resyncMut = useMutation({
+    mutationFn: () => api<Sender>(`/api/v1/senders/${sender.slug}/resync`, { method: "POST" }),
     onSuccess: (fresh) => {
       qc.setQueryData<{ senders: Sender[] }>(["senders"], (prev) =>
-        prev
-          ? { senders: prev.senders.map((x) => (x.slug === sender.slug ? fresh : x)) }
-          : prev,
+        prev ? { senders: prev.senders.map((x) => (x.slug === sender.slug ? fresh : x)) } : prev,
       );
-      toast.success(`Status: ${fresh.status}`);
+      void qc.invalidateQueries({ queryKey: ["senders"] });
+      void qc.invalidateQueries({ queryKey: ["sender-photo", sender.slug] });
+      toast.success("Профиль обновлён");
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Refresh failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось обновить профиль"),
   });
 
   const statusStyle: Record<string, { pill: string; dot: string }> = {
@@ -311,8 +347,8 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
   const dailyLimit = sender.rate_limits.per_day;
 
   // Checker status presentation (only when the backend supplied checker_status).
-  const checkerStatus = isChecker ? sender.checker_status ?? null : null;
-  const cSty = checkerStatus ? checkerStatusStyle[checkerStatus] ?? statusStyle.paused : null;
+  const checkerStatus = isChecker ? (sender.checker_status ?? null) : null;
+  const cSty = checkerStatus ? (checkerStatusStyle[checkerStatus] ?? statusStyle.paused) : null;
   const checkerRetry =
     checkerStatus === "cooling_down" || checkerStatus === "frozen"
       ? relativeRetry(sender.restricted_until)
@@ -332,29 +368,10 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
     <tr>
       <td>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ position: "relative" }}>
-            <div
-              className="avatar avatar--sm"
-              style={{ background: "var(--tg-blue-soft)", color: "var(--tg-blue)" }}
-            >
-              {(sender.name || sender.phone).slice(0, 1).toUpperCase()}
-            </div>
-            <div
-              aria-hidden
-              style={{
-                position: "absolute",
-                bottom: -1,
-                right: -1,
-                width: 11,
-                height: 11,
-                borderRadius: 50,
-                background: dotColor,
-                border: "2px solid var(--bg)",
-              }}
-            />
-          </div>
+          <AccountAvatar sender={sender} dotColor={dotColor} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="fw5">{sender.name || sender.phone}</span>
+            {sender.tg_username && <span className="muted text-xs">@{sender.tg_username}</span>}
             <span className="muted text-xs mono">{sender.phone}</span>
           </div>
         </div>
@@ -363,8 +380,7 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
         {checkerStatus && cSty ? (
           <>
             <span className={`pill ${cSty.pill}`}>
-              <span className="pill__dot" />{" "}
-              {checkerStatusLabel[checkerStatus] ?? checkerStatus}
+              <span className="pill__dot" /> {checkerStatusLabel[checkerStatus] ?? checkerStatus}
               {checkerRetry ? ` · retry in ${checkerRetry}` : ""}
             </span>
             {checkerStatus === "reauth_needed" && (
@@ -390,7 +406,9 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
             )}
             {isRestricted && (
               <div className="muted text-xs" style={{ marginTop: 4 }}>
-                {restrictedUntil ? `Not sending · rechecks ${restrictedUntil}` : "Not sending until cleared"}
+                {restrictedUntil
+                  ? `Not sending · rechecks ${restrictedUntil}`
+                  : "Not sending until cleared"}
               </div>
             )}
           </>
@@ -417,7 +435,9 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
                 cursor: "help",
               }}
             >
-              <span className="num text-xs muted">{sender.sent_today ?? 0} / {dailyLimit}</span>
+              <span className="num text-xs muted">
+                {sender.sent_today ?? 0} / {dailyLimit}
+              </span>
               <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
             </div>
           </TooltipTrigger>
@@ -429,7 +449,8 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
         </Tooltip>
       </td>
       <td className="num mono text-sm">
-        {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} · {sender.rate_limits.per_day}
+        {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} ·{" "}
+        {sender.rate_limits.per_day}
       </td>
       <td>
         <span className="pill pill--ghost">
@@ -451,16 +472,21 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
                   setEditing(true);
                 }}
               >
-                <Pencil size={13} /> Изменить
+                <Pencil size={13} /> Изменить профиль
               </button>
               <button
-                disabled={refreshMut.isPending}
+                disabled={resyncMut.isPending}
                 onClick={() => {
                   setOpen(false);
-                  refreshMut.mutate();
+                  resyncMut.mutate();
                 }}
               >
-                <RefreshCcw size={13} /> Обновить статус
+                {resyncMut.isPending ? (
+                  <Loader2 size={13} className="ob__spin" />
+                ) : (
+                  <RefreshCcw size={13} />
+                )}{" "}
+                Обновить профиль
               </button>
               <button
                 onClick={() => {
@@ -489,14 +515,9 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
             </div>
           </>
         )}
-        {editing && (
-          <EditSenderModal sender={sender} onClose={() => setEditing(false)} />
-        )}
+        {editing && <ProfileModal sender={sender} onClose={() => setEditing(false)} />}
         {historyOpen && (
-          <RestrictionHistoryModal
-            sender={sender}
-            onClose={() => setHistoryOpen(false)}
-          />
+          <RestrictionHistoryModal sender={sender} onClose={() => setHistoryOpen(false)} />
         )}
       </td>
     </tr>
@@ -515,7 +536,11 @@ const EVENT_META: Record<string, { label: string; pill: string; dot: string }> =
   extension: { label: "Продление", pill: "pill--orange", dot: "var(--warning)" },
   cleared: { label: "Снято", pill: "pill--green", dot: "var(--success)" },
   banned: { label: "Бан", pill: "pill--red", dot: "var(--danger)" },
-  privacy_restricted: { label: "Приватность получателя", pill: "pill--ghost", dot: "var(--text-muted)" },
+  privacy_restricted: {
+    label: "Приватность получателя",
+    pill: "pill--ghost",
+    dot: "var(--text-muted)",
+  },
 };
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -559,28 +584,16 @@ function sliceSummary(slice: RestrictionEvent["activity_slice"]): string | null 
   return parts.length ? parts.join(" · ") : null;
 }
 
-function RestrictionHistoryModal({
-  sender,
-  onClose,
-}: {
-  sender: Sender;
-  onClose: () => void;
-}) {
+function RestrictionHistoryModal({ sender, onClose }: { sender: Sender; onClose: () => void }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["restriction-events", sender.slug],
-    queryFn: () =>
-      api<RestrictionEvent[]>(
-        `/api/v1/senders/${sender.slug}/restriction-events`,
-      ),
+    queryFn: () => api<RestrictionEvent[]>(`/api/v1/senders/${sender.slug}/restriction-events`),
   });
 
   const events = data ?? [];
 
   return (
-    <Modal
-      title={`История ограничений · ${sender.name || sender.phone}`}
-      onClose={onClose}
-    >
+    <Modal title={`История ограничений · ${sender.name || sender.phone}`} onClose={onClose}>
       {isLoading && <div className="muted text-sm">Загрузка истории…</div>}
       {error && (
         <div style={{ color: "var(--danger)", fontSize: 13 }}>
@@ -638,21 +651,13 @@ function RestrictionHistoryModal({
                     <span className="pill__dot" style={{ background: meta.dot }} />
                     {meta.label}
                   </span>
-                  <span className="muted text-xs">
-                    {SOURCE_LABEL[ev.source] ?? ev.source}
-                  </span>
+                  <span className="muted text-xs">{SOURCE_LABEL[ev.source] ?? ev.source}</span>
                   <span className="muted text-xs" style={{ marginLeft: "auto" }}>
                     {eventTime(ev.created_at)}
                   </span>
                 </div>
-                {until && (
-                  <div className="muted text-xs">
-                    Ограничение до проверки в {until}
-                  </div>
-                )}
-                {summary && (
-                  <div className="muted text-xs mono">{summary}</div>
-                )}
+                {until && <div className="muted text-xs">Ограничение до проверки в {until}</div>}
+                {summary && <div className="muted text-xs mono">{summary}</div>}
                 {ev.raw_text && (
                   <div
                     className="muted text-xs"
@@ -674,46 +679,536 @@ function RestrictionHistoryModal({
   );
 }
 
-function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => void }) {
-  const qc = useQueryClient();
-  const [name, setName] = useState(sender.name ?? "");
-  const [role, setRole] = useState<"sender" | "checker">(
-    sender.role === "checker" ? "checker" : "sender",
-  );
+// ─── Phase 20 profile helpers ───────────────────────────────────────────────
+const HOUR_MS = 3_600_000;
+const USERNAME_RE = /^[a-z0-9_]{5,32}$/;
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
-  const mut = useMutation({
-    mutationFn: () =>
-      api(`/api/v1/senders/${sender.slug}`, {
+/**
+ * Fetch a sender's cached avatar bytes from the auth-gated endpoint
+ * (GET /senders/{slug}/photo, D-11/C1) and hand back an object URL — never a
+ * public blob URL, never base64 in the list. Returns null on 404/no-photo.
+ */
+async function fetchSenderPhoto(slug: string): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const res = await fetch(`${apiBaseUrl}/api/v1/senders/${slug}/photo`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+/** Remaining ms of a per-field 1h cooldown (D-08); 0 when clear. */
+function cooldownRemainingMs(
+  sender: Sender,
+  field: "username" | "photo",
+  nowMs: number = Date.now(),
+): number {
+  const map = sender.profile_field_changed_at as Record<string, unknown> | undefined;
+  const iso = map?.[field];
+  if (typeof iso !== "string") return 0;
+  const changed = new Date(iso).getTime();
+  if (Number.isNaN(changed)) return 0;
+  const remaining = changed + HOUR_MS - nowMs;
+  return remaining > 0 ? remaining : 0;
+}
+
+function fmtCountdown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** D-09: account younger than 7 days. */
+function isFreshAccount(sender: Sender): boolean {
+  if (!sender.created_at) return false;
+  const created = new Date(sender.created_at).getTime();
+  if (Number.isNaN(created)) return false;
+  return Date.now() - created < 7 * 24 * HOUR_MS;
+}
+
+/** Re-render every second while `active`, so live countdowns tick down. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return now;
+}
+
+/** Map a backend profile / 2FA error code to the approved RU copy (UI-SPEC §Copywriting). */
+function profileErrorMessage(e: unknown): string {
+  if (!(e instanceof ApiError)) return "Что-то пошло не так. Попробуйте снова.";
+  const retry = (() => {
+    const d = e.detail as Record<string, unknown> | undefined;
+    const s = d ? (d.retry_after ?? d.seconds) : undefined;
+    return typeof s === "number" ? `${s} c` : "немного";
+  })();
+  switch (e.code) {
+    case "USERNAME_TAKEN":
+      return "Этот username уже занят";
+    case "USERNAME_INVALID":
+      return "Недопустимый формат username (a-z, 0-9, _, 5–32 символа)";
+    case "BIO_TOO_LONG":
+      return "Описание слишком длинное (максимум 70 символов)";
+    case "PASSWORD_INVALID":
+      return "Неверный текущий пароль 2FA";
+    case "EMAIL_INVALID":
+      return "Некорректный email";
+    case "EMAIL_CODE_INVALID":
+      return "Неверный или просроченный код";
+    case "TOO_FRESH":
+      return `Telegram временно блокирует это действие на новом аккаунте. Попробуйте через ${retry}.`;
+    case "TOO_FREQUENT":
+      return "Слишком часто. Это действие можно повторять не чаще раза в час.";
+    case "FLOOD_WAIT":
+      return `Слишком часто. Повторите через ${retry}.`;
+    case "FILE_TOO_LARGE":
+      return "Файл слишком большой (максимум 5 МБ)";
+    case "UNSUPPORTED_FILE_TYPE":
+      return "Неподдерживаемый формат. Загрузите JPG или PNG";
+    case "PHOTO_TOO_SMALL":
+      return "Фото слишком маленькое";
+    case "PHOTO_FORMAT_INVALID":
+      return "Неподдерживаемый формат. Загрузите JPG или PNG";
+    default:
+      return e.message;
+  }
+}
+
+/**
+ * D-10/D-11: account-row avatar. Cached photo (fetched auth-gated → object URL)
+ * when `has_photo`, initials fallback otherwise. Keeps the status-dot overlay.
+ */
+function AccountAvatar({ sender, dotColor }: { sender: Sender; dotColor: string }) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const photoChangedAt = (sender.profile_field_changed_at as Record<string, unknown> | undefined)
+    ?.photo;
+
+  useEffect(() => {
+    if (!sender.has_photo) {
+      setPhotoUrl(null);
+      return;
+    }
+    let cancelled = false;
+    let created: string | null = null;
+    void fetchSenderPhoto(sender.slug).then((url) => {
+      if (cancelled) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
+      created = url;
+      setPhotoUrl(url);
+    });
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [sender.slug, sender.has_photo, photoChangedAt]);
+
+  const initial = (sender.name || sender.phone).slice(0, 1).toUpperCase();
+  return (
+    <div style={{ position: "relative" }}>
+      <div
+        className="avatar avatar--sm"
+        style={{
+          background: "var(--tg-blue-soft)",
+          color: "var(--tg-blue)",
+          overflow: "hidden",
+        }}
+      >
+        {sender.has_photo && photoUrl ? (
+          <img
+            src={photoUrl}
+            alt=""
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        ) : (
+          initial
+        )}
+      </div>
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          bottom: -1,
+          right: -1,
+          width: 11,
+          height: 11,
+          borderRadius: 50,
+          background: dotColor,
+          border: "2px solid var(--bg)",
+        }}
+      />
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="fw5"
+      style={{
+        fontSize: 11.5,
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        color: "var(--text-muted)",
+        margin: "4px 0 2px",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Phase 20 full account-profile editor (Surface 3). Two independently-submitted
+ * sections — A: Профиль (identity via PATCH /profile) and B: Безопасность (2FA)
+ * (password via POST /2fa, recovery email via the two-step /2fa/recovery-email
+ * flow). Each section has its own scoped primary button (Reconciliation §5) —
+ * there is no single generic Save. Frequency guardrails (D-06..09) are computed
+ * client-side and mirror the backend 409/422.
+ */
+function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void }) {
+  const qc = useQueryClient();
+  const authExpired = sender.auth_status !== "ok";
+
+  // ── Section A — identity ────────────────────────────────────────────────
+  const initialFirst = sender.name ?? "";
+  const initialRole = sender.role === "checker" ? "checker" : "sender";
+  const [firstName, setFirstName] = useState(initialFirst);
+  const [lastName, setLastName] = useState("");
+  const [username, setUsername] = useState(sender.tg_username ?? "");
+  const [about, setAbout] = useState(sender.tg_bio ?? "");
+  const [role, setRole] = useState<"sender" | "checker">(initialRole);
+
+  const usernameChanged = username.trim() !== (sender.tg_username ?? "");
+  const nameChanged = firstName.trim() !== initialFirst.trim() || lastName.trim() !== "";
+  const bioChanged = about !== (sender.tg_bio ?? "");
+  const roleChanged = role !== initialRole;
+
+  // ── live per-field cooldowns (D-08) ─────────────────────────────────────
+  const usernameCd0 = cooldownRemainingMs(sender, "username");
+  const photoCd0 = cooldownRemainingMs(sender, "photo");
+  const now = useNow(usernameCd0 > 0 || photoCd0 > 0);
+  const usernameCd = cooldownRemainingMs(sender, "username", now);
+  const photoCd = cooldownRemainingMs(sender, "photo", now);
+  const usernameBlocked = usernameChanged && usernameCd > 0;
+  const photoBlocked = photoCd > 0;
+  const isWarmupOrFresh = sender.lifecycle_status === "warmup" || isFreshAccount(sender);
+
+  // ── username availability (C5) ──────────────────────────────────────────
+  const [uState, setUState] = useState<"idle" | "checking" | "free" | "taken" | "invalid">("idle");
+  useEffect(() => {
+    const u = username.trim();
+    if (!usernameChanged || u === "") {
+      setUState("idle");
+      return;
+    }
+    if (!USERNAME_RE.test(u)) {
+      setUState("invalid");
+      return;
+    }
+    setUState("checking");
+    const ctrl = new AbortController();
+    const id = window.setTimeout(() => {
+      api<UsernameCheckResponse>(`/api/v1/senders/${sender.slug}/username-check`, {
+        query: { username: u },
+        signal: ctrl.signal,
+      })
+        .then((r) => setUState(r.available ? "free" : "taken"))
+        .catch(() => setUState("idle"));
+    }, 450);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(id);
+    };
+  }, [username, usernameChanged, sender.slug]);
+
+  // ── photo preview (auth-gated bytes) ────────────────────────────────────
+  const photoChangedAt = (sender.profile_field_changed_at as Record<string, unknown> | undefined)
+    ?.photo;
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!sender.has_photo) {
+      setPreviewUrl(null);
+      return;
+    }
+    let cancelled = false;
+    let created: string | null = null;
+    void fetchSenderPhoto(sender.slug).then((url) => {
+      if (cancelled) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
+      created = url;
+      setPreviewUrl(url);
+    });
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [sender.slug, sender.has_photo, photoChangedAt]);
+
+  // ── Section A save (identity + optional app-level role) ─────────────────
+  const saveProfileMut = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = {
+        first_name: firstName.trim() || null,
+        last_name: lastName.trim() || null,
+        about: about,
+      };
+      if (usernameChanged) body.username = username.trim() || null;
+      const res = await api<ProfileUpdateResponse>(`/api/v1/senders/${sender.slug}/profile`, {
         method: "PATCH",
-        body: { name: name.trim() || null, role },
-      }),
-    onSuccess: () => {
-      toast.success("Сохранено");
-      qc.invalidateQueries({ queryKey: ["senders"] });
-      onClose();
+        body,
+      });
+      // Role (sender↔checker) is an app-level setting, not a Telegram profile
+      // field — persisted via the SenderUpdate endpoint. Kept here so the
+      // profile editor does not regress the operationally-critical role flip.
+      if (roleChanged) {
+        await api(`/api/v1/senders/${sender.slug}`, {
+          method: "PATCH",
+          body: { role },
+        });
+      }
+      return res;
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось сохранить"),
+    onSuccess: (res) => {
+      toast.success("Профиль обновлён");
+      (res.warnings ?? []).forEach((w) => toast.warning(w.message));
+      void qc.invalidateQueries({ queryKey: ["senders"] });
+      void qc.invalidateQueries({ queryKey: ["sender-photo", sender.slug] });
+    },
+    onError: (e) => toast.error(profileErrorMessage(e)),
   });
 
-  return (
-    <Modal title="Изменить аккаунт" onClose={onClose}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div>
-          <label className="muted text-xs" style={{ display: "block", marginBottom: 6 }}>
-            Имя
-          </label>
-          <input
-            className="ob__input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={sender.phone}
-            style={{ width: "100%" }}
-          />
+  function handleSaveProfile() {
+    if (usernameBlocked) return; // hard block (button already disabled)
+    if (usernameChanged && (uState === "taken" || uState === "invalid")) {
+      toast.error(
+        uState === "taken"
+          ? "Этот username уже занят"
+          : "Недопустимый формат username (a-z, 0-9, _, 5–32 символа)",
+      );
+      return;
+    }
+    const advisories: string[] = [];
+    if (nameChanged || bioChanged)
+      advisories.push(
+        "Слишком частая смена имени или описания может насторожить Telegram. Продолжить?",
+      );
+    if (isWarmupOrFresh)
+      advisories.push(
+        "Аккаунт ещё прогревается (моложе 7 дней). Резкие изменения профиля повышают риск ограничений. Продолжить?",
+      );
+    if (advisories.length && !window.confirm(advisories.join("\n\n"))) return;
+    saveProfileMut.mutate();
+  }
+
+  // ── photo upload / delete (D-08/D-11, C6) ───────────────────────────────
+  const fileRef = useRef<HTMLInputElement>(null);
+  const photoMut = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api<ProfileUpdateResponse>(`/api/v1/senders/${sender.slug}/photo`, {
+        method: "POST",
+        body: fd,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Профиль обновлён");
+      void qc.invalidateQueries({ queryKey: ["senders"] });
+      void qc.invalidateQueries({ queryKey: ["sender-photo", sender.slug] });
+    },
+    onError: (e) => toast.error(profileErrorMessage(e)),
+  });
+  const deletePhotoMut = useMutation({
+    mutationFn: () => api(`/api/v1/senders/${sender.slug}/photo`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Профиль обновлён");
+      void qc.invalidateQueries({ queryKey: ["senders"] });
+      void qc.invalidateQueries({ queryKey: ["sender-photo", sender.slug] });
+    },
+    onError: (e) => toast.error(profileErrorMessage(e)),
+  });
+
+  function handlePhotoFile(file: File) {
+    if (photoBlocked || photoMut.isPending) return;
+    if (file.size > MAX_PHOTO_BYTES) {
+      toast.error("Файл слишком большой (максимум 5 МБ)");
+      return;
+    }
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      toast.error("Только JPG или PNG");
+      return;
+    }
+    photoMut.mutate(file);
+  }
+
+  // ── Section B — 2FA password ────────────────────────────────────────────
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [hint, setHint] = useState("");
+  const passwordMut = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/senders/${sender.slug}/2fa`, {
+        method: "POST",
+        body: {
+          current_password: currentPw || null,
+          new_password: newPw,
+          hint: hint.trim() || null,
+        },
+      }),
+    onSuccess: () => {
+      toast.success("Пароль 2FA обновлён");
+      setNewPw("");
+      setHint("");
+    },
+    onError: (e) => toast.error(profileErrorMessage(e)),
+  });
+
+  // ── Section B — recovery email (two-step, C4) ───────────────────────────
+  const [email, setEmail] = useState("");
+  const [emailStep, setEmailStep] = useState<"input" | "sent">("input");
+  const [code, setCode] = useState("");
+  const [codeLength, setCodeLength] = useState<number | null>(null);
+  const emailStartMut = useMutation({
+    mutationFn: () =>
+      api<RecoveryEmailStartResponse>(`/api/v1/senders/${sender.slug}/2fa/recovery-email`, {
+        method: "POST",
+        body: { current_password: currentPw || null, email: email.trim() },
+      }),
+    onSuccess: (res) => {
+      setCodeLength(typeof res.code_length === "number" ? res.code_length : null);
+      setEmailStep("sent");
+    },
+    onError: (e) => toast.error(profileErrorMessage(e)),
+  });
+  const emailConfirmMut = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/senders/${sender.slug}/2fa/recovery-email/confirm`, {
+        method: "POST",
+        body: { code: code.trim() },
+      }),
+    onSuccess: () => {
+      toast.success("Email восстановления обновлён");
+      setEmailStep("input");
+      setEmail("");
+      setCode("");
+      setCodeLength(null);
+    },
+    onError: (e) => toast.error(profileErrorMessage(e)),
+  });
+
+  const usernameHint = (() => {
+    if (usernameBlocked)
+      return {
+        text: `Username можно менять не чаще раза в час. Попробуйте снова через ${fmtCountdown(usernameCd)}.`,
+        color: "var(--danger)",
+      };
+    if (!usernameChanged) return { text: "5–32 символа: a-z, 0-9, _", color: "var(--text-muted)" };
+    switch (uState) {
+      case "checking":
+        return { text: "Проверяем…", color: "var(--text-muted)" };
+      case "free":
+        return { text: "Свободно", color: "var(--success)" };
+      case "taken":
+        return { text: "Занято", color: "var(--danger)" };
+      case "invalid":
+        return {
+          text: "Недопустимый формат (a-z, 0-9, _, 5–32 символа)",
+          color: "var(--danger)",
+        };
+      default:
+        return { text: "5–32 символа: a-z, 0-9, _", color: "var(--text-muted)" };
+    }
+  })();
+
+  if (authExpired) {
+    return (
+      <Modal title={`Профиль · ${sender.name || sender.phone}`} onClose={onClose} wide>
+        <div style={{ color: "var(--danger)", fontSize: 13, display: "flex", gap: 8 }}>
+          <AlertCircle size={16} />
+          <span>
+            Сессия аккаунта истекла. Переподключите аккаунт (кнопка «re-auth» в строке), чтобы
+            менять профиль.
+          </span>
         </div>
-        <div>
-          <label className="muted text-xs" style={{ display: "block", marginBottom: 6 }}>
-            Роль
-          </label>
+      </Modal>
+    );
+  }
+
+  const initial = (sender.name || sender.phone).slice(0, 1).toUpperCase();
+
+  return (
+    <Modal title={`Профиль · ${sender.name || sender.phone}`} onClose={onClose} wide>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* ── Section A — Профиль ─────────────────────────────────────── */}
+        <SectionLabel>Профиль</SectionLabel>
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <div className="field" style={{ flex: 1 }}>
+            <label className="field__label">Имя</label>
+            <input
+              className="input"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              placeholder={sender.phone}
+            />
+          </div>
+          <div className="field" style={{ flex: 1 }}>
+            <label className="field__label">Фамилия</label>
+            <input
+              className="input"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="field__label">Username</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="muted" style={{ fontSize: 13 }}>
+              @
+            </span>
+            <input
+              className="input"
+              style={{ flex: 1 }}
+              value={username}
+              onChange={(e) => setUsername(e.target.value.replace(/^@/, ""))}
+              placeholder="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+          </div>
+          <span className="field__hint" style={{ color: usernameHint.color }}>
+            {usernameHint.text}
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field__label">Описание</label>
+          <textarea
+            className="textarea"
+            value={about}
+            maxLength={70}
+            rows={2}
+            onChange={(e) => setAbout(e.target.value)}
+          />
+          <span className="field__hint">{about.length}/70</span>
+        </div>
+
+        <div className="field">
+          <label className="field__label">Роль</label>
           <div className="ob__roles">
             <button
               type="button"
@@ -737,18 +1232,218 @@ function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => v
             </button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+
+        <div className="field">
+          <label className="field__label">Фото профиля</label>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <div
+              className="avatar avatar--lg"
+              style={{
+                background: "var(--tg-blue-soft)",
+                color: "var(--tg-blue)",
+                overflow: "hidden",
+                flex: "0 0 auto",
+              }}
+            >
+              {sender.has_photo && previewUrl ? (
+                <img
+                  src={previewUrl}
+                  alt=""
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                initial
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/jpeg,image/png"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handlePhotoFile(f);
+                  e.target.value = "";
+                }}
+              />
+              <div
+                className="ct__dropzone"
+                onClick={() => {
+                  if (!photoBlocked && !photoMut.isPending) fileRef.current?.click();
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files[0];
+                  if (f) handlePhotoFile(f);
+                }}
+                style={photoBlocked ? { opacity: 0.55, pointerEvents: "none" } : undefined}
+              >
+                {photoMut.isPending ? (
+                  <>
+                    <Loader2 size={20} className="ob__spin" />
+                    <span>Загрузка…</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload size={20} />
+                    <span className="fw5">Загрузить фото</span>
+                    <span className="muted text-xs">
+                      Перетащите фото сюда или нажмите, чтобы выбрать (JPG/PNG, до 5 МБ)
+                    </span>
+                  </>
+                )}
+              </div>
+              {sender.has_photo && (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  style={{ marginTop: 8, color: "var(--danger)" }}
+                  disabled={deletePhotoMut.isPending || photoBlocked}
+                  onClick={() => {
+                    if (window.confirm("Удалить фото профиля?")) deletePhotoMut.mutate();
+                  }}
+                >
+                  <Trash2 size={13} /> Удалить фото
+                </button>
+              )}
+              {photoBlocked && (
+                <div className="field__hint" style={{ color: "var(--danger)" }}>
+                  Фото можно менять не чаще раза в час. Попробуйте снова через{" "}
+                  {fmtCountdown(photoCd)}.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            justifyContent: "flex-end",
+            marginTop: 2,
+          }}
+        >
           <button className="btn btn--ghost" type="button" onClick={onClose}>
             Отмена
           </button>
           <button
             className="btn btn--primary"
             type="button"
-            disabled={mut.isPending}
-            onClick={() => mut.mutate()}
+            disabled={saveProfileMut.isPending || usernameBlocked}
+            onClick={handleSaveProfile}
           >
-            {mut.isPending ? "Сохранение…" : "Сохранить"}
+            {saveProfileMut.isPending ? "Сохранение…" : "Сохранить профиль"}
           </button>
+        </div>
+
+        {/* ── Section B — Безопасность (2FA) ──────────────────────────── */}
+        <div style={{ borderTop: "1px solid var(--border)", marginTop: 8 }} />
+        <SectionLabel>Безопасность (2FA)</SectionLabel>
+
+        <div className="field">
+          <label className="field__label">Текущий пароль 2FA</label>
+          <input
+            className="input"
+            type="password"
+            value={currentPw}
+            autoComplete="off"
+            onChange={(e) => setCurrentPw(e.target.value)}
+          />
+          <span className="field__hint">Заполните, если на аккаунте уже включён 2FA</span>
+        </div>
+
+        <div className="field">
+          <label className="field__label">Новый пароль 2FA</label>
+          <input
+            className="input"
+            type="password"
+            value={newPw}
+            autoComplete="new-password"
+            onChange={(e) => setNewPw(e.target.value)}
+          />
+        </div>
+
+        <div className="field">
+          <label className="field__label">Подсказка (необязательно)</label>
+          <input className="input" value={hint} onChange={(e) => setHint(e.target.value)} />
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled={passwordMut.isPending || !newPw}
+            onClick={() => passwordMut.mutate()}
+          >
+            {passwordMut.isPending ? "Сохранение…" : "Обновить пароль 2FA"}
+          </button>
+        </div>
+
+        <div className="field" style={{ marginTop: 4 }}>
+          <label className="field__label">Email для восстановления</label>
+          {emailStep === "input" ? (
+            <>
+              <input
+                className="input"
+                type="email"
+                value={email}
+                placeholder="you@example.com"
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                <button
+                  className="btn btn--primary"
+                  type="button"
+                  disabled={emailStartMut.isPending || !email.trim()}
+                  onClick={() => emailStartMut.mutate()}
+                >
+                  {emailStartMut.isPending ? "Отправка…" : "Отправить код подтверждения"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="muted text-sm" style={{ marginBottom: 8 }}>
+                Мы отправили код на {email}. Введите его ниже.
+              </div>
+              <input
+                className="input"
+                value={code}
+                inputMode="numeric"
+                placeholder={codeLength ? `${codeLength}-значный код` : "Код из письма"}
+                onChange={(e) => setCode(e.target.value)}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                  justifyContent: "flex-end",
+                  marginTop: 8,
+                }}
+              >
+                <button
+                  className="ob__link"
+                  type="button"
+                  disabled={emailStartMut.isPending}
+                  onClick={() => emailStartMut.mutate()}
+                >
+                  Отправить снова
+                </button>
+                <button
+                  className="btn btn--primary"
+                  type="button"
+                  disabled={emailConfirmMut.isPending || !code.trim()}
+                  onClick={() => emailConfirmMut.mutate()}
+                >
+                  {emailConfirmMut.isPending ? "Подтверждение…" : "Подтвердить email"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </Modal>
@@ -757,8 +1452,7 @@ function EditSenderModal({ sender, onClose }: { sender: Sender; onClose: () => v
 
 function CorridorBar({ value, limit }: { value: number; limit: number }) {
   const pct = limit > 0 ? Math.min(100, (value / limit) * 100) : 0;
-  const color =
-    pct > 90 ? "var(--danger)" : pct > 70 ? "var(--warning)" : "var(--tg-blue)";
+  const color = pct > 90 ? "var(--danger)" : pct > 70 ? "var(--warning)" : "var(--tg-blue)";
   return (
     <div
       style={{
@@ -784,10 +1478,12 @@ function Modal({
   children,
   onClose,
   title,
+  wide = false,
 }: {
   children: React.ReactNode;
   onClose: () => void;
   title: string;
+  wide?: boolean;
 }) {
   return (
     <div
@@ -797,7 +1493,7 @@ function Modal({
       aria-label={title}
       onClick={onClose}
     >
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className={`modal${wide ? " modal--wide" : ""}`} onClick={(e) => e.stopPropagation()}>
         <header className="modal__head">
           <h3>{title}</h3>
           <button className="tb__icon-btn" aria-label="Close" onClick={onClose}>
