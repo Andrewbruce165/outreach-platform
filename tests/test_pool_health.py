@@ -85,9 +85,10 @@ async def test_pool_health_states(
         assert r.status_code == 200, r.text
         return r.json()["pool_health"]
 
-    # (a) all active.
+    # (a) all active. has_backup True (quick-260706-c1p: >=2 sendable senders).
     ph = await _pool_health()
-    assert ph == {"active": 3, "paused": 0, "total": 3, "earliest_resume_at": None}, ph
+    assert ph == {"active": 3, "paused": 0, "total": 3, "earliest_resume_at": None,
+                  "has_backup": True}, ph
 
     # (b) freeze one with a known release date.
     t1 = (await async_db_session.execute(
@@ -99,6 +100,8 @@ async def test_pool_health_states(
     assert ph["paused"] == 1, ph
     assert ph["total"] == 3, ph
     assert ph["earliest_resume_at"] is not None, ph
+    # 2 sendable senders remain → still has a backup (advisory True).
+    assert ph["has_backup"] is True, ph
 
     # (c) freeze all three with distinct release dates → earliest_resume_at = MIN.
     t_min = (await async_db_session.execute(
@@ -113,6 +116,8 @@ async def test_pool_health_states(
     assert ph["active"] == 0, ph
     assert ph["paused"] == 3, ph
     assert ph["total"] == 3, ph
+    # 0 sendable senders → no backup (advisory False).
+    assert ph["has_backup"] is False, ph
     # The earliest of {t1, t_min, t_max} is t_min (2h).
     assert ph["earliest_resume_at"] is not None
     assert ph["earliest_resume_at"][:13] == t_min.isoformat()[:13], (

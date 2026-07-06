@@ -300,11 +300,17 @@ async def _compute_pool_health(
         JOIN senders s ON s.id = cs.sender_id
         WHERE cs.campaign_id = :cid
     """), {"cid": str(campaign_id)})).one()
+    active = row.active or 0
     return PoolHealth(
         total=row.total or 0,
-        active=row.active or 0,
+        active=active,
         paused=row.paused or 0,
         earliest_resume_at=row.earliest_resume_at,
+        # quick-260706-c1p SOFT advisory: >=2 sendable senders means a single
+        # freeze still leaves a backup. Derived from the active count already
+        # computed above — no extra query. Advisory only; no attach/detach/start
+        # behaviour changes (locked decision 2026-07-06).
+        has_backup=active >= 2,
     )
 
 
