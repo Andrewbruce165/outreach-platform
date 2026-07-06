@@ -2,7 +2,7 @@
 phase: 21
 slug: bulk-telegram-account-import-via-session-json-upload-in-ui
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-06
 ---
@@ -42,7 +42,20 @@ created: 2026-07-06
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 21-XX-XX | XX | 0 | IMPT-XX | unit | `pytest tests/test_account_import.py -q` | ❌ W0 | ⬜ pending |
+| 21-01-1 | 01 | 1 | IMPT-08 | schema | `pytest tests/test_account_import.py --collect-only -q` | ❌ W0 | ⬜ pending |
+| 21-01-2 | 01 | 1 | scaffold (all IMPT) | scaffold | `pytest tests/test_account_import.py tests/test_account_import_worker.py --collect-only -q` | ❌ W0 | ⬜ pending |
+| 21-02-1 | 02 | 2 | IMPT-04 | unit | `pytest tests/test_account_import.py::test_fingerprint_override_and_strict_fallback -x -q` | ❌ W0 | ⬜ pending |
+| 21-02-2 | 02 | 2 | IMPT-04 | unit/regression | `pytest tests/test_account_import.py -x -q` + targeted queue/warmup/checker/listener/sender suites | ❌ W0 | ⬜ pending |
+| 21-02-3 | 02 | 2 | IMPT-10 | integration | `pytest tests/test_account_import.py -k 2fa -x -q` | ❌ W0 | ⬜ pending |
+| 21-03-1 | 03 | 2 | IMPT-01 | unit | `pytest tests/test_account_import.py::test_preview_pairing -x -q` | ❌ W0 | ⬜ pending |
+| 21-03-2 | 03 | 2 | IMPT-01 | integration | `pytest tests/test_account_import.py -k preview -x -q` | ❌ W0 | ⬜ pending |
+| 21-04-1 | 04 | 3 | IMPT-03, IMPT-05 | unit | `pytest tests/test_account_import.py -k "offline or twofa" -x -q` | ❌ W0 | ⬜ pending |
+| 21-04-2 | 04 | 3 | IMPT-06, IMPT-07 | integration | `pytest tests/test_account_import.py -x -q` | ❌ W0 | ⬜ pending |
+| 21-05-1 | 05 | 4 | IMPT-02 | integration | `pytest tests/test_account_import_worker.py -k "confirm or status" -x -q` | ❌ W0 | ⬜ pending |
+| 21-05-2 | 05 | 4 | IMPT-02, IMPT-07 | integration | `pytest tests/test_account_import_worker.py -x -q` | ❌ W0 | ⬜ pending |
+| 21-06-1 | 06 | 5 | IMPT-09 | contract | `grep -q "accounts/import/preview" lovable-handoff/openapi.json` | ✅ (regen) | ⬜ pending |
+| 21-06-2 | 06 | 5 | IMPT-09 | typecheck | `cd ../aimly-tg-outreach && npx tsc --noEmit` | ➖ sibling | ⬜ pending |
+| 21-06-3 | 06 | 5 | IMPT-09 (fingerprint) | manual | human-verify: mixed-batch import + reconnect-no-relogin | manual | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
