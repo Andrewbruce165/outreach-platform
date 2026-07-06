@@ -542,6 +542,16 @@ Plans:
 **Wave 5** *(frontend + handoff, human-verify)*
 - [x] 20-05-frontend-and-handoff-PLAN.md — openapi/types regen + enriched accounts.tsx (row/kebab/two-section modal/guardrails) + human UAT (cross-repo) [Wave 5, depends_on: 20-02, 20-03, 20-04] — PROF-09
 
+### Phase 21: Bulk Telegram account import via session JSON upload in UI
+
+**Goal:** Import Telegram accounts into a workspace by uploading vendor-format session JSON files (tdesktop-style metadata: app_id/app_hash/device/sdk/proxy/2FA + paired session file) through the UI, with bulk (multi-account) upload support — bypassing the phone/SMS onboarding flow for pre-authorized sessions.
+**Requirements**: TBD
+**Depends on:** Phase 20
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 21 to break down)
+
 ---
 
 ## Progress
@@ -566,8 +576,6 @@ Plans:
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
-
----
 
 ## Backlog
 
