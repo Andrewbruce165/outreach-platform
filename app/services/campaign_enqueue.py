@@ -85,8 +85,63 @@ class CampaignEnqueueWorker:
                 logger.error("❌ CampaignEnqueueWorker tick error: %s", exc, exc_info=True)
             await asyncio.sleep(self.poll_interval)
 
+    async def _sweep_stranded_cold_backlog(self) -> int:
+        """Re-run failover for every INELIGIBLE sender that still holds cold-pending
+        backlog in a running campaign. Closes the gap where failover_cold_backlog only
+        fires inline at freeze time and never re-runs (root cause #1): a sender that
+        froze AFTER a healthy sender was already attached never had its backlog moved.
+
+        The ``NOT (...eligible predicate...)`` is the exact negation of the eligible-
+        pool filter used everywhere (rotation.py:113-123 / campaign_enqueue.py:140-150),
+        so it catches EVERY ineligible reason (restricted/frozen/paused/auth-failed/
+        non-sender), not just spam_limited. failover's downstream pool resolution keeps
+        it safe: rows only ever land on healthy receivers, and it is a no-op when there
+        is none. failover_cold_backlog iterates ALL campaigns of the swept sender; the
+        running-campaign JOIN is only the trigger — draining that sender's cold backlog
+        in a paused campaign too is harmless (rows still only move to healthy senders)
+        and consistent with the invariant.
+
+        Self-contained: the discovery SELECT uses its own session; failover_cold_backlog
+        (db=None) opens and commits its OWN session per sender, isolated from the enqueue
+        transaction. Runs every ``campaign_enqueue_tick_seconds`` — no new interval, no
+        new worker, no schema change."""
+        from app.services.failover import failover_cold_backlog
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(text("""
+                SELECT DISTINCT mq.sender_id AS sid
+                FROM message_queue mq
+                JOIN senders s   ON s.id = mq.sender_id
+                JOIN campaigns c ON c.id = mq.campaign_id
+                WHERE mq.status = 'pending'
+                  AND mq.item_type = 'message'
+                  AND mq.campaign_id IS NOT NULL
+                  AND c.status = 'running'
+                  AND NOT (
+                      s.lifecycle_status = 'active' AND s.auth_status = 'ok'
+                      AND s.role = 'sender' AND s.restriction_status = 'none'
+                  )
+            """))).fetchall()
+        total = 0
+        for r in rows:
+            total += await failover_cold_backlog(r.sid)
+        if total:
+            # PII-safe: COUNT only, never recipient_phone (CLAUDE.md).
+            logger.info(
+                "📤 sweep: evacuated %d stranded cold-pending rows off ineligible senders",
+                total,
+            )
+        return total
+
     async def _tick(self) -> int:
         """One tick — process all running campaigns. Returns total enqueued count."""
+        # Continuous invariant enforcement (EVAC-03): before enqueueing, drain any
+        # cold-pending backlog stranded on an ineligible sender in a running campaign.
+        # Wrapped so a sweep failure never aborts the tick (worker-must-not-die
+        # discipline, matching the per-campaign try/except below).
+        try:
+            await self._sweep_stranded_cold_backlog()
+        except Exception as exc:  # noqa: BLE001 — sweep must not starve enqueue
+            logger.error("📤 sweep error: %s", exc, exc_info=True)
         async with AsyncSessionLocal() as db:
             campaigns_rows = await db.execute(text("""
                 SELECT id, workspace_id, folder_id, message_template, start_date,
