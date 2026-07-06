@@ -3583,7 +3583,10 @@ export interface components {
             total: number;
             /** Earliest Resume At */
             earliest_resume_at?: string | null;
+            /** Has Backup — true when the campaign has ≥2 active senders (a failover exists). */
+            has_backup?: boolean;
         };
+
         /** ProxyConfig */
         ProxyConfig: {
             /**
