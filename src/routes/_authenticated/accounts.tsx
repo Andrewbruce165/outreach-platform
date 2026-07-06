@@ -174,6 +174,82 @@ function MiniMetric({
   );
 }
 
+// ─── Account status presentation (shared by SenderCard) ─────────────────────
+// Sender-role statuses.
+const SENDER_STATUS_STYLE: Record<string, { pill: string; dot: string }> = {
+  active: { pill: "pill--green", dot: "var(--success)" },
+  warmup: { pill: "pill--blue", dot: "var(--tg-blue)" },
+  paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
+  error: { pill: "pill--red", dot: "var(--danger)" },
+  limited: { pill: "pill--orange", dot: "var(--warning)" },
+  frozen: { pill: "pill--red", dot: "var(--danger)" },
+};
+const SENDER_STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  warmup: "Warm-up",
+  paused: "Paused",
+  error: "Error",
+  limited: "Spam-limited",
+  frozen: "Frozen",
+};
+// Checker-specific statuses (role='checker'). Amber = auto-recovering, no action.
+// Red = needs the user (re-auth / banned). Distinct from the sender-oriented
+// status above so a self-healing throttle never reads as a hard error.
+const CHECKER_STATUS_STYLE: Record<string, { pill: string; dot: string }> = {
+  active: { pill: "pill--green", dot: "var(--success)" },
+  cooling_down: { pill: "pill--orange", dot: "var(--warning)" },
+  frozen: { pill: "pill--orange", dot: "var(--warning)" },
+  paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
+  reauth_needed: { pill: "pill--red", dot: "var(--danger)" },
+  banned: { pill: "pill--red", dot: "var(--danger)" },
+};
+const CHECKER_STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  cooling_down: "Cooling down",
+  frozen: "Frozen",
+  paused: "Paused",
+  reauth_needed: "Re-auth needed",
+  banned: "Banned",
+};
+
+/**
+ * Grouping priority within a role group. Tier 0 (accounts that need the user —
+ * re-auth / banned) always floats to the top, unconditionally, regardless of any
+ * other status. Then active (tier 1), then everything else (tier 2). Callers
+ * sort stably within a tier by preserving the original API index.
+ */
+function priorityTier(s: Sender): number {
+  if (s.role === "checker") {
+    if (s.checker_status === "reauth_needed" || s.checker_status === "banned") return 0;
+    if (s.checker_status === "active") return 1;
+    return 2;
+  }
+  if (s.auth_status !== "ok") return 0;
+  if (s.status === "active") return 1;
+  return 2;
+}
+
+type SenderGroup = { role: "sender" | "checker"; label: string; items: Sender[] };
+
+/** Split senders into Sender/Checker groups, each priority-sorted (stable). */
+function groupSenders(senders: Sender[]): SenderGroup[] {
+  const indexed = senders.map((s, i) => ({ s, i }));
+  const byTier = (a: { s: Sender; i: number }, b: { s: Sender; i: number }) =>
+    priorityTier(a.s) - priorityTier(b.s) || a.i - b.i;
+  const senderItems = indexed
+    .filter((x) => x.s.role !== "checker")
+    .sort(byTier)
+    .map((x) => x.s);
+  const checkerItems = indexed
+    .filter((x) => x.s.role === "checker")
+    .sort(byTier)
+    .map((x) => x.s);
+  const groups: SenderGroup[] = [];
+  if (senderItems.length) groups.push({ role: "sender", label: "Sender", items: senderItems });
+  if (checkerItems.length) groups.push({ role: "checker", label: "Checker", items: checkerItems });
+  return groups;
+}
+
 function FleetTable({
   senders,
   isLoading,
@@ -237,34 +313,28 @@ function FleetTable({
     );
   }
 
+  const groups = groupSenders(senders);
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="card">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>Account</th>
-              <th>Status</th>
-              <th>Role</th>
-              <th>Today · ceiling</th>
-              <th>Limits (min · hr · day)</th>
-              <th>Proxy</th>
-              <th>Last used</th>
-              <th style={{ width: 40 }} aria-label="actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {senders.map((s) => (
-              <SenderRow key={s.id} sender={s} onReauth={() => onReauth(s)} />
+      {groups.map((g) => (
+        <section key={g.role} className="acct-group">
+          <div className="acct-group__head">
+            {g.role === "checker" ? <ShieldCheck size={15} /> : <PhoneIcon size={15} />}
+            {g.label}
+            <span className="acct-group__count">{g.items.length}</span>
+          </div>
+          <div className="tile-grid">
+            {g.items.map((s) => (
+              <SenderCard key={s.id} sender={s} onReauth={() => onReauth(s)} />
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </section>
+      ))}
     </TooltipProvider>
   );
 }
 
-function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void }) {
+function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -295,42 +365,7 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось обновить профиль"),
   });
 
-  const statusStyle: Record<string, { pill: string; dot: string }> = {
-    active: { pill: "pill--green", dot: "var(--success)" },
-    warmup: { pill: "pill--blue", dot: "var(--tg-blue)" },
-    paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
-    error: { pill: "pill--red", dot: "var(--danger)" },
-    limited: { pill: "pill--orange", dot: "var(--warning)" },
-    frozen: { pill: "pill--red", dot: "var(--danger)" },
-  };
-  const statusLabel: Record<string, string> = {
-    active: "Active",
-    warmup: "Warm-up",
-    paused: "Paused",
-    error: "Error",
-    limited: "Spam-limited",
-    frozen: "Frozen",
-  };
-  // Checker-specific statuses (role='checker'). Amber = auto-recovering, no action.
-  // Red = needs the user (re-auth / banned). Distinct from the sender-oriented
-  // `status` above so a self-healing throttle never reads as a hard error.
-  const checkerStatusStyle: Record<string, { pill: string; dot: string }> = {
-    active: { pill: "pill--green", dot: "var(--success)" },
-    cooling_down: { pill: "pill--orange", dot: "var(--warning)" },
-    frozen: { pill: "pill--orange", dot: "var(--warning)" },
-    paused: { pill: "pill--ghost", dot: "var(--text-muted)" },
-    reauth_needed: { pill: "pill--red", dot: "var(--danger)" },
-    banned: { pill: "pill--red", dot: "var(--danger)" },
-  };
-  const checkerStatusLabel: Record<string, string> = {
-    active: "Active",
-    cooling_down: "Cooling down",
-    frozen: "Frozen",
-    paused: "Paused",
-    reauth_needed: "Re-auth needed",
-    banned: "Banned",
-  };
-  const sty = statusStyle[sender.status] ?? statusStyle.paused;
+  const sty = SENDER_STATUS_STYLE[sender.status] ?? SENDER_STATUS_STYLE.paused;
   const isRestricted = sender.status === "limited" || sender.status === "frozen";
   const restrictedUntil =
     isRestricted && sender.restricted_until
@@ -348,7 +383,9 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
 
   // Checker status presentation (only when the backend supplied checker_status).
   const checkerStatus = isChecker ? (sender.checker_status ?? null) : null;
-  const cSty = checkerStatus ? (checkerStatusStyle[checkerStatus] ?? statusStyle.paused) : null;
+  const cSty = checkerStatus
+    ? (CHECKER_STATUS_STYLE[checkerStatus] ?? SENDER_STATUS_STYLE.paused)
+    : null;
   const checkerRetry =
     checkerStatus === "cooling_down" || checkerStatus === "frozen"
       ? relativeRetry(sender.restricted_until)
@@ -363,164 +400,161 @@ function SenderRow({ sender, onReauth }: { sender: Sender; onReauth: () => void 
           ? "Action required · banned"
           : null;
   const dotColor = cSty ? cSty.dot : sty.dot;
+  const showReauth = checkerStatus
+    ? checkerStatus === "reauth_needed"
+    : sender.auth_status !== "ok";
 
   return (
-    <tr>
-      <td>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <AccountAvatar sender={sender} dotColor={dotColor} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span className="fw5">{sender.name || sender.phone}</span>
-            {sender.tg_username && <span className="muted text-xs">@{sender.tg_username}</span>}
-            <span className="muted text-xs mono">{sender.phone}</span>
-          </div>
+    <div className="acct-card">
+      {/* identity + actions */}
+      <div className="acct-card__top">
+        <AccountAvatar sender={sender} dotColor={dotColor} size="lg" />
+        <div className="acct-card__ident">
+          <span className="acct-card__name">{sender.name || sender.phone}</span>
+          {sender.tg_username && <span className="muted text-xs">@{sender.tg_username}</span>}
+          <span className="muted text-xs mono">{sender.phone}</span>
         </div>
-      </td>
-      <td>
-        {checkerStatus && cSty ? (
-          <>
+        <div className="acct-card__actions">
+          <button className="tb__icon-btn" aria-label="Actions" onClick={() => setOpen((v) => !v)}>
+            <MoreHorizontal size={16} />
+          </button>
+          {open && (
+            <>
+              <div className="ob__menuScrim" onClick={() => setOpen(false)} />
+              <div className="ob__menu" role="menu">
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    setEditing(true);
+                  }}
+                >
+                  <Pencil size={13} /> Изменить профиль
+                </button>
+                <button
+                  disabled={resyncMut.isPending}
+                  onClick={() => {
+                    setOpen(false);
+                    resyncMut.mutate();
+                  }}
+                >
+                  {resyncMut.isPending ? (
+                    <Loader2 size={13} className="ob__spin" />
+                  ) : (
+                    <RefreshCcw size={13} />
+                  )}{" "}
+                  Обновить профиль
+                </button>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    setHistoryOpen(true);
+                  }}
+                >
+                  <History size={13} /> История ограничений
+                </button>
+                <button
+                  className="is-danger"
+                  disabled={deleteMut.isPending}
+                  onClick={() => {
+                    setOpen(false);
+                    if (
+                      confirm(
+                        `Удалить ${sender.name || sender.phone}? Это остановит все кампании, где он используется.`,
+                      )
+                    ) {
+                      deleteMut.mutate();
+                    }
+                  }}
+                >
+                  <Trash2 size={13} /> Удалить
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* bio (clamped to 2 lines) */}
+      {sender.tg_bio && <div className="acct-card__bio text-clamp-2">{sender.tg_bio}</div>}
+
+      {/* status + role + re-auth */}
+      <div className="acct-card__pillCol">
+        <div className="acct-card__pills">
+          {checkerStatus && cSty ? (
             <span className={`pill ${cSty.pill}`}>
-              <span className="pill__dot" /> {checkerStatusLabel[checkerStatus] ?? checkerStatus}
+              <span className="pill__dot" /> {CHECKER_STATUS_LABEL[checkerStatus] ?? checkerStatus}
               {checkerRetry ? ` · retry in ${checkerRetry}` : ""}
             </span>
-            {checkerStatus === "reauth_needed" && (
-              <button className="ob__link" style={{ marginLeft: 8 }} onClick={onReauth}>
-                re-auth
-              </button>
-            )}
-            {checkerSubtitle && (
-              <div className="muted text-xs" style={{ marginTop: 4 }}>
-                {checkerSubtitle}
-              </div>
-            )}
-          </>
-        ) : (
-          <>
+          ) : (
             <span className={`pill ${sty.pill}`}>
-              <span className="pill__dot" /> {statusLabel[sender.status] ?? sender.status}
+              <span className="pill__dot" /> {SENDER_STATUS_LABEL[sender.status] ?? sender.status}
             </span>
-            {sender.auth_status !== "ok" && (
-              <button className="ob__link" style={{ marginLeft: 8 }} onClick={onReauth}>
-                re-auth
-              </button>
-            )}
-            {isRestricted && (
-              <div className="muted text-xs" style={{ marginTop: 4 }}>
-                {restrictedUntil
-                  ? `Not sending · rechecks ${restrictedUntil}`
-                  : "Not sending until cleared"}
-              </div>
-            )}
-          </>
+          )}
+          <span
+            className={`pill ${isChecker ? "pill--purple" : "pill--ghost"}`}
+            title={isChecker ? "Verifies phone numbers on Telegram" : "Sends outreach messages"}
+          >
+            {isChecker ? <ShieldCheck size={11} /> : <PhoneIcon size={11} />}
+            {isChecker ? "Checker" : "Sender"}
+          </span>
+          {showReauth && (
+            <button className="ob__link" onClick={onReauth}>
+              re-auth
+            </button>
+          )}
+        </div>
+        {checkerStatus && checkerSubtitle && <div className="muted text-xs">{checkerSubtitle}</div>}
+        {!checkerStatus && isRestricted && (
+          <div className="muted text-xs">
+            {restrictedUntil
+              ? `Not sending · rechecks ${restrictedUntil}`
+              : "Not sending until cleared"}
+          </div>
         )}
-      </td>
-      <td>
-        <span
-          className={`pill ${isChecker ? "pill--purple" : "pill--ghost"}`}
-          title={isChecker ? "Verifies phone numbers on Telegram" : "Sends outreach messages"}
-        >
-          {isChecker ? <ShieldCheck size={11} /> : <PhoneIcon size={11} />}
-          {isChecker ? "Checker" : "Sender"}
-        </span>
-      </td>
-      <td>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 4,
-                minWidth: 120,
-                cursor: "help",
-              }}
-            >
+      </div>
+
+      {/* today · ceiling */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="acct-card__meter" style={{ cursor: "help" }}>
+            <div className="acct-card__meterRow">
+              <span className="muted text-xs">Сегодня · потолок</span>
               <span className="num text-xs muted">
                 {sender.sent_today ?? 0} / {dailyLimit}
               </span>
-              <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
             </div>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-[260px] text-left leading-relaxed">
-            {isChecker
-              ? `Overall message limit — ${dailyLimit}/day (incl. follow-ups).`
-              : `Overall message limit — ${dailyLimit}/day (incl. follow-ups). New-contact outreach is capped separately at 50 new dialogs/day per account.`}
-          </TooltipContent>
-        </Tooltip>
-      </td>
-      <td className="num mono text-sm">
-        {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} ·{" "}
-        {sender.rate_limits.per_day}
-      </td>
-      <td>
-        <span className="pill pill--ghost">
-          {sender.proxy ? proxyLabel(sender.proxy) : "Direct"}
-        </span>
-      </td>
-      <td className="muted text-sm">{lastUsed}</td>
-      <td style={{ textAlign: "right", position: "relative" }}>
-        <button className="tb__icon-btn" aria-label="Actions" onClick={() => setOpen((v) => !v)}>
-          <MoreHorizontal size={16} />
-        </button>
-        {open && (
-          <>
-            <div className="ob__menuScrim" onClick={() => setOpen(false)} />
-            <div className="ob__menu" role="menu">
-              <button
-                onClick={() => {
-                  setOpen(false);
-                  setEditing(true);
-                }}
-              >
-                <Pencil size={13} /> Изменить профиль
-              </button>
-              <button
-                disabled={resyncMut.isPending}
-                onClick={() => {
-                  setOpen(false);
-                  resyncMut.mutate();
-                }}
-              >
-                {resyncMut.isPending ? (
-                  <Loader2 size={13} className="ob__spin" />
-                ) : (
-                  <RefreshCcw size={13} />
-                )}{" "}
-                Обновить профиль
-              </button>
-              <button
-                onClick={() => {
-                  setOpen(false);
-                  setHistoryOpen(true);
-                }}
-              >
-                <History size={13} /> История ограничений
-              </button>
-              <button
-                className="is-danger"
-                disabled={deleteMut.isPending}
-                onClick={() => {
-                  setOpen(false);
-                  if (
-                    confirm(
-                      `Удалить ${sender.name || sender.phone}? Это остановит все кампании, где он используется.`,
-                    )
-                  ) {
-                    deleteMut.mutate();
-                  }
-                }}
-              >
-                <Trash2 size={13} /> Удалить
-              </button>
-            </div>
-          </>
-        )}
-        {editing && <ProfileModal sender={sender} onClose={() => setEditing(false)} />}
-        {historyOpen && (
-          <RestrictionHistoryModal sender={sender} onClose={() => setHistoryOpen(false)} />
-        )}
-      </td>
-    </tr>
+            <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-[260px] text-left leading-relaxed">
+          {isChecker
+            ? `Overall message limit — ${dailyLimit}/day (incl. follow-ups).`
+            : `Overall message limit — ${dailyLimit}/day (incl. follow-ups). New-contact outreach is capped separately at 50 new dialogs/day per account.`}
+        </TooltipContent>
+      </Tooltip>
+
+      {/* limits · proxy · activity */}
+      <dl className="acct-card__kv">
+        <dt>Лимиты</dt>
+        <dd className="num mono">
+          {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} ·{" "}
+          {sender.rate_limits.per_day}
+        </dd>
+        <dt>Прокси</dt>
+        <dd>
+          <span className="pill pill--ghost">
+            {sender.proxy ? proxyLabel(sender.proxy) : "Direct"}
+          </span>
+        </dd>
+        <dt>Активность</dt>
+        <dd className="muted">{lastUsed}</dd>
+      </dl>
+
+      {editing && <ProfileModal sender={sender} onClose={() => setEditing(false)} />}
+      {historyOpen && (
+        <RestrictionHistoryModal sender={sender} onClose={() => setHistoryOpen(false)} />
+      )}
+    </div>
   );
 }
 
@@ -785,7 +819,15 @@ function profileErrorMessage(e: unknown): string {
  * D-10/D-11: account-row avatar. Cached photo (fetched auth-gated → object URL)
  * when `has_photo`, initials fallback otherwise. Keeps the status-dot overlay.
  */
-function AccountAvatar({ sender, dotColor }: { sender: Sender; dotColor: string }) {
+function AccountAvatar({
+  sender,
+  dotColor,
+  size = "sm",
+}: {
+  sender: Sender;
+  dotColor: string;
+  size?: "sm" | "lg";
+}) {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const photoChangedAt = (sender.profile_field_changed_at as Record<string, unknown> | undefined)
     ?.photo;
@@ -812,10 +854,11 @@ function AccountAvatar({ sender, dotColor }: { sender: Sender; dotColor: string 
   }, [sender.slug, sender.has_photo, photoChangedAt]);
 
   const initial = (sender.name || sender.phone).slice(0, 1).toUpperCase();
+  const dotSize = size === "lg" ? 13 : 11;
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", flexShrink: 0 }}>
       <div
-        className="avatar avatar--sm"
+        className={`avatar avatar--${size}`}
         style={{
           background: "var(--tg-blue-soft)",
           color: "var(--tg-blue)",
@@ -838,8 +881,8 @@ function AccountAvatar({ sender, dotColor }: { sender: Sender; dotColor: string 
           position: "absolute",
           bottom: -1,
           right: -1,
-          width: 11,
-          height: 11,
+          width: dotSize,
+          height: dotSize,
           borderRadius: 50,
           background: dotColor,
           border: "2px solid var(--bg)",
@@ -849,21 +892,13 @@ function AccountAvatar({ sender, dotColor }: { sender: Sender; dotColor: string 
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="fw5"
-      style={{
-        fontSize: 11.5,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        color: "var(--text-muted)",
-        margin: "4px 0 2px",
-      }}
-    >
-      {children}
-    </div>
-  );
+/** Best-effort split of a combined Telegram display name into [first, last]. */
+function splitName(full: string | null | undefined): [string, string] {
+  const s = (full ?? "").trim();
+  if (!s) return ["", ""];
+  const idx = s.indexOf(" ");
+  if (idx === -1) return [s, ""];
+  return [s.slice(0, idx), s.slice(idx + 1).trim()];
 }
 
 /**
@@ -879,16 +914,19 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
   const authExpired = sender.auth_status !== "ok";
 
   // ── Section A — identity ────────────────────────────────────────────────
-  const initialFirst = sender.name ?? "";
+  // Telegram stores one combined display name; best-effort split on the first
+  // space so the Фамилия field prefills instead of always starting blank.
+  const [initialFirst, initialLast] = splitName(sender.name);
   const initialRole = sender.role === "checker" ? "checker" : "sender";
   const [firstName, setFirstName] = useState(initialFirst);
-  const [lastName, setLastName] = useState("");
+  const [lastName, setLastName] = useState(initialLast);
   const [username, setUsername] = useState(sender.tg_username ?? "");
   const [about, setAbout] = useState(sender.tg_bio ?? "");
   const [role, setRole] = useState<"sender" | "checker">(initialRole);
 
   const usernameChanged = username.trim() !== (sender.tg_username ?? "");
-  const nameChanged = firstName.trim() !== initialFirst.trim() || lastName.trim() !== "";
+  const nameChanged =
+    firstName.trim() !== initialFirst.trim() || lastName.trim() !== initialLast.trim();
   const bioChanged = about !== (sender.tg_bio ?? "");
   const roleChanged = role !== initialRole;
 
@@ -1149,301 +1187,299 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
 
   return (
     <Modal title={`Профиль · ${sender.name || sender.phone}`} onClose={onClose} wide>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {/* ── Section A — Профиль ─────────────────────────────────────── */}
-        <SectionLabel>Профиль</SectionLabel>
-
-        <div style={{ display: "flex", gap: 12 }}>
-          <div className="field" style={{ flex: 1 }}>
-            <label className="field__label">Имя</label>
-            <input
-              className="input"
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-              placeholder={sender.phone}
-            />
+        <div className="profile-section">
+          <div className="profile-section__head">
+            <Pencil size={13} /> Профиль
           </div>
-          <div className="field" style={{ flex: 1 }}>
-            <label className="field__label">Фамилия</label>
-            <input
-              className="input"
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-            />
-          </div>
-        </div>
 
-        <div className="field">
-          <label className="field__label">Username</label>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span className="muted" style={{ fontSize: 13 }}>
-              @
-            </span>
-            <input
-              className="input"
-              style={{ flex: 1 }}
-              value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/^@/, ""))}
-              placeholder="username"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-          </div>
-          <span className="field__hint" style={{ color: usernameHint.color }}>
-            {usernameHint.text}
-          </span>
-        </div>
-
-        <div className="field">
-          <label className="field__label">Описание</label>
-          <textarea
-            className="textarea"
-            value={about}
-            maxLength={70}
-            rows={2}
-            onChange={(e) => setAbout(e.target.value)}
-          />
-          <span className="field__hint">{about.length}/70</span>
-        </div>
-
-        <div className="field">
-          <label className="field__label">Роль</label>
-          <div className="ob__roles">
-            <button
-              type="button"
-              className={`ob__role ${role === "sender" ? "is-active" : ""}`}
-              onClick={() => setRole("sender")}
-            >
-              <span className="ob__roleTitle">
-                <PhoneIcon size={14} /> Sender
-              </span>
-              <span className="ob__roleHint">Отправляет outreach (4/мин · 20/ч · 150/день)</span>
-            </button>
-            <button
-              type="button"
-              className={`ob__role ${role === "checker" ? "is-active" : ""}`}
-              onClick={() => setRole("checker")}
-            >
-              <span className="ob__roleTitle">
-                <ShieldCheck size={14} /> Checker
-              </span>
-              <span className="ob__roleHint">Проверяет номера в Telegram</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="field">
-          <label className="field__label">Фото профиля</label>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-            <div
-              className="avatar avatar--lg"
-              style={{
-                background: "var(--tg-blue-soft)",
-                color: "var(--tg-blue)",
-                overflow: "hidden",
-                flex: "0 0 auto",
-              }}
-            >
-              {sender.has_photo && previewUrl ? (
-                <img
-                  src={previewUrl}
-                  alt=""
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              ) : (
-                initial
-              )}
-            </div>
-            <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div className="field" style={{ flex: 1 }}>
+              <label className="field__label">Имя</label>
               <input
-                ref={fileRef}
-                type="file"
-                accept="image/jpeg,image/png"
-                hidden
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handlePhotoFile(f);
-                  e.target.value = "";
-                }}
+                className="input"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder={sender.phone}
               />
+            </div>
+            <div className="field" style={{ flex: 1 }}>
+              <label className="field__label">Фамилия</label>
+              <input
+                className="input"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="field__label">Username</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span className="muted" style={{ fontSize: 13 }}>
+                @
+              </span>
+              <input
+                className="input"
+                style={{ flex: 1 }}
+                value={username}
+                onChange={(e) => setUsername(e.target.value.replace(/^@/, ""))}
+                placeholder="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+            <span className="field__hint" style={{ color: usernameHint.color }}>
+              {usernameHint.text}
+            </span>
+          </div>
+
+          <div className="field">
+            <label className="field__label">Описание</label>
+            <textarea
+              className="textarea"
+              value={about}
+              maxLength={70}
+              rows={2}
+              onChange={(e) => setAbout(e.target.value)}
+            />
+            <span className="field__hint">{about.length}/70</span>
+          </div>
+
+          <div className="field">
+            <label className="field__label">Фото профиля</label>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
               <div
-                className="ct__dropzone"
-                onClick={() => {
-                  if (!photoBlocked && !photoMut.isPending) fileRef.current?.click();
+                className="avatar avatar--xl"
+                style={{
+                  background: "var(--tg-blue-soft)",
+                  color: "var(--tg-blue)",
+                  overflow: "hidden",
+                  flex: "0 0 auto",
                 }}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const f = e.dataTransfer.files[0];
-                  if (f) handlePhotoFile(f);
-                }}
-                style={photoBlocked ? { opacity: 0.55, pointerEvents: "none" } : undefined}
               >
-                {photoMut.isPending ? (
-                  <>
-                    <Loader2 size={20} className="ob__spin" />
-                    <span>Загрузка…</span>
-                  </>
+                {sender.has_photo && previewUrl ? (
+                  <img
+                    src={previewUrl}
+                    alt=""
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
                 ) : (
-                  <>
-                    <Upload size={20} />
-                    <span className="fw5">Загрузить фото</span>
-                    <span className="muted text-xs">
-                      Перетащите фото сюда или нажмите, чтобы выбрать (JPG/PNG, до 5 МБ)
-                    </span>
-                  </>
+                  initial
                 )}
               </div>
-              {sender.has_photo && (
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  style={{ marginTop: 8, color: "var(--danger)" }}
-                  disabled={deletePhotoMut.isPending || photoBlocked}
-                  onClick={() => {
-                    if (window.confirm("Удалить фото профиля?")) deletePhotoMut.mutate();
+              <div style={{ flex: 1 }}>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handlePhotoFile(f);
+                    e.target.value = "";
                   }}
+                />
+                <div
+                  className="ct__dropzone"
+                  onClick={() => {
+                    if (!photoBlocked && !photoMut.isPending) fileRef.current?.click();
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const f = e.dataTransfer.files[0];
+                    if (f) handlePhotoFile(f);
+                  }}
+                  style={photoBlocked ? { opacity: 0.55, pointerEvents: "none" } : undefined}
                 >
-                  <Trash2 size={13} /> Удалить фото
-                </button>
-              )}
-              {photoBlocked && (
-                <div className="field__hint" style={{ color: "var(--danger)" }}>
-                  Фото можно менять не чаще раза в час. Попробуйте снова через{" "}
-                  {fmtCountdown(photoCd)}.
+                  {photoMut.isPending ? (
+                    <>
+                      <Loader2 size={20} className="ob__spin" />
+                      <span>Загрузка…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={20} />
+                      <span className="fw5">Загрузить фото</span>
+                      <span className="muted text-xs">
+                        Перетащите фото сюда или нажмите, чтобы выбрать (JPG/PNG, до 5 МБ)
+                      </span>
+                    </>
+                  )}
                 </div>
-              )}
+                {sender.has_photo && (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    style={{ marginTop: 8, color: "var(--danger)" }}
+                    disabled={deletePhotoMut.isPending || photoBlocked}
+                    onClick={() => {
+                      if (window.confirm("Удалить фото профиля?")) deletePhotoMut.mutate();
+                    }}
+                  >
+                    <Trash2 size={13} /> Удалить фото
+                  </button>
+                )}
+                {photoBlocked && (
+                  <div className="field__hint" style={{ color: "var(--danger)" }}>
+                    Фото можно менять не чаще раза в час. Попробуйте снова через{" "}
+                    {fmtCountdown(photoCd)}.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            justifyContent: "flex-end",
-            marginTop: 2,
-          }}
-        >
-          <button className="btn btn--ghost" type="button" onClick={onClose}>
-            Отмена
-          </button>
-          <button
-            className="btn btn--primary"
-            type="button"
-            disabled={saveProfileMut.isPending || usernameBlocked}
-            onClick={handleSaveProfile}
-          >
-            {saveProfileMut.isPending ? "Сохранение…" : "Сохранить профиль"}
-          </button>
+          {/* Роль — app-level operational setting, kept out of the identity fields */}
+          <div className="profile-section__block">
+            <span className="profile-section__blockLabel">Роль</span>
+            <div className="ob__roles">
+              <button
+                type="button"
+                className={`ob__role ${role === "sender" ? "is-active" : ""}`}
+                onClick={() => setRole("sender")}
+              >
+                <span className="ob__roleTitle">
+                  <PhoneIcon size={14} /> Sender
+                </span>
+                <span className="ob__roleHint">Отправляет outreach (4/мин · 20/ч · 150/день)</span>
+              </button>
+              <button
+                type="button"
+                className={`ob__role ${role === "checker" ? "is-active" : ""}`}
+                onClick={() => setRole("checker")}
+              >
+                <span className="ob__roleTitle">
+                  <ShieldCheck size={14} /> Checker
+                </span>
+                <span className="ob__roleHint">Проверяет номера в Telegram</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="profile-footer">
+            <button className="btn btn--ghost" type="button" onClick={onClose}>
+              Отмена
+            </button>
+            <button
+              className="btn btn--primary"
+              type="button"
+              disabled={saveProfileMut.isPending || usernameBlocked}
+              onClick={handleSaveProfile}
+            >
+              {saveProfileMut.isPending ? "Сохранение…" : "Сохранить профиль"}
+            </button>
+          </div>
         </div>
 
         {/* ── Section B — Безопасность (2FA) ──────────────────────────── */}
-        <div style={{ borderTop: "1px solid var(--border)", marginTop: 8 }} />
-        <SectionLabel>Безопасность (2FA)</SectionLabel>
+        <div className="profile-section">
+          <div className="profile-section__head">
+            <ShieldCheck size={13} /> Безопасность (2FA)
+          </div>
 
-        <div className="field">
-          <label className="field__label">Текущий пароль 2FA</label>
-          <input
-            className="input"
-            type="password"
-            value={currentPw}
-            autoComplete="off"
-            onChange={(e) => setCurrentPw(e.target.value)}
-          />
-          <span className="field__hint">Заполните, если на аккаунте уже включён 2FA</span>
-        </div>
+          <div className="field">
+            <label className="field__label">Текущий пароль 2FA</label>
+            <input
+              className="input"
+              type="password"
+              value={currentPw}
+              autoComplete="off"
+              onChange={(e) => setCurrentPw(e.target.value)}
+            />
+            <span className="field__hint">Заполните, если на аккаунте уже включён 2FA</span>
+          </div>
 
-        <div className="field">
-          <label className="field__label">Новый пароль 2FA</label>
-          <input
-            className="input"
-            type="password"
-            value={newPw}
-            autoComplete="new-password"
-            onChange={(e) => setNewPw(e.target.value)}
-          />
-        </div>
+          <div className="field">
+            <label className="field__label">Новый пароль 2FA</label>
+            <input
+              className="input"
+              type="password"
+              value={newPw}
+              autoComplete="new-password"
+              onChange={(e) => setNewPw(e.target.value)}
+            />
+          </div>
 
-        <div className="field">
-          <label className="field__label">Подсказка (необязательно)</label>
-          <input className="input" value={hint} onChange={(e) => setHint(e.target.value)} />
-        </div>
+          <div className="field">
+            <label className="field__label">Подсказка (необязательно)</label>
+            <input className="input" value={hint} onChange={(e) => setHint(e.target.value)} />
+          </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            className="btn btn--primary"
-            type="button"
-            disabled={passwordMut.isPending || !newPw}
-            onClick={() => passwordMut.mutate()}
-          >
-            {passwordMut.isPending ? "Сохранение…" : "Обновить пароль 2FA"}
-          </button>
-        </div>
+          <div className="profile-footer">
+            <button
+              className="btn btn--primary"
+              type="button"
+              disabled={passwordMut.isPending || !newPw}
+              onClick={() => passwordMut.mutate()}
+            >
+              {passwordMut.isPending ? "Сохранение…" : "Обновить пароль 2FA"}
+            </button>
+          </div>
 
-        <div className="field" style={{ marginTop: 4 }}>
-          <label className="field__label">Email для восстановления</label>
-          {emailStep === "input" ? (
-            <>
-              <input
-                className="input"
-                type="email"
-                value={email}
-                placeholder="you@example.com"
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-                <button
-                  className="btn btn--primary"
-                  type="button"
-                  disabled={emailStartMut.isPending || !email.trim()}
-                  onClick={() => emailStartMut.mutate()}
+          <div className="profile-section__block">
+            <span className="profile-section__blockLabel">Email для восстановления</span>
+            {emailStep === "input" ? (
+              <>
+                <input
+                  className="input"
+                  type="email"
+                  value={email}
+                  placeholder="you@example.com"
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <div className="profile-footer">
+                  <button
+                    className="btn btn--primary"
+                    type="button"
+                    disabled={emailStartMut.isPending || !email.trim()}
+                    onClick={() => emailStartMut.mutate()}
+                  >
+                    {emailStartMut.isPending ? "Отправка…" : "Отправить код подтверждения"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="muted text-sm">Мы отправили код на {email}. Введите его ниже.</div>
+                <input
+                  className="input"
+                  value={code}
+                  inputMode="numeric"
+                  placeholder={codeLength ? `${codeLength}-значный код` : "Код из письма"}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                  }}
                 >
-                  {emailStartMut.isPending ? "Отправка…" : "Отправить код подтверждения"}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="muted text-sm" style={{ marginBottom: 8 }}>
-                Мы отправили код на {email}. Введите его ниже.
-              </div>
-              <input
-                className="input"
-                value={code}
-                inputMode="numeric"
-                placeholder={codeLength ? `${codeLength}-значный код` : "Код из письма"}
-                onChange={(e) => setCode(e.target.value)}
-              />
-              <div
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  alignItems: "center",
-                  justifyContent: "flex-end",
-                  marginTop: 8,
-                }}
-              >
-                <button
-                  className="ob__link"
-                  type="button"
-                  disabled={emailStartMut.isPending}
-                  onClick={() => emailStartMut.mutate()}
-                >
-                  Отправить снова
-                </button>
-                <button
-                  className="btn btn--primary"
-                  type="button"
-                  disabled={emailConfirmMut.isPending || !code.trim()}
-                  onClick={() => emailConfirmMut.mutate()}
-                >
-                  {emailConfirmMut.isPending ? "Подтверждение…" : "Подтвердить email"}
-                </button>
-              </div>
-            </>
-          )}
+                  <button
+                    className="ob__link"
+                    type="button"
+                    disabled={emailStartMut.isPending}
+                    onClick={() => emailStartMut.mutate()}
+                  >
+                    Отправить снова
+                  </button>
+                  <button
+                    className="btn btn--primary"
+                    type="button"
+                    disabled={emailConfirmMut.isPending || !code.trim()}
+                    onClick={() => emailConfirmMut.mutate()}
+                  >
+                    {emailConfirmMut.isPending ? "Подтверждение…" : "Подтвердить email"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </Modal>

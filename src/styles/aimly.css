@@ -793,3 +793,91 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 900px) {
   .ct { grid-template-columns: 200px 1fr; }
 }
+
+/* ============================================================
+   Account tiles + profile editor (Phase 20 redesign)
+   ============================================================ */
+
+/* Clamp long text to 2 lines with an ellipsis (bios etc.) */
+.text-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Grouped account tiles (Sender / Checker, sorted by priority tier) */
+.acct-group { margin-bottom: 24px; }
+.acct-group:last-child { margin-bottom: 0; }
+.acct-group__head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
+}
+.acct-group__head svg { color: var(--text-muted); }
+.acct-group__count {
+  font-size: 12px; font-weight: 500; color: var(--text-muted);
+  background: var(--bg-soft); border-radius: 999px; padding: 1px 9px;
+}
+
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.acct-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.acct-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+.acct-card__top { display: flex; align-items: flex-start; gap: 12px; }
+.acct-card__ident { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.acct-card__name {
+  font-size: 14px; font-weight: 600; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.acct-card__bio { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.acct-card__pillCol { display: flex; flex-direction: column; gap: 6px; }
+.acct-card__pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acct-card__meter { display: flex; flex-direction: column; gap: 5px; }
+.acct-card__meterRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.acct-card__kv {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 12px;
+  margin: 0; font-size: 12px;
+  padding-top: 12px; border-top: 1px solid var(--divider);
+}
+.acct-card__kv dt { color: var(--text-muted); white-space: nowrap; }
+.acct-card__kv dd { margin: 0; text-align: right; min-width: 0; }
+.acct-card__actions { position: relative; flex-shrink: 0; }
+
+/* Profile editor sections (Surface 3 redesign — visually separated blocks) */
+.profile-section {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-softer);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.profile-section__head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.profile-section__head svg { color: var(--text-faint); }
+.profile-section__block {
+  display: flex; flex-direction: column; gap: 8px;
+  padding-top: 14px; border-top: 1px solid var(--border);
+}
+.profile-section__blockLabel { font-size: 12px; font-weight: 600; color: var(--text-soft); }
+.profile-footer { display: flex; gap: 8px; justify-content: flex-end; }
