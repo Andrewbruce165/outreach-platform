@@ -46,6 +46,13 @@ async def _count_campaign_senders(db, campaign_id, sender_id) -> int:
     return int(row)
 
 
+async def _db_role(db, sender_id) -> str:
+    return (await db.execute(
+        text("SELECT role FROM senders WHERE id = :sid"),
+        {"sid": str(sender_id)},
+    )).scalar_one()
+
+
 async def _insert_restriction_event(
     db, ws_id, sender_id, event_type,
     category="restriction", source="queue_error", age_days=0,
@@ -208,3 +215,64 @@ async def test_attach_checker_with_force_ok(
     codes = [w["code"] for w in r.json()["attach_warnings"]]
     assert "CHECKER_FORCE_ATTACHED" in codes
     assert await _count_campaign_senders(async_db_session, camp["id"], checker.id) == 1
+
+
+# ─── PFH-03: reverse-direction guard on PATCH /senders/{slug} ─────────────────
+
+async def test_flip_to_checker_in_running_campaign_without_force_409(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory, attach_sender_to_campaign,
+):
+    """Flipping a role='sender' that is in a RUNNING campaign to 'checker' without
+    force → 409 CHECKER_ROLE_CONFLICT; role in DB stays 'sender'."""
+    await _bind(async_db_session, test_workspace.id, "pf-rev-noforce")
+    sender = await test_sender_factory(slug="pf-rev-nf")
+    running = await test_campaign_factory(status="running", name="RevRunNF")
+    await attach_sender_to_campaign(running["id"], sender.id)
+
+    r = await async_client.patch(
+        f"/api/v1/senders/{sender.slug}",
+        json={"role": "checker"},
+        headers=_auth_headers(valid_supabase_jwt, "pf-rev-noforce"),
+    )
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    code = detail["code"] if isinstance(detail, dict) else detail
+    assert code == "CHECKER_ROLE_CONFLICT"
+    assert await _db_role(async_db_session, sender.id) == "sender"
+
+
+async def test_flip_to_checker_in_running_campaign_with_force_ok(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory, attach_sender_to_campaign,
+):
+    """Same flip with force=true → 200; role in DB is now 'checker'."""
+    await _bind(async_db_session, test_workspace.id, "pf-rev-force")
+    sender = await test_sender_factory(slug="pf-rev-f")
+    running = await test_campaign_factory(status="running", name="RevRunF")
+    await attach_sender_to_campaign(running["id"], sender.id)
+
+    r = await async_client.patch(
+        f"/api/v1/senders/{sender.slug}",
+        json={"role": "checker", "force": True},
+        headers=_auth_headers(valid_supabase_jwt, "pf-rev-force"),
+    )
+    assert r.status_code == 200, r.text
+    assert await _db_role(async_db_session, sender.id) == "checker"
+
+
+async def test_flip_to_checker_not_in_running_campaign_ok(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_sender_factory,
+):
+    """A sender NOT in any running campaign flips to 'checker' without force → 200."""
+    await _bind(async_db_session, test_workspace.id, "pf-rev-idle")
+    sender = await test_sender_factory(slug="pf-rev-idle")
+
+    r = await async_client.patch(
+        f"/api/v1/senders/{sender.slug}",
+        json={"role": "checker"},
+        headers=_auth_headers(valid_supabase_jwt, "pf-rev-idle"),
+    )
+    assert r.status_code == 200, r.text
+    assert await _db_role(async_db_session, sender.id) == "checker"

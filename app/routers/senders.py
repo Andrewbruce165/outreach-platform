@@ -644,6 +644,31 @@ async def update_sender(
     if request.rate_per_day is not None:
         sender.rate_per_day = request.rate_per_day
     # Phase 3 C-05: ai_context_id setter removed — column dropped.
+    # PFH-03: symmetric checker guard. Flipping an in-running-campaign sender to
+    # role='checker' would pull it out of sending, so require an explicit override.
+    # Distinct code + force bypass from _check_sender_not_in_running_campaign
+    # (which raises SENDER_USED_BY_RUNNING_CAMPAIGN and has no escape hatch); no
+    # guard at all when the sender is idle.
+    if request.role == "checker" and sender.role != "checker" and not request.force:
+        in_running = (await db.execute(text("""
+            SELECT EXISTS (
+              SELECT 1 FROM campaign_senders cs
+              JOIN campaigns c ON c.id = cs.campaign_id
+              WHERE cs.sender_id = :sid
+                AND c.workspace_id = :wid
+                AND c.status = 'running'
+            )
+        """), {"sid": str(sender.id), "wid": str(ctx.workspace_id)})).scalar()
+        if in_running:
+            raise HTTPException(status_code=409, detail={
+                "code": "CHECKER_ROLE_CONFLICT",
+                "message": (
+                    "Sender is attached to a running campaign — flipping it to the "
+                    "checker pool would pull it out of sending. Pause/finish the "
+                    "campaign or pass force=true to override."
+                ),
+                "sender_id": str(sender.id),
+            })
     if request.role is not None:
         sender.role = request.role
     if request.proxy is not None:
