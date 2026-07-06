@@ -14,6 +14,7 @@ No Redis or Celery needed — the queue lives in Postgres.
 """
 
 import asyncio
+import json
 import logging
 import random
 from datetime import datetime, timezone, timedelta
@@ -1044,6 +1045,14 @@ class QueueWorker:
                         # helper owns + commits its own session.
                         from app.services.failover import failover_cold_backlog
                         await failover_cold_backlog(sender.id)
+                        # T2 (quick 260706-e8s): the sender is now flagged
+                        # spam_limited (committed above) → claw back its send-path
+                        # resolve false-negatives (NOT_REGISTERED / PRIVACY) from
+                        # the last SUSPECT_RESOLVE_WINDOW_MINUTES onto the healthy
+                        # pool and purge its poisoned resolve cache. db=None → the
+                        # helper owns + commits its own session.
+                        from app.services.send_suspect import rollback_suspect_resolve_fails
+                        await rollback_suspect_resolve_fails(sender.id)
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
@@ -1092,6 +1101,12 @@ class QueueWorker:
                         # backlog onto healthy senders. db=None → own committed session.
                         from app.services.failover import failover_cold_backlog
                         await failover_cold_backlog(sender.id)
+                        # T2 (quick 260706-e8s): sender flagged frozen (committed
+                        # above) → claw back its send-path resolve false-negatives
+                        # from the window onto the healthy pool + purge its poisoned
+                        # resolve cache. db=None → own committed session.
+                        from app.services.send_suspect import rollback_suspect_resolve_fails
+                        await rollback_suspect_resolve_fails(sender.id)
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
@@ -1116,6 +1131,13 @@ class QueueWorker:
                             sender.id, "privacy_restricted", "queue_error",
                             None, error_msg, category="recipient_privacy", db=db,
                         )
+                        # T2 (quick 260706-e8s): privacy stays recipient-level (NO
+                        # reroute — the account is healthy), but stamp the resolve-
+                        # fail marker so if THIS sender is later flagged
+                        # spam_limited/frozen within the window, the reactive
+                        # send_suspect rollback can still claw the row back (a
+                        # privacy false-negative during throttle onset).
+                        await self._stamp_resolve_fail(db, item, sender, "PRIVACY_RESTRICTED")
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
@@ -1144,6 +1166,31 @@ class QueueWorker:
                             sender.id, "blocked", "queue_error",
                             None, error_msg, db=db,
                         )
+                        if item.callback_url:
+                            asyncio.create_task(self._fire_callback(
+                                url=item.callback_url,
+                                queue_id=str(item.id),
+                                status="failed",
+                                sender_slug=sender.slug,
+                                recipient_phone=item.recipient_phone,
+                                error=error_msg,
+                                extra_data=item.extra_data,
+                            ))
+                        await self._fail_item(db, item, error_msg)
+                        return
+
+                    elif error_code == "RECIPIENT_NOT_IN_TELEGRAM":
+                        # T2 (quick 260706-e8s): NOT_REGISTERED from a possibly-
+                        # throttled sender is a likely false negative (the 2026-07-06
+                        # 07:31 incident). Re-rotate onto an UNTRIED healthy pool
+                        # sender instead of finalizing on THIS account; finalize only
+                        # when the pool is exhausted (bounded — WR-15). On finalize,
+                        # stamp the resolve-fail marker so the reactive rollback
+                        # (send_suspect) can claw the row back if the sender is later
+                        # flagged spam_limited/frozen within the window.
+                        if await self._reroute_resolve_fail(db, item, sender):
+                            return
+                        await self._stamp_resolve_fail(db, item, sender, "RECIPIENT_NOT_IN_TELEGRAM")
                         if item.callback_url:
                             asyncio.create_task(self._fire_callback(
                                 url=item.callback_url,
@@ -1295,6 +1342,89 @@ class QueueWorker:
                 error="past_stop_date",
                 extra_data=r.extra_data,
             ))
+
+    async def _stamp_resolve_fail(self, db: AsyncSession, item: MessageQueue, sender: Sender, code: str):
+        """T2 (quick 260706-e8s): merge the resolve-fail marker into
+        message_queue.extra_data (NO commit — the following _fail_item commits).
+
+        Records the sender in ``nr_tried_senders`` (dedup, order-preserving) and
+        stamps ``resolve_fail_code`` / ``resolve_fail_sender`` so the reactive
+        send_suspect rollback can find & claw the row back if this sender is later
+        flagged spam_limited/frozen within SUSPECT_RESOLVE_WINDOW_MINUTES. Uses a
+        STABLE code marker in extra_data — never matches on the localised RU
+        error_message (MEMORY: 'ограничен' substring-matched 'ограничений').
+        """
+        ed = dict(item.extra_data or {})
+        tried = list(dict.fromkeys([*(ed.get("nr_tried_senders") or []), str(sender.id)]))
+        ed["nr_tried_senders"] = tried
+        ed["resolve_fail_code"] = code
+        ed["resolve_fail_sender"] = str(sender.id)
+        await db.execute(
+            text("UPDATE message_queue SET extra_data = CAST(:ed AS JSONB) WHERE id = :id"),
+            {"ed": json.dumps(ed), "id": str(item.id)},
+        )
+
+    async def _reroute_resolve_fail(self, db: AsyncSession, item: MessageQueue, sender: Sender) -> bool:
+        """T2 (quick 260706-e8s): preventive re-rotation for a send-path
+        NOT_REGISTERED (a likely false negative from a possibly-throttled account).
+
+        Re-rotate the row onto an UNTRIED healthy pool sender instead of finalizing
+        on THIS account. Returns True if rerouted (row now pending on the new
+        sender, committed), False if the pool is exhausted (caller finalizes —
+        bounded, WR-15). Mirrors failover.py's healthy-pool query
+        (restriction_status='none' excludes the current/flagged sender) and reuses
+        rotation._pick_least_loaded. PII discipline: logs COUNT/UUIDs only.
+        """
+        if item.campaign_id is None:
+            return False
+        from app.services.rotation import _pick_least_loaded
+
+        ed = dict(item.extra_data or {})
+        tried_list = list(dict.fromkeys([*(ed.get("nr_tried_senders") or []), str(sender.id)]))
+        tried = set(tried_list)
+
+        pool_rows = (await db.execute(text("""
+            SELECT s.id AS sid
+            FROM campaign_senders cs
+            JOIN senders s ON s.id = cs.sender_id
+            JOIN campaigns c ON c.id = cs.campaign_id
+            WHERE cs.campaign_id = :cid
+              AND c.status = 'running'
+              AND s.lifecycle_status = 'active'
+              AND s.auth_status = 'ok'
+              AND s.role = 'sender'
+              AND s.restriction_status = 'none'
+              AND s.workspace_id = c.workspace_id
+        """), {"cid": str(item.campaign_id)})).fetchall()
+        candidates = [str(r.sid) for r in pool_rows if str(r.sid) not in tried]
+        if not candidates:
+            return False
+
+        new_sid = str(await _pick_least_loaded(db, candidates))
+        # Stamp resolve_fail_sender = new_sid so a later flag on the NEW sender is
+        # attributable; record the current sender in nr_tried_senders.
+        ed["nr_tried_senders"] = tried_list
+        ed["resolve_fail_code"] = "RECIPIENT_NOT_IN_TELEGRAM"
+        ed["resolve_fail_sender"] = new_sid
+        await db.execute(text("""
+            UPDATE message_queue
+            SET sender_id = :new, status = 'pending', scheduled_at = NOW(),
+                attempts = 0, error_message = NULL, started_at = NULL,
+                finished_at = NULL, extra_data = CAST(:ed AS JSONB)
+            WHERE id = :rid
+        """), {"new": new_sid, "ed": json.dumps(ed), "rid": str(item.id)})
+        await db.execute(text("""
+            UPDATE campaign_contact_assignments
+            SET sender_id = :new
+            WHERE campaign_id = :cid AND contact_phone = :phone
+        """), {"new": new_sid, "cid": str(item.campaign_id), "phone": item.recipient_phone})
+        await db.commit()
+        logger.info(
+            "queue: NOT_REGISTERED from sender %s — re-rotated queue item %s onto "
+            "untried healthy sender %s (campaign %s)",
+            str(sender.id), str(item.id)[:8], new_sid, str(item.campaign_id),
+        )
+        return True
 
     async def _fail_item(self, db: AsyncSession, item: MessageQueue, error: str):
         attempts = (item.attempts or 0) + 1
