@@ -286,3 +286,38 @@ def test_queue_pre_send_skips_restricted():
 
     src = inspect.getsource(QueueWorker._check_rate_limits)
     assert 'restriction_status != "none"' in src
+
+
+# ─── 5. quick 260706-fw7: spam-limit recheck window is 1h, not 6h ─────────────
+
+
+def test_recheck_interval_default_is_one_hour():
+    """quick 260706-fw7: the post-PEER_FLOOD @SpamBot recheck delay shrank 6h → 1h so
+    an account SpamBot frees after an hour is not held under the synthetic stub for six.
+    The 15-min reconcile sweep re-polls SpamBot inside the resulting 60–75 min window."""
+    from app.config import get_settings
+
+    assert get_settings().restriction_recheck_interval_seconds == 60 * 60
+    # The 15-min sweep cadence is a SEPARATE knob and must stay untouched.
+    assert get_settings().restriction_reconcile_interval_seconds == 15 * 60
+
+
+def test_peer_flood_sets_one_hour_recheck_with_matching_audit():
+    """quick 260706-fw7: the PEER_FLOOD branch derives recheck_at from the (now 1h)
+    interval, writes it to senders.restricted_until, and passes the SAME recheck_at to
+    record_restriction_event — so the audit row's restricted_until equals the sender's.
+    The 24h queue pause stays independent (timedelta(hours=24))."""
+    from app.services.queue import QueueWorker
+
+    src = inspect.getsource(QueueWorker)  # PEER_FLOOD branch lives in the send-error path
+    # recheck_at is computed from the config knob (now 1h) …
+    assert "restriction_recheck_interval_seconds" in src
+    # … and stamped onto senders.restricted_until …
+    assert "restricted_until = :recheck_at" in src
+    # … and the SAME recheck_at is handed to the audit event (audit window == sender window).
+    assert (
+        'record_restriction_event(sender.id, "spam_limited", "queue_error", recheck_at'
+        in src
+    )
+    # The 24h queue pause is a distinct value and must remain untouched.
+    assert "timedelta(hours=24)" in src
