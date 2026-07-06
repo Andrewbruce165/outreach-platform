@@ -331,6 +331,10 @@ function CampaignDetailPage() {
           {c && <PoolBadge health={c.pool_health} />}
         </div>
 
+        {c && <NoBackupNotice health={c.pool_health} />}
+
+
+
         {actionError && (
           <div
             className="card"
