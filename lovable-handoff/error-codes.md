@@ -18,6 +18,22 @@ Backend uses HTTPException with `detail: {code, message}` envelope (Phase 1 D-04
 | `UNKNOWN_EVENT` | 400 | "Internal: unknown telemetry event" | Debug-only; should not reach user — log to console.warn |
 | `ID_REQUIRED` | 422 | "Missing id parameter" | Used by /analytics/funnel + /analytics/llm |
 | `INVALID_PHONE` | 422 | "Phone number is invalid. Use +1 415 555 2810 format." | Onboarding step 1 |
+| `CHECKER_ROLE_CONFLICT` | 409 | "This account checks contacts. Adding it to a campaign (or switching it to the checker pool while a campaign runs) can get it blocked for both jobs. Add it anyway?" | Two call-sites: **(a)** `POST /campaigns/{id}/senders` — the account is `role='checker'`; **(b)** `PATCH /senders/{slug}` flips an in-running-campaign sender to `role='checker'`. Resolve by pausing/finishing the campaign, or re-send the same request with `force: true`. `detail.sender_id` identifies the account. |
 | (generic 5xx) | 5xx | "Server is unreachable. Retry." | Sonner toast with Retry action |
 
 Reference: when in doubt, fall back to UI-SPEC §8.3 copywriting contract.
+
+## Advisory warnings (non-blocking) — `CampaignResponse.attach_warnings[]`
+
+`POST /campaigns/{id}/senders` returns **200** even when it wants to warn the user. The
+warnings ride in `attach_warnings[]` (empty `[]` on every other endpoint and on a clean
+attach). Each item is `{code, sender_id, message, event_type?, restricted_until?, last_event_at?}`.
+Render them as an **amber banner** (not an error toast) — the attach already succeeded.
+
+| Warning code | Meaning | Suggested UI |
+|---|---|---|
+| `RECENT_RESTRICTION` | The attached account hit a restriction event (`event_type`, e.g. `spam_limited`/`frozen`) in the last 7 days — the "green corridor" pre-flight. Attaching may re-trigger anti-spam. | Amber banner: "This account was restricted recently ({event_type}). Verify it via @SpamBot before sending." Surface `last_event_at`/`restricted_until` if present. |
+| `CHECKER_FORCE_ATTACHED` | A `role='checker'` account was force-attached (`force: true`) as a campaign sender — it will leave the contact-check pool once it sends. | Amber banner confirming the override: "Checker account added as a sender — it will stop checking contacts once it sends." |
+
+Note: live inline @SpamBot pre-flight on attach is a documented follow-up; the manual
+`GET /senders/{slug}/spambot-check` remains the on-demand "green corridor" verification.
