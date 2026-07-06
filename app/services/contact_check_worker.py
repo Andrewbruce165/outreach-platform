@@ -768,6 +768,31 @@ class ContactCheckWorker:
             self._degraded_this_tick.add(checker_id)
         return "suspect"
 
+    async def _rearm_recovery_cooldown(self, checker_id: str) -> None:
+        """CR-03: push ``restricted_until`` forward by the base cooldown WITHOUT
+        touching the trip ladder or writing an audit row.
+
+        Used when a recovery probe fails for a non-throttle reason (exception:
+        network error, dead session). The recovery SELECT keys on
+        ``restricted_until <= NOW()``, so an elapsed timestamp that is never
+        re-armed re-selects the same checker on EVERY poll tick — the 2026-07-04
+        prod hot loop. Throttle-evidenced failures go through
+        ``_flag_checker_degraded`` instead (trip bump + audit + escalation).
+        """
+        cooldown = get_settings().contact_check_cooldown_seconds
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                await db.execute(
+                    text(
+                        """
+                        UPDATE senders
+                        SET restricted_until = NOW() + make_interval(secs => :cooldown)
+                        WHERE id = :id
+                        """
+                    ),
+                    {"cooldown": cooldown, "id": checker_id},
+                )
+
     async def _recover_checkers(self) -> None:
         """D-04 recovery: re-probe checkers whose cooldown elapsed; clear if clean.
 
@@ -817,6 +842,13 @@ class ContactCheckWorker:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("recovery probe for checker %s raised: %s", r.id, exc)
+                # CR-03: re-arm the cooldown even on an infra error (network, dead
+                # session). Without it the elapsed restricted_until re-selects this
+                # checker EVERY tick → a ~12.5s connect/probe hot loop (prod incident
+                # 2026-07-04..06, sender-8525079460, ~20k resolves/day). An exception
+                # is not throttle evidence, so no trip bump / no audit row — just push
+                # restricted_until forward by the base cooldown.
+                await self._rearm_recovery_cooldown(str(r.id))
                 continue
             results = summary.get("results", [])
             # CR-01: a recovery probe only counts as CLEAN if it hit Telegram live
@@ -830,6 +862,22 @@ class ContactCheckWorker:
                 and all(res.get("is_registered") for res in results)
             )
             if not clean:
+                # CR-03: a failed recovery probe MUST re-arm the cooldown, or the
+                # elapsed restricted_until keeps re-selecting this checker every
+                # poll tick — a silent ~12.5s live-probe loop that burns the
+                # already-throttled account. A live miss on known-live controls IS
+                # throttle evidence → climb the escalating ladder (trip += 1,
+                # exponential cooldown, audit row), same as any other trip.
+                misses = sum(1 for res in results if not res.get("is_registered"))
+                flood = ", flood_wait" if summary.get("flood_wait_hit") else ""
+                await self._flag_checker_degraded(
+                    str(r.id),
+                    miss_count=misses,
+                    raw_text=(
+                        f"recovery-probe: still throttled "
+                        f"({misses}/{len(sample)} live misses{flood})"
+                    ),
+                )
                 continue
             async with AsyncSessionLocal() as db:
                 async with db.begin():

@@ -515,3 +515,127 @@ async def test_suspect_batch_still_rolls_back_not_registered(
     ).fetchone()
     assert notreg_row.tg_status == "pending", "suspect not_registered must roll back, not finalize"
     assert notreg_row.tg_checked_at is None, "claim timestamp cleared for re-check"
+
+
+# ─── CR-03 (re-review 260706): failed recovery probe must re-arm the cooldown ─
+#
+# Regression: after Batch A switched recovery to the live-only probe_control, a
+# FAILED probe just `continue`d — restricted_until stayed in the past, so the
+# recovery SELECT re-picked the same checker on EVERY ~5s poll tick: a silent
+# live-probe hot loop (~20k resolves/day) against an already-throttled account
+# (prod incident 2026-07-04..06, sender-8525079460).
+
+
+def _dirty_probe_summary(phones: list[str]) -> dict:
+    """A throttled probe result — every control number 'not registered' (all live)."""
+    return {
+        "checked": len(phones),
+        "registered": 0,
+        "not_registered": len(phones),
+        "flood_wait_hit": False,
+        "results": [
+            {"phone": p, "is_registered": False, "from_cache": False} for p in phones
+        ],
+    }
+
+
+async def test_failed_recovery_probe_rearms_cooldown_and_escalates(
+    async_db_session, test_workspace, test_checker
+):
+    """A recovery probe that comes back dirty (live misses on known-live controls)
+    is throttle evidence: the checker must be re-armed via the escalating ladder
+    (trip += 1, restricted_until pushed into the FUTURE) — and, critically, a
+    second _recover_checkers pass must then be a no-op (no hot loop)."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    await async_db_session.execute(
+        text(
+            "UPDATE senders SET restriction_status = 'spam_limited', "
+            "lifecycle_status = 'paused', "
+            "restricted_until = NOW() - INTERVAL '1 minute', "
+            "checker_trip_count = 3 WHERE id = :id"
+        ),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    worker = ContactCheckWorker()
+    with patch(
+        "app.services.contact_check_worker.checker_service.probe_control",
+        new=AsyncMock(side_effect=lambda phones, **kw: _dirty_probe_summary(phones)),
+    ) as probe_mock:
+        await worker._recover_checkers()
+        first_pass_calls = probe_mock.await_count
+        assert first_pass_calls >= 1, "elapsed cooldown → checker is probed once"
+
+        row = (
+            await async_db_session.execute(
+                text(
+                    "SELECT restriction_status, restricted_until, checker_trip_count "
+                    "FROM senders WHERE id = :id"
+                ),
+                {"id": checker_id},
+            )
+        ).fetchone()
+        assert row.restriction_status == "spam_limited", "dirty probe must NOT recover"
+        assert row.restricted_until is not None and row.restricted_until > datetime.now(
+            timezone.utc
+        ), "CR-03: failed probe must re-arm restricted_until into the future"
+        assert row.checker_trip_count == 4, "throttle evidence climbs the trip ladder"
+
+        # The hot-loop guard itself: with the cooldown re-armed, an immediate second
+        # recovery pass must not probe this checker again.
+        await worker._recover_checkers()
+        assert probe_mock.await_count == first_pass_calls, (
+            "re-armed checker must not be re-probed on the next tick (hot-loop guard)"
+        )
+
+
+async def test_recovery_probe_exception_rearms_base_cooldown_without_trip_bump(
+    async_db_session, test_workspace, test_checker
+):
+    """An infra failure (probe raises: network error, dead session) is NOT throttle
+    evidence: re-arm restricted_until by the base cooldown so the loop is bounded,
+    but do NOT bump the trip ladder and do NOT clear the restriction."""
+    from app.services.contact_check_worker import ContactCheckWorker
+
+    checker_id = str(test_checker.id)
+    base = get_settings().contact_check_cooldown_seconds
+    await async_db_session.execute(
+        text(
+            "UPDATE senders SET restriction_status = 'spam_limited', "
+            "lifecycle_status = 'paused', "
+            "restricted_until = NOW() - INTERVAL '1 minute', "
+            "checker_trip_count = 3 WHERE id = :id"
+        ),
+        {"id": checker_id},
+    )
+    await async_db_session.commit()
+
+    worker = ContactCheckWorker()
+    before = datetime.now(timezone.utc)
+    with patch(
+        "app.services.contact_check_worker.checker_service.probe_control",
+        new=AsyncMock(side_effect=ConnectionError("boom")),
+    ):
+        await worker._recover_checkers()
+
+    row = (
+        await async_db_session.execute(
+            text(
+                "SELECT restriction_status, restricted_until, checker_trip_count "
+                "FROM senders WHERE id = :id"
+            ),
+            {"id": checker_id},
+        )
+    ).fetchone()
+    assert row.restriction_status == "spam_limited"
+    assert row.restricted_until is not None and row.restricted_until > before, (
+        "CR-03: an exception must still re-arm the cooldown (bounded retry, no hot loop)"
+    )
+    delta = (row.restricted_until - before).total_seconds()
+    assert abs(delta - base) < 60, f"exception path re-arms ≈ base cooldown, got {delta}s"
+    assert row.checker_trip_count == 3, (
+        "an infra error is not throttle evidence — the trip ladder must not bump"
+    )

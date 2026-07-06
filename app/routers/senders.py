@@ -1051,8 +1051,13 @@ async def username_check(
 
     try:
         res = await telegram_service.check_username(
-            sender.slug, sender.session_string, username, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, username,
+            proxy=sender.proxy,
         )
+    except TypeError:
+        # CR-04 regression guard: a broken call signature is a programming error,
+        # not an unreachable session — never mask it as "available".
+        raise
     except Exception as e:  # noqa: BLE001 — session unreachable → best-effort fall-through
         logger.info(f"[senders] username-check live probe failed for {slug}: {e}")
         return UsernameCheckResponse(available=True, reason=None)
@@ -1108,7 +1113,8 @@ async def update_sender_profile(
                 about=request.about,
             )
             await telegram_service.update_profile(
-                sender.slug, sender.session_string, req, proxy=sender.proxy
+                sender.slug, str(sender.id), sender.session_string, req,
+                proxy=sender.proxy,
             )
             if request.first_name is not None:
                 composed = (
@@ -1122,7 +1128,8 @@ async def update_sender_profile(
                 _stamp_profile_change(sender, "bio")
         if changing_username:
             await telegram_service.update_username(
-                sender.slug, sender.session_string, request.username, proxy=sender.proxy
+                sender.slug, str(sender.id), sender.session_string, request.username,
+                proxy=sender.proxy,
             )
             sender.tg_username = request.username or None
             _stamp_profile_change(sender, "username")
@@ -1188,6 +1195,7 @@ async def upload_sender_photo(
     try:
         res = await telegram_service.upload_profile_photo(
             sender.slug,
+            str(sender.id),
             sender.session_string,
             raw,
             file_name=file.filename or "avatar.jpg",
@@ -1238,7 +1246,7 @@ async def delete_sender_photo(
 
     try:
         res = await telegram_service.delete_profile_photos(
-            sender.slug, sender.session_string, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1304,7 +1312,7 @@ async def resync_sender_profile(
 
     try:
         res = await telegram_service.fetch_profile(
-            sender.slug, sender.session_string, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1364,6 +1372,7 @@ async def update_sender_2fa(
     try:
         await telegram_service.edit_2fa(
             sender.slug,
+            str(sender.id),
             sender.session_string,
             current_password=request.current_password,
             new_password=request.new_password,
@@ -1403,6 +1412,7 @@ async def start_sender_recovery_email(
     try:
         res = await telegram_service.set_recovery_email(
             sender.slug,
+            str(sender.id),
             sender.session_string,
             current_password=request.current_password,
             email=str(request.email),
@@ -1440,6 +1450,7 @@ async def confirm_sender_recovery_email(
     try:
         await telegram_service.confirm_recovery_email(
             sender.slug,
+            str(sender.id),
             sender.session_string,
             code=request.code,
             proxy=sender.proxy,
