@@ -116,6 +116,9 @@ class SenderUpdate(BaseModel):
     # NB: ai_context_id field dropped (Phase 3 C-05).
     role: Optional[Literal["sender", "checker"]] = None
     proxy: Optional[ProxyConfig] = None
+    # PFH-03: override for flipping an in-running-campaign sender to role='checker'
+    # (see update_sender guard). Default False → no behaviour change for existing PATCHes.
+    force: bool = False
 
 
 class SenderResponse(BaseModel):
@@ -720,6 +723,33 @@ class CampaignSenderAttachRequest(BaseModel):
     which is the read-only response sub-object inside attached_senders[].
     """
     sender_id: UUID
+    # PFH-02: attaching a role='checker' account (or any account with special
+    # handling) requires an explicit override. Default False → backward-compatible
+    # for every existing caller that posts only {sender_id}.
+    force: bool = False
+
+
+class SenderAttachWarning(BaseModel):
+    """PFH-01/PFH-02: advisory (NON-blocking) warning surfaced by
+    POST /campaigns/{id}/senders in CampaignResponse.attach_warnings[].
+
+    code:
+      RECENT_RESTRICTION      — sender had a (non-'cleared') restriction event in the
+                                last 7 days ("зелёный коридор"); attaching may
+                                re-trigger anti-spam.
+      CHECKER_FORCE_ATTACHED  — a role='checker' account was force-attached as a
+                                campaign sender (force=true); it will leave the
+                                contact-check pool once it sends.
+
+    Returned ONLY by attach_sender; every other endpoint leaves attach_warnings
+    defaulting to [] (backward-compatible).
+    """
+    code: str
+    sender_id: UUID
+    message: str
+    event_type: Optional[str] = None
+    restricted_until: Optional[datetime] = None
+    last_event_at: Optional[datetime] = None
 
 
 class CampaignCreate(BaseModel):
@@ -918,6 +948,9 @@ class CampaignResponse(BaseModel):
     pause_reason: Optional[str] = None
     paused_at: Optional[datetime] = None
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
+    # PFH-01/PFH-02: advisory pre-flight warnings, populated ONLY by attach_sender.
+    # Optional (default empty) → backward-compatible for get/patch/start/pause/detach.
+    attach_warnings: List[SenderAttachWarning] = Field(default_factory=list)
     is_exhausted: bool = False
     # WR-12b: number of status='failed' queue rows for this campaign. Computed at
     # read time (COUNT(*), not a stored column) so the UI can surface a "retry
