@@ -41,6 +41,43 @@ async def _cca_sender_for(db, campaign_id, contact_phone):
     return str(row[0]) if row else None
 
 
+# ─── Evacuation freeze-state helpers (copied verbatim from test_failover.py:62-93) ─
+
+async def _freeze_sender(db, sender_id, status: str = "spam_limited"):
+    """Flag a sender restricted exactly as the freeze paths do (queue.py / listener.py).
+
+    The freeze write MUST land before rebalance runs so the eligible-pool filter
+    (restriction_status='none') excludes this sender as a receiver.
+    """
+    await db.execute(text("""
+        UPDATE senders
+        SET restriction_status = :st,
+            restricted_until = NOW() + INTERVAL '24 hours'
+        WHERE id = :sid
+    """), {"st": status, "sid": str(sender_id)})
+    await db.commit()
+
+
+async def _pause_pending(db, sender_id):
+    """Push the sender's pending queue +24h — what every freeze path does before
+    failover/rebalance (queue.py:745 / listener.py:926). Evacuated rows must be
+    reset to NOW()."""
+    await db.execute(text("""
+        UPDATE message_queue
+        SET scheduled_at = NOW() + INTERVAL '24 hours'
+        WHERE sender_id = :sid AND status = 'pending'
+    """), {"sid": str(sender_id)})
+    await db.commit()
+
+
+async def _scheduled_at(db, campaign_id, phone, status="pending"):
+    row = (await db.execute(text("""
+        SELECT scheduled_at FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = :phone AND status = :st
+    """), {"cid": str(campaign_id), "phone": phone, "st": status})).first()
+    return row[0] if row else None
+
+
 # ─── POOL-07 ─────────────────────────────────────────────────────────────────
 
 async def test_rebalance_evens_cold_pending(
@@ -201,3 +238,114 @@ async def test_rebalance_p3_small_backlog_not_starved(
         if await _cca_sender_for(async_db_session, camp["id"], ph) == str(b.id)
     ]
     assert len(moved_to_b) == 1, "exactly one recipient's CCA points at B"
+
+
+# ─── EVAC-01 ─────────────────────────────────────────────────────────────────
+
+async def test_rebalance_evacuates_frozen_donor_fully(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+    test_sender_factory, attach_sender_to_campaign,
+):
+    """EVAC-01: a campaign whose ONLY sender is frozen (the old P<2 no-op stranded
+    the backlog) still evacuates 100% of its cold-pending rows onto a freshly-
+    attached healthy sender. This is the exact production failure being fixed:
+    the frozen donor is excluded from the eligible pool → P=1 → old code returned
+    0; full evacuation moves every cold row regardless of fair-share math."""
+    from app.services.rebalance import rebalance_on_attach
+
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    frozen = senders[0]
+
+    phones = [f"+7990050{i:04d}" for i in range(4)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], frozen.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+
+    # Freeze the only sender + pause its pending +24h (what the freeze path does).
+    await _freeze_sender(async_db_session, frozen.id)
+    await _pause_pending(async_db_session, frozen.id)
+
+    # Attach a fresh healthy sender, then rebalance onto it.
+    healthy = await test_sender_factory()
+    await attach_sender_to_campaign(camp["id"], healthy.id)
+
+    moved = await rebalance_on_attach(camp["id"], healthy.id, async_db_session)
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert moved == 4, "all 4 cold-pending rows must evacuate off the frozen sender"
+    assert sum(after.values()) == 4, "rebalance must not create or drop rows"
+    assert after.get(str(frozen.id), 0) == 0, "frozen sender holds 0 pending after"
+    assert after.get(str(healthy.id), 0) == 4, "healthy sender holds all 4 evacuated rows"
+    # Every moved recipient's sticky CCA repoints at the healthy sender.
+    for ph in phones:
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(healthy.id)
+
+
+# ─── EVAC-02 ─────────────────────────────────────────────────────────────────
+
+async def test_rebalance_resets_scheduled_at_on_evacuation(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+    test_sender_factory, attach_sender_to_campaign,
+):
+    """EVAC-02: evacuated rows shed the inherited +24h PEER_FLOOD pause — their
+    scheduled_at is reset to NOW() so the healthy receiver can send immediately."""
+    from app.services.rebalance import rebalance_on_attach
+
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    frozen = senders[0]
+
+    phones = [f"+7990051{i:04d}" for i in range(4)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], frozen.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+    await _freeze_sender(async_db_session, frozen.id)
+    await _pause_pending(async_db_session, frozen.id)  # scheduled_at → NOW()+24h
+
+    healthy = await test_sender_factory()
+    await attach_sender_to_campaign(camp["id"], healthy.id)
+
+    moved = await rebalance_on_attach(camp["id"], healthy.id, async_db_session)
+    assert moved == 4
+
+    horizon = (await async_db_session.execute(
+        text("SELECT NOW() + INTERVAL '1 hour'")
+    )).scalar()
+    for ph in phones:
+        sched = await _scheduled_at(async_db_session, camp["id"], ph)
+        assert sched is not None and sched < horizon, (
+            "evacuated row scheduled_at must be reset to NOW() (not the +24h pause)"
+        )
+
+
+# ─── EVAC idempotent ─────────────────────────────────────────────────────────
+
+async def test_rebalance_evacuation_idempotent(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+    test_sender_factory, attach_sender_to_campaign,
+):
+    """A repeated rebalance after a full evacuation moves 0 rows and leaves the
+    distribution unchanged (idempotent — the rows now sit on the eligible pool)."""
+    from app.services.rebalance import rebalance_on_attach
+
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    frozen = senders[0]
+
+    for i in range(4):
+        await test_queue_item_factory(camp["id"], frozen.id, f"+7990052{i:04d}",
+                                      status="pending", with_cca=True,
+                                      with_conversation=False)
+    await _freeze_sender(async_db_session, frozen.id)
+    await _pause_pending(async_db_session, frozen.id)
+
+    healthy = await test_sender_factory()
+    await attach_sender_to_campaign(camp["id"], healthy.id)
+
+    first = await rebalance_on_attach(camp["id"], healthy.id, async_db_session)
+    dist_after_first = await _pending_counts(async_db_session, camp["id"])
+
+    second = await rebalance_on_attach(camp["id"], healthy.id, async_db_session)
+    dist_after_second = await _pending_counts(async_db_session, camp["id"])
+
+    assert first == 4, "first call evacuates the whole cold backlog"
+    assert second == 0, "second call must move 0 rows"
+    assert dist_after_second == dist_after_first, "distribution must be unchanged"
