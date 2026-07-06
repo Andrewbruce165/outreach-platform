@@ -8,7 +8,7 @@
 
 Import already-authorized Telegram accounts into a workspace by uploading vendor-format **pairs** `<phone>.json` + `<phone>.session` through the UI, with bulk (multi-account) support — bypassing the phone/SMS onboarding flow. The `.session` is a live Telethon SQLite session (auth_key present) that must be converted to our encrypted StringSession storage; the `.json` carries the client fingerprint + optional proxy/2FA.
 
-**In scope:** ZIP upload endpoint, pair matching, SQLite→StringSession conversion, per-account fingerprint capture, encrypted 2FA storage, validation (connect + get_me), dedup, background job + status polling, per-file result report, proxy assignment.
+**In scope:** ZIP upload endpoint, pair matching, SQLite→StringSession conversion, per-account fingerprint capture, encrypted 2FA storage, validation (connect + get_me), dedup, two-step flow (preview → role selection → confirm), role assignment (sender/checker) for the whole batch, background job + status polling, per-file result report, proxy assignment.
 
 **Out of scope:** phone/SMS/QR onboarding changes (unchanged), profile editing (Phase 20 owns this), SpamBot restriction probing at import (reconcile handles it later), bulk profile editing (backlog Phase 999.1).
 
@@ -29,9 +29,14 @@ Import already-authorized Telegram accounts into a workspace by uploading vendor
 - **D-07:** Security trade-off noted for the planner: the DB already holds `session_string` (full account access) encrypted, so adding the 2FA password raises the blast radius of a DB leak (full account takeover) but does not change the fact that the DB already contains account-access secrets. Encryption at rest is mandatory; the plaintext password is never logged or returned in API responses.
 
 ### Bulk upload UX
-- **D-08:** Delivery format = **single ZIP archive**. Client uploads one ZIP of all `<phone>.json` + `<phone>.session` pairs; the backend unzips and matches `.json`↔`.session` by **basename** (the `session_file` field in the JSON = the shared basename, e.g. `+18646884306`). One POST — avoids a hundreds-part multipart form and is simpler for the Lovable-generated frontend.
-- **D-09:** Batch processing is **asynchronous**: the upload POST creates an import job, returns a `job_id` immediately, and the frontend **polls a status endpoint** for progress (processed/total + per-file status). Rationale: connect + get_me per account is ~1–3s each; a synchronous POST would hit the nginx/HTTP timeout on a large batch.
+- **D-08:** Delivery format = **single ZIP archive**. Client uploads one ZIP of all `<phone>.json` + `<phone>.session` pairs; the backend unzips and matches `.json`↔`.session` by **basename** (the `session_file` field in the JSON = the shared basename, e.g. `+18646884306`). One upload — avoids a hundreds-part multipart form and is simpler for the Lovable-generated frontend.
+- **D-08a:** **Two-step flow with a backend preview.** Step 1 (preview): `POST` the ZIP → backend unzips + matches pairs + validates JSON schema (NO Telegram connect yet) → returns a summary of what was recognized (matched pairs, unpaired files, malformed JSON) **without importing**. Step 2 (confirm): the client sees the recognized set, picks a role (D-16), and confirms → this launches the actual import. Requires **server-side staging** of the unpacked ZIP between the two steps, keyed by a preview id/token, with a TTL cleanup (Claude's Discretion on exact mechanism).
+- **D-09:** The **confirm step (step 2) is asynchronous**: it creates an import job, returns a `job_id` immediately, and the frontend **polls a status endpoint** for progress (processed/total + per-file status). Rationale: connect + get_me per account is ~1–3s each; a synchronous confirm would hit the nginx/HTTP timeout on a large batch. (Preview/step 1 is fast — unzip + parse only — so it can be synchronous.)
 - **D-10:** **Per-file result report** with partial success: each pair resolves to `ok` or `failed` + reason. A broken/invalid/unpaired file **must not fail the whole batch** — it is reported and the rest continue.
+
+### Role assignment
+- **D-16:** The imported accounts' **role (`sender` | `checker`) is chosen once for the whole batch** at step 2, and applied to every account in the ZIP (`senders.role` set accordingly). Rationale: clients load a batch of senders separately from a batch of checkers; a single radio choice keeps the form simple. Per-account role selection was considered and declined.
+- **D-17:** **Checker import = the same import path + `role='checker'`** — no special handling. Proxy, fingerprint capture, encrypted-2FA storage, dedup, and SQLite→StringSession conversion are identical for both roles (consistent with Phase 2 D-21: checker onboarding = the same flow as sender). The only downstream difference is behavioral (a checker joins the resolve rotation, not sending/warmup) and is owned by existing checker code, not this phase.
 
 ### Validation & start state
 - **D-11:** Import validation per account: convert the SQLite Telethon session → StringSession, `connect()` → `is_user_authorized()` → `get_me()` to populate `phone` / `telegram_id` / `tg_username` / name. **No @SpamBot probe at import** — `restriction_status` defaults to `'none'` and the periodic reconcile loop picks up any restriction later. (Accepted risk: a restricted account may briefly sit in the sending pool until reconcile runs.)
@@ -42,6 +47,7 @@ Import already-authorized Telegram accounts into a workspace by uploading vendor
 
 ### Claude's Discretion
 - Exact import-job / status schema shape and the per-file report structure (D-09/D-10).
+- Preview-staging mechanism and TTL between step 1 and step 2 (D-08a) — how the unpacked ZIP is held server-side, keyed, and cleaned up.
 - Where to stage the `.session` bytes on disk for Telethon SQLiteSession conversion (it reads a file), and cleanup after.
 - Exact new column names on `senders` (fingerprint fields, encrypted 2FA).
 - ZIP size limit and max accounts per batch.
@@ -113,6 +119,7 @@ Import already-authorized Telegram accounts into a workspace by uploading vendor
 - **@SpamBot restriction probe at import** — considered, rejected for this phase (D-11); the periodic reconcile handles restriction detection. Could be added later if active-start proves risky in practice.
 - **Bulk account profile editing** — already parked as backlog Phase 999.1; out of scope here.
 - **Warmup-first start for imported accounts** — the safer alternative to active-start (D-13) was offered and declined; if freshly-imported accounts get flagged, revisit a warmup or paused default.
+- **Per-account role selection in a mixed batch** — considered and declined (D-16); role is one choice per ZIP. Revisit if clients start shipping mixed sender/checker batches.
 
 </deferred>
 

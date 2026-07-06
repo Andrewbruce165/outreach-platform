@@ -122,9 +122,36 @@ Follow-up (how to store + Phase 20 interaction):
 
 ---
 
+## Role assignment (follow-up)
+
+User asked: "checker and sender on bulk upload — what do we do with them? Let's have a form where we upload a batch of accounts, next step we pick the role for them."
+
+**Q1 — Role scope:**
+
+| Option | Selected |
+|--------|----------|
+| One role for the whole batch | ✓ |
+| Per-account | |
+
+→ D-16: single role choice per ZIP, applied to all.
+
+**Q2 — Two-step flow shape:**
+
+| Option | Selected |
+|--------|----------|
+| Backend preview (unzip+match → show → pick role → import) | ✓ |
+| Frontend wizard (one POST, ZIP+role) | |
+
+→ D-08a: step 1 preview (POST ZIP → recognized set, no import), step 2 confirm (pick role → async import job).
+
+**Claude's note:** checker import = same path + role='checker'; no special handling (Phase 2 D-21). D-17.
+
+---
+
 ## Claude's Discretion
 
 - Import-job / status schema and per-file report structure.
+- Preview-staging mechanism and TTL between step 1 and step 2.
 - Disk staging for SQLite→StringSession conversion + cleanup.
 - Exact new column names; discrete columns vs JSONB for fingerprint.
 - ZIP size limit / max accounts per batch.
