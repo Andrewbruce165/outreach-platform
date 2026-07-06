@@ -675,11 +675,11 @@ class Campaign(Base):
     allow_recontact = Column(Boolean, nullable=False, server_default="false")
     recontact_min_age_days = Column(Integer, nullable=False, server_default="30")
     # Phase 12 (D-10/D-11, NDLG-01): per-sender-per-campaign daily new-dialog cap.
-    # DEFAULT 50 applies to ALL existing campaigns incl. running (D-11, no backfill).
-    # server_default="50" duplicates the migration-033 DB default for the create_all
-    # path (post-DROP-incident rebuild reconstructs tables from the ORM). API enforces
-    # the ge=1/le=100 bounds (D-12); no DB CHECK.
-    max_new_dialogs_per_day = Column(Integer, nullable=False, server_default="50")
+    # DEFAULT 10 (quick 260706-mdz supersedes migration-033's DEFAULT 50 — the old 50
+    # was too aggressive for Telegram anti-spam). server_default="10" duplicates the
+    # migration-050 DB default for the create_all path (post-DROP-incident rebuild
+    # reconstructs tables from the ORM). API enforces the ge=1/le=30 bounds; no DB CHECK.
+    max_new_dialogs_per_day = Column(Integer, nullable=False, server_default="10")
     # Phase 19 (D-08/D-12): no-reply follow-up + auto-finish policy per campaign.
     # follow_up_enabled off by default (opt-in). server_default values duplicate the
     # migration-045 DB defaults for the create_all rebuild path. API enforces the

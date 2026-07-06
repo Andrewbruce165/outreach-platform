@@ -56,16 +56,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
 
-# Phase 12 D-13/D-14: green corridor <=50; hard cap 100 (top of the "warmed" range).
-DIALOG_LIMIT_SOFT_CAP = 50
-DIALOG_LIMIT_HARD_CAP = 100
+# Quick 260706-mdz: green corridor <=10; hard cap 30 (50 was too aggressive for
+# Telegram anti-spam). Supersedes the Phase-12 D-13/D-14 corridor (50/100).
+DIALOG_LIMIT_SOFT_CAP = 10
+DIALOG_LIMIT_HARD_CAP = 30
 
 
 def _validate_max_new_dialogs(value: Optional[int]) -> List[WarningItem]:
-    """Phase 12 D-13/D-14: hard cap 100 → 422; soft cap 50 → warnings[].
+    """Quick 260706-mdz: hard cap 30 → 422; soft cap 10 → warnings[].
 
     Mirrors senders._validate_rate_limits: Pydantic already clips the hard cap via
-    Field(le=100), but Lovable sometimes posts raw JSON — the explicit check here is
+    Field(le=30), but Lovable sometimes posts raw JSON — the explicit check here is
     harmless and yields a clearer senders-style detail payload.
     """
     warnings: List[WarningItem] = []
