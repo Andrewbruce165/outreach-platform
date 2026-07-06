@@ -107,6 +107,53 @@ function PoolBadge({ health }: { health: PoolHealth | null | undefined }) {
   );
 }
 
+/**
+ * Soft advisory: campaign has exactly one active sender (no failover).
+ * Shown only when has_backup === false AND at least one sender is active.
+ * Independent from the paused/total PoolBadge — this is a heads-up, not a block.
+ */
+function NoBackupNotice({ health }: { health: PoolHealth | null | undefined }) {
+  if (!health) return null;
+  if (health.has_backup) return null;
+  if (health.active < 1) return null;
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "10px 12px",
+        marginBottom: 14,
+        borderRadius: 8,
+        border: "1px solid var(--warning)",
+        background: "color-mix(in oklab, var(--warning) 10%, transparent)",
+        color: "var(--text)",
+        fontSize: 13,
+        lineHeight: 1.45,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0,
+          width: 8,
+          height: 8,
+          marginTop: 6,
+          borderRadius: "50%",
+          background: "var(--warning)",
+        }}
+      />
+      <div>
+        <strong style={{ fontWeight: 600 }}>No backup account.</strong>{" "}
+        If this single connected account hits a restriction, the campaign will
+        stop sending. Attach a second account as a failover.
+      </div>
+    </div>
+  );
+}
+
+
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 function maskToDays(mask: number): string {
   const days: string[] = [];
