@@ -524,7 +524,7 @@ Plans:
 **Goal:** Editable Telegram account profile (name, username, bio, photo, linked email if possible, 2FA) from the account edit view, plus richer account cards (photo, name, username, phone, update/delete/reauth) on the accounts list page.
 **Requirements**: PROF-01, PROF-02, PROF-03, PROF-04, PROF-05, PROF-06, PROF-07, PROF-08, PROF-09 (derived during /gsd:plan-phase 20 — see REQUIREMENTS.md §Account Profile Management; tracked via decisions D-01..D-14)
 **Depends on:** Phase 19
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -540,7 +540,7 @@ Plans:
 - [x] 20-04-two-fa-and-recovery-email-PLAN.md — edit_2fa password path + raw two-request recovery-email confirm flow + 3 endpoints (D-03/D-04/D-05) [Wave 4, depends_on: 20-03] — PROF-05
 
 **Wave 5** *(frontend + handoff, human-verify)*
-- [ ] 20-05-frontend-and-handoff-PLAN.md — openapi/types regen + enriched accounts.tsx (row/kebab/two-section modal/guardrails) + human UAT (cross-repo) [Wave 5, depends_on: 20-02, 20-03, 20-04] — PROF-09
+- [x] 20-05-frontend-and-handoff-PLAN.md — openapi/types regen + enriched accounts.tsx (row/kebab/two-section modal/guardrails) + human UAT (cross-repo) [Wave 5, depends_on: 20-02, 20-03, 20-04] — PROF-09
 
 ---
 

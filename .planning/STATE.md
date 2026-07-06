@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 20-04-PLAN.md
-last_updated: "2026-07-04T09:45:56.911Z"
-last_activity: 2026-07-04
+status: verifying
+stopped_at: Completed 20-05-PLAN.md — Phase 20 complete, approved at human-verify gate
+last_updated: "2026-07-06T15:37:05.878Z"
+last_activity: 2026-07-06
 progress:
   total_phases: 22
-  completed_phases: 19
+  completed_phases: 20
   total_plans: 83
-  completed_plans: 81
+  completed_plans: 82
   percent: 99
 ---
 
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 20 (account-profile-management) — EXECUTING
+Phase: 20 (account-profile-management) — COMPLETE (ready for verification)
 Plan: 5 of 5
-Status: Ready to execute
-Last activity: 2026-07-06 - Completed quick task 260706-fw7: сокращение окна перепроверки @SpamBot 6ч→1ч после spam-ограничения
+Status: Phase complete — ready for verification
+Last activity: 2026-07-06 - Completed 20-05 (frontend + handoff): approved at human-verify gate after 2 gap-closure rounds; PROF-09 closed, Phase 20 done (5/5)
 
-Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05: schema, API+AI, listener/queue guards, FollowUpWorker, openapi+form)
+Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05: profile schema/columns, identity+guardrails, photo+resync, 2FA+recovery-email, enriched accounts UI + handoff regen)
 
 ## Performance Metrics
 
@@ -104,6 +104,7 @@ Progress: [██████████] 99% — Phase 19 COMPLETE (19-01..05:
 | Phase 20 P02 | 18min | 3 tasks | 4 files |
 | Phase 20 P03 | 9min | 2 tasks | 2 files |
 | Phase 20 P04 | 22min | 2 tasks | 2 files |
+| Phase 20 P05 | multi-day (human-verify + 2 gap rounds) | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -186,6 +187,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 20]: 20-04: PROF-05 closed — POST /senders/{slug}/2fa (edit_2fa one-shot set/change, wrong pw→400 PASSWORD_INVALID, password NEVER persisted D-03) + two-request recovery-email (POST /2fa/recovery-email → EMAIL_CONFIRMATION_SENT+code_length via EmailUnconfirmedError pivot, POST /2fa/recovery-email/confirm → ConfirmPasswordEmailRequest→400 EMAIL_CODE_INVALID)
 - [Phase 20]: 20-04: implemented to the RED test contract (like 20-02/20-03) — canonical change_2fa_password/start_recovery_email/confirm_recovery_email + router-facing edit_2fa/set_recovery_email aliases (test-patched names); router raise-based (mocks return bare {ok:True}/{code_length:6}), never res.get('success'); _status_for_profile_error (TOO_FRESH→409/FLOOD_WAIT→429/else 400) wired as single source of truth inside refactored _raise_profile_telegram_error
 - [Phase 20]: 20-04: full-suite red (91F+86E) is shared-DB test-ordering pollution (auth/me workspace-create fails deep in 900+ session, cascades to ~40 files incl. Phase-5 untouched ones), NOT a 20-04 regression — 2FA writes nothing to DB (D-03); all my-domain files GREEN in isolation (45 passed) + flagged files 28 passed as a group; logged to deferred-items.md, exacerbated by parallel quick-260704 buc/buq/bty merges
+- [Phase 20]: [Phase 20]: Plan 20-05 (frontend + handoff, cross-repo, human-verify) closes PROF-09 + Phase 20. Handoff openapi/types regenerated offline (1128ee8, backend); enriched accounts.tsx — avatar+@username row, Изменить/Обновить профиль kebab, two-section identity+2FA modal, two-step recovery-email, frequency guardrails (55c5c64, sibling). Two gap-closure rounds: (r1) resync now composes live first_name/last_name from get_me() into the single sender.name column (ed3960b, backend, mirrors PATCH /profile) + profile modal redesigned into bordered sections with Role selector in its own block + FleetTable→SenderCard grid grouped by role then priority tier needs-reauth>active>rest (1373bf6, sibling); (r2) avatar-photo staleness after resync raised but NOT fixed — known minor gap (profile_field_changed_at.photo stamp resync never sets + dead sender-photo invalidation key), user confirmed name/bio/username refresh + approved. Bulk/mass account editing explicitly scoped OUT of Phase 20 (separate backlog item). Cross-repo commit isolation held throughout (2 backend + 2 sibling commits, explicit per-repo staging, never git add -A).
 
 ### Roadmap Evolution
 
@@ -279,6 +281,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-04T09:45:40.218Z
-Stopped at: Completed 20-04-PLAN.md
+Last session: 2026-07-06T15:36:51.424Z
+Stopped at: Completed 20-05-PLAN.md — Phase 20 complete, approved at human-verify gate
 Resume file: None

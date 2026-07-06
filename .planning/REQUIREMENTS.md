@@ -411,7 +411,7 @@
 | PROF-06 | Phase 20 | Complete |
 | PROF-07 | Phase 20 | Complete |
 | PROF-08 | Phase 20 | Complete |
-| PROF-09 | Phase 20 | Pending |
+| PROF-09 | Phase 20 | Complete |
 
 **Coverage:**
 
