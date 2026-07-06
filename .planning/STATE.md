@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 20-05-PLAN.md — Phase 20 complete, approved at human-verify gate
-last_updated: "2026-07-06T15:51:16.142Z"
-last_activity: 2026-07-06
+stopped_at: Phase 21 context gathered
+last_updated: "2026-07-06T17:39:23.995Z"
+last_activity: "2026-07-06 - Completed quick task 260706-mdz: lower per-account daily new-dialog limit to 10 (all campaigns + default + green corridor 10/30)"
 progress:
-  total_phases: 23
+  total_phases: 24
   completed_phases: 20
   total_plans: 83
   completed_plans: 82
@@ -283,6 +283,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-06T15:36:51.424Z
-Stopped at: Completed 20-05-PLAN.md — Phase 20 complete, approved at human-verify gate
-Resume file: None
+Last session: 2026-07-06T17:39:23.956Z
+Stopped at: Phase 21 context gathered
+Resume file: .planning/phases/21-bulk-telegram-account-import-via-session-json-upload-in-ui/21-CONTEXT.md
