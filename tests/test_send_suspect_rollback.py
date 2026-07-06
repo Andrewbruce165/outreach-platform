@@ -309,3 +309,229 @@ async def test_reactive_tried_exclusion_bounded(
     row = await _row(async_db_session, camp["id"], phone)
     assert row.status == "failed"
     assert str(row.sender_id) == str(a.id)
+
+
+# ─── Task 2 helpers: drive the real queue send path with a mocked Telegram ────
+
+class _FakeTelegram:
+    """Minimal telegram_service stand-in (copied from tests/test_failover.py):
+    get_client returns a sentinel and send_message returns a configured error
+    dict — no network."""
+
+    def __init__(self, error_code: str):
+        self._error_code = error_code
+
+    async def get_client(self, *args, **kwargs):
+        return object()  # sentinel client; never used by the error path
+
+    async def send_message(self, *args, **kwargs):
+        return {"success": False,
+                "error": {"code": self._error_code, "message": f"{self._error_code} (test)"}}
+
+    async def send_file(self, *args, **kwargs):
+        return {"success": False,
+                "error": {"code": self._error_code, "message": f"{self._error_code} (test)"}}
+
+
+async def _seed_processing_item(
+    db, ws_id, campaign_id, sender_id, phone, *,
+    attempts: int = 0, extra_data=None, with_cca: bool = True,
+) -> str:
+    """Insert a 'processing' message_queue row the worker can pick up + optional CCA.
+    Returns the new row id (str)."""
+    ed = json.dumps(extra_data) if extra_data is not None else None
+    row = (await db.execute(text("""
+        INSERT INTO message_queue (
+            workspace_id, campaign_id, sender_id, recipient_phone, message_text,
+            item_type, status, scheduled_at, started_at, attempts, extra_data
+        ) VALUES (
+            :wid, :cid, :sid, :phone, 'hello', 'message', 'processing', NOW(), NOW(),
+            :attempts, CAST(:ed AS JSONB)
+        )
+        RETURNING id
+    """), {
+        "wid": str(ws_id), "cid": str(campaign_id), "sid": str(sender_id),
+        "phone": phone, "attempts": attempts, "ed": ed,
+    })).first()
+    if with_cca:
+        await db.execute(text("""
+            INSERT INTO campaign_contact_assignments
+                (workspace_id, campaign_id, contact_phone, sender_id)
+            VALUES (:wid, :cid, :phone, :sid)
+            ON CONFLICT (campaign_id, contact_phone)
+                DO UPDATE SET sender_id = EXCLUDED.sender_id
+        """), {"wid": str(ws_id), "cid": str(campaign_id), "phone": phone, "sid": str(sender_id)})
+    await db.commit()
+    return str(row[0])
+
+
+# ─── Test G — PEER_FLOOD / ACCOUNT_FROZEN both invoke the reactive rollback ───
+
+async def test_peer_flood_invokes_rollback(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    import app.services.queue as queue_mod
+    import app.services.send_suspect as ss_mod
+    from app.services.queue import QueueWorker
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a = senders[0]
+    trigger_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, "+79185799991",
+    )
+
+    seen = []
+
+    async def _spy(sender_id, db=None):
+        seen.append(str(sender_id))
+        return 0
+
+    monkeypatch.setattr(ss_mod, "rollback_suspect_resolve_fails", _spy)
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("PEER_FLOOD"))
+
+    await QueueWorker()._send_item(trigger_id)
+
+    assert seen == [str(a.id)], "PEER_FLOOD must invoke rollback with the flagged sender id"
+
+
+async def test_account_frozen_invokes_rollback(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    import app.services.queue as queue_mod
+    import app.services.send_suspect as ss_mod
+    from app.services.queue import QueueWorker
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a = senders[0]
+    trigger_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, "+79185799992",
+    )
+
+    seen = []
+
+    async def _spy(sender_id, db=None):
+        seen.append(str(sender_id))
+        return 0
+
+    monkeypatch.setattr(ss_mod, "rollback_suspect_resolve_fails", _spy)
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("ACCOUNT_FROZEN"))
+
+    await QueueWorker()._send_item(trigger_id)
+
+    assert seen == [str(a.id)], "ACCOUNT_FROZEN must invoke rollback with the flagged sender id"
+
+
+# ─── Test H — send-path NOT_REGISTERED re-rotates onto an untried healthy sender ─
+
+async def test_not_registered_preventive_reroute(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    import app.services.queue as queue_mod
+    from app.services.queue import QueueWorker
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a, b = senders[0], senders[1]
+    phone = "+79185782285"
+
+    item_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, phone, with_cca=True,
+    )
+
+    now_before = await _now(async_db_session)
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("RECIPIENT_NOT_IN_TELEGRAM"))
+
+    await QueueWorker()._send_item(item_id)
+
+    row = await _row(async_db_session, camp["id"], phone)
+    assert row.status == "pending", "NOT_REGISTERED must NOT finalize while B is untried"
+    assert str(row.sender_id) == str(b.id), "row must re-rotate onto the untried healthy sender B"
+    assert row.attempts == 0, "attempts reset on preventive reroute"
+    assert row.scheduled_at is not None and row.scheduled_at >= now_before
+    tried = (row.extra_data or {}).get("nr_tried_senders") or []
+    assert str(a.id) in tried, "the sender that returned NOT_REGISTERED must be recorded as tried"
+    assert await _cca_sender_for(async_db_session, camp["id"], phone) == str(b.id), (
+        "sticky CCA must repoint at the untried healthy sender"
+    )
+
+
+# ─── Test I — NOT_REGISTERED finalizes (with markers) once the pool is exhausted ─
+
+async def test_not_registered_finalizes_when_exhausted(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    import app.services.queue as queue_mod
+    from app.services.queue import QueueWorker
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a, b = senders[0], senders[1]
+    phone = "+79185782286"
+
+    # B already tried; A is the current sender → whole pool exhausted. attempts=2
+    # so the terminal _fail_item finalizes (MAX_ATTEMPTS=3) in this single drive.
+    item_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, phone,
+        attempts=2, extra_data={"nr_tried_senders": [str(b.id)]}, with_cca=True,
+    )
+
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("RECIPIENT_NOT_IN_TELEGRAM"))
+
+    await QueueWorker()._send_item(item_id)
+
+    row = await _row(async_db_session, camp["id"], phone)
+    assert row.status == "failed", "pool exhausted → NOT_REGISTERED finalizes failed (bounded)"
+    assert str(row.sender_id) == str(a.id), "no further reroute (WR-15)"
+    ed = row.extra_data or {}
+    assert ed.get("resolve_fail_code") == "RECIPIENT_NOT_IN_TELEGRAM", (
+        "finalize must stamp the resolve-fail marker so reactive rollback can find it"
+    )
+    assert ed.get("resolve_fail_sender") == str(a.id), "resolve_fail_sender must be set"
+    tried = ed.get("nr_tried_senders") or []
+    assert str(a.id) in tried and str(b.id) in tried, "both senders recorded as tried"
+
+
+# ─── Test J — the 2026-07-06 07:31 incident resolves automatically ────────────
+
+async def test_0731_incident_resolves_automatically(
+    async_db_session, test_running_campaign_factory, test_sender_factory,
+    attach_sender_to_campaign, monkeypatch,
+):
+    import app.services.queue as queue_mod
+    from app.services.queue import QueueWorker
+
+    # At 07:31 only sender A was healthy in the pool.
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    a = senders[0]
+    phone = "+79185782285"
+
+    # Step 1: A resolves +79185782285 as NOT_REGISTERED. A is the sole healthy
+    # sender → no reroute → finalized failed WITH markers (attempts=2 → terminal).
+    nr_item_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, phone,
+        attempts=2, with_cca=True,
+    )
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("RECIPIENT_NOT_IN_TELEGRAM"))
+    await QueueWorker()._send_item(nr_item_id)
+
+    finalized = await _row(async_db_session, camp["id"], phone)
+    assert finalized.status == "failed", "A finalizes the false-negative (sole healthy sender)"
+    assert (finalized.extra_data or {}).get("resolve_fail_sender") == str(a.id)
+
+    # Step 2: a healthy sender B becomes available in the pool.
+    b = await test_sender_factory()
+    await attach_sender_to_campaign(camp["id"], b.id)
+
+    # Step 3: 12s later A catches PEER_FLOOD → flag spam_limited + reactive rollback.
+    trigger_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, "+79185799999",
+        with_cca=True,
+    )
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("PEER_FLOOD"))
+    await QueueWorker()._send_item(trigger_id)
+
+    # The +79185782285 row (finalized false-negative) is clawed back onto healthy B
+    # automatically — no manual SQL.
+    resolved = await _row(async_db_session, camp["id"], phone)
+    assert resolved.status == "pending", "the false-negative row must be re-queued"
+    assert str(resolved.sender_id) == str(b.id), (
+        "the 07:31 false-negative resolves automatically onto the healthy sender B"
+    )
