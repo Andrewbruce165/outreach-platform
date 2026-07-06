@@ -566,3 +566,18 @@ Plans:
 
 **Total: 7 phases (incl. 02.1 hardening), 23 plans, 59 requirements mapped + 9 CR findings traced, 0 unmapped ✓**
 **Post-v1 block (Sender Pool Resilience): +4 phases (7–10); Phase 7 planned (1 plan, FRZ-01..05).**
+
+---
+
+## Backlog
+
+### Phase 999.1: Bulk account profile editing (BACKLOG)
+
+**Goal:** [Captured for future planning]
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Select multiple senders and batch-update photo, first name/last name, description (bio), and username in one action. Raised by user during Phase 20 (account-profile-management) human-verify checkpoint; explicitly scoped OUT of Phase 20 by agreement (Phase 20 covers only single-account profile editing, PROF-01..09). Needs its own design pass: how to handle partial failures across a batch (some accounts hit the 1h per-field cooldown, some fail Telegram-side), whether to preview changes before applying, and whether fields are set identically for all selected accounts or templated (e.g. per-account username can't literally be identical since Telegram usernames are globally unique).
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
