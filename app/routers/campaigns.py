@@ -45,6 +45,7 @@ from app.schemas import (
     CampaignUpdate,
     CampaignWriteResponse,
     PoolHealth,
+    SenderAttachWarning,
     WarningItem,
 )
 from app.services.rebalance import rebalance_on_attach
@@ -1078,6 +1079,42 @@ async def duplicate_campaign(
 # ── Endpoints: Pool management (Phase 8 — POOL-01..06b) ──────────────────────
 
 
+async def _recent_restriction_warnings(
+    db: AsyncSession, ctx: AuthCtx, sender_id: UUID
+) -> List[SenderAttachWarning]:
+    """PFH-01: pre-flight "зелёный коридор" check for a pool attach.
+
+    Returns a single advisory RECENT_RESTRICTION warning if the sender hit a
+    non-'cleared' restriction event in the last 7 days ('cleared' is a RECOVERY
+    event and is excluded). Empty list otherwise. Query mirrors the 7-day window
+    pattern used by get_block_rate; workspace-scoped, newest in-window event.
+    """
+    row = (await db.execute(text("""
+        SELECT event_type, restricted_until, created_at
+          FROM sender_restriction_events
+         WHERE sender_id = :sid
+           AND workspace_id = :wid
+           AND event_type <> 'cleared'
+           AND created_at > now() - interval '7 days'
+         ORDER BY created_at DESC
+         LIMIT 1
+    """), {"sid": str(sender_id), "wid": str(ctx.workspace_id)})).first()
+    if row is None:
+        return []
+    event_type, restricted_until, created_at = row
+    return [SenderAttachWarning(
+        code="RECENT_RESTRICTION",
+        sender_id=sender_id,
+        message=(
+            f"Account had a restriction event ({event_type}) in the last 7 days — "
+            "attaching it may re-trigger anti-spam. Verify via @SpamBot before sending."
+        ),
+        event_type=event_type,
+        restricted_until=restricted_until,
+        last_event_at=created_at,
+    )]
+
+
 @router.post("/{campaign_id}/senders", response_model=CampaignResponse)
 async def attach_sender(
     campaign_id: UUID,
@@ -1092,9 +1129,37 @@ async def attach_sender(
     D-02: reuses _validate_workspace_owns_senders (404 SENDER_NOT_FOUND) and
     _check_sender_lock (409 SENDER_LOCK_CONFLICT — byte-identical to /start).
     D-08: triggers rebalance_on_attach only when the campaign is running.
+    PFH-01: on success, attach_warnings[] carries a RECENT_RESTRICTION advisory if
+    the sender hit a restriction event in the last 7 days (warning, NOT a block).
+    PFH-02: attaching a role='checker' account requires force=true, else 409
+    CHECKER_ROLE_CONFLICT — a checker consumed for sending can PEER_FLOOD out of
+    both roles (restriction-gated selection excludes restricted checkers).
     """
     c = await _load_campaign(db, ctx, campaign_id)
     await _validate_workspace_owns_senders(db, ctx, [payload.sender_id])
+
+    # PFH-02: role guard. Capture the role now (before commit) — the incoming
+    # sender is already workspace-validated, so a plain fetch is enough.
+    sender = (await db.execute(
+        select(Sender).where(
+            Sender.id == payload.sender_id,
+            Sender.workspace_id == ctx.workspace_id,
+        )
+    )).scalars().first()
+    sender_is_checker = sender is not None and sender.role == "checker"
+    if sender_is_checker and not payload.force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CHECKER_ROLE_CONFLICT",
+                "message": (
+                    "This account is in the checker pool (role='checker'); attaching "
+                    "it as a campaign sender will consume it for contact-checking and "
+                    "can PEER_FLOOD it out of both roles. Pass force=true to override."
+                ),
+                "sender_id": str(payload.sender_id),
+            },
+        )
 
     # Idempotency: PK is (campaign_id, sender_id) — no-op if already attached.
     existing = (await db.execute(
@@ -1135,7 +1200,21 @@ async def attach_sender(
         f"[campaigns] attached sender={payload.sender_id} "
         f"campaign={campaign_id} status={c.status}"
     )
-    return await _campaign_to_response(db, ctx, c)
+
+    # PFH-01/PFH-02: advisory (non-blocking) warnings on the successful attach.
+    warnings = await _recent_restriction_warnings(db, ctx, payload.sender_id)
+    if sender_is_checker:  # reached only with force=true
+        warnings.append(SenderAttachWarning(
+            code="CHECKER_FORCE_ATTACHED",
+            sender_id=payload.sender_id,
+            message=(
+                "Checker account force-attached as a campaign sender — it will be "
+                "pulled out of the contact-check pool once it sends."
+            ),
+        ))
+    resp = await _campaign_to_response(db, ctx, c)
+    resp.attach_warnings = warnings
+    return resp
 
 
 @router.delete("/{campaign_id}/senders/{sender_id}", response_model=CampaignResponse)
