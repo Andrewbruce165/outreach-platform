@@ -1,6 +1,6 @@
 # aimly — Lovable Handoff Bundle
 
-Generated from outreach-platform backend at commit 3553603. Source of truth for the Lovable build.
+Generated from outreach-platform backend at commit a23399f. Source of truth for the Lovable build.
 
 ## How to consume
 
@@ -35,4 +35,4 @@ Requires Docker (for `docker compose up api`), Node 18+ (for `npx openapi-typesc
 
 ## Last regenerated
 
-2026-05-23T08:44:39Z
+2026-07-06T10:09:09Z

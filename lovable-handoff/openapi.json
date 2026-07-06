@@ -13708,6 +13708,11 @@
               }
             ],
             "title": "Earliest Resume At"
+          },
+          "has_backup": {
+            "type": "boolean",
+            "title": "Has Backup",
+            "default": false
           }
         },
         "type": "object",
@@ -13717,7 +13722,7 @@
           "total"
         ],
         "title": "PoolHealth",
-        "description": "POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.\n\nPresentation-free — the green/yellow/red badge is derived ON THE FRONTEND\n(paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).\nearliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4\nrecheck horizon); None when no sender is restricted."
+        "description": "POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.\n\nPresentation-free — the green/yellow/red badge is derived ON THE FRONTEND\n(paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).\nearliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4\nrecheck horizon); None when no sender is restricted.\n\nhas_backup (quick-260706-c1p, SOFT advisory): True iff the pool has >=2\ntruly-sendable (active) senders, i.e. a single freeze still leaves a backup\nthat can carry the campaign. Purely advisory — the frontend renders a yellow\n\"no backup sender — a single freeze stalls this campaign\" nudge when False.\nNO blocking behaviour on attach/detach/start is derived from this field."
       },
       "ProfileUpdate": {
         "properties": {

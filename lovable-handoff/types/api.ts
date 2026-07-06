@@ -3792,6 +3792,12 @@ export interface components {
          *     (paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).
          *     earliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4
          *     recheck horizon); None when no sender is restricted.
+         *
+         *     has_backup (quick-260706-c1p, SOFT advisory): True iff the pool has >=2
+         *     truly-sendable (active) senders, i.e. a single freeze still leaves a backup
+         *     that can carry the campaign. Purely advisory — the frontend renders a yellow
+         *     "no backup sender — a single freeze stalls this campaign" nudge when False.
+         *     NO blocking behaviour on attach/detach/start is derived from this field.
          */
         PoolHealth: {
             /** Active */
@@ -3802,6 +3808,11 @@ export interface components {
             total: number;
             /** Earliest Resume At */
             earliest_resume_at?: string | null;
+            /**
+             * Has Backup
+             * @default false
+             */
+            has_backup: boolean;
         };
         /**
          * ProfileUpdate
