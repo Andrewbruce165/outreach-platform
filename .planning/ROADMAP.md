@@ -544,7 +544,7 @@ Plans:
 
 ### Phase 21: Bulk Telegram account import via session JSON upload in UI
 
-**Goal:** Import Telegram accounts into a workspace by uploading vendor-format session JSON files (tdesktop-style metadata: app_id/app_hash/device/sdk/proxy/2FA + paired session file) through the UI, with bulk (multi-account) upload support — bypassing the phone/SMS onboarding flow for pre-authorized sessions.
+**Goal:** Import already-authorized Telegram accounts into a workspace by uploading vendor-format **pairs** `<phone>.json` + `<phone>.session` through the UI, with bulk (multi-account) upload support — bypassing the phone/SMS onboarding flow. The `.session` is a live Telethon SQLite session (auth_key present) that must be converted to our encrypted StringSession storage; the `.json` carries the client fingerprint (app_id/app_hash/device/sdk/app_version/lang) + optional proxy/2FA. **Key risk to design around:** our reconnect currently forces one hardcoded global api_id/api_hash + `_CLIENT_FINGERPRINT` — reconnecting an imported session with a different fingerprint than the one that created it risks a Telegram security-flag / forced re-login. See `21-NOTES.md` for the grounded file analysis and codebase findings.
 **Requirements**: TBD
 **Depends on:** Phase 20
 **Plans:** 0 plans
