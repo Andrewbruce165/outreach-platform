@@ -133,10 +133,11 @@ class Settings(BaseSettings):
 
     # Migration 028: sender write-restriction reconcile (spam-limit / freeze).
     restriction_recheck_interval_seconds: int = Field(
-        default=6 * 60 * 60,
+        default=1 * 60 * 60,
         validation_alias="RESTRICTION_RECHECK_INTERVAL",
-        description="How long after a spam_limited hit to re-check via SpamBot (seconds). "
-                    "check_spambot does not expose limit_until, so this is a fixed delay.",
+        description="How long after a spam_limited hit to re-check via SpamBot (seconds); "
+                    "recheck via SpamBot after 1h. SpamBot's own quoted release date, when "
+                    "parsed, takes precedence over this interval.",
     )
     restriction_reconcile_interval_seconds: int = Field(
         default=15 * 60,
