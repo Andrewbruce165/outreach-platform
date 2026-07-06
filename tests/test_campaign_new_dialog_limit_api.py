@@ -1,13 +1,13 @@
 """Campaign max_new_dialogs_per_day API — Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14).
 
 Mirrors the senders D-14 soft/hard-cap contract for the per-campaign daily new-dialog
-cap on the campaign write path:
+cap on the campaign write path (quick 260706-mdz: corridor lowered to soft 10 / hard 30):
 
-- create with no value      → 201, persisted default 50, warnings == []
-- create with 70 (>soft 50) → 201 + warnings[] (recommended_max=50)
-- create with 120 (>hard)   → 422
-- patch to 80 (>soft)       → 200 + warnings[]
-- patch to 150 (>hard)      → 422
+- create with no value      → 201, persisted default 10, warnings == []
+- create with 20 (>soft 10) → 201 + warnings[] (recommended_max=10)
+- create with 40 (>hard 30) → 422
+- patch to 20 (>soft)       → 200 + warnings[]
+- patch to 40 (>hard)       → 422
 - GET                       → flat CampaignResponse, no warnings, echoes stored value
 
 The create/patch responses are the CampaignWriteResponse wrapper {campaign, warnings[]};
@@ -43,11 +43,11 @@ def _base_payload(agent_id, folder_id, name: str, **extra) -> dict:
     return payload
 
 
-async def test_create_default_is_50(
+async def test_create_default_is_10(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder,
 ):
-    """POST without max_new_dialogs_per_day → 201, default 50 persisted, no warnings."""
+    """POST without max_new_dialogs_per_day → 201, default 10 persisted, no warnings."""
     await _bind(async_db_session, test_workspace.id, "ndlg-def")
     agent = await test_agent_factory()
     r = await async_client.post(
@@ -57,7 +57,7 @@ async def test_create_default_is_50(
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["campaign"]["max_new_dialogs_per_day"] == 50
+    assert body["campaign"]["max_new_dialogs_per_day"] == 10
     assert body["warnings"] == []
 
 
@@ -65,36 +65,36 @@ async def test_create_soft_cap_warns(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder,
 ):
-    """POST with 70 (>soft 50, <=hard 100) → 201 + one warning (recommended_max=50)."""
+    """POST with 20 (>soft 10, <=hard 30) → 201 + one warning (recommended_max=10)."""
     await _bind(async_db_session, test_workspace.id, "ndlg-soft")
     agent = await test_agent_factory()
     r = await async_client.post(
         "/api/v1/campaigns",
         json=_base_payload(
-            agent.id, test_folder.id, "NDLG soft", max_new_dialogs_per_day=70
+            agent.id, test_folder.id, "NDLG soft", max_new_dialogs_per_day=20
         ),
         headers=_auth_headers(valid_supabase_jwt, "ndlg-soft"),
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["campaign"]["max_new_dialogs_per_day"] == 70
+    assert body["campaign"]["max_new_dialogs_per_day"] == 20
     assert len(body["warnings"]) == 1
     w = body["warnings"][0]
     assert w["field"] == "max_new_dialogs_per_day"
-    assert w["recommended_max"] == 50
+    assert w["recommended_max"] == 10
 
 
 async def test_create_hard_cap_422(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder,
 ):
-    """POST with 120 (>hard 100) → 422 (Pydantic le=100 or explicit hard-cap check)."""
+    """POST with 40 (>hard 30) → 422 (Pydantic le=30 or explicit hard-cap check)."""
     await _bind(async_db_session, test_workspace.id, "ndlg-hard")
     agent = await test_agent_factory()
     r = await async_client.post(
         "/api/v1/campaigns",
         json=_base_payload(
-            agent.id, test_folder.id, "NDLG hard", max_new_dialogs_per_day=120
+            agent.id, test_folder.id, "NDLG hard", max_new_dialogs_per_day=40
         ),
         headers=_auth_headers(valid_supabase_jwt, "ndlg-hard"),
     )
@@ -105,7 +105,7 @@ async def test_patch_soft_cap_warns(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder,
 ):
-    """PATCH to 80 (>soft) → 200 + warnings[]; value round-trips on the wrapper."""
+    """PATCH to 20 (>soft) → 200 + warnings[]; value round-trips on the wrapper."""
     await _bind(async_db_session, test_workspace.id, "ndlg-psoft")
     agent = await test_agent_factory()
     create = await async_client.post(
@@ -118,12 +118,12 @@ async def test_patch_soft_cap_warns(
 
     r = await async_client.patch(
         f"/api/v1/campaigns/{cid}",
-        json={"max_new_dialogs_per_day": 80},
+        json={"max_new_dialogs_per_day": 20},
         headers=_auth_headers(valid_supabase_jwt, "ndlg-psoft"),
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["campaign"]["max_new_dialogs_per_day"] == 80
+    assert body["campaign"]["max_new_dialogs_per_day"] == 20
     assert len(body["warnings"]) == 1
 
 
@@ -131,7 +131,7 @@ async def test_patch_hard_cap_422(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_agent_factory, test_folder,
 ):
-    """PATCH to 150 (>hard) → 422."""
+    """PATCH to 40 (>hard) → 422."""
     await _bind(async_db_session, test_workspace.id, "ndlg-phard")
     agent = await test_agent_factory()
     create = await async_client.post(
@@ -144,7 +144,7 @@ async def test_patch_hard_cap_422(
 
     r = await async_client.patch(
         f"/api/v1/campaigns/{cid}",
-        json={"max_new_dialogs_per_day": 150},
+        json={"max_new_dialogs_per_day": 40},
         headers=_auth_headers(valid_supabase_jwt, "ndlg-phard"),
     )
     assert r.status_code == 422, r.text
@@ -156,8 +156,8 @@ async def test_get_carries_no_warnings_and_echoes_stored_value(
 ):
     """GET returns flat CampaignResponse (no warnings) and echoes a NON-default value.
 
-    Creating with 70 then reading back 70 proves the explicit `_campaign_to_response`
-    mapping is wired — a missing mapping would silently return the 50 default and this
+    Creating with 20 then reading back 20 proves the explicit `_campaign_to_response`
+    mapping is wired — a missing mapping would silently return the 10 default and this
     NON-default assertion would fail. (D-14: GET carries no warnings.)
     """
     await _bind(async_db_session, test_workspace.id, "ndlg-get")
@@ -165,7 +165,7 @@ async def test_get_carries_no_warnings_and_echoes_stored_value(
     create = await async_client.post(
         "/api/v1/campaigns",
         json=_base_payload(
-            agent.id, test_folder.id, "NDLG get echo", max_new_dialogs_per_day=70
+            agent.id, test_folder.id, "NDLG get echo", max_new_dialogs_per_day=20
         ),
         headers=_auth_headers(valid_supabase_jwt, "ndlg-get"),
     )
@@ -181,4 +181,4 @@ async def test_get_carries_no_warnings_and_echoes_stored_value(
     # Flat CampaignResponse — value at top level, NOT nested under "campaign".
     assert "campaign" not in body
     assert "warnings" not in body
-    assert body["max_new_dialogs_per_day"] == 70
+    assert body["max_new_dialogs_per_day"] == 20
