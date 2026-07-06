@@ -332,6 +332,72 @@ async def test_resync(async_client, async_db_session, valid_supabase_jwt):
     assert sender["has_photo"] is True
 
 
+async def test_resync_updates_name(async_client, async_db_session, valid_supabase_jwt):
+    """PROF-06 gap-fix: resync refreshes the display `name` from the live account.
+
+    After the user renames on Telegram, get_me() returns a fresh first_name/last_name;
+    the endpoint must compose them into the single `name` column (same convention as
+    PATCH /profile). A resync payload WITHOUT a first_name must never blank the name.
+    """
+    import app.services.telegram as telegram_module
+
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="prof-resync-name"
+    )
+    # _insert_sender_raw seeds name = slug.
+    await _insert_sender_raw(async_db_session, ws, "prof-resync-name-1")
+
+    # 1) Live first + last name → name recomposed to "First Last".
+    with patch.object(
+        telegram_module.telegram_service, "fetch_profile",
+        new=AsyncMock(return_value={
+            "username": "livehandle", "bio": "live bio", "has_photo": False,
+            "first_name": "Иван", "last_name": "Петров",
+        }),
+        create=True,
+    ):
+        r = await async_client.post(
+            "/api/v1/senders/prof-resync-name-1/resync", headers=_auth(token),
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    sender = body.get("sender", body)
+    assert sender["name"] == "Иван Петров"
+
+    # 2) Live first name only (no last) → name is just the first name.
+    with patch.object(
+        telegram_module.telegram_service, "fetch_profile",
+        new=AsyncMock(return_value={
+            "username": "livehandle", "bio": "live bio", "has_photo": False,
+            "first_name": "Иван", "last_name": None,
+        }),
+        create=True,
+    ):
+        r = await async_client.post(
+            "/api/v1/senders/prof-resync-name-1/resync", headers=_auth(token),
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    sender = body.get("sender", body)
+    assert sender["name"] == "Иван"
+
+    # 3) Payload WITHOUT first_name → the cached name is preserved (not blanked).
+    with patch.object(
+        telegram_module.telegram_service, "fetch_profile",
+        new=AsyncMock(return_value={
+            "username": "livehandle", "bio": "live bio", "has_photo": False,
+        }),
+        create=True,
+    ):
+        r = await async_client.post(
+            "/api/v1/senders/prof-resync-name-1/resync", headers=_auth(token),
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    sender = body.get("sender", body)
+    assert sender["name"] == "Иван"  # unchanged from step 2
+
+
 # ─── D-11: authenticated photo serving (RED) ───────────────────────────────────
 
 

@@ -1331,6 +1331,18 @@ async def resync_sender_profile(
     res = res or {}
     sender.tg_username = res.get("username")
     sender.tg_bio = res.get("bio")
+    # PROF-06 gap-fix: also refresh the display name from the live account. There is
+    # no separate first/last column on Sender — compose them into the single `name`
+    # field the SAME way update_sender_profile does. Only overwrite when Telegram
+    # actually returned a first_name, mirroring the photo/has_photo "don't zero out
+    # on missing data" defensiveness below (a partial/lightweight resync payload must
+    # never blank the cached name).
+    if res.get("first_name") is not None:
+        composed = (
+            (res.get("first_name") or "")
+            + (" " + res["last_name"] if res.get("last_name") else "")
+        ).strip()
+        sender.name = composed or sender.name
     photo = res.get("photo")
     if photo is not None:
         sender.tg_photo = photo

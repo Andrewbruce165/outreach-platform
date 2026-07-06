@@ -1346,6 +1346,11 @@ class TelegramService:
             return {
                 "success": True,
                 "username": getattr(me, "username", None),
+                # PROF-06 gap-fix: surface the LIVE display name too so a resync can
+                # refresh the cached name after the user renames on Telegram (there is
+                # no separate first/last column — the router composes them into `name`).
+                "first_name": getattr(me, "first_name", None),
+                "last_name": getattr(me, "last_name", None),
                 "bio": bio,
                 "photo": photo_bytes,
                 "photo_mime": "image/jpeg" if photo_bytes else None,
