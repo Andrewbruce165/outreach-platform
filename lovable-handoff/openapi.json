@@ -10904,11 +10904,11 @@
           },
           "max_new_dialogs_per_day": {
             "type": "integer",
-            "maximum": 100.0,
+            "maximum": 30.0,
             "minimum": 1.0,
             "title": "Max New Dialogs Per Day",
-            "description": "Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=50; soft-warn >50; hard cap 100.",
-            "default": 50
+            "description": "Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=10; soft-warn >10; hard cap 30.",
+            "default": 10
           },
           "follow_up_enabled": {
             "type": "boolean",
@@ -11286,7 +11286,7 @@
           "max_new_dialogs_per_day": {
             "type": "integer",
             "title": "Max New Dialogs Per Day",
-            "default": 50
+            "default": 10
           },
           "follow_up_enabled": {
             "type": "boolean",
@@ -11843,7 +11843,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 100.0,
+                "maximum": 30.0,
                 "minimum": 1.0
               },
               {

@@ -1358,6 +1358,11 @@ export interface paths {
          *     D-02: reuses _validate_workspace_owns_senders (404 SENDER_NOT_FOUND) and
          *     _check_sender_lock (409 SENDER_LOCK_CONFLICT — byte-identical to /start).
          *     D-08: triggers rebalance_on_attach only when the campaign is running.
+         *     PFH-01: on success, attach_warnings[] carries a RECENT_RESTRICTION advisory if
+         *     the sender hit a restriction event in the last 7 days (warning, NOT a block).
+         *     PFH-02: attaching a role='checker' account requires force=true, else 409
+         *     CHECKER_ROLE_CONFLICT — a checker consumed for sending can PEER_FLOOD out of
+         *     both roles (restriction-gated selection excludes restricted checkers).
          */
         post: operations["attach_sender_api_v1_campaigns__campaign_id__senders_post"];
         delete?: never;
@@ -2744,8 +2749,8 @@ export interface components {
             recontact_min_age_days: number;
             /**
              * Max New Dialogs Per Day
-             * @description Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=50; soft-warn >50; hard cap 100.
-             * @default 50
+             * @description Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=10; soft-warn >10; hard cap 30.
+             * @default 10
              */
             max_new_dialogs_per_day: number;
             /**
@@ -2863,7 +2868,7 @@ export interface components {
             recontact_min_age_days: number;
             /**
              * Max New Dialogs Per Day
-             * @default 50
+             * @default 10
              */
             max_new_dialogs_per_day: number;
             /**
@@ -2908,6 +2913,8 @@ export interface components {
             paused_at?: string | null;
             /** Attached Senders */
             attached_senders?: components["schemas"]["CampaignSenderAttach"][];
+            /** Attach Warnings */
+            attach_warnings?: components["schemas"]["SenderAttachWarning"][];
             /**
              * Is Exhausted
              * @default false
@@ -2979,6 +2986,11 @@ export interface components {
              * Format: uuid
              */
             sender_id: string;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /**
          * CampaignUpdate
@@ -4108,6 +4120,39 @@ export interface components {
             callback_url?: string | null;
         };
         /**
+         * SenderAttachWarning
+         * @description PFH-01/PFH-02: advisory (NON-blocking) warning surfaced by
+         *     POST /campaigns/{id}/senders in CampaignResponse.attach_warnings[].
+         *
+         *     code:
+         *       RECENT_RESTRICTION      — sender had a (non-'cleared') restriction event in the
+         *                                 last 7 days ("зелёный коридор"); attaching may
+         *                                 re-trigger anti-spam.
+         *       CHECKER_FORCE_ATTACHED  — a role='checker' account was force-attached as a
+         *                                 campaign sender (force=true); it will leave the
+         *                                 contact-check pool once it sends.
+         *
+         *     Returned ONLY by attach_sender; every other endpoint leaves attach_warnings
+         *     defaulting to [] (backward-compatible).
+         */
+        SenderAttachWarning: {
+            /** Code */
+            code: string;
+            /**
+             * Sender Id
+             * Format: uuid
+             */
+            sender_id: string;
+            /** Message */
+            message: string;
+            /** Event Type */
+            event_type?: string | null;
+            /** Restricted Until */
+            restricted_until?: string | null;
+            /** Last Event At */
+            last_event_at?: string | null;
+        };
+        /**
          * SenderBlockRateResponse
          * @description SRLD-08 (D-15/D-16): read-only per-sender block-rate aggregate.
          *
@@ -4269,6 +4314,11 @@ export interface components {
             /** Role */
             role?: ("sender" | "checker") | null;
             proxy?: components["schemas"]["ProxyConfig"] | null;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** StartRequest */
         StartRequest: {
