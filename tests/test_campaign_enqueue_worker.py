@@ -11,7 +11,7 @@ import asyncio
 import pytest
 from sqlalchemy import text
 
-from app.services.campaign_enqueue import CampaignEnqueueWorker
+from app.services.campaign_enqueue import CampaignEnqueueWorker, campaign_enqueue_worker
 
 pytestmark = pytest.mark.asyncio
 
@@ -20,6 +20,54 @@ async def _make_worker():
     """Local helper — fresh worker (no module singleton)."""
     w = CampaignEnqueueWorker()
     return w
+
+
+# ─── Sweep helpers (mirror tests/test_failover.py:42-93 freeze/pause pattern) ──
+
+async def _pending_counts(db, campaign_id) -> dict[str, int]:
+    rows = (await db.execute(text("""
+        SELECT sender_id, COUNT(*) FROM message_queue
+        WHERE campaign_id = :cid AND status = 'pending'
+        GROUP BY sender_id
+    """), {"cid": str(campaign_id)})).all()
+    return {str(r[0]): int(r[1]) for r in rows}
+
+
+async def _cca_sender_for(db, campaign_id, contact_phone):
+    row = (await db.execute(text("""
+        SELECT sender_id FROM campaign_contact_assignments
+        WHERE campaign_id = :cid AND contact_phone = :phone
+    """), {"cid": str(campaign_id), "phone": contact_phone})).first()
+    return str(row[0]) if row else None
+
+
+async def _scheduled_at(db, campaign_id, phone, status="pending"):
+    row = (await db.execute(text("""
+        SELECT scheduled_at FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = :phone AND status = :st
+    """), {"cid": str(campaign_id), "phone": phone, "st": status})).first()
+    return row[0] if row else None
+
+
+async def _freeze_sender(db, sender_id, status: str = "spam_limited"):
+    """Flag a sender restricted exactly as the freeze paths do (queue.py / listener.py)."""
+    await db.execute(text("""
+        UPDATE senders
+        SET restriction_status = :st,
+            restricted_until = NOW() + INTERVAL '24 hours'
+        WHERE id = :sid
+    """), {"st": status, "sid": str(sender_id)})
+    await db.commit()
+
+
+async def _pause_pending(db, sender_id):
+    """Push the sender's pending queue +24h — what every freeze path does before failover."""
+    await db.execute(text("""
+        UPDATE message_queue
+        SET scheduled_at = NOW() + INTERVAL '24 hours'
+        WHERE sender_id = :sid AND status = 'pending'
+    """), {"sid": str(sender_id)})
+    await db.commit()
 
 
 async def test_worker_tick_inserts_queue_item_for_new_contact(
@@ -513,3 +561,74 @@ async def test_worker_move_contact_race(
         SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid
     """), {"cid": str(camp2["id"])})).scalar()
     assert c1 == 1 and c2 == 1
+
+
+# ─── EVAC-03: periodic sweep drains stranded backlog (attach-before-freeze) ───
+
+async def test_sweep_evacuates_stranded_backlog(
+    async_db_session,
+    test_running_campaign_factory,
+    test_queue_item_factory,
+):
+    """EVAC-03: a healthy sender was attached BEFORE the freeze, so failover never
+    fired for the frozen sender's backlog (failover only runs inline at freeze
+    time and never re-runs — root cause #1). The periodic sweep drains that
+    stranded cold-pending backlog onto the healthy sender within one tick, resets
+    scheduled_at to NOW(), and keeps CCA in lock-step."""
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    frozen, healthy = senders[0], senders[1]
+
+    phones = [f"+7990060{i:04d}" for i in range(3)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], frozen.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+
+    # Freeze one sender AFTER both are attached + pause its pending +24h.
+    await _freeze_sender(async_db_session, frozen.id)
+    await _pause_pending(async_db_session, frozen.id)
+
+    moved = await campaign_enqueue_worker._sweep_stranded_cold_backlog()
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert moved == 3, "sweep must drain all 3 stranded cold rows off the frozen sender"
+    assert sum(after.values()) == 3, "sweep must not create or drop rows"
+    assert after.get(str(frozen.id), 0) == 0, "frozen sender holds 0 pending after sweep"
+    assert after.get(str(healthy.id), 0) == 3, "healthy sender holds all 3 rows"
+
+    horizon = (await async_db_session.execute(
+        text("SELECT NOW() + INTERVAL '1 hour'")
+    )).scalar()
+    for ph in phones:
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(healthy.id)
+        sched = await _scheduled_at(async_db_session, camp["id"], ph)
+        assert sched is not None and sched < horizon, (
+            "swept row scheduled_at must be reset to NOW() (not the +24h pause)"
+        )
+
+
+async def test_sweep_idempotent(
+    async_db_session,
+    test_running_campaign_factory,
+    test_queue_item_factory,
+):
+    """A second sweep moves nothing and leaves the distribution unchanged (the
+    backlog now sits on an eligible sender, so it is no longer discovered)."""
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    frozen, healthy = senders[0], senders[1]
+
+    for i in range(3):
+        await test_queue_item_factory(camp["id"], frozen.id, f"+7990061{i:04d}",
+                                      status="pending", with_cca=True,
+                                      with_conversation=False)
+    await _freeze_sender(async_db_session, frozen.id)
+    await _pause_pending(async_db_session, frozen.id)
+
+    first = await campaign_enqueue_worker._sweep_stranded_cold_backlog()
+    dist_after_first = await _pending_counts(async_db_session, camp["id"])
+
+    second = await campaign_enqueue_worker._sweep_stranded_cold_backlog()
+    dist_after_second = await _pending_counts(async_db_session, camp["id"])
+
+    assert first == 3, "first sweep drains the stranded backlog"
+    assert second == 0, "second sweep must move 0 rows"
+    assert dist_after_second == dist_after_first, "distribution must be unchanged"
