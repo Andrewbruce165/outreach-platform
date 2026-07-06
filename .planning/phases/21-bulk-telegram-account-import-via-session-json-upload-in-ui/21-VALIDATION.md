@@ -45,8 +45,8 @@ created: 2026-07-06
 | 21-01-1 | 01 | 1 | IMPT-08 | schema | `pytest tests/test_account_import.py --collect-only -q` | ❌ W0 | ⬜ pending |
 | 21-01-2 | 01 | 1 | scaffold (all IMPT) | scaffold | `pytest tests/test_account_import.py tests/test_account_import_worker.py --collect-only -q` | ❌ W0 | ⬜ pending |
 | 21-02-1 | 02 | 2 | IMPT-04 | unit | `pytest tests/test_account_import.py::test_fingerprint_override_and_strict_fallback -x -q` | ❌ W0 | ⬜ pending |
-| 21-02-2 | 02 | 2 | IMPT-04 | unit/regression | `pytest tests/test_account_import.py -x -q` + targeted queue/warmup/checker/listener/sender suites | ❌ W0 | ⬜ pending |
-| 21-02-3 | 02 | 2 | IMPT-10 | integration | `pytest tests/test_account_import.py -k 2fa -x -q` | ❌ W0 | ⬜ pending |
+| 21-02-2 | 02 | 2 | IMPT-04 | unit/regression | `pytest tests/test_account_import.py -x -q` + targeted queue/warmup/checker/listener/contact_check/sender suites (automated-path threading + NULL regression + checker kwargs-capture) | ❌ W0 | ⬜ pending |
+| 21-02-3 | 02 | 2 | IMPT-04, IMPT-10 | integration | `pytest tests/test_account_import.py -k "2fa or profile_method" -x -q` + sender/profile/2fa suites (profile-path method threading + 2FA autofill) | ❌ W0 | ⬜ pending |
 | 21-03-1 | 03 | 2 | IMPT-01 | unit | `pytest tests/test_account_import.py::test_preview_pairing -x -q` | ❌ W0 | ⬜ pending |
 | 21-03-2 | 03 | 2 | IMPT-01 | integration | `pytest tests/test_account_import.py -k preview -x -q` | ❌ W0 | ⬜ pending |
 | 21-04-1 | 04 | 3 | IMPT-03, IMPT-05 | unit | `pytest tests/test_account_import.py -k "offline or twofa" -x -q` | ❌ W0 | ⬜ pending |
