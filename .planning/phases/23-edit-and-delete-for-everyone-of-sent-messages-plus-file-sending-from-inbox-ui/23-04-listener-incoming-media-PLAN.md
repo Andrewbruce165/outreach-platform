@@ -109,7 +109,7 @@ message_text = f"[🎤 Голосовое]: {transcribed_text}"   # is_voice=Tru
     `message_text` may now be None (column relaxed in 053) — the INSERT already binds it.
   </action>
   <verify>
-    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py -k incoming_media -x</automated>
+    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py -k save_message_persists -x</automated>
   </verify>
   <acceptance_criteria>
     - `save_message` signature includes `message_type: str = "text"`, `file_name`, `mime_type`, `size_bytes` (all keyword-optional).

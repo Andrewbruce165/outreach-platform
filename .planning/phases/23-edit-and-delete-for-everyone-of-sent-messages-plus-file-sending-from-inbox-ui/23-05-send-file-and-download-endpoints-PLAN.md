@@ -133,6 +133,13 @@ return Response(content=sender.tg_photo, media_type=sender.tg_photo_mime or "ima
                                 caption: Optional[str] = Form(None),
                                 ctx: AuthCtx = Depends(auth_dep), db: AsyncSession = Depends(get_db)):
     ```
+    D-22 alias tolerance: `caption` is a BRAND-NEW multipart field with no legacy/Lovable
+    naming precedent (unlike `message`/`message_text`), so NO Form alias is needed — this
+    rationale is documented here to close the D-22 compliance check. If Lovable later ships a
+    different field name, accept it via a second `Form(None)` alias param then.
+    INFO: the persisted `message_type` (step 8) is a BEST-EFFORT label derived from the
+    browser-supplied `file.content_type`; actual Telegram rendering is governed by
+    `force_document=False` (Telethon auto-detect), so any label/render mismatch is cosmetic only.
     Ordering:
       1. Same load+gate SELECT as POST /send (workspace + `s.lifecycle_status='active'` +
          `s.auth_status='ok'`; also select `s.client_fingerprint`). 404 if none.
@@ -161,6 +168,7 @@ return Response(content=sender.tg_photo, media_type=sender.tg_photo_mime or "ima
   <acceptance_criteria>
     - `conversations.py` contains `@router.post("/{conversation_id}/send-file"` with `UploadFile = File(...)` and `caption: Optional[str] = Form(None)`.
     - Contains `_spool_upload_with_cap` with `MAX_FILE_BYTES = 50 * 1024 * 1024` and a 413 `FILE_TOO_LARGE` raise.
+    - Action documents the D-22 rationale that `caption` needs no Form alias (brand-new field, no legacy naming).
     - Handler performs the takeover UPDATE (`status = 'manual'`, `ai_enabled = false`, `paused_reason = 'Manager sent file via UI'`) and the pending-queue cancel BEFORE the Telethon call.
     - Handler INSERTs a messages row carrying `message_type` and calls `send_file_by_telegram_id`.
     - `os.unlink(tmp_path)` present in a finally; no byte payload written to `messages`.

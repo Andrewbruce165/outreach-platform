@@ -162,7 +162,7 @@ monkeypatch.setattr("app.services.telegram.telegram_service.send_message_by_tele
     constraint or indexes.
   </action>
   <verify>
-    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py -k schema -x</automated>
+    <automated>grep -q "ADD COLUMN IF NOT EXISTS message_type VARCHAR(20) NOT NULL DEFAULT 'text'" migrations/053_phase23_messages_media.sql && grep -q "message_text DROP NOT NULL" migrations/053_phase23_messages_media.sql && grep -Eq "CHECK \(message_type IN" migrations/053_phase23_messages_media.sql && ! grep -q deleted_at migrations/053_phase23_messages_media.sql && echo migration-053-structure-ok</automated>
   </verify>
   <acceptance_criteria>
     - File `migrations/053_phase23_messages_media.sql` exists.
@@ -202,8 +202,15 @@ monkeypatch.setattr("app.services.telegram.telegram_service.send_message_by_tele
     yet exist (tests fail RED, not collection-error). Include at minimum:
       - `test_schema_new_columns_present` — INSERT a `messages` row with `message_text=NULL`
         and `message_type='photo'` via raw SQL through `async_db_session`; assert it succeeds
-        and that a row inserted WITHOUT message_type defaults to `'text'`. (This is the only
-        test expected GREEN after Task 1 — it validates the migration.)
+        and that a row inserted WITHOUT message_type defaults to `'text'`. (Expected GREEN
+        once BOTH migration 053 and this file exist — this task's verify runs it.)
+      - `test_messages_select_includes_media_fields` — seed an outbound `messages` row with
+        `message_type='photo'` + file_name/mime_type/size_bytes, GET
+        `/conversations/{id}/messages`, assert response items carry `message_type='photo'` +
+        the media fields (RED until 23-03 widens the GET /messages SELECT).
+      - `test_save_message_persists_media_fields` — call the listener's `save_message(...,
+        message_type='photo', file_name=..., mime_type=..., size_bytes=...)` and assert the
+        row persists those columns (RED until 23-04 extends save_message).
       - `test_edit_*` (success updates message_text + edited_at; MESSAGE_EDIT_TOO_OLD;
         MessageNotModifiedError→success no-op; editing inbound→404; cross-ws→404)
       - `test_delete_*` (row DELETEd; revoke=True; no takeover; inbound→404; cross-ws→404)
@@ -221,12 +228,12 @@ monkeypatch.setattr("app.services.telegram.telegram_service.send_message_by_tele
     your discretion, but the file MUST collect with 0 errors.
   </action>
   <verify>
-    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py --collect-only -q</automated>
+    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py --collect-only -q && docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py -k schema -x</automated>
   </verify>
   <acceptance_criteria>
     - `tests/conftest.py` contains the string `053_phase23_messages_media.sql` inside an exists-guarded `_mig_053` block.
     - `tests/test_phase23_inbox_mutations.py` exists, contains `pytestmark = pytest.mark.asyncio`, and `--collect-only` exits 0 (no collection errors).
-    - File contains test functions matching `test_schema`, `test_edit`, `test_delete`, `test_send_file`, `test_incoming_media`, `test_download`.
+    - File contains test functions matching `test_schema`, `test_messages_select`, `test_save_message_persists`, `test_edit`, `test_delete`, `test_send_file`, `test_incoming_media`, `test_download`.
     - `monkeypatch.setattr` calls for the four new methods use `raising=False`.
     - `test_schema_new_columns_present` passes (validates migration 053 after Task 1).
   </acceptance_criteria>

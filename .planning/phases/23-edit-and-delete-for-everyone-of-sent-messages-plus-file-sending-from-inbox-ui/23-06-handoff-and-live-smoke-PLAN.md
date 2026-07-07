@@ -106,6 +106,8 @@ Addresses: INBM-09 (D-22).
       - `DELETE_FAILED` | 502 | "Couldn't delete the message. Try again."
       - `FILE_TOO_LARGE` | 413 | "File is larger than 50 MB."
       - `MEDIA_UNAVAILABLE` | 410 | "This file is no longer available in Telegram."
+      - `DOWNLOAD_FAILED` | 502 | "Couldn't download the file. Try again."
+      - `TELEGRAM_OP_FAILED` | 502 | "Telegram operation failed. Try again." (generic fallback from _raise_inbox_message_error)
     Note that the reused codes already in the table (`NO_TELEGRAM_ID`, `RECIPIENT_NOT_IN_TELEGRAM`,
     `FLOOD_WAIT`, `ACCOUNT_FROZEN`, `USER_IS_BLOCKED`) apply to the new endpoints too, and add a
     one-line note that multipart send-file + EditMessageRequest tolerate Lovable field aliases
@@ -117,7 +119,7 @@ Addresses: INBM-09 (D-22).
   <acceptance_criteria>
     - `lovable-handoff/openapi.json` `paths` includes a `send-file` POST path, a `.../messages/{message_id}/file` GET path, and a `.../messages/{message_id}` path with both `patch` and `delete`.
     - `openapi.json` `components.schemas` includes `EditMessageRequest` and `SendFileFromUIResponse`; `MessageResponse` includes `message_type` and `edited_at`.
-    - `lovable-handoff/error-codes.md` contains `MESSAGE_EDIT_TOO_OLD`, `MESSAGE_NOT_EDITABLE`, `MESSAGE_NOT_FOUND`, `DELETE_FAILED`, `FILE_TOO_LARGE`, `MEDIA_UNAVAILABLE`.
+    - `lovable-handoff/error-codes.md` contains `MESSAGE_EDIT_TOO_OLD`, `MESSAGE_NOT_EDITABLE`, `MESSAGE_NOT_FOUND`, `DELETE_FAILED`, `FILE_TOO_LARGE`, `MEDIA_UNAVAILABLE`, `DOWNLOAD_FAILED`, `TELEGRAM_OP_FAILED`.
     - `info.title` unchanged (Outreach Platform, not a neighbouring FastAPI). Verify command prints `openapi ok`.
   </acceptance_criteria>
   <done>openapi.json regenerated (4 endpoints + schemas) via export-handoff, not hand-edited; error-codes.md documents all D-17 codes.</done>
@@ -177,7 +179,7 @@ Addresses: INBM-09 (D-22).
 
 <verification>
 - `python3` openapi assertion prints `openapi ok` (4 endpoints present).
-- `lovable-handoff/error-codes.md` contains all six new D-17 codes.
+- `lovable-handoff/error-codes.md` contains all D-17 codes incl. `DOWNLOAD_FAILED` + `TELEGRAM_OP_FAILED`.
 - Human live-smoke sign-off recorded.
 </verification>
 

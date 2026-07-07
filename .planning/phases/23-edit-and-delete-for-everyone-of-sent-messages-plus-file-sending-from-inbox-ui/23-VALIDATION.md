@@ -41,15 +41,15 @@ updated: 2026-07-07
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 23-01-T1 migration 053 | 01 | 1 | INBM-08 | integration | `pytest tests/test_phase23_inbox_mutations.py -k schema -x` | ❌ Wave 0 (T2) | ⬜ pending |
-| 23-01-T2 conftest + RED scaffold | 01 | 1 | INBM-08 (+01..07 scaffold) | harness | `pytest tests/test_phase23_inbox_mutations.py --collect-only -q` | ✅ created here | ⬜ pending |
+| 23-01-T1 migration 053 | 01 | 1 | INBM-08 | structural | `grep structural check on migrations/053_*.sql` | n/a | ⬜ pending |
+| 23-01-T2 conftest + RED scaffold | 01 | 1 | INBM-08 (+01..07 scaffold) | harness | `pytest ... --collect-only -q && pytest ... -k schema -x` | ✅ created here | ⬜ pending |
 | 23-01-T3 schemas | 01 | 1 | INBM-08 | smoke | `python -c "from app.schemas import MessageResponse, EditMessageRequest, SendFileFromUIResponse"` | ✅ | ⬜ pending |
 | 23-02-T1 edit/delete methods | 02 | 1 | INBM-01/02/06 | smoke | `python -c "hasattr checks on edit/delete/_resolve_peer"` | ✅ | ⬜ pending |
 | 23-02-T2 send_file/download methods | 02 | 1 | INBM-03/05 | smoke | `python -c "hasattr checks on send_file/download"` | ✅ | ⬜ pending |
-| 23-03-T1 error helper + gate + SELECT | 03 | 2 | INBM-06/07 | integration | `pytest tests/test_phase23_inbox_mutations.py -k "download or messages_select" tests/test_phase5_inbox_send_takeover.py -x` | ✅ (23-01) | ⬜ pending |
+| 23-03-T1 error helper + gate + SELECT | 03 | 2 | INBM-06/07 | integration | `pytest tests/test_phase23_inbox_mutations.py -k messages_select tests/test_phase5_inbox_send_takeover.py -x` | ✅ (23-01) | ⬜ pending |
 | 23-03-T2 PATCH edit | 03 | 2 | INBM-02 | integration | `pytest tests/test_phase23_inbox_mutations.py -k edit -x` | ✅ (23-01) | ⬜ pending |
 | 23-03-T3 DELETE revoke | 03 | 2 | INBM-01 | integration | `pytest tests/test_phase23_inbox_mutations.py -k delete -x` | ✅ (23-01) | ⬜ pending |
-| 23-04-T1 save_message params | 04 | 2 | INBM-04 | integration | `pytest tests/test_phase23_inbox_mutations.py -k incoming_media -x` | ✅ (23-01) | ⬜ pending |
+| 23-04-T1 save_message params | 04 | 2 | INBM-04 | unit | `pytest tests/test_phase23_inbox_mutations.py -k save_message_persists -x` | ✅ (23-01) | ⬜ pending |
 | 23-04-T2 media classify | 04 | 2 | INBM-04 | integration | `pytest tests/test_phase23_inbox_mutations.py -k incoming_media -x` | ✅ (23-01) | ⬜ pending |
 | 23-05-T1 send-file endpoint | 05 | 3 | INBM-03/07 | integration | `pytest tests/test_phase23_inbox_mutations.py -k send_file tests/test_phase5_inbox_send_takeover.py -x` | ✅ (23-01) | ⬜ pending |
 | 23-05-T2 download endpoint | 05 | 3 | INBM-05/07 | integration | `pytest tests/test_phase23_inbox_mutations.py -k download -x` | ✅ (23-01) | ⬜ pending |
@@ -63,7 +63,7 @@ updated: 2026-07-07
 ## Wave 0 Requirements
 
 - [ ] `tests/conftest.py` — teach the hardcoded migration list to apply new migration `053` (conftest applies an explicit list, NOT a glob — omitting 053 → every inbox integration test hits `UndefinedColumn`). **Owned by plan 23-01 Task 2.** Single most important Wave-0 task.
-- [ ] `tests/test_phase23_inbox_mutations.py` — RED stubs for delete / edit / send-file / incoming-media / download / schema (mock TelegramService at the client-per-op boundary, `raising=False`). **Owned by plan 23-01 Task 2.**
+- [ ] `tests/test_phase23_inbox_mutations.py` — RED stubs for schema / messages_select (widened GET /messages) / save_message_persists (listener unit) / edit / delete / send-file / incoming-media / download (mock TelegramService at the client-per-op boundary, `raising=False`). **Owned by plan 23-01 Task 2.**
 
 ---
 

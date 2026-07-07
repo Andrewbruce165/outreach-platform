@@ -133,7 +133,7 @@ MessageResponse(... message_type, file_name, mime_type, size_bytes, edited_at ..
     previews untouched — the LATERAL preview already recomputes correctly, D-03).
   </action>
   <verify>
-    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py -k "download or messages_select" tests/test_phase5_inbox_send_takeover.py -x</automated>
+    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_phase23_inbox_mutations.py -k messages_select tests/test_phase5_inbox_send_takeover.py -x</automated>
   </verify>
   <acceptance_criteria>
     - `app/routers/conversations.py` contains `def _raise_inbox_message_error` and `async def _load_message_for_mutation`.
