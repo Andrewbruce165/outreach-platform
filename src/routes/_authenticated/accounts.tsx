@@ -47,6 +47,7 @@ function AccountsPage() {
     slug?: string;
   }>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["senders"],
@@ -54,14 +55,24 @@ function AccountsPage() {
     refetchInterval: 15000,
   });
 
-  const senders = data?.senders ?? [];
+  const allSenders = data?.senders ?? [];
+  const q = search.trim().toLowerCase();
+  const senders = q
+    ? allSenders.filter((s) => {
+        const hay = [s.name, s.tg_username, s.phone]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      })
+    : allSenders;
   const counts = {
-    total: senders.length,
-    active: senders.filter((s) => s.status === "active").length,
-    warmup: senders.filter((s) => s.status === "warmup").length,
-    paused: senders.filter((s) => s.status === "paused").length,
-    error: senders.filter((s) => s.status === "error").length,
-    restricted: senders.filter((s) => s.status === "limited" || s.status === "frozen").length,
+    total: allSenders.length,
+    active: allSenders.filter((s) => s.status === "active").length,
+    warmup: allSenders.filter((s) => s.status === "warmup").length,
+    paused: allSenders.filter((s) => s.status === "paused").length,
+    error: allSenders.filter((s) => s.status === "error").length,
+    restricted: allSenders.filter((s) => s.status === "limited" || s.status === "frozen").length,
   };
 
   return (
