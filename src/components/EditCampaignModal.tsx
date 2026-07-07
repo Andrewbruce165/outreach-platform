@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Calendar, Check, Flag, MousePointerClick, Smile, X } from "lucide-react";
+import { Calendar, Check, Flag, MousePointerClick, Paperclip, Smile, Trash2, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { StageEditor } from "@/components/StageEditor";
 import type { components } from "@/types/api";
@@ -9,8 +9,12 @@ type Campaign = components["schemas"]["CampaignResponse"];
 type CampaignUpdate = components["schemas"]["CampaignUpdate"];
 // Phase 12 NDLG-06: PATCH now returns {campaign, warnings[]}
 type CampaignWriteResponse = components["schemas"]["CampaignWriteResponse"];
+type CampaignAttachmentUploadResponse = components["schemas"]["CampaignAttachmentUploadResponse"];
 type Agent = components["schemas"]["AgentResponse"];
 type Folder = components["schemas"]["FolderResponse"];
+
+// Phase 24 D-03: hard ceiling mirrored from the backend MAX_ATTACHMENT_BYTES check.
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 const DAYS: Array<{ id: string; label: string; bit: number }> = [
   { id: "mon", label: "M", bit: 1 },
@@ -98,6 +102,8 @@ export function EditCampaignModal({
   const [followUpIntervalHours, setFollowUpIntervalHours] = useState(campaign.follow_up_interval_hours ?? 24);
   const [followUpMaxPings, setFollowUpMaxPings] = useState(campaign.follow_up_max_pings ?? 2);
   const [autoFinishHours, setAutoFinishHours] = useState(campaign.auto_finish_hours ?? 72);
+  // Phase 24 D-13: invisible anti-spam text variation on the campaign opener.
+  const [variationEnabled, setVariationEnabled] = useState(campaign.variation_enabled ?? true);
   const [startDate, setStartDate] = useState(toDateInput(campaign.start_date));
   const [stopDate, setStopDate] = useState(toDateInput(campaign.stop_date));
   const [audienceHints, setAudienceHints] = useState(campaign.audience_hints ?? "");
@@ -147,6 +153,7 @@ export function EditCampaignModal({
         follow_up_interval_hours: followUpIntervalHours,
         follow_up_max_pings: followUpMaxPings,
         auto_finish_hours: autoFinishHours,
+        variation_enabled: variationEnabled,
         start_date: startDate ? new Date(startDate).toISOString() : null,
         stop_date: stopDate ? new Date(stopDate).toISOString() : null,
         audience_hints: audienceHints || null,
@@ -189,6 +196,7 @@ export function EditCampaignModal({
         follow_up_interval_hours: campaign.follow_up_interval_hours ?? 24,
         follow_up_max_pings: campaign.follow_up_max_pings ?? 2,
         auto_finish_hours: campaign.auto_finish_hours ?? 72,
+        variation_enabled: campaign.variation_enabled ?? true,
         start_date: origDate(campaign.start_date),
         stop_date: origDate(campaign.stop_date),
         audience_hints: campaign.audience_hints ?? null,
@@ -223,6 +231,51 @@ export function EditCampaignModal({
     },
     onError: (e) => setError(errMsg(e)),
   });
+
+  // Phase 24 D-01/D-03/D-19: campaign first-message file attachment.
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [hasAttachment, setHasAttachment] = useState(campaign.has_attachment ?? false);
+  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+
+  const uploadAttachmentMut = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api<CampaignAttachmentUploadResponse>(`/api/v1/campaigns/${campaign.id}/attachment`, {
+        method: "POST",
+        body: fd,
+      });
+    },
+    onSuccess: (res) => {
+      setHasAttachment(true);
+      setAttachmentName(res.file_name);
+      setAttachmentError(null);
+      void qc.invalidateQueries({ queryKey: ["campaigns"] });
+      void qc.invalidateQueries({ queryKey: ["campaign", campaign.id] });
+    },
+    onError: (e) => setAttachmentError(errMsg(e)),
+  });
+  const deleteAttachmentMut = useMutation({
+    mutationFn: () => api(`/api/v1/campaigns/${campaign.id}/attachment`, { method: "DELETE" }),
+    onSuccess: () => {
+      setHasAttachment(false);
+      setAttachmentName(null);
+      setAttachmentError(null);
+      void qc.invalidateQueries({ queryKey: ["campaigns"] });
+      void qc.invalidateQueries({ queryKey: ["campaign", campaign.id] });
+    },
+    onError: (e) => setAttachmentError(errMsg(e)),
+  });
+
+  function handleAttachmentFile(file: File) {
+    if (uploadAttachmentMut.isPending) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setAttachmentError("Файл слишком большой (максимум 50 МБ)");
+      return;
+    }
+    uploadAttachmentMut.mutate(file);
+  }
 
   const agents = agentsQ.data?.agents ?? [];
   const folders = foldersQ.data ?? [];
@@ -456,6 +509,67 @@ export function EditCampaignModal({
               onChange={(e) => setMessageTemplate(e.target.value)}
               placeholder="Hi {{first_name}}!"
             />
+          </div>
+
+          {/* Phase 24 D-01/D-03/D-19: first-message file attachment (photo/document). */}
+          <div className="field">
+            <label className="field__label">Вложение к первому сообщению</label>
+            <input
+              ref={fileRef}
+              type="file"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleAttachmentFile(f);
+                e.target.value = "";
+              }}
+            />
+            {hasAttachment ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    background: "var(--bg-soft)",
+                    fontSize: 13,
+                  }}
+                >
+                  <Paperclip size={13} />
+                  {attachmentName ?? "Файл прикреплён"}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  disabled={deleteAttachmentMut.isPending}
+                  onClick={() => {
+                    if (window.confirm("Удалить вложение?")) deleteAttachmentMut.mutate();
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={uploadAttachmentMut.isPending}
+                onClick={() => fileRef.current?.click()}
+              >
+                {uploadAttachmentMut.isPending ? "Загрузка…" : "Прикрепить файл"}
+              </button>
+            )}
+            <span className="field__hint">
+              Одно фото/файл на кампанию (максимум 50 МБ). Фото приходит получателю как медиа с
+              подписью — текст первого сообщения. При variation-вариации подпись меняется невидимо.
+            </span>
+            {attachmentError && (
+              <span className="field__hint" role="alert" style={{ color: "var(--danger)" }}>
+                {attachmentError}
+              </span>
+            )}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
@@ -693,6 +807,49 @@ export function EditCampaignModal({
             <span className="field__hint">
               Молчит столько часов — диалог закрывается («finished», в finish-webhook уходит
               reason=&quot;no_reply&quot;). 24–720, по умолчанию 72.
+            </span>
+          </div>
+
+          {/* Phase 24 D-13/D-16: invisible anti-spam text variation on the opener. */}
+          <div className="field">
+            <label
+              className="field__label"
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+            >
+              <span>Анти-спам вариация текста</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={variationEnabled}
+                onClick={() => setVariationEnabled(!variationEnabled)}
+                style={{
+                  width: 44,
+                  height: 24,
+                  borderRadius: 999,
+                  background: variationEnabled ? "var(--tg-blue)" : "var(--bg-soft)",
+                  position: "relative",
+                  border: "1px solid var(--border)",
+                  cursor: "pointer",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: variationEnabled ? 22 : 2,
+                    width: 18,
+                    height: 18,
+                    borderRadius: "50%",
+                    background: "white",
+                    transition: "left 120ms",
+                    boxShadow: "0 1px 2px rgba(0,0,0,.2)",
+                  }}
+                />
+              </button>
+            </label>
+            <span className="field__hint">
+              Невидимые вариации в каждом отправленном сообщении (без изменения читаемого текста) —
+              снижают риск спам-фильтров Telegram. Рекомендуем оставить включённым.
             </span>
           </div>
 

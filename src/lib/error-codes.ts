@@ -38,8 +38,8 @@ const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   ID_REQUIRED: () => "Missing id parameter",
   INVALID_PHONE: () => "Phone number is invalid. Use +1 415 555 2810 format.",
   SERVER_ERROR: () => "Server is unreachable. Retry.",
-  // ── Bulk account import (Phase 21) ──────────────────────────────────────
-  FILE_TOO_LARGE: () => "That ZIP is too large. Split it into smaller batches and try again.",
+  // ── File uploads (Phase 21 account import, Phase 24 campaign attachment) ─
+  FILE_TOO_LARGE: () => "That file is too large. Use a smaller one and try again.",
   ZIP_TOO_LARGE: () =>
     "The archive expands to more than we allow. Split it into smaller batches and try again.",
   TOO_MANY_ACCOUNTS: () =>

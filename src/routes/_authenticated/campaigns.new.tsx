@@ -137,6 +137,8 @@ function CampaignBuilder() {
   const [followUpIntervalHours, setFollowUpIntervalHours] = useState(24);
   const [followUpMaxPings, setFollowUpMaxPings] = useState(2);
   const [autoFinishHours, setAutoFinishHours] = useState(72);
+  // Phase 24 D-13: invisible anti-spam text variation on the campaign opener. On by default.
+  const [variationEnabled, setVariationEnabled] = useState(true);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
   // Phase 11 D-13: lead_trigger_hint now also absorbs migrated success_criteria.
@@ -207,6 +209,7 @@ function CampaignBuilder() {
     follow_up_interval_hours: followUpIntervalHours,
     follow_up_max_pings: followUpMaxPings,
     auto_finish_hours: autoFinishHours,
+    variation_enabled: variationEnabled,
     audience_hints: audienceHints || null,
     primary_goal: primaryGoal || null,
     // Phase 11 D-04/D-06: drop stages with empty instruction before saving
@@ -587,6 +590,8 @@ function CampaignBuilder() {
                   setFollowUpMaxPings={setFollowUpMaxPings}
                   autoFinishHours={autoFinishHours}
                   setAutoFinishHours={setAutoFinishHours}
+                  variationEnabled={variationEnabled}
+                  setVariationEnabled={setVariationEnabled}
                 />
               )}
               {cur.id === "integrations" && (
@@ -1263,6 +1268,8 @@ function ScheduleStep({
   setFollowUpMaxPings,
   autoFinishHours,
   setAutoFinishHours,
+  variationEnabled,
+  setVariationEnabled,
 }: {
   days: string[];
   setDays: (v: string[]) => void;
@@ -1288,6 +1295,8 @@ function ScheduleStep({
   setFollowUpMaxPings: (v: number) => void;
   autoFinishHours: number;
   setAutoFinishHours: (v: number) => void;
+  variationEnabled: boolean;
+  setVariationEnabled: (v: boolean) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1538,6 +1547,49 @@ function ScheduleStep({
         <span className="field__hint">
           Если контакт молчит столько часов — диалог закрывается со статусом «finished»
           (в finish-webhook уходит reason=&quot;no_reply&quot;). 24–720, по умолчанию 72.
+        </span>
+      </div>
+
+      {/* Phase 24 D-13/D-16: invisible anti-spam text variation on the opener. */}
+      <div className="field">
+        <label
+          className="field__label"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        >
+          <span>Анти-спам вариация текста</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={variationEnabled}
+            onClick={() => setVariationEnabled(!variationEnabled)}
+            style={{
+              width: 44,
+              height: 24,
+              borderRadius: 999,
+              background: variationEnabled ? "var(--tg-blue)" : "var(--bg-soft)",
+              position: "relative",
+              transition: "background 120ms",
+              border: "1px solid var(--border, rgba(0,0,0,.1))",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: variationEnabled ? 22 : 2,
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: "white",
+                transition: "left 120ms",
+                boxShadow: "0 1px 2px rgba(0,0,0,.2)",
+              }}
+            />
+          </button>
+        </label>
+        <span className="field__hint">
+          Каждое отправляемое сообщение получает невидимые вариации (без изменения читаемого
+          текста), чтобы снизить риск спам-фильтров Telegram. Рекомендуем оставить включённым.
         </span>
       </div>
 

@@ -4545,6 +4545,84 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/attachment": {
+      "post": {
+        "tags": ["campaigns"],
+        "summary": "Upload Attachment",
+        "description": "D-19: attach ONE first-message file to a campaign (multipart upload). Alias-tolerant field name (file|attachment). D-03: over 50MB -> 413 FILE_TOO_LARGE.",
+        "operationId": "upload_attachment_api_v1_campaigns__campaign_id__attachment_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid", "title": "Campaign Id" }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignAttachmentUploadResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "File Too Large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["campaigns"],
+        "summary": "Delete Attachment",
+        "description": "D-19: remove the campaign's first-message attachment (idempotent -> 204).",
+        "operationId": "delete_attachment_api_v1_campaigns__campaign_id__attachment_delete",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid", "title": "Campaign Id" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Successful Response" },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{campaign_id}/senders": {
       "post": {
         "tags": [
@@ -7259,6 +7337,49 @@
         ],
         "title": "Body_import_preview_api_v1_contacts_import_preview_post"
       },
+      "Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "attachment": {
+            "type": "string",
+            "format": "binary",
+            "title": "Attachment"
+          }
+        },
+        "type": "object",
+        "title": "Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"
+      },
+      "CampaignAttachmentUploadResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "content_type": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "title": "Content Type"
+          }
+        },
+        "type": "object",
+        "required": ["campaign_id", "file_name", "size_bytes"],
+        "title": "CampaignAttachmentUploadResponse",
+        "description": "POST /campaigns/{id}/attachment response (Phase 24 D-19)."
+      },
       "CampaignCreate": {
         "properties": {
           "name": {
@@ -7578,6 +7699,11 @@
               }
             ],
             "title": "Campaign Rules"
+          },
+          "variation_enabled": {
+            "type": "boolean",
+            "title": "Variation Enabled",
+            "default": true
           }
         },
         "type": "object",
@@ -7926,6 +8052,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "variation_enabled": {
+            "type": "boolean",
+            "title": "Variation Enabled",
+            "default": true
+          },
+          "has_attachment": {
+            "type": "boolean",
+            "title": "Has Attachment",
+            "default": false
           }
         },
         "type": "object",
@@ -8418,6 +8554,17 @@
               }
             ],
             "title": "Campaign Rules"
+          },
+          "variation_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variation Enabled"
           }
         },
         "type": "object",

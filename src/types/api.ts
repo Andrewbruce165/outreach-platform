@@ -1347,6 +1347,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/campaigns/{campaign_id}/attachment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Attachment
+         * @description D-19: attach ONE first-message file to a campaign (multipart upload). Alias-tolerant field name (file|attachment). D-03: over 50MB -> 413 FILE_TOO_LARGE.
+         */
+        post: operations["upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
+        /**
+         * Delete Attachment
+         * @description D-19: remove the campaign's first-message attachment (idempotent -> 204).
+         */
+        delete: operations["delete_attachment_api_v1_campaigns__campaign_id__attachment_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/campaigns/{campaign_id}/senders": {
         parameters: {
             query?: never;
@@ -2777,6 +2801,33 @@ export interface components {
              */
             file: string;
         };
+        /** Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post */
+        Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file?: string;
+            /**
+             * Attachment
+             * Format: binary
+             */
+            attachment?: string;
+        };
+        /**
+         * CampaignAttachmentUploadResponse
+         * @description POST /campaigns/{id}/attachment response (Phase 24 D-19).
+         */
+        CampaignAttachmentUploadResponse: {
+            /** Campaign Id */
+            campaign_id: string;
+            /** File Name */
+            file_name: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Content Type */
+            content_type?: string | null;
+        };
         /**
          * CampaignCreate
          * @description POST /api/v1/campaigns body.
@@ -2888,6 +2939,11 @@ export interface components {
             authority_preset?: ("handoff_only" | "can_schedule" | "can_send_materials" | "can_offer") | null;
             /** Style Examples */
             style_examples?: string | null;
+            /**
+             * Variation Enabled
+             * @default true
+             */
+            variation_enabled: boolean;
         };
         /** CampaignListResponse */
         CampaignListResponse: {
@@ -3037,6 +3093,16 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Variation Enabled
+             * @default true
+             */
+            variation_enabled: boolean;
+            /**
+             * Has Attachment
+             * @default false
+             */
+            has_attachment: boolean;
         };
         /**
          * CampaignSenderAttach
@@ -3173,6 +3239,8 @@ export interface components {
             authority_preset?: ("handoff_only" | "can_schedule" | "can_send_materials" | "can_offer") | null;
             /** Style Examples */
             style_examples?: string | null;
+            /** Variation Enabled */
+            variation_enabled?: boolean | null;
         };
         /**
          * CampaignWriteResponse
@@ -7374,6 +7442,79 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CampaignResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignAttachmentUploadResponse"];
+                };
+            };
+            /** @description File Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_attachment_api_v1_campaigns__campaign_id__attachment_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
