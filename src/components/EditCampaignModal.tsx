@@ -92,7 +92,7 @@ export function EditCampaignModal({
   const [allowRecontact, setAllowRecontact] = useState(campaign.allow_recontact ?? false);
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(campaign.recontact_min_age_days ?? 30);
   // Phase 12 NDLG-06: per-account daily new-dialog cap
-  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(campaign.max_new_dialogs_per_day ?? 50);
+  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(campaign.max_new_dialogs_per_day ?? 10);
   // Phase 19 NORP-13: no-reply follow-up + auto-finish (D-08/D-12).
   const [followUpEnabled, setFollowUpEnabled] = useState(campaign.follow_up_enabled ?? false);
   const [followUpIntervalHours, setFollowUpIntervalHours] = useState(campaign.follow_up_interval_hours ?? 24);
