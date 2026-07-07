@@ -3,12 +3,19 @@
 Step 1 of the two-step flow (D-08a): a fast, synchronous preview that unzips the
 uploaded archive in memory, pairs ``<base>.json`` ↔ ``<base>.session`` by basename,
 validates each vendor JSON against :class:`VendorAccountJson`, and returns a
-``{matched, unpaired, malformed}`` summary. NO Telegram connect happens here — this
-module never imports Telethon and never opens a socket.
+``{matched, unpaired, malformed}`` summary. The preview / unzip / pair path performs
+NO Telegram connect and opens no socket.
 
-Later plans extend this same module with the per-account import routine
-(``sqlite_to_string_session`` / ``encrypt_twofa`` / ``import_one_account`` — 21-04/05);
-those symbols are intentionally NOT defined here yet.
+Plan 21-04 adds the per-account import routine to this same module:
+  * :func:`sqlite_to_string_session` — OFFLINE SQLite ``.session`` → ``StringSession``
+    (Telethon loads the file locally; no network);
+  * :func:`encrypt_twofa` — Fernet-encrypt the vendor 2FA password at rest (D-05);
+  * :func:`resolve_import_proxy` — JSON-supplied proxy first, else a free ProxyPool row
+    (returns the row id so the caller can mark it taken after the sender is created);
+  * :func:`import_one_account` — convert → connect under the account's own fingerprint
+    → ``get_me`` → dedup → create exactly one ``active`` sender, or skip+report — never
+    raising into the batch (D-10). This is the only path here that opens a socket, and
+    only via the shared :func:`make_telegram_client` seam (stubbed out in tests).
 
 Security (RESEARCH Pitfall 7 — ZIP bomb / path traversal / huge batch):
   * every member name is reduced to ``os.path.basename`` — the archived path is never
@@ -26,11 +33,19 @@ import io
 import json
 import logging
 import os
+import tempfile
 import zipfile
 
 from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from telethon.errors import UserDeactivatedBanError
+from telethon.sessions import SQLiteSession, StringSession
 
 from app.config import get_settings
+from app.models import AccountImportJob, ProxyPool, Sender
+from app.services.encryption import encrypt_session
+from app.services.telegram import AUTH_ERRORS, make_telegram_client
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -226,3 +241,108 @@ def unpack_and_pair(zip_bytes: bytes) -> dict:
                 unpaired.append({"basename": stem, "filename": session_name})
 
     return {"matched": matched, "unpaired": unpaired, "malformed": malformed}
+
+
+# ─── Per-account import routine (Plan 21-04) ────────────────────────────────────
+#
+# Security invariant (RESEARCH Pitfall 9): the raw vendor ``.session`` bytes, the
+# decrypted StringSession, the 2FA plaintext and the account auth_key are NEVER
+# logged anywhere in this module — only a masked phone prefix + slug/tg_id + result.
+
+
+def _mask_phone(value: str | None) -> str:
+    """Return a log-safe phone prefix (``+1864***``) — never the full number."""
+    s = str(value or "")
+    return (s[:6] + "***") if s else "***"
+
+
+def sqlite_to_string_session(session_bytes: bytes) -> str:
+    """Convert vendor SQLite ``.session`` bytes to a ``StringSession`` string, OFFLINE.
+
+    Telethon's :class:`~telethon.sessions.SQLiteSession` loads the auth_key + DC from
+    the file locally — no ``connect()``, no socket (RESEARCH Pattern 1, verified on the
+    real sample). The bytes are written to a unique temp path ENDING in ``.session``
+    (Pitfall 4 — ``SQLiteSession`` appends the extension only when the arg lacks it, so
+    an exact ``*.session`` path is used verbatim), ``chmod 0600``, then loaded.
+
+    Raises :class:`ValueError` (``empty_or_invalid_session``) when the file is empty /
+    not a database / carries no auth_key — the caller fails that one item, never the
+    batch. The temp file (and any SQLite journal/WAL side files) is deleted in a
+    ``finally`` so vendor session bytes never linger on disk (Pitfall 9).
+    """
+    fd, path = tempfile.mkstemp(suffix=".session")
+    side_files = [path, path + "-journal", path + "-wal", path + "-shm"]
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(session_bytes or b"")
+        os.chmod(path, 0o600)
+
+        try:
+            sess = SQLiteSession(path)
+        except Exception as exc:  # noqa: BLE001 — corrupt/non-sqlite bytes
+            # sqlite3.DatabaseError("file is not a database") et al. → invalid pair.
+            raise ValueError("empty_or_invalid_session") from exc
+
+        try:
+            if sess.auth_key is None:
+                # Empty but valid sqlite (fresh DB) → no account behind it (Pitfall 4).
+                raise ValueError("empty_or_invalid_session")
+            return StringSession.save(sess)
+        finally:
+            sess.close()
+    finally:
+        for p in side_files:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def encrypt_twofa(twofa: str | None) -> str | None:
+    """Fernet-encrypt a vendor 2FA password for storage (D-05). ``None`` → ``None``.
+
+    Reuses the shared session Fernet path (``app.services.encryption``) — one key, one
+    code path. The ciphertext is stored in ``senders.twofa_password_enc`` and is never
+    logged or returned as plaintext (D-07).
+    """
+    if not twofa:
+        return None
+    return encrypt_session(twofa)
+
+
+async def resolve_import_proxy(db, workspace_id, json_proxy: dict | None):
+    """Resolve the proxy for an imported account → ``(proxy_dict | None, pool_row_id | None)``.
+
+    * A non-empty JSON-supplied proxy wins (D-15) → ``(json_proxy, None)`` — no pool row
+      is involved, so nothing to mark taken.
+    * Otherwise take one FREE :class:`ProxyPool` row for the workspace
+      (``assigned_to_sender_id IS NULL``) → ``(socks5-dict, row.id)``. The row id lets the
+      caller mark that EXACT pool row ``assigned_to_sender_id`` AFTER the sender exists
+      (Warning-1 contract gap fix) — this function only READS, never writes.
+    * Empty pool → ``(None, None)`` (proxy is optional — do NOT hard-fail).
+    """
+    if json_proxy:
+        return json_proxy, None
+
+    row = (
+        await db.execute(
+            select(ProxyPool)
+            .where(
+                ProxyPool.workspace_id == workspace_id,
+                ProxyPool.assigned_to_sender_id.is_(None),
+            )
+            .limit(1)
+        )
+    ).scalars().first()
+    if row is None:
+        return None, None
+    return (
+        {
+            "type": "socks5",
+            "host": row.host,
+            "port": row.port,
+            "username": row.username,
+            "password": row.password,
+        },
+        row.id,
+    )
