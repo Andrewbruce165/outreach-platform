@@ -805,6 +805,60 @@ function RestrictionHistoryModal({ sender, onClose }: { sender: Sender; onClose:
   );
 }
 
+function SpambotResultModal({
+  sender,
+  result,
+  onClose,
+}: {
+  sender: Sender;
+  result: SpambotResult;
+  onClose: () => void;
+}) {
+  const status = (result.status ?? "unknown").toLowerCase();
+  const STATUS_STY: Record<string, { pill: string; dot: string; label: string }> = {
+    free: { pill: "pill--green", dot: "var(--success)", label: "Free" },
+    limited: { pill: "pill--orange", dot: "var(--warning)", label: "Limited" },
+    suspended: { pill: "pill--red", dot: "var(--danger)", label: "Suspended" },
+    unknown: { pill: "pill--ghost", dot: "var(--text-muted)", label: "Unknown" },
+  };
+  const sty = STATUS_STY[status] ?? STATUS_STY.unknown;
+  return (
+    <Modal title={`@SpamBot check · ${sender.name || sender.phone}`} onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className={`pill ${sty.pill}`}>
+            <span className="pill__dot" style={{ background: sty.dot }} /> {sty.label}
+          </span>
+          {result.auth_status_updated && (
+            <span className="muted text-xs">
+              auth status: {result.auth_status_updated}
+            </span>
+          )}
+        </div>
+        {result.raw_text ? (
+          <div
+            style={{
+              padding: 12,
+              background: "var(--bg-soft)",
+              borderRadius: 8,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontSize: 13,
+              lineHeight: 1.5,
+              maxHeight: 360,
+              overflowY: "auto",
+            }}
+          >
+            {result.raw_text}
+          </div>
+        ) : (
+          <div className="muted text-sm">No response text from @SpamBot.</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Phase 20 profile helpers ───────────────────────────────────────────────
 const HOUR_MS = 3_600_000;
 const USERNAME_RE = /^[a-z0-9_]{5,32}$/;
