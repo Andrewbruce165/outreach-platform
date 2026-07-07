@@ -190,6 +190,42 @@ async def test_preview_pairs_list_proxy_record():
     assert result["malformed"] == []
 
 
+async def test_resolve_import_proxy_ignores_vendor_and_uses_pool(
+    async_db_session, test_workspace
+):
+    """Policy override (2026-07-07): a usable vendor JSON proxy is IGNORED — resolve ALWAYS
+    returns a FREE workspace ProxyPool row (+ its id). Dead vendor residential proxies
+    (``proxyshard``, SOCKS ``402: user reached limit``) stranded imports at connect, so we
+    always pin our own pool proxy. Empty pool → ``(None, None)``, never the vendor value."""
+    from app.services.account_import import resolve_import_proxy
+
+    pool_id = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO proxy_pool (id, workspace_id, host, port, username, password)
+        VALUES (:id, :ws, 'pool.example.com', 1080, 'poolu', 'poolp')
+    """), {"id": pool_id, "ws": str(test_workspace.id)})
+    await async_db_session.commit()
+
+    # A perfectly-usable vendor proxy (the exact shape from the failing archive).
+    vendor_proxy = [3, "resident.proxyshard.com", 8080, True, "vu", "vp"]
+    proxy, row_id = await resolve_import_proxy(
+        async_db_session, test_workspace.id, vendor_proxy
+    )
+    assert proxy["host"] == "pool.example.com"      # OUR pool, not the vendor host
+    assert proxy["type"] == "socks5"
+    assert str(row_id) == pool_id                    # row id returned so caller marks taken
+
+    # Empty pool → no proxy, and STILL never the vendor value.
+    await async_db_session.execute(
+        _t("DELETE FROM proxy_pool WHERE id = :id"), {"id": pool_id}
+    )
+    await async_db_session.commit()
+    proxy2, row_id2 = await resolve_import_proxy(
+        async_db_session, test_workspace.id, vendor_proxy
+    )
+    assert proxy2 is None and row_id2 is None
+
+
 # ─── IMPT-04: per-account fingerprint override + strict global fallback ─────────
 
 async def test_fingerprint_override_and_strict_fallback():

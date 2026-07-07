@@ -10,8 +10,9 @@ Plan 21-04 adds the per-account import routine to this same module:
   * :func:`sqlite_to_string_session` — OFFLINE SQLite ``.session`` → ``StringSession``
     (Telethon loads the file locally; no network);
   * :func:`encrypt_twofa` — Fernet-encrypt the vendor 2FA password at rest (D-05);
-  * :func:`resolve_import_proxy` — JSON-supplied proxy first, else a free ProxyPool row
-    (returns the row id so the caller can mark it taken after the sender is created);
+  * :func:`resolve_import_proxy` — ALWAYS a free ProxyPool row; the vendor JSON proxy is
+    ignored (dead/exhausted in practice). Returns the row id so the caller can mark it
+    taken after the sender is created;
   * :func:`import_one_account` — convert → connect under the account's own fingerprint
     → ``get_me`` → dedup → create exactly one ``active`` sender, or skip+report — never
     raising into the batch (D-10). This is the only path here that opens a socket, and
@@ -392,19 +393,20 @@ def _normalize_vendor_proxy(raw: Any) -> dict | None:
 async def resolve_import_proxy(db, workspace_id, json_proxy: Any = None):
     """Resolve the proxy for an imported account → ``(proxy_dict | None, pool_row_id | None)``.
 
-    * A usable JSON-supplied proxy wins (D-15) → ``(normalized_dict, None)`` — no pool row
-      is involved, so nothing to mark taken. The vendor value is normalized first, so a
-      list/tuple/string proxy is honoured, not silently ignored.
-    * Otherwise take one FREE :class:`ProxyPool` row for the workspace
+    **Policy (2026-07-07 — overrides D-15):** the vendor-supplied ``json_proxy`` is IGNORED.
+    Imported accounts ALWAYS route through a workspace-owned :class:`ProxyPool` row. The
+    residential proxies shipped inside the vendor archives (e.g. ``proxyshard``) proved to
+    be subscription-exhausted / dead (SOCKS ``402: user reached limit`` → hard timeout), so
+    honouring them only produced ``connect_failed`` and stranded the accounts. ``json_proxy``
+    is still accepted for signature compatibility, but no longer selected.
+
+    * Take one FREE :class:`ProxyPool` row for the workspace
       (``assigned_to_sender_id IS NULL``) → ``(socks5-dict, row.id)``. The row id lets the
       caller mark that EXACT pool row ``assigned_to_sender_id`` AFTER the sender exists
       (Warning-1 contract gap fix) — this function only READS, never writes.
-    * Empty pool → ``(None, None)`` (proxy is optional — do NOT hard-fail).
+    * Empty pool → ``(None, None)`` (proxy is optional — do NOT hard-fail; logged so an
+      exhausted pool is visible in the account-import logs).
     """
-    normalized = _normalize_vendor_proxy(json_proxy)
-    if normalized:
-        return normalized, None
-
     row = (
         await db.execute(
             select(ProxyPool)
@@ -416,6 +418,11 @@ async def resolve_import_proxy(db, workspace_id, json_proxy: Any = None):
         )
     ).scalars().first()
     if row is None:
+        logger.warning(
+            "[account-import] proxy pool empty for workspace %s — account will connect "
+            "WITHOUT a proxy (direct from server IP)",
+            workspace_id,
+        )
         return None, None
     return (
         {
