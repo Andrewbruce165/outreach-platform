@@ -16,6 +16,7 @@ No Redis or Celery needed — the queue lives in Postgres.
 import asyncio
 import json
 import logging
+import os
 import random
 from datetime import datetime, timezone, timedelta
 import zoneinfo
@@ -32,6 +33,7 @@ from app.models import MessageQueue, QueueItemStatus, QueueItemType, Sender, Mes
 from app.services.telegram import telegram_service, SessionAuthError
 from app.services.recontact import protected_conversation_sql
 from app.services.restriction_audit import record_restriction_event
+from app.services.variation import vary
 from telethon.errors import FloodWaitError
 from sqlalchemy import text
 
@@ -748,14 +750,16 @@ class QueueWorker:
             # campaign_enqueue через recontact.protected_conversation_sql.
             allow_recontact = False
             recontact_age = 30
+            variation_enabled = False  # Phase 24 D-12: read at send time (default off).
             if item.campaign_id is not None:
                 camp_row = (await db.execute(text("""
-                    SELECT allow_recontact, recontact_min_age_days
+                    SELECT allow_recontact, recontact_min_age_days, variation_enabled
                     FROM campaigns WHERE id = :cid
                 """), {"cid": str(item.campaign_id)})).fetchone()
                 if camp_row is not None:
                     allow_recontact = bool(camp_row.allow_recontact)
                     recontact_age = int(camp_row.recontact_min_age_days)
+                    variation_enabled = bool(camp_row.variation_enabled)
 
             guard_params = {
                 "wid": str(item.workspace_id),
@@ -874,6 +878,26 @@ class QueueWorker:
                     return
             # === End Phase 19 follow-up guard ===
 
+            # === Phase 24 (D-12/D-14/D-16): send-time invisible variation gate ===
+            # vary() is applied to a LOCAL COPY of the opener text/caption right
+            # before the Telethon call. message_queue.message_text/caption and the
+            # messages/messages_log rows are NEVER mutated (DB stays clean, inbox
+            # readable, rerender untouched). Strictly gated: only a campaign send
+            # that is NOT a follow-up ping AND has variation_enabled=true is varied,
+            # so follow-ups and non-campaign sends go out clean. Called fresh per
+            # send → two sends of the same opener differ in bytes (D-16).
+            apply_var = (
+                item.campaign_id is not None and not is_followup and variation_enabled
+            )
+            text_to_send = (
+                vary(item.message_text) if (apply_var and item.message_text)
+                else item.message_text
+            )
+            caption_to_send = (
+                vary(item.caption) if (apply_var and item.caption) else item.caption
+            )
+            # === End Phase 24 variation gate ===
+
             client = None
             try:
                 client = await telegram_service.get_client(sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy, fingerprint=sender.client_fingerprint)
@@ -885,7 +909,7 @@ class QueueWorker:
                         recipient_name=item.recipient_name,
                         file_url=item.file_url,
                         file_name=item.file_name,
-                        caption=item.caption,
+                        caption=caption_to_send,
                         sender_id=str(sender.id),
                         workspace_id=str(item.workspace_id),
                     )
@@ -894,7 +918,7 @@ class QueueWorker:
                         client=client,
                         phone=item.recipient_phone,
                         recipient_name=item.recipient_name,
-                        message=item.message_text,
+                        message=text_to_send,
                         as_draft=item.as_draft,
                         sender_id=str(sender.id),
                         workspace_id=str(item.workspace_id),
