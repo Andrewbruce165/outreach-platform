@@ -38,6 +38,17 @@ const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   ID_REQUIRED: () => "Missing id parameter",
   INVALID_PHONE: () => "Phone number is invalid. Use +1 415 555 2810 format.",
   SERVER_ERROR: () => "Server is unreachable. Retry.",
+  // ── Bulk account import (Phase 21) ──────────────────────────────────────
+  FILE_TOO_LARGE: () => "That ZIP is too large. Split it into smaller batches and try again.",
+  ZIP_TOO_LARGE: () =>
+    "The archive expands to more than we allow. Split it into smaller batches and try again.",
+  TOO_MANY_ACCOUNTS: () =>
+    "This ZIP has too many accounts. Split it into smaller batches and try again.",
+  BAD_ZIP: () => "We couldn't read that file. Upload a valid .zip of account files.",
+  IMPORT_NOT_FOUND: () => "That import session is gone. Upload the ZIP again to start over.",
+  IMPORT_EXPIRED: () => "This import session expired. Upload the ZIP again to start over.",
+  JOB_NOT_FOUND: () => "Import job not found.",
+  INVALID_ROLE: () => "Pick a role (sender or checker) before confirming.",
 };
 
 export function errorMessageFromEnvelope(

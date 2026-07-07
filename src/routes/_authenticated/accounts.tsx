@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
+import { AccountImportModal } from "@/components/AccountImportModal";
 import { api, ApiError, apiBaseUrl } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -43,6 +44,7 @@ function AccountsPage() {
     phone?: string;
     slug?: string;
   }>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["senders"],
@@ -68,6 +70,12 @@ function AccountsPage() {
           <>
             <button className="btn btn--ghost btn--sm" type="button">
               <Filter size={14} /> Filters
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => setImportOpen(true)}
+            >
+              <Upload size={14} /> Import accounts
             </button>
             <button className="btn btn--primary btn--sm" onClick={() => setModal({ mode: "new" })}>
               <Plus size={14} /> Connect account
@@ -143,6 +151,8 @@ function AccountsPage() {
           />
         </Modal>
       )}
+
+      {importOpen && <AccountImportModal onClose={() => setImportOpen(false)} />}
     </>
   );
 }
