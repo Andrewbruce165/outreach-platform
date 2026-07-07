@@ -18,6 +18,7 @@ from app.services.contact_check_worker import contact_check_worker
 from app.services.campaign_enqueue import campaign_enqueue_worker  # Phase 4 D-17
 from app.services.kb_ingest_worker import kb_ingest_worker  # Phase 16 — KB ingest pipeline
 from app.services.follow_up import follow_up_worker  # Phase 19 — no-reply follow-up + auto-finish
+from app.services.account_import_worker import account_import_worker  # Phase 21 — bulk account import
 from app.routers import (
     account_import,  # Phase 21 — bulk Telegram account import
     agents,
@@ -70,11 +71,14 @@ async def lifespan(app: FastAPI):
     logger.info("Knowledge ingest worker started")
     follow_up_worker.start()  # Phase 19 — no-reply follow-up + auto-finish
     logger.info("Follow-up worker started")
+    account_import_worker.start()  # Phase 21 — bulk Telegram account import
+    logger.info("Account import worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await account_import_worker.stop()  # Phase 21 — bulk Telegram account import
     await follow_up_worker.stop()  # Phase 19 — no-reply follow-up + auto-finish
     await kb_ingest_worker.stop()  # Phase 16 — KB ingest pipeline
     await campaign_enqueue_worker.stop()  # Phase 4 D-17

@@ -70,6 +70,12 @@ class Settings(BaseSettings):
         validation_alias="KB_INGEST_POLL_INTERVAL",
         description="Polling interval (seconds) for the KnowledgeIngestWorker loop.",
     )
+    # Phase 21 (IMPT-02): async bulk account-import worker.
+    account_import_poll_interval: int = Field(
+        default=3,
+        validation_alias="ACCOUNT_IMPORT_POLL_INTERVAL",
+        description="Polling interval (seconds) for the AccountImportWorker loop.",
+    )
     kb_search_max_distance: float = Field(
         default=0.8,
         validation_alias="KB_SEARCH_MAX_DISTANCE",
