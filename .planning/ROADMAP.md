@@ -566,6 +566,16 @@ Plans:
 **Wave 5** *(frontend + handoff, human-verify, cross-repo)*
 - [x] 21-06-frontend-and-handoff-PLAN.md — openapi/types regen + sibling-repo two-step bulk-import UI (ZIP → preview → role radio → confirm → progress poll) + human UAT [Wave 5, depends_on: 21-05] — IMPT-09
 
+### Phase 22: Warmup new-chat budget ladder with campaign priority reserve
+
+**Goal:** Аккаунты в warmup-пуле получают редактируемую лестницу бюджета «новых чатов в сутки» (скользящие 24ч: недели 1–3 → 3/день, далее 4/6/8, после 42 дней кап 8), единую для рассылки и warmup-пар; рассылка всегда в приоритете (warmup тратит только остаток после резерва под pending cold openers), реестр `sender_first_contacts` — единственный источник правды «этому peer'у уже писали первым».
+**Requirements**: TBD
+**Depends on:** Phase 21
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 22 to break down)
+
 ---
 
 ## Progress
