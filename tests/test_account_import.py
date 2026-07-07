@@ -64,6 +64,132 @@ async def test_sqlite_to_stringsession_offline(tmp_path, build_vendor_sqlite_ses
     assert rebuilt.auth_key.key == bytes([0x11]) * 256
 
 
+async def test_sqlite_to_stringsession_tolerates_extra_column(
+    tmp_path, build_vendor_sqlite_session
+):
+    """A vendor .session whose ``sessions`` table carries an EXTRA column (seen in the
+    wild: a 6th ``tmp_auth_key`` written by a patched/forked Telethon) still converts.
+
+    Regression for the field bug where such files failed ``empty_or_invalid_session``
+    because Telethon's own ``SQLiteSession`` does ``SELECT *`` and unpacks exactly 5
+    values → ``too many values to unpack (expected 5)`` even though the auth_key is
+    valid. Our explicit-column reader must ignore the extra column."""
+    import sqlite3
+
+    from app.services.account_import import sqlite_to_string_session
+    from telethon.sessions import StringSession
+
+    src_path = build_vendor_sqlite_session(tmp_path, dc_id=2, auth_key_byte=0x33)
+    # Simulate the vendor's patched schema: append a 6th column to `sessions`.
+    con = sqlite3.connect(src_path)
+    con.execute("ALTER TABLE sessions ADD COLUMN tmp_auth_key blob")
+    con.commit()
+    con.close()
+    with open(src_path, "rb") as f:
+        session_bytes = f.read()
+
+    ss = sqlite_to_string_session(session_bytes)
+
+    rebuilt = StringSession(ss)
+    assert rebuilt.dc_id == 2
+    assert rebuilt.auth_key is not None
+    assert rebuilt.auth_key.key == bytes([0x33]) * 256
+
+
+async def test_sqlite_to_stringsession_rejects_empty_and_authless(tmp_path):
+    """Empty bytes, non-sqlite bytes, and a valid-but-authless sqlite all raise
+    ``empty_or_invalid_session`` (never a StringSession for a dead pair)."""
+    import sqlite3
+
+    from app.services.account_import import sqlite_to_string_session
+
+    for bad in (b"", b"not a database at all"):
+        with pytest.raises(ValueError, match="empty_or_invalid_session"):
+            sqlite_to_string_session(bad)
+
+    # Valid sqlite with a `sessions` table but a NULL auth_key → still rejected.
+    p = tmp_path / "authless.session"
+    con = sqlite3.connect(str(p))
+    con.execute(
+        "CREATE TABLE sessions (dc_id integer primary key, server_address text, "
+        "port integer, auth_key blob, takeout_id integer)"
+    )
+    con.execute("INSERT INTO sessions VALUES (2, '149.154.167.51', 443, NULL, NULL)")
+    con.commit()
+    con.close()
+    with pytest.raises(ValueError, match="empty_or_invalid_session"):
+        sqlite_to_string_session(p.read_bytes())
+
+
+async def test_normalize_vendor_proxy_shapes():
+    """``_normalize_vendor_proxy`` accepts the canonical dict, the PySocks-style list
+    a real vendor ships (``[type, host, port, rdns, user, pass]``), and a
+    ``host:port[:user:pass]`` string — and returns ``None`` for empty/garbage so the
+    account still imports (falls back to the pool), never dropped over a proxy."""
+    from app.services.account_import import _normalize_vendor_proxy
+
+    # PySocks int type: 3 == HTTP (the exact shape seen in the failing archive).
+    got = _normalize_vendor_proxy(
+        [3, "resident.proxyshard.com", 8080, True, "user", "pass"]
+    )
+    assert got == {
+        "type": "http",
+        "host": "resident.proxyshard.com",
+        "port": 8080,
+        "username": "user",
+        "password": "pass",
+    }
+    # String type + no auth.
+    assert _normalize_vendor_proxy(["socks5", "1.2.3.4", "1080"]) == {
+        "type": "socks5",
+        "host": "1.2.3.4",
+        "port": 1080,
+    }
+    # Canonical dict passes through.
+    d = {"type": "socks5", "host": "1.2.3.4", "port": 1080, "username": "u", "password": "p"}
+    assert _normalize_vendor_proxy(d) == d
+    # host:port:user:pass string.
+    assert _normalize_vendor_proxy("1.2.3.4:1080:u:p") == {
+        "type": "socks5",
+        "host": "1.2.3.4",
+        "port": 1080,
+        "username": "u",
+        "password": "p",
+    }
+    # Empty / unusable shapes → None (account still imports).
+    for junk in (None, "", [], {}, {"host": ""}, [99, "h", 1], ["socks5"], "noport"):
+        assert _normalize_vendor_proxy(junk) is None
+
+
+async def test_preview_pairs_list_proxy_record():
+    """A JSON with a list-form ``proxy`` PAIRS (matched), not malformed — regression for
+    the field bug where the ``proxy: dict | None`` schema failed validation on the
+    vendor's list proxy and silently bucketed the whole account as malformed."""
+    import io
+    import json
+    import zipfile
+
+    from app.services.account_import import unpack_and_pair
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "79326406301.json",
+            json.dumps(
+                {
+                    "phone": "79326406301",
+                    "twoFA": "secret",
+                    "proxy": [3, "resident.proxyshard.com", 8080, True, "u", "p"],
+                }
+            ),
+        )
+        zf.writestr("79326406301.session", b"\x00fake-sqlite-bytes")
+
+    result = unpack_and_pair(buf.getvalue())
+    assert [m["basename"] for m in result["matched"]] == ["79326406301"]
+    assert result["malformed"] == []
+
+
 # ─── IMPT-04: per-account fingerprint override + strict global fallback ─────────
 
 async def test_fingerprint_override_and_strict_fallback():
