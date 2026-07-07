@@ -209,6 +209,23 @@ class Settings(BaseSettings):
                     "cycling account rests for hours not a fixed 15min and stops re-tripping.",
     )
 
+    # Phase 21 (IMPT-01 / RESEARCH Pitfall 7): bulk account-import ZIP-safety caps.
+    # Enforced by app/services/account_import.py::unpack_and_pair BEFORE extraction so
+    # a ZIP-bomb or an oversized batch is rejected as a structured 413/422, not a 500.
+    max_import_uncompressed_bytes: int = Field(
+        default=52428800,  # 50 MB
+        validation_alias="MAX_IMPORT_UNCOMPRESSED_BYTES",
+        description="Max total UNCOMPRESSED size (bytes) of a bulk account-import ZIP. "
+                    "Summed from ZipInfo.file_size before extraction (ZIP-bomb guard). "
+                    "~28 KB/session × 500 accounts + JSONs ≈ 14 MB, so 50 MB is generous.",
+    )
+    max_import_accounts: int = Field(
+        default=500,
+        validation_alias="MAX_IMPORT_ACCOUNTS",
+        description="Max distinct account basenames (.json/.session pairs) accepted in a "
+                    "single bulk-import ZIP. Over the cap → 422 TOO_MANY_ACCOUNTS.",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Парсит CORS_ALLOWED_ORIGINS в list для FastAPI CORSMiddleware."""
