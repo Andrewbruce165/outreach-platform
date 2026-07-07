@@ -803,6 +803,8 @@ class CampaignCreate(BaseModel):
     follow_up_interval_hours: int = Field(default=24, ge=4, le=168)
     follow_up_max_pings: int = Field(default=2, ge=1, le=5)
     auto_finish_hours: int = Field(default=72, ge=24, le=720)
+    # ── Phase 24 (D-13): invisible anti-spam text-variation toggle, default ON. ──
+    variation_enabled: bool = True
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     # dialogue_flow: ordered conversation stages (max 7 — T2 size guard).
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
@@ -873,6 +875,8 @@ class CampaignUpdate(BaseModel):
     follow_up_interval_hours: Optional[int] = Field(default=None, ge=4, le=168)
     follow_up_max_pings: Optional[int] = Field(default=None, ge=1, le=5)
     auto_finish_hours: Optional[int] = Field(default=None, ge=24, le=720)
+    # ── Phase 24 (D-13): variation toggle — partial PATCH. ──
+    variation_enabled: Optional[bool] = None
     # ── Phase 11 campaign fields (D-04/D-12/D-14) — partial PATCH. ──
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
     arguments_facts: Optional[str] = None
@@ -935,6 +939,12 @@ class CampaignResponse(BaseModel):
     follow_up_interval_hours: int = 24
     follow_up_max_pings: int = 2
     auto_finish_hours: int = 72
+    # ── Phase 24 (D-13/D-19): variation toggle + computed attachment presence. ──
+    # variation_enabled is a real column; has_attachment is computed by the router
+    # (EXISTS on campaign_attachments), NOT a campaigns column — keeps the blob off
+    # every SELECT campaigns (Pitfall 7).
+    variation_enabled: bool = True
+    has_attachment: bool = False
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     dialogue_flow: List[dict] = Field(default_factory=list)
     arguments_facts: Optional[str] = None

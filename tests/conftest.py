@@ -238,6 +238,16 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_046.exists():
             await asyncpg_conn.execute(_mig_046.read_text())
 
+        # 054: Phase 24 campaign attachment + variation flag. The campaign_attachments
+        # table and campaigns.variation_enabled column come from ORM create_all (CREATE
+        # TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS are no-ops here), but the
+        # ALTER ... SET DEFAULT true drift-guard, the campaign_id UNIQUE constraint and
+        # the workspace index are SQL-only — apply the migration so the test DB matches
+        # prod exactly. Exists-guard keeps this green until migrations/054 lands.
+        _mig_054 = PROJECT_ROOT / "migrations" / "054_campaign_attachment_and_variation.sql"
+        if _mig_054.exists():
+            await asyncpg_conn.execute(_mig_054.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
