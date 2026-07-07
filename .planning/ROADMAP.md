@@ -603,13 +603,13 @@ Plans:
 **Goal:** Клиент прикрепляет ОДИН файл к первому сообщению кампании — он уходит одним media-сообщением с текстом опенера в caption (авто-медиа: фото приходит фото), и каждый исходящий опенер делается байт-уникальным невидимой вариацией (zero-width + near-invisible джиттер) без изменения читаемого текста — обход наивного дедупа Telegram (defense-in-depth, D-11).
 **Requirements**: Derived from CONTEXT decisions D-01..D-20 (no pre-mapped REQ-IDs in ROADMAP). Research-derived cluster: ATT-STORE/UPLOAD/DELIVER/OVERFLOW/ENQUEUE, VAR-INVIS/UNIQUE/SCOPE/FLAG, RER-FILE, DUP-COPY. Phase adds ONE migration (054).
 **Depends on:** Phase 23 (reserves migration slot 053; Phase 24 uses 054)
-**Plans:** 7 plans (waves 1->3)
+**Plans:** 3/7 plans executed
 
 Plans:
 **Wave 1** (parallel — independent)
-- [ ] 24-01-variation-pure-module-PLAN.md — pure vary()/strip_invisible() module (zero-width U+200B/U+200C/U+2060 + NBSP/U+202F jitter, U+200D excluded, letter-letter only, cap 20) + RED tests [D-09/10/11/15/16]
-- [ ] 24-02-data-model-migration-schemas-PLAN.md — migration 054 (campaign_attachments 1-1 BYTEA + campaigns.variation_enabled default true) + ORM + schemas + conftest + drift tests [D-01/02/04/13]
-- [ ] 24-03-send-file-blob-source-automedia-PLAN.md — send_file gains file_bytes + force_document (defaults preserve today); blob->temp auto-media; overflow reused [D-06/07/08]
+- [x] 24-01-variation-pure-module-PLAN.md — pure vary()/strip_invisible() module (zero-width U+200B/U+200C/U+2060 + NBSP/U+202F jitter, U+200D excluded, letter-letter only, cap 20) + RED tests [D-09/10/11/15/16]
+- [x] 24-02-data-model-migration-schemas-PLAN.md — migration 054 (campaign_attachments 1-1 BYTEA + campaigns.variation_enabled default true) + ORM + schemas + conftest + drift tests [D-01/02/04/13]
+- [x] 24-03-send-file-blob-source-automedia-PLAN.md — send_file gains file_bytes + force_document (defaults preserve today); blob->temp auto-media; overflow reused [D-06/07/08]
 
 **Wave 2** (depend on Wave 1)
 - [ ] 24-04-attachment-endpoint-and-duplicate-PLAN.md — POST/DELETE /campaigns/{id}/attachment (50MB->FILE_TOO_LARGE, alias-tolerant) + variation_enabled/has_attachment wiring + duplicate copies blob+flag [D-03/13/19/20/01] [depends_on: 24-02]

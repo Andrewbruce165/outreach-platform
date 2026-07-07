@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
+status: executing
 stopped_at: Phase 24 context gathered
-last_updated: "2026-07-07T13:28:05.651Z"
-last_activity: 2026-07-07
+last_updated: "2026-07-07T15:06:14.118Z"
+last_activity: 2026-07-07 -- Phase 24 execution started
 progress:
   total_phases: 27
   completed_phases: 21
-  total_plans: 95
+  total_plans: 102
   completed_plans: 88
   percent: 99
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 21 — bulk-telegram-account-import-via-session-json-upload-in-ui
+**Current focus:** Phase 24 — campaign-first-message-file-attachment-plus-invisible-anti-spam-text-variation
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-07
+Phase: 24 (campaign-first-message-file-attachment-plus-invisible-anti-spam-text-variation) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 24
+Last activity: 2026-07-07 -- Phase 24 execution started
 
 Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05: profile schema/columns, identity+guardrails, photo+resync, 2FA+recovery-email, enriched accounts UI + handoff regen)
 
