@@ -17,6 +17,8 @@ import {
   Upload,
   Loader2,
   Phone as PhoneIcon,
+  Search,
+  ShieldAlert,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
@@ -45,6 +47,7 @@ function AccountsPage() {
     slug?: string;
   }>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["senders"],
@@ -52,14 +55,24 @@ function AccountsPage() {
     refetchInterval: 15000,
   });
 
-  const senders = data?.senders ?? [];
+  const allSenders = data?.senders ?? [];
+  const q = search.trim().toLowerCase();
+  const senders = q
+    ? allSenders.filter((s) => {
+        const hay = [s.name, s.tg_username, s.phone]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      })
+    : allSenders;
   const counts = {
-    total: senders.length,
-    active: senders.filter((s) => s.status === "active").length,
-    warmup: senders.filter((s) => s.status === "warmup").length,
-    paused: senders.filter((s) => s.status === "paused").length,
-    error: senders.filter((s) => s.status === "error").length,
-    restricted: senders.filter((s) => s.status === "limited" || s.status === "frozen").length,
+    total: allSenders.length,
+    active: allSenders.filter((s) => s.status === "active").length,
+    warmup: allSenders.filter((s) => s.status === "warmup").length,
+    paused: allSenders.filter((s) => s.status === "paused").length,
+    error: allSenders.filter((s) => s.status === "error").length,
+    restricted: allSenders.filter((s) => s.status === "limited" || s.status === "frozen").length,
   };
 
   return (
@@ -68,6 +81,28 @@ function AccountsPage() {
         title="Telegram accounts"
         right={
           <>
+            <div style={{ position: "relative" }}>
+              <Search
+                size={13}
+                style={{
+                  position: "absolute",
+                  left: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-muted)",
+                  pointerEvents: "none",
+                }}
+              />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name…"
+                aria-label="Search accounts"
+                className="input input--sm"
+                style={{ width: 200, paddingLeft: 26, height: 28 }}
+              />
+            </div>
             <button className="btn btn--ghost btn--sm" type="button">
               <Filter size={14} /> Filters
             </button>
@@ -84,7 +119,7 @@ function AccountsPage() {
         }
       />
       <div className="scroll" style={{ flex: 1, padding: 24, background: "var(--bg-soft)" }}>
-        {senders.length > 0 && (
+        {allSenders.length > 0 && (
           <div
             style={{
               display: "grid",
@@ -127,13 +162,21 @@ function AccountsPage() {
           </div>
         )}
 
-        <FleetTable
-          senders={senders}
-          isLoading={isLoading}
-          errorMsg={error instanceof ApiError ? error.message : null}
-          onEmpty={() => setModal({ mode: "new" })}
-          onReauth={(s) => setModal({ mode: "reauth", phone: s.phone, slug: s.slug })}
-        />
+        {allSenders.length > 0 && senders.length === 0 && !isLoading && !error ? (
+          <div className="card">
+            <div className="card__body muted" style={{ textAlign: "center", padding: "32px 24px" }}>
+              No accounts match “{search}”.
+            </div>
+          </div>
+        ) : (
+          <FleetTable
+            senders={senders}
+            isLoading={isLoading}
+            errorMsg={error instanceof ApiError ? error.message : null}
+            onEmpty={() => setModal({ mode: "new" })}
+            onReauth={(s) => setModal({ mode: "reauth", phone: s.phone, slug: s.slug })}
+          />
+        )}
       </div>
 
       {modal && (
@@ -344,11 +387,29 @@ function FleetTable({
   );
 }
 
+type SpambotResult = {
+  status?: string;
+  raw_text?: string;
+  auth_status_updated?: string | null;
+};
+
 function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [spambotResult, setSpambotResult] = useState<SpambotResult | null>(null);
+
+  const spambotMut = useMutation({
+    mutationFn: () =>
+      api<SpambotResult>(`/api/v1/senders/${sender.slug}/spambot-check`),
+    onSuccess: (res) => {
+      setSpambotResult(res ?? {});
+      void qc.invalidateQueries({ queryKey: ["senders"] });
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.message : "Spam Bot check failed"),
+  });
 
   const deleteMut = useMutation({
     mutationFn: () => api(`/api/v1/senders/${sender.slug}`, { method: "DELETE" }),
@@ -453,6 +514,20 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
                     <RefreshCcw size={13} />
                   )}{" "}
                   Обновить профиль
+                </button>
+                <button
+                  disabled={spambotMut.isPending}
+                  onClick={() => {
+                    setOpen(false);
+                    spambotMut.mutate();
+                  }}
+                >
+                  {spambotMut.isPending ? (
+                    <Loader2 size={13} className="ob__spin" />
+                  ) : (
+                    <ShieldAlert size={13} />
+                  )}{" "}
+                  Check Spam Bot
                 </button>
                 <button
                   onClick={() => {
@@ -563,6 +638,13 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
       {editing && <ProfileModal sender={sender} onClose={() => setEditing(false)} />}
       {historyOpen && (
         <RestrictionHistoryModal sender={sender} onClose={() => setHistoryOpen(false)} />
+      )}
+      {spambotResult && (
+        <SpambotResultModal
+          sender={sender}
+          result={spambotResult}
+          onClose={() => setSpambotResult(null)}
+        />
       )}
     </div>
   );
@@ -719,6 +801,60 @@ function RestrictionHistoryModal({ sender, onClose }: { sender: Sender; onClose:
           })}
         </ul>
       )}
+    </Modal>
+  );
+}
+
+function SpambotResultModal({
+  sender,
+  result,
+  onClose,
+}: {
+  sender: Sender;
+  result: SpambotResult;
+  onClose: () => void;
+}) {
+  const status = (result.status ?? "unknown").toLowerCase();
+  const STATUS_STY: Record<string, { pill: string; dot: string; label: string }> = {
+    free: { pill: "pill--green", dot: "var(--success)", label: "Free" },
+    limited: { pill: "pill--orange", dot: "var(--warning)", label: "Limited" },
+    suspended: { pill: "pill--red", dot: "var(--danger)", label: "Suspended" },
+    unknown: { pill: "pill--ghost", dot: "var(--text-muted)", label: "Unknown" },
+  };
+  const sty = STATUS_STY[status] ?? STATUS_STY.unknown;
+  return (
+    <Modal title={`@SpamBot check · ${sender.name || sender.phone}`} onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className={`pill ${sty.pill}`}>
+            <span className="pill__dot" style={{ background: sty.dot }} /> {sty.label}
+          </span>
+          {result.auth_status_updated && (
+            <span className="muted text-xs">
+              auth status: {result.auth_status_updated}
+            </span>
+          )}
+        </div>
+        {result.raw_text ? (
+          <div
+            style={{
+              padding: 12,
+              background: "var(--bg-soft)",
+              borderRadius: 8,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontSize: 13,
+              lineHeight: 1.5,
+              maxHeight: 360,
+              overflowY: "auto",
+            }}
+          >
+            {result.raw_text}
+          </div>
+        ) : (
+          <div className="muted text-sm">No response text from @SpamBot.</div>
+        )}
+      </div>
     </Modal>
   );
 }
