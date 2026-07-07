@@ -19,6 +19,7 @@ Backend uses HTTPException with `detail: {code, message}` envelope (Phase 1 D-04
 | `ID_REQUIRED` | 422 | "Missing id parameter" | Used by /analytics/funnel + /analytics/llm |
 | `INVALID_PHONE` | 422 | "Phone number is invalid. Use +1 415 555 2810 format." | Onboarding step 1 |
 | `CHECKER_ROLE_CONFLICT` | 409 | "This account checks contacts. Adding it to a campaign (or switching it to the checker pool while a campaign runs) can get it blocked for both jobs. Add it anyway?" | Two call-sites: **(a)** `POST /campaigns/{id}/senders` — the account is `role='checker'`; **(b)** `PATCH /senders/{slug}` flips an in-running-campaign sender to `role='checker'`. Resolve by pausing/finishing the campaign, or re-send the same request with `force: true`. `detail.sender_id` identifies the account. |
+| `FILE_TOO_LARGE` | 413 | "File is too large (max 50 MB)." | Campaign attachment upload — surface the 50 MB limit before retry |
 | (generic 5xx) | 5xx | "Server is unreachable. Retry." | Sonner toast with Retry action |
 
 Reference: when in doubt, fall back to UI-SPEC §8.3 copywriting contract.

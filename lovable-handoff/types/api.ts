@@ -1347,6 +1347,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/campaigns/{campaign_id}/attachment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Attachment
+         * @description D-19: attach ONE first-message file to a campaign (multipart upload).
+         *
+         *     Alias-tolerant to the multipart field name (``file`` or ``attachment``) so the
+         *     Lovable frontend works either way. Bytes stream straight to the BYTEA column
+         *     (D-02 — no temp file). D-03: over MAX_ATTACHMENT_BYTES → 413 FILE_TOO_LARGE.
+         *     D-01: exactly one attachment per campaign — delete-then-insert (upsert).
+         *     Workspace-scoped via _load_campaign (cross-workspace → 404).
+         */
+        post: operations["upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
+        /**
+         * Delete Attachment
+         * @description D-19: remove the campaign's first-message attachment (idempotent → 204).
+         */
+        delete: operations["delete_attachment_api_v1_campaigns__campaign_id__attachment_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/campaigns/{campaign_id}/senders": {
         parameters: {
             query?: never;
@@ -2761,6 +2791,19 @@ export interface components {
              */
             file: string;
         };
+        /** Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post */
+        Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file?: string;
+            /**
+             * Attachment
+             * Format: binary
+             */
+            attachment?: string;
+        };
         /** Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post */
         Body_upload_document_api_v1_knowledge_bases__kb_id__documents_post: {
             /**
@@ -2874,6 +2917,11 @@ export interface components {
              * @default 72
              */
             auto_finish_hours: number;
+            /**
+             * Variation Enabled
+             * @default true
+             */
+            variation_enabled: boolean;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
@@ -2992,6 +3040,16 @@ export interface components {
              * @default 72
              */
             auto_finish_hours: number;
+            /**
+             * Variation Enabled
+             * @default true
+             */
+            variation_enabled: boolean;
+            /**
+             * Has Attachment
+             * @default false
+             */
+            has_attachment: boolean;
             /** Dialogue Flow */
             dialogue_flow?: {
                 [key: string]: unknown;
@@ -3159,6 +3217,8 @@ export interface components {
             follow_up_max_pings?: number | null;
             /** Auto Finish Hours */
             auto_finish_hours?: number | null;
+            /** Variation Enabled */
+            variation_enabled?: boolean | null;
             /** Dialogue Flow */
             dialogue_flow?: components["schemas"]["DialogueStage"][] | null;
             /** Arguments Facts */
@@ -7374,6 +7434,76 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CampaignResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_attachment_api_v1_campaigns__campaign_id__attachment_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
