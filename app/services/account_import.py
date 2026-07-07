@@ -33,14 +33,17 @@ import io
 import json
 import logging
 import os
+import sqlite3
 import tempfile
 import zipfile
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
+from telethon.crypto import AuthKey
 from telethon.errors import UserDeactivatedBanError
-from telethon.sessions import SQLiteSession, StringSession
+from telethon.sessions import StringSession
 
 from app.config import get_settings
 from app.models import AccountImportJob, ProxyPool, Sender
@@ -97,7 +100,11 @@ class VendorAccountJson(BaseModel):
     lang_code: str | None = None
     system_lang_code: str | None = None
     twoFA: str | None = None  # -> Fernet-encrypt into twofa_password_enc (D-05)
-    proxy: dict | None = None  # -> senders.proxy if set, else pool (D-15)
+    # Accept ANY proxy shape (canonical dict, PySocks-style list, "host:port[:u:p]"
+    # string) — normalized later by _normalize_vendor_proxy. Kept as ``Any`` so a
+    # never-before-seen vendor shape can NEVER fail validation and silently drop the
+    # account; an unusable shape just falls back to the pool (D-15).
+    proxy: Any = None  # -> senders.proxy if set, else pool (D-15)
     phone: str | None = None
 
 
@@ -259,16 +266,21 @@ def _mask_phone(value: str | None) -> str:
 def sqlite_to_string_session(session_bytes: bytes) -> str:
     """Convert vendor SQLite ``.session`` bytes to a ``StringSession`` string, OFFLINE.
 
-    Telethon's :class:`~telethon.sessions.SQLiteSession` loads the auth_key + DC from
-    the file locally — no ``connect()``, no socket (RESEARCH Pattern 1, verified on the
-    real sample). The bytes are written to a unique temp path ENDING in ``.session``
-    (Pitfall 4 — ``SQLiteSession`` appends the extension only when the arg lacks it, so
-    an exact ``*.session`` path is used verbatim), ``chmod 0600``, then loaded.
+    Reads ``dc_id / server_address / port / auth_key`` from the ``sessions`` table by
+    EXPLICIT column name and rebuilds a :class:`~telethon.sessions.StringSession` in
+    memory — no ``connect()``, no socket. We deliberately do NOT hand the file to
+    Telethon's own ``SQLiteSession``: that class runs ``SELECT * FROM sessions`` and
+    unpacks exactly 5 values, so any vendor that ships an extra column (seen in the
+    wild: a 6th ``tmp_auth_key`` column written by a patched/forked Telethon) makes it
+    raise ``too many values to unpack`` even though the auth_key is perfectly valid.
+    Naming the columns is tolerant of such schema variants.
 
+    The bytes are written to a unique temp path ENDING in ``.session``, ``chmod 0600``.
     Raises :class:`ValueError` (``empty_or_invalid_session``) when the file is empty /
-    not a database / carries no auth_key — the caller fails that one item, never the
-    batch. The temp file (and any SQLite journal/WAL side files) is deleted in a
-    ``finally`` so vendor session bytes never linger on disk (Pitfall 9).
+    not a database / lacks a ``sessions`` row with a usable auth_key + DC — the caller
+    fails that one item, never the batch. The temp file (and any SQLite journal/WAL
+    side files) is deleted in a ``finally`` so vendor session bytes never linger on
+    disk (Pitfall 9).
     """
     fd, path = tempfile.mkstemp(suffix=".session")
     side_files = [path, path + "-journal", path + "-wal", path + "-shm"]
@@ -278,18 +290,31 @@ def sqlite_to_string_session(session_bytes: bytes) -> str:
         os.chmod(path, 0o600)
 
         try:
-            sess = SQLiteSession(path)
-        except Exception as exc:  # noqa: BLE001 — corrupt/non-sqlite bytes
-            # sqlite3.DatabaseError("file is not a database") et al. → invalid pair.
+            con = sqlite3.connect(path)
+            try:
+                # Explicit columns → tolerant of extra vendor columns (tmp_auth_key etc.).
+                row = con.execute(
+                    "SELECT dc_id, server_address, port, auth_key "
+                    "FROM sessions WHERE auth_key IS NOT NULL LIMIT 1"
+                ).fetchone()
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            # "file is not a database" / no sessions table / non-Telethon schema.
             raise ValueError("empty_or_invalid_session") from exc
 
-        try:
-            if sess.auth_key is None:
-                # Empty but valid sqlite (fresh DB) → no account behind it (Pitfall 4).
-                raise ValueError("empty_or_invalid_session")
-            return StringSession.save(sess)
-        finally:
-            sess.close()
+        # Empty but valid sqlite (fresh DB), or a row without a usable auth_key + DC →
+        # no live account behind it.
+        if not row:
+            raise ValueError("empty_or_invalid_session")
+        dc_id, server_address, port, auth_key = row
+        if not auth_key or not server_address or not port:
+            raise ValueError("empty_or_invalid_session")
+
+        sess = StringSession()
+        sess.set_dc(dc_id, server_address, port)
+        sess.auth_key = AuthKey(data=bytes(auth_key))
+        return sess.save()
     finally:
         for p in side_files:
             try:
@@ -310,19 +335,75 @@ def encrypt_twofa(twofa: str | None) -> str | None:
     return encrypt_session(twofa)
 
 
-async def resolve_import_proxy(db, workspace_id, json_proxy: dict | None):
+# Map a PySocks-style integer proxy type (as shipped in a vendor list) to our string.
+_VENDOR_PROXY_INT_TYPE = {1: "socks4", 2: "socks5", 3: "http"}
+
+
+def _normalize_vendor_proxy(raw: Any) -> dict | None:
+    """Coerce a vendor ``proxy`` value to our canonical ``{type,host,port,...}`` dict.
+
+    Vendors ship the proxy in several shapes — a canonical dict, a PySocks-style list
+    ``[type, host, port, rdns?, user?, pass?]`` (``type`` an int code or a string), or a
+    ``"host:port[:user:pass]"`` string. Returns the canonical dict, or ``None`` for an
+    empty / unrecognized shape (the account still imports — it just falls back to the
+    workspace proxy pool per D-15; a proxy is never a reason to drop an account).
+    """
+    if not raw:
+        return None
+
+    if isinstance(raw, dict):
+        return raw if raw.get("host") else None
+
+    if isinstance(raw, (list, tuple)):
+        if len(raw) < 3:
+            return None
+        ptype, host = raw[0], raw[1]
+        ptype = ptype.lower() if isinstance(ptype, str) else _VENDOR_PROXY_INT_TYPE.get(ptype)
+        if ptype not in ("socks5", "socks4", "http") or not host:
+            return None
+        try:
+            port = int(raw[2])
+        except (TypeError, ValueError):
+            return None
+        out: dict = {"type": ptype, "host": str(host), "port": port}
+        username = raw[4] if len(raw) > 4 else None
+        if username:
+            out["username"] = username
+            out["password"] = (raw[5] if len(raw) > 5 else "") or ""
+        return out
+
+    if isinstance(raw, str):
+        parts = raw.strip().split(":")
+        if len(parts) < 2:
+            return None
+        try:
+            port = int(parts[1])
+        except (TypeError, ValueError):
+            return None
+        out = {"type": "socks5", "host": parts[0], "port": port}
+        if len(parts) >= 4:
+            out["username"] = parts[2]
+            out["password"] = parts[3]
+        return out
+
+    return None
+
+
+async def resolve_import_proxy(db, workspace_id, json_proxy: Any = None):
     """Resolve the proxy for an imported account → ``(proxy_dict | None, pool_row_id | None)``.
 
-    * A non-empty JSON-supplied proxy wins (D-15) → ``(json_proxy, None)`` — no pool row
-      is involved, so nothing to mark taken.
+    * A usable JSON-supplied proxy wins (D-15) → ``(normalized_dict, None)`` — no pool row
+      is involved, so nothing to mark taken. The vendor value is normalized first, so a
+      list/tuple/string proxy is honoured, not silently ignored.
     * Otherwise take one FREE :class:`ProxyPool` row for the workspace
       (``assigned_to_sender_id IS NULL``) → ``(socks5-dict, row.id)``. The row id lets the
       caller mark that EXACT pool row ``assigned_to_sender_id`` AFTER the sender exists
       (Warning-1 contract gap fix) — this function only READS, never writes.
     * Empty pool → ``(None, None)`` (proxy is optional — do NOT hard-fail).
     """
-    if json_proxy:
-        return json_proxy, None
+    normalized = _normalize_vendor_proxy(json_proxy)
+    if normalized:
+        return normalized, None
 
     row = (
         await db.execute(
