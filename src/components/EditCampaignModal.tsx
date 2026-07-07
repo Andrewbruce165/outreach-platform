@@ -589,7 +589,7 @@ export function EditCampaignModal({
               className="input"
               type="number"
               min={1}
-              max={100}
+              max={30}
               value={maxNewDialogsPerDay}
               onChange={(e) => setMaxNewDialogsPerDay(Number(e.target.value))}
             />
