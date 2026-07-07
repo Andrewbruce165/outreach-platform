@@ -205,6 +205,66 @@ async def test_preview_pairing():
     assert "+491234567" in _basenames(result["malformed"])
 
 
+# ─── IMPT-01: POST /accounts/import/preview stages the ZIP + returns the summary ──
+
+async def test_preview_endpoint_stages_and_returns(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """``POST /api/v1/accounts/import/preview`` unzips + pairs synchronously, returns
+    import_id + matched/unpaired/malformed, and stages an ``account_import_stagings``
+    row with a FUTURE ``expires_at`` — never leaking the twoFA value or session bytes.
+    """
+    from datetime import datetime, timezone
+
+    token = valid_supabase_jwt(sub="imp-preview", email="imp-preview@test.com")
+    r = await async_client.post(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    ws = r.json()["workspace_id"]
+
+    buf = io.BytesIO()
+    secret_2fa = "super-secret-2fa"
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "+18646884306.json",
+            json.dumps({"twoFA": secret_2fa, "app_version": "6.8.2", "proxy": {"host": "1.2.3.4"}}),
+        )
+        zf.writestr("+18646884306.session", b"\x00fake-sqlite-bytes")
+        zf.writestr("+15551234567.json", json.dumps({"twoFA": None}))  # orphan json
+        zf.writestr("+79990001111.session", b"\x00orphan")            # orphan session
+        zf.writestr("+491234567.json", "{ not valid json")            # malformed
+        zf.writestr("+491234567.session", b"\x00bad")
+
+    resp = await async_client.post(
+        "/api/v1/accounts/import/preview",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("accounts.zip", buf.getvalue(), "application/zip")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    import_id = body["import_id"]
+    assert import_id
+    assert {m["basename"] for m in body["matched"]} == {"+18646884306"}
+    assert {u["basename"] for u in body["unpaired"]} == {"+15551234567", "+79990001111"}
+    assert {m["basename"] for m in body["malformed"]} == {"+491234567"}
+    # flags only — the raw twoFA value is NEVER in the response.
+    assert body["matched"][0]["has_2fa"] is True
+    assert body["matched"][0]["has_proxy"] is True
+    assert secret_2fa not in resp.text
+
+    # A staging row persisted with the ZIP + a future expires_at.
+    row = (await async_db_session.execute(_t("""
+        SELECT workspace_id, octet_length(zip_data) AS zlen, expires_at
+        FROM account_import_stagings WHERE id = :id
+    """), {"id": import_id})).mappings().first()
+    assert row is not None
+    assert str(row["workspace_id"]) == ws
+    assert row["zlen"] == len(buf.getvalue())
+    assert row["expires_at"] > datetime.now(timezone.utc)
+
+
 # ─── IMPT-05: 2FA password Fernet-encrypted at rest, never plaintext ────────────
 
 async def test_twofa_encrypted_at_rest(async_db_session, test_workspace):

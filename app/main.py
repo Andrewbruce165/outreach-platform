@@ -19,6 +19,7 @@ from app.services.campaign_enqueue import campaign_enqueue_worker  # Phase 4 D-1
 from app.services.kb_ingest_worker import kb_ingest_worker  # Phase 16 — KB ingest pipeline
 from app.services.follow_up import follow_up_worker  # Phase 19 — no-reply follow-up + auto-finish
 from app.routers import (
+    account_import,  # Phase 21 — bulk Telegram account import
     agents,
     analytics,  # Phase 5 — new (4 read-only endpoints)
     campaigns,
@@ -202,6 +203,7 @@ app.include_router(telemetry.router)  # Phase 05.1 — UI-SPEC §9 telemetry + c
 app.include_router(warmup.router)  # Phase 15 — warmup tab (workspace-scoped, D-05)
 app.include_router(knowledge_bases.router)  # Phase 16 — RAG knowledge bases
 app.include_router(llm_settings.router)  # Phase 18 — switchable LLM provider settings
+app.include_router(account_import.router)  # Phase 21 — bulk account import
 
 
 @app.get("/")
