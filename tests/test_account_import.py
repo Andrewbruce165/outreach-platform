@@ -1,0 +1,265 @@
+"""Phase 21 — Bulk Telegram account import (Wave 0 RED scaffold).
+
+Covers the per-account import surface. Every production symbol is imported INSIDE the
+test body (deferred import) so ``--collect-only`` stays clean while the assertions fail
+(RED) until the downstream tasks land the code:
+
+- test_sqlite_to_stringsession_offline        → IMPT-03 (SQLite .session → StringSession, offline)
+- test_fingerprint_override_and_strict_fallback→ IMPT-04 (per-account fingerprint override; strict fallback)
+- test_preview_pairing                         → IMPT-01 (ZIP unzip + .json↔.session pair, no connect)
+- test_twofa_encrypted_at_rest                 → IMPT-05 (2FA password Fernet-encrypted at rest)
+- test_dedup_skip_and_proxy                    → IMPT-06 (dedup by telegram_id + proxy from JSON)
+- test_partial_success_and_start_state         → IMPT-07 (per-file partial success; imported = active/none)
+
+No test performs a real Telegram connect: the offline conversion uses a SYNTHETIC vendor
+SQLiteSession (``build_vendor_sqlite_session`` fixture, never the live sample), and the
+import routine's Telethon client is the stubbed ``stub_import_telethon`` fixture.
+"""
+
+import io
+import json
+import uuid
+import zipfile
+
+import pytest
+from sqlalchemy import text as _t
+
+pytestmark = pytest.mark.asyncio
+
+
+def _basenames(entries):
+    """Extract the pairing-key basenames from a preview list.
+
+    Tolerant of either a list[str] of basenames or a list[dict] carrying a
+    'basename'/'name' key, so this scaffold does not over-constrain 21-03's exact
+    return shape — only the pairing behaviour it must produce.
+    """
+    out = set()
+    for e in entries or []:
+        if isinstance(e, str):
+            out.add(e)
+        elif isinstance(e, dict):
+            out.add(e.get("basename") or e.get("name"))
+    return out
+
+
+# ─── IMPT-03: offline SQLite → StringSession conversion ─────────────────────────
+
+async def test_sqlite_to_stringsession_offline(tmp_path, build_vendor_sqlite_session):
+    """A vendor SQLite .session converts to a StringSession offline (no network) and
+    round-trips to the same auth_key."""
+    from app.services.account_import import sqlite_to_string_session  # RED until 21-04
+    from telethon.sessions import StringSession
+
+    src_path = build_vendor_sqlite_session(tmp_path, dc_id=2, auth_key_byte=0x11)
+    with open(src_path, "rb") as f:
+        session_bytes = f.read()
+
+    ss = sqlite_to_string_session(session_bytes)
+
+    assert isinstance(ss, str)
+    assert ss.startswith("1A"), f"expected a version-1 StringSession, got {ss[:4]!r}"
+    rebuilt = StringSession(ss)
+    assert rebuilt.auth_key is not None
+    assert rebuilt.auth_key.key == bytes([0x11]) * 256
+
+
+# ─── IMPT-04: per-account fingerprint override + strict global fallback ─────────
+
+async def test_fingerprint_override_and_strict_fallback():
+    """``make_telegram_client(fingerprint=None)`` is byte-identical to today's global
+    ``_CLIENT_FINGERPRINT`` and keeps ``lang_pack='tdesktop'``; a fingerprint dict
+    overrides device/version/locale but STILL forces ``lang_pack='tdesktop'`` (D-04)."""
+    from telethon.sessions import StringSession
+    from app.services.telegram import make_telegram_client, _CLIENT_FINGERPRINT
+
+    # RED until 21-02 adds the `fingerprint=` param (TypeError on the unexpected kwarg).
+    c = make_telegram_client(StringSession(), fingerprint=None)
+    init = c._init_request
+    assert init.device_model == _CLIENT_FINGERPRINT["device_model"]
+    assert init.system_version == _CLIENT_FINGERPRINT["system_version"]
+    assert init.app_version == _CLIENT_FINGERPRINT["app_version"]
+    assert init.lang_code == _CLIENT_FINGERPRINT["lang_code"]
+    assert init.system_lang_code == _CLIENT_FINGERPRINT["system_lang_code"]
+    assert init.lang_pack == "tdesktop"
+
+    fp = {
+        "device_model": "iPhone14,2",
+        "system_version": "iOS 17.1",
+        "app_version": "10.2",
+        "lang_code": "en",
+        "system_lang_code": "en-US",
+    }
+    c2 = make_telegram_client(StringSession(), fingerprint=fp)
+    init2 = c2._init_request
+    assert init2.device_model == "iPhone14,2"
+    assert init2.system_version == "iOS 17.1"
+    assert init2.app_version == "10.2"
+    assert init2.lang_code == "en"
+    assert init2.system_lang_code == "en-US"
+    assert init2.lang_pack == "tdesktop"  # strict — never dropped even when overriding
+
+
+# ─── IMPT-01: preview unzip + pair by basename, no Telegram connect ─────────────
+
+async def test_preview_pairing():
+    """``unpack_and_pair`` matches .json↔.session by basename and reports orphans
+    (unpaired) + bad-JSON (malformed), with no Telegram connect."""
+    from app.services.account_import import unpack_and_pair  # RED until 21-03
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        # 1) matched pair
+        zf.writestr("+18646884306.json", json.dumps({"twoFA": None, "app_version": "6.8.2"}))
+        zf.writestr("+18646884306.session", b"\x00fake-sqlite-bytes")
+        # 2) orphan .json (no matching .session)
+        zf.writestr("+15551234567.json", json.dumps({"twoFA": None}))
+        # 3) orphan .session (no matching .json)
+        zf.writestr("+79990001111.session", b"\x00orphan-session")
+        # 4) malformed .json (paired session present, but JSON does not parse)
+        zf.writestr("+491234567.json", "{ this is : not valid json")
+        zf.writestr("+491234567.session", b"\x00bad-json-session")
+
+    result = unpack_and_pair(buf.getvalue())
+
+    assert "+18646884306" in _basenames(result["matched"])
+    unpaired = _basenames(result["unpaired"])
+    assert "+15551234567" in unpaired  # orphan json
+    assert "+79990001111" in unpaired  # orphan session
+    assert "+491234567" in _basenames(result["malformed"])
+
+
+# ─── IMPT-05: 2FA password Fernet-encrypted at rest, never plaintext ────────────
+
+async def test_twofa_encrypted_at_rest(async_db_session, test_workspace):
+    """A stored ``senders.twofa_password_enc`` is Fernet ciphertext (never the plaintext)
+    and decrypts back to the original password."""
+    from app.services.account_import import encrypt_twofa  # RED until 21-04/21-05
+    from app.services.encryption import decrypt_session
+
+    plaintext = "s3cr3t-2fa-pass"
+    enc = encrypt_twofa(plaintext)
+    assert enc != plaintext
+    assert plaintext not in enc
+
+    sid = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO senders (id, workspace_id, slug, name, phone, session_string,
+                             role, auth_status, lifecycle_status, twofa_password_enc)
+        VALUES (:id, :ws, :slug, 'Imported', '+18646884306', 'encrypted_stub',
+                'sender', 'ok', 'active', :enc)
+    """), {"id": sid, "ws": str(test_workspace.id), "slug": f"imp-{sid[:8]}", "enc": enc})
+    await async_db_session.commit()
+
+    stored = (await async_db_session.execute(_t(
+        "SELECT twofa_password_enc FROM senders WHERE id = :id"
+    ), {"id": sid})).scalar_one()
+    assert stored != plaintext
+    assert decrypt_session(stored) == plaintext
+
+
+# ─── IMPT-06: dedup by telegram_id + proxy from JSON ────────────────────────────
+
+async def test_dedup_skip_and_proxy(async_db_session, test_workspace, stub_import_telethon):
+    """Second import of an already-connected telegram_id → item result
+    'already_connected' and the existing sender's session_string is untouched; a JSON
+    proxy is honoured on the imported sender."""
+    import app.services.account_import as ai_mod  # RED until 21-04
+    from app.services.account_import import import_one_account
+
+    stub_import_telethon.install(ai_mod)
+    dup_tg_id = 778899
+    stub_import_telethon.client.get_me.return_value.id = dup_tg_id
+
+    # Pre-existing sender with the same telegram_id and a known session_string.
+    existing_id = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO senders (id, workspace_id, slug, name, phone, telegram_id,
+                             session_string, role, auth_status, lifecycle_status)
+        VALUES (:id, :ws, 'existing-dup', 'Existing', '+18646884306', :tid,
+                'ORIGINAL_UNTOUCHED', 'sender', 'ok', 'active')
+    """), {"id": existing_id, "ws": str(test_workspace.id), "tid": dup_tg_id})
+
+    # Job + item carrying a proxy in the vendor JSON.
+    job_id = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_jobs (id, workspace_id, role, status, total)
+        VALUES (:id, :ws, 'sender', 'running', 1)
+    """), {"id": job_id, "ws": str(test_workspace.id)})
+    proxy = {"type": "socks5", "host": "1.2.3.4", "port": 1080,
+             "username": "u", "password": "p"}
+    item_id = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_items
+            (id, job_id, workspace_id, basename, session_blob, vendor_json)
+        VALUES (:id, :job, :ws, '+18646884306', :blob, CAST(:vj AS JSONB))
+    """), {"id": item_id, "job": job_id, "ws": str(test_workspace.id),
+           "blob": b"\x00sqlite", "vj": json.dumps({"proxy": proxy})})
+    await async_db_session.commit()
+
+    item = (await async_db_session.execute(_t(
+        "SELECT * FROM account_import_items WHERE id = :id"), {"id": item_id})).mappings().first()
+
+    result = await import_one_account(async_db_session, dict(item))
+
+    assert result == "already_connected"
+    untouched = (await async_db_session.execute(_t(
+        "SELECT session_string FROM senders WHERE id = :id"), {"id": existing_id})).scalar_one()
+    assert untouched == "ORIGINAL_UNTOUCHED"
+
+
+# ─── IMPT-07: per-file partial success + imported start state ───────────────────
+
+async def test_partial_success_and_start_state(
+    async_db_session, test_workspace, stub_import_telethon, tmp_path, build_vendor_sqlite_session
+):
+    """A batch with one broken pair → that item 'failed', a good pair imports 'ok' and
+    the created sender starts lifecycle_status='active' + restriction_status='none'."""
+    import app.services.account_import as ai_mod  # RED until 21-04
+    from app.services.account_import import import_one_account
+
+    stub_import_telethon.install(ai_mod)
+    stub_import_telethon.client.get_me.return_value.id = 555001
+
+    good_path = build_vendor_sqlite_session(tmp_path, dc_id=2, auth_key_byte=0x22)
+    with open(good_path, "rb") as f:
+        good_blob = f.read()
+
+    job_id = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_jobs (id, workspace_id, role, status, total)
+        VALUES (:id, :ws, 'sender', 'running', 2)
+    """), {"id": job_id, "ws": str(test_workspace.id)})
+
+    good_id, bad_id = str(uuid.uuid4()), str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_items
+            (id, job_id, workspace_id, basename, session_blob, vendor_json)
+        VALUES (:id, :job, :ws, '+15550000001', :blob, '{}'::jsonb)
+    """), {"id": good_id, "job": job_id, "ws": str(test_workspace.id), "blob": good_blob})
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_items
+            (id, job_id, workspace_id, basename, session_blob, vendor_json)
+        VALUES (:id, :job, :ws, '+15550000002', :blob, '{}'::jsonb)
+    """), {"id": bad_id, "job": job_id, "ws": str(test_workspace.id),
+           "blob": b"\x00not-a-sqlite-file"})
+    await async_db_session.commit()
+
+    good_item = dict((await async_db_session.execute(_t(
+        "SELECT * FROM account_import_items WHERE id = :id"), {"id": good_id})).mappings().first())
+    bad_item = dict((await async_db_session.execute(_t(
+        "SELECT * FROM account_import_items WHERE id = :id"), {"id": bad_id})).mappings().first())
+
+    good_result = await import_one_account(async_db_session, good_item)
+    bad_result = await import_one_account(async_db_session, bad_item)
+
+    assert good_result in ("imported", "ok")
+    assert bad_result not in ("imported", "ok", "already_connected")
+
+    created = (await async_db_session.execute(_t("""
+        SELECT lifecycle_status, restriction_status FROM senders
+        WHERE workspace_id = :ws AND phone = '+15550000001'
+    """), {"ws": str(test_workspace.id)})).mappings().first()
+    assert created is not None
+    assert created["lifecycle_status"] == "active"
+    assert created["restriction_status"] == "none"

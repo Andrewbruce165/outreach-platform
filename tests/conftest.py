@@ -17,6 +17,7 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-pytest-only")
 import logging
 from typing import AsyncGenerator, Callable
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from jose import jwt
@@ -1115,3 +1116,94 @@ async def mock_telethon_client():
             return True
 
     return _MockTelethonClient()
+
+
+# ─── Phase 21 fixtures: bulk account-import (synthetic session + stubbed Telethon) ──
+# The vendor .session sample is gitignored / holds a LIVE auth_key — never read or commit
+# it in tests. Instead we synthesize a SQLiteSession on disk with a fake dc + 256-byte
+# auth_key so the offline SQLite→StringSession conversion (IMPT-03) runs with no network.
+
+
+def _valid_string_session_blob() -> str:
+    """A real (empty-auth-key) Telethon StringSession string — round-trippable.
+
+    ``StringSession(<blob>)`` raises ValueError on a non-Telethon string, so the import
+    stub must hand back a genuine one (mirror tests/test_onboarding.py). This is what the
+    stubbed connected client's ``.session.save()`` returns.
+    """
+    from telethon.crypto import AuthKey
+    from telethon.sessions import StringSession
+
+    s = StringSession()
+    s.set_dc(2, "149.154.167.40", 443)
+    s.auth_key = AuthKey(b"\x00" * 256)
+    return s.save()
+
+
+@pytest.fixture
+def build_vendor_sqlite_session():
+    """Return a builder for a SYNTHETIC vendor SQLiteSession file on disk (no live sample).
+
+    Usage:
+        path = build_vendor_sqlite_session(tmp_path)                 # dc 2, auth_key 0x11*256
+        path = build_vendor_sqlite_session(tmp_path, dc_id=4, auth_key_byte=0x22)
+
+    Constructs a real telethon ``SQLiteSession`` with a fake dc_id + 256-byte auth_key and
+    flushes it to ``<tmp_path>/vendor_account.session``. Returns the file path; read its
+    bytes (``open(path, "rb").read()``) for the ``session_blob`` an import item carries.
+    Round-trips offline: SQLite → StringSession conversion (IMPT-03) needs no Telegram net.
+    """
+    def _build(tmp_path, dc_id: int = 2, server: str = "149.154.167.40",
+               port: int = 443, auth_key_byte: int = 0x11) -> str:
+        from telethon.crypto import AuthKey
+        from telethon.sessions import SQLiteSession
+
+        base = str(tmp_path / "vendor_account")
+        s = SQLiteSession(base)              # SQLiteSession appends '.session'
+        s.set_dc(dc_id, server, port)
+        s.auth_key = AuthKey(bytes([auth_key_byte]) * 256)
+        s.save()                             # commit to sqlite on disk
+        s.close()
+        return base + ".session"
+
+    return _build
+
+
+@pytest.fixture
+def stub_import_telethon(monkeypatch):
+    """Reusable stubbed Telethon client for account-import tests — NO Telegram network.
+
+    Returns a namespace with:
+      * ``.client`` — a MagicMock that quacks like a CONNECTED TelegramClient
+        (``connect`` / ``disconnect`` / ``is_connected`` / ``is_user_authorized`` /
+        ``get_me`` + a ``.session`` whose ``.save()`` yields a VALID empty-auth-key
+        StringSession string). ``get_me`` returns a SimpleNamespace(id/username/
+        first_name/last_name/phone) — mutate ``.get_me.return_value`` per test (e.g. to
+        force a duplicate telegram_id for the dedup path).
+      * ``.install(module)`` — monkeypatch ``make_telegram_client`` on the given module
+        object to return ``.client``. Call it after the (deferred) import of the
+        account-import module lands, so the import routine never touches the network.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = MagicMock(name="StubImportTelethonClient")
+    client.connect = AsyncMock(return_value=None)
+    client.disconnect = AsyncMock(return_value=None)
+    client.is_connected = MagicMock(return_value=True)
+    client.is_user_authorized = AsyncMock(return_value=True)
+    client.get_me = AsyncMock(return_value=SimpleNamespace(
+        id=778899, username="imported_user", first_name="Imported",
+        last_name=None, phone="18646884306",
+    ))
+    session = MagicMock()
+    session.save = MagicMock(return_value=_valid_string_session_blob())
+    client.session = session
+
+    def _install(module):
+        def _factory(session, proxy=None, **kwargs):
+            return client
+        monkeypatch.setattr(module, "make_telegram_client", _factory, raising=False)
+        return client
+
+    return SimpleNamespace(client=client, install=_install)
