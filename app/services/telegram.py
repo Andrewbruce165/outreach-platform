@@ -912,15 +912,40 @@ class TelegramService:
         client: TelegramClient,
         phone: str,
         recipient_name: Optional[str],
-        file_url: str,
+        file_url: Optional[str] = None,
         file_name: Optional[str] = None,
         caption: Optional[str] = None,
         sender_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
+        file_bytes: Optional[bytes] = None,
+        force_document: bool = True,
     ) -> dict:
-        """Download file from URL and send to recipient. Client is disconnected after the operation."""
+        """Send a file to a recipient. Client is disconnected after the operation.
+
+        Source (D-08): pass ``file_bytes`` for a DB-blob source (written straight to
+        a temp file, no network) OR ``file_url`` to download the file first. Exactly
+        one is expected; ``file_bytes`` wins when both are given.
+
+        Media type (D-06): ``force_document=True`` (default) preserves today's
+        behaviour — every file arrives as a document. ``force_document=False`` lets
+        Telethon auto-detect media (photo->photo, video->video, else document); this
+        works because the temp file keeps the ORIGINAL filename extension.
+
+        Caption overflow (D-07): a caption longer than 1024 chars is sent as a
+        separate follow-up text message so nothing is lost.
+        """
         tmp_path = None
         try:
+            # D-08 guard: need at least one source (blob or URL) before touching Telegram.
+            if file_bytes is None and not file_url:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "SEND_FAILED",
+                        "message": "no file source"
+                    }
+                }
+
             # Resolve contact (cache first, ImportContacts only for new contacts)
             if sender_id and workspace_id:
                 contact_info = await self.resolve_contact(client, workspace_id, sender_id, phone, recipient_name)
@@ -945,17 +970,25 @@ class TelegramService:
             else:
                 peer = telegram_id  # fallback for cached contacts without access_hash
 
-            # Download file from URL
-            if not file_name:
-                parsed = urlparse(file_url)
-                file_name = os.path.basename(parsed.path) or "file"
+            # Obtain the file bytes: blob source (D-08) skips the network entirely;
+            # otherwise fall back to the existing URL download.
+            if file_bytes is not None:
+                # The attachment always supplies a file_name; default defensively.
+                if not file_name:
+                    file_name = "file"
+                file_data = file_bytes
+            else:
+                if not file_name:
+                    parsed = urlparse(file_url)
+                    file_name = os.path.basename(parsed.path) or "file"
 
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-                resp = await http.get(file_url)
-                resp.raise_for_status()
-                file_data = resp.content
+                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
+                    resp = await http.get(file_url)
+                    resp.raise_for_status()
+                    file_data = resp.content
 
-            # Save to temp file
+            # Save to temp file. The suffix is load-bearing: Telethon uses the file
+            # extension to decide auto-media type when force_document=False (D-06).
             suffix = os.path.splitext(file_name)[1] or ""
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
                 f.write(file_data)
@@ -979,7 +1012,7 @@ class TelegramService:
                 tmp_path,
                 caption=file_caption,
                 file_name=file_name,
-                force_document=True
+                force_document=force_document
             )
 
             # Send overflow caption as a follow-up text message
