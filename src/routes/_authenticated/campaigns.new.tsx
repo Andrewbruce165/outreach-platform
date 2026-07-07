@@ -130,8 +130,8 @@ function CampaignBuilder() {
   // 026: per-campaign re-contact policy. Off by default — strict no-re-touch.
   const [allowRecontact, setAllowRecontact] = useState(false);
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(30);
-  // Phase 12 NDLG-06: per-attached-account daily new-dialog cap. Default 50.
-  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(50);
+  // Phase 12 NDLG-06: per-attached-account daily new-dialog cap. Default 10 (hard cap 30, quick 260706-mdz).
+  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(10);
   // Phase 19 NORP-13: no-reply follow-up + auto-finish. Off by default (D-08/D-12).
   const [followUpEnabled, setFollowUpEnabled] = useState(false);
   const [followUpIntervalHours, setFollowUpIntervalHours] = useState(24);
