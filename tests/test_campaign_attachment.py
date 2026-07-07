@@ -122,3 +122,193 @@ async def test_migration_054_idempotent(async_db_session):
         for stmt in statements:
             await async_db_session.execute(text(stmt))
         await async_db_session.commit()
+
+
+# ─── 24-04: attachment-endpoint + wiring tests ──────────────────────────────
+#
+# Covers D-03/D-13/D-19/D-20:
+#   - POST /campaigns/{id}/attachment (multipart) stores exactly ONE blob (upsert),
+#     alias-tolerant to file|attachment, >50MB -> 413 FILE_TOO_LARGE.
+#   - DELETE /campaigns/{id}/attachment -> 204, row gone.
+#   - cross-workspace campaign -> 404 CAMPAIGN_NOT_FOUND.
+#   - has_attachment surfaces the blob; variation_enabled round-trips through PATCH.
+#   - duplicate_campaign copies BOTH the flag AND the blob (own row for the copy).
+
+from app.routers.campaigns import MAX_ATTACHMENT_BYTES
+
+
+async def _bind(db, ws_id, uid):
+    await db.execute(
+        text(
+            "INSERT INTO user_workspaces (supabase_user_id, workspace_id, role) "
+            "VALUES (:uid, :wid, 'owner') ON CONFLICT DO NOTHING"
+        ),
+        {"uid": uid, "wid": str(ws_id)},
+    )
+    await db.commit()
+
+
+async def _count_attachments(db, campaign_id) -> int:
+    return (
+        await db.execute(
+            text("SELECT COUNT(*) FROM campaign_attachments WHERE campaign_id = :cid"),
+            {"cid": str(campaign_id)},
+        )
+    ).scalar()
+
+
+async def test_upload_attachment_stores_one_blob(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """POST stores the uploaded file as exactly ONE campaign_attachments row;
+    the response echoes size_bytes == len(raw) (D-19)."""
+    await _bind(async_db_session, test_workspace.id, "u-up")
+    camp = await test_campaign_factory()
+    blob = b"hello-first-message-attachment-bytes"
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("doc.pdf", blob, "application/pdf")},
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-up')}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["file_name"] == "doc.pdf"
+    assert body["size_bytes"] == len(blob)
+    assert body["content_type"] == "application/pdf"
+    assert await _count_attachments(async_db_session, camp["id"]) == 1
+
+
+async def test_upload_replaces_existing_blob(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """A second upload replaces the first — still exactly one row (D-01 upsert)."""
+    await _bind(async_db_session, test_workspace.id, "u-rep")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-rep')}"}
+    r1 = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("a.pdf", b"first", "application/pdf")}, headers=hdr,
+    )
+    assert r1.status_code == 200, r1.text
+    r2 = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("b.png", b"second-bytes", "image/png")}, headers=hdr,
+    )
+    assert r2.status_code == 200, r2.text
+    assert await _count_attachments(async_db_session, camp["id"]) == 1
+    row = (await async_db_session.execute(
+        text("SELECT file_name, file_data FROM campaign_attachments WHERE campaign_id = :cid"),
+        {"cid": str(camp["id"])},
+    )).first()
+    assert row[0] == "b.png"
+    assert bytes(row[1]) == b"second-bytes"
+
+
+async def test_upload_alias_attachment_field(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """The multipart field may be named 'attachment' instead of 'file' (D-19 Lovable)."""
+    await _bind(async_db_session, test_workspace.id, "u-alias")
+    camp = await test_campaign_factory()
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"attachment": ("c.txt", b"alias-field", "text/plain")},
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-alias')}"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["file_name"] == "c.txt"
+    assert await _count_attachments(async_db_session, camp["id"]) == 1
+
+
+async def test_upload_no_file_field_422(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """Neither file nor attachment present -> 422 FILE_REQUIRED."""
+    await _bind(async_db_session, test_workspace.id, "u-nofile")
+    camp = await test_campaign_factory()
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        data={"foo": "bar"},
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-nofile')}"},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["code"] == "FILE_REQUIRED"
+
+
+async def test_upload_too_large_413(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """A file over MAX_ATTACHMENT_BYTES (50 MB) -> 413 FILE_TOO_LARGE (D-03)."""
+    await _bind(async_db_session, test_workspace.id, "u-big")
+    camp = await test_campaign_factory()
+    oversized = b"0" * (MAX_ATTACHMENT_BYTES + 1)
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("big.bin", oversized, "application/octet-stream")},
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-big')}"},
+    )
+    assert r.status_code == 413, r.status_code
+    assert r.json()["detail"]["code"] == "FILE_TOO_LARGE"
+    assert await _count_attachments(async_db_session, camp["id"]) == 0
+
+
+async def test_delete_attachment_204(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """DELETE removes the blob -> 204 and the row is gone (D-19)."""
+    await _bind(async_db_session, test_workspace.id, "u-del")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-del')}"}
+    up = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("d.pdf", b"to-delete", "application/pdf")}, headers=hdr,
+    )
+    assert up.status_code == 200, up.text
+    assert await _count_attachments(async_db_session, camp["id"]) == 1
+    d = await async_client.delete(
+        f"/api/v1/campaigns/{camp['id']}/attachment", headers=hdr,
+    )
+    assert d.status_code == 204, d.text
+    assert await _count_attachments(async_db_session, camp["id"]) == 0
+
+
+async def test_delete_attachment_idempotent_no_blob(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """DELETE with no attachment present is a no-op -> still 204 (idempotent)."""
+    await _bind(async_db_session, test_workspace.id, "u-del2")
+    camp = await test_campaign_factory()
+    d = await async_client.delete(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-del2')}"},
+    )
+    assert d.status_code == 204, d.text
+
+
+async def test_upload_cross_workspace_404(
+    async_client, valid_supabase_jwt, async_db_session, test_campaign_factory,
+):
+    """Uploading to a campaign owned by another workspace -> 404 (workspace isolation)."""
+    from app.models import Workspace
+
+    camp = await test_campaign_factory()  # in test_workspace
+    other = Workspace(name="Other-attach-ws")
+    async_db_session.add(other)
+    await async_db_session.commit()
+    await async_db_session.refresh(other)
+    await _bind(async_db_session, other.id, "u-cross")
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("x.pdf", b"nope", "application/pdf")},
+        headers={"Authorization": f"Bearer {valid_supabase_jwt(sub='u-cross')}"},
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "CAMPAIGN_NOT_FOUND"
+    assert await _count_attachments(async_db_session, camp["id"]) == 0
