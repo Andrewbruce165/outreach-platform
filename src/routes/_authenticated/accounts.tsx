@@ -639,6 +639,13 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
       {historyOpen && (
         <RestrictionHistoryModal sender={sender} onClose={() => setHistoryOpen(false)} />
       )}
+      {spambotResult && (
+        <SpambotResultModal
+          sender={sender}
+          result={spambotResult}
+          onClose={() => setSpambotResult(null)}
+        />
+      )}
     </div>
   );
 }
