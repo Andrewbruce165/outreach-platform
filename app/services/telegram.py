@@ -235,6 +235,7 @@ def make_telegram_client(
     proxy: dict | None = None,
     flood_sleep_threshold: int = 60,
     client_class: type = TelegramClient,
+    fingerprint: dict | None = None,
 ) -> TelegramClient:
     """Create a TelegramClient with official-client fingerprint.
 
@@ -243,16 +244,28 @@ def make_telegram_client(
     Telethon sends an empty lang_pack which Telegram uses to mark the session
     as third-party and terminates it when the user logs out from mobile.
 
+    Per-account fingerprint override (Phase 21, IMPT-04): pass ``fingerprint``
+    (a dict of device_model/system_version/app_version/lang_code/system_lang_code)
+    to reconnect an *imported* account with the exact fingerprint that created its
+    session. STRICT NULL fallback (D-02): ``fingerprint=None`` resolves to EXACTLY
+    the global ``_CLIENT_FINGERPRINT`` — byte-identical to pre-Phase-21 behaviour,
+    so the phone-onboarded senders (all with NULL fingerprint) are unaffected. Any
+    keys the override omits fall back to the global. ``api_id``/``api_hash`` stay the
+    global settings values — never per-account (D-03). ``lang_pack`` is forced to
+    'tdesktop' UNCONDITIONALLY even when overriding (D-04 — it is the field that
+    terminates sessions when empty).
+
     Pass client_class=ResilientTelegramClient for the listener subprocess.
     Must be called before client.connect().
     """
+    fp = {**_CLIENT_FINGERPRINT, **(fingerprint or {})}
     client = client_class(
         session,
         settings.telegram_api_id,
         settings.telegram_api_hash,
         flood_sleep_threshold=flood_sleep_threshold,
         proxy=build_proxy_tuple(proxy),
-        **_CLIENT_FINGERPRINT,
+        **fp,
     )
     client._init_request.lang_pack = "tdesktop"
     return client
@@ -293,7 +306,8 @@ class TelegramService:
         sender_slug: str,
         sender_id: str,
         encrypted_session: str,
-        proxy: dict | None = None
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> TelegramClient:
         """Create a temporary Telegram client for a single operation.
 
@@ -316,6 +330,7 @@ class TelegramService:
             client = make_telegram_client(
                 StringSession(session_string),
                 proxy=proxy,
+                fingerprint=fingerprint,
             )
 
             try:
