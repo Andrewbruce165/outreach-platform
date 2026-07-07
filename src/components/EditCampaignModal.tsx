@@ -184,7 +184,7 @@ export function EditCampaignModal({
         work_days_mask: campaign.work_days_mask ?? null,
         allow_recontact: campaign.allow_recontact ?? false,
         recontact_min_age_days: campaign.recontact_min_age_days ?? 30,
-        max_new_dialogs_per_day: campaign.max_new_dialogs_per_day ?? 50,
+        max_new_dialogs_per_day: campaign.max_new_dialogs_per_day ?? 10,
         follow_up_enabled: campaign.follow_up_enabled ?? false,
         follow_up_interval_hours: campaign.follow_up_interval_hours ?? 24,
         follow_up_max_pings: campaign.follow_up_max_pings ?? 2,
