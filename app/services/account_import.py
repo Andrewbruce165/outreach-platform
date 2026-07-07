@@ -346,3 +346,208 @@ async def resolve_import_proxy(db, workspace_id, json_proxy: dict | None):
         },
         row.id,
     )
+
+
+def _as_vendor_dict(value) -> dict:
+    """Coerce a stored ``vendor_json`` value (dict / JSON str / bytes / None) to a dict."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", "ignore")
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+async def _job_role(db, job_id) -> str:
+    """The batch role ('sender' | 'checker') for an item's job; 'sender' if unknown."""
+    if job_id is None:
+        return "sender"
+    role = (
+        await db.execute(select(AccountImportJob.role).where(AccountImportJob.id == job_id))
+    ).scalar_one_or_none()
+    return role or "sender"
+
+
+async def import_one_account(db, item) -> str:
+    """Import ONE file pair (an ``account_import_items`` row dict) → a result-code string.
+
+    Returns one of ``imported`` | ``already_connected`` | ``malformed_json`` |
+    ``convert_failed`` | ``not_authorized`` | ``auth_failed`` | ``banned`` |
+    ``connect_failed`` | ``failed`` and NEVER raises for a per-account failure (D-10) —
+    the worker (21-05) persists the returned code onto the item row. ``item`` carries its
+    own ``session_blob`` (bytes) + ``vendor_json`` so no re-unzip is needed.
+
+    Flow:
+      1. Re-validate the vendor JSON (``session_file`` injected from ``basename``) —
+         malformed → ``malformed_json``.
+      2. Dedup BEFORE loading the session (D-14 — never overwrite a live account): a
+         sender already exists in the workspace with this phone → ``already_connected``,
+         its ``session_string`` untouched (and a garbage session is never even loaded).
+      3. Offline ``sqlite_to_string_session`` — a broken/empty session fails THIS item
+         (``convert_failed``), not the batch.
+      4. Connect under the account's OWN fingerprint (21-02 seam), ``get_me``, disconnect
+         in a ``finally`` (Pitfall 5). Dead session → ``auth_failed``/``banned``/
+         ``not_authorized``.
+      5. Authoritative dedup by ``telegram_id`` (IMPT-06) — same account under a
+         different filename is still a duplicate → ``already_connected``.
+      6. Create exactly one ``active`` sender (fingerprint / Fernet-2FA / proxy / none),
+         mark the exact free pool row taken (only when a pool proxy was used), and
+         recover an INSERT race as ``already_connected`` (Pitfall 8). No @SpamBot probe —
+         ``restriction_status`` defaults to ``'none'`` via server_default (D-11).
+    """
+    workspace_id = item.get("workspace_id")
+    basename = item.get("basename") or ""
+    session_bytes = item.get("session_blob")
+    masked = _mask_phone(basename)
+
+    try:
+        vendor_dict = _as_vendor_dict(item.get("vendor_json"))
+        # session_file is REQUIRED on the schema; the item stores the vendor JSON as-is,
+        # so inject the archived basename as the authoritative fallback before validating.
+        vendor_dict.setdefault("session_file", basename)
+        try:
+            vendor = VendorAccountJson.model_validate(vendor_dict)
+        except ValidationError:
+            logger.warning("[account-import] malformed vendor JSON for %s", masked)
+            return "malformed_json"
+
+        # (2) Pre-connect dedup by phone (D-14): skip a known account WITHOUT loading its
+        # session — never overwrite the existing (live) session_string.
+        existing = (
+            await db.execute(
+                select(Sender).where(
+                    Sender.workspace_id == workspace_id, Sender.phone == basename
+                )
+            )
+        ).scalars().first()
+        if existing is not None:
+            logger.info("[account-import] skip %s -> already_connected (phone match)", masked)
+            return "already_connected"
+
+        # (3) Offline SQLite -> StringSession — fails this item only.
+        try:
+            string = sqlite_to_string_session(session_bytes or b"")
+        except Exception as exc:  # noqa: BLE001 — ValueError + corrupt-sqlite variants
+            logger.warning("[account-import] convert_failed for %s: %s", masked, exc)
+            return "convert_failed"
+
+        role = await _job_role(db, item.get("job_id"))
+        proxy, proxy_pool_id = await resolve_import_proxy(db, workspace_id, vendor.proxy)
+
+        # (4) Connect under the account's OWN fingerprint (21-02 seam) — the stub replaces
+        # make_telegram_client in tests, so no socket is opened there.
+        client = make_telegram_client(
+            StringSession(string), proxy=proxy, fingerprint=build_fingerprint(vendor)
+        )
+        me = None
+        try:
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    logger.warning("[account-import] not_authorized for %s", masked)
+                    return "not_authorized"
+                me = await client.get_me()
+            except AUTH_ERRORS as exc:
+                logger.warning("[account-import] auth_failed for %s: %s", masked, exc)
+                return "auth_failed"
+            except UserDeactivatedBanError as exc:
+                logger.warning("[account-import] banned for %s: %s", masked, exc)
+                return "banned"
+            except Exception as exc:  # noqa: BLE001 — never raise into the batch
+                logger.warning("[account-import] connect_failed for %s: %s", masked, exc)
+                return "connect_failed"
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001 — best-effort cleanup (Pitfall 5)
+                pass
+
+        if me is None:
+            logger.warning("[account-import] get_me returned nothing for %s", masked)
+            return "connect_failed"
+
+        tg_id = getattr(me, "id", None)
+        tg_username = getattr(me, "username", None)
+        first_name = getattr(me, "first_name", "") or ""
+        slug = f"sender-{tg_id}" if tg_id is not None else f"sender-{basename}"
+
+        # (5) Authoritative dedup by telegram_id (IMPT-06) — same account, any filename.
+        if tg_id is not None:
+            dup = (
+                await db.execute(
+                    select(Sender).where(
+                        Sender.workspace_id == workspace_id, Sender.telegram_id == tg_id
+                    )
+                )
+            ).scalars().first()
+            if dup is not None:
+                logger.info(
+                    "[account-import] skip %s -> already_connected (tg_id match)", masked
+                )
+                return "already_connected"
+
+        # (6) Create exactly one active sender. restriction_status defaults to 'none' via
+        # server_default (D-11) — imported accounts start active/none, no @SpamBot probe.
+        sender = Sender(
+            workspace_id=workspace_id,
+            slug=slug,
+            name=first_name or slug,
+            phone=basename,
+            telegram_id=tg_id,
+            session_string=encrypt_session(string),
+            role=role,
+            proxy=proxy,
+            client_fingerprint=build_fingerprint(vendor),
+            twofa_password_enc=encrypt_twofa(vendor.twoFA),
+            auth_status="ok",
+            lifecycle_status="active",
+            tg_username=tg_username,
+        )
+        db.add(sender)
+        try:
+            await db.flush()
+        except IntegrityError:
+            # Race: a concurrent import created (workspace_id, slug) between the dedup
+            # SELECT and this flush (Pitfall 8) → recover as already_connected, never 500.
+            await db.rollback()
+            raced = (
+                await db.execute(
+                    select(Sender).where(
+                        Sender.workspace_id == workspace_id, Sender.slug == slug
+                    )
+                )
+            ).scalars().first()
+            if raced is None:
+                return "failed"
+            logger.warning("[account-import] INSERT raced on slug=%s -> already_connected", slug)
+            return "already_connected"
+
+        # Mark the EXACT free pool row taken — only when a pool proxy was used. A
+        # JSON-supplied proxy (proxy_pool_id is None) touches no pool row.
+        if proxy_pool_id is not None:
+            await db.execute(
+                update(ProxyPool)
+                .where(ProxyPool.id == proxy_pool_id)
+                .values(assigned_to_sender_id=sender.id)
+            )
+
+        await db.commit()
+        logger.info("[account-import] imported %s slug=%s tg_id=%s", masked, slug, tg_id)
+        return "imported"
+    except Exception as exc:  # noqa: BLE001 — a per-account failure must never break the batch
+        logger.warning("[account-import] unexpected failure for %s: %s", masked, exc)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return "failed"
