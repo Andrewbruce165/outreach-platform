@@ -454,6 +454,13 @@ export interface paths {
          * @description PROF-05: set (no current_password) or change (with current_password, D-04) the
          *     account 2FA password via a single stateless ``edit_2fa`` request. Wrong current
          *     password → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03).
+         *
+         *     IMPT-10 (D-06): for an IMPORTED account whose 2FA password was stored (encrypted)
+         *     at import time, a request that OMITS ``current_password`` falls back to the stored,
+         *     decrypted password server-side — so the user need not re-type the 2FA password the
+         *     platform already knows. The decrypted plaintext is used ONLY to build the edit_2fa
+         *     request; it is never returned in the response, never logged, never re-persisted
+         *     (D-07). The reconnect uses the account's own fingerprint (Part B, site edit_2fa).
          */
         post: operations["update_sender_2fa_api_v1_senders__slug__2fa_post"];
         delete?: never;
@@ -2279,6 +2286,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/import/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Preview
+         * @description Unzip + pair + validate a bulk-import ZIP synchronously; stage it with a TTL.
+         *
+         *     Returns ``import_id`` + matched/unpaired/malformed. NO Telegram connect happens.
+         */
+        post: operations["import_preview_api_v1_accounts_import_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/import/{import_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Confirm
+         * @description Turn a staged preview into a background import job (returns ``job_id``, 202).
+         *
+         *     Re-reads the staged ZIP, pairs it again, and creates ONE job + N pending items (one
+         *     per matched pair). NO Telegram connect happens here — the AccountImportWorker does the
+         *     per-account work. Unknown staging → 404 ``IMPORT_NOT_FOUND``; expired → 410
+         *     ``IMPORT_EXPIRED``. Double-submit is allowed (a fresh job each time — the worker dedups
+         *     per phone/telegram_id, so a re-confirm never creates duplicate senders; D-14/IMPT-06).
+         */
+        post: operations["import_confirm_api_v1_accounts_import__import_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/import/{job_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Import Status
+         * @description Poll an import job's progress: ``processed``/``total`` + a per-file result list.
+         *
+         *     The item payload is secrets-free by construction — only basename/status/result/reason.
+         *     ``processed`` is the worker-maintained counter; when it reaches ``total`` the worker has
+         *     flipped ``status`` → ``done`` (whatever the row currently says is returned).
+         */
+        get: operations["import_status_api_v1_accounts_import__job_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -2303,6 +2382,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccountImportPreviewResponse */
+        AccountImportPreviewResponse: {
+            /**
+             * Import Id
+             * Format: uuid
+             */
+            import_id: string;
+            /** Matched */
+            matched: components["schemas"]["PreviewMatchedItem"][];
+            /** Unpaired */
+            unpaired: components["schemas"]["PreviewUnpairedItem"][];
+            /** Malformed */
+            malformed: components["schemas"]["PreviewMalformedItem"][];
+        };
         /**
          * AgentCreate
          * @description POST /api/v1/agents body (D-02 + Phase 11 field split).
@@ -2651,6 +2744,14 @@ export interface components {
              * Format: date-time
              */
             workspace_created_at: string;
+        };
+        /** Body_import_preview_api_v1_accounts_import_preview_post */
+        Body_import_preview_api_v1_accounts_import_preview_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
         };
         /** Body_import_preview_api_v1_contacts_import_preview_post */
         Body_import_preview_api_v1_contacts_import_preview_post: {
@@ -3458,6 +3559,58 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /**
+         * ImportConfirmRequest
+         * @description Body for confirm. Role is chosen once for the whole batch (D-16); an invalid
+         *     value is rejected by the ``Literal`` type (structured 422).
+         */
+        ImportConfirmRequest: {
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "sender" | "checker";
+        };
+        /** ImportConfirmResponse */
+        ImportConfirmResponse: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ImportStatusItem
+         * @description A single per-file outcome — NEVER carries session bytes or the twoFA value.
+         */
+        ImportStatusItem: {
+            /** Basename */
+            basename: string;
+            /** Status */
+            status: string;
+            /** Result */
+            result?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** ImportStatusResponse */
+        ImportStatusResponse: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Total */
+            total: number;
+            /** Processed */
+            processed: number;
+            /** Items */
+            items: components["schemas"]["ImportStatusItem"][];
+        };
+        /**
          * KbDocumentResponse
          * @description D-10 per-document list row.
          */
@@ -3825,6 +3978,43 @@ export interface components {
              * @default false
              */
             has_backup: boolean;
+        };
+        /**
+         * PreviewMalformedItem
+         * @description A .json that failed to parse or failed schema validation.
+         */
+        PreviewMalformedItem: {
+            /** Basename */
+            basename: string;
+            /** Filename */
+            filename: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * PreviewMatchedItem
+         * @description A recognized .json↔.session pair. Carries flags only — never the twoFA value
+         *     nor the session bytes.
+         */
+        PreviewMatchedItem: {
+            /** Basename */
+            basename: string;
+            /** Phone */
+            phone: string;
+            /** Has 2Fa */
+            has_2fa: boolean;
+            /** Has Proxy */
+            has_proxy: boolean;
+        };
+        /**
+         * PreviewUnpairedItem
+         * @description A file present without its partner (json without session, or vice versa).
+         */
+        PreviewUnpairedItem: {
+            /** Basename */
+            basename: string;
+            /** Filename */
+            filename: string;
         };
         /**
          * ProfileUpdate
@@ -8866,6 +9056,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_preview_api_v1_accounts_import_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_preview_api_v1_accounts_import_preview_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountImportPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_confirm_api_v1_accounts_import__import_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                import_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportConfirmResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_status_api_v1_accounts_import__job_id__status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportStatusResponse"];
                 };
             };
             /** @description Validation Error */

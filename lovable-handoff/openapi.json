@@ -1746,7 +1746,7 @@
           "senders"
         ],
         "summary": "Update Sender 2Fa",
-        "description": "PROF-05: set (no current_password) or change (with current_password, D-04) the\naccount 2FA password via a single stateless ``edit_2fa`` request. Wrong current\npassword → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03).",
+        "description": "PROF-05: set (no current_password) or change (with current_password, D-04) the\naccount 2FA password via a single stateless ``edit_2fa`` request. Wrong current\npassword → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03).\n\nIMPT-10 (D-06): for an IMPORTED account whose 2FA password was stored (encrypted)\nat import time, a request that OMITS ``current_password`` falls back to the stored,\ndecrypted password server-side — so the user need not re-type the 2FA password the\nplatform already knows. The decrypted plaintext is used ONLY to build the edit_2fa\nrequest; it is never returned in the response, never logged, never re-persisted\n(D-07). The reconnect uses the account's own fingerprint (Part B, site edit_2fa).",
         "operationId": "update_sender_2fa_api_v1_senders__slug__2fa_post",
         "parameters": [
           {
@@ -9539,6 +9539,244 @@
         }
       }
     },
+    "/api/v1/accounts/import/preview": {
+      "post": {
+        "tags": [
+          "account-import"
+        ],
+        "summary": "Import Preview",
+        "description": "Unzip + pair + validate a bulk-import ZIP synchronously; stage it with a TTL.\n\nReturns ``import_id`` + matched/unpaired/malformed. NO Telegram connect happens.",
+        "operationId": "import_preview_api_v1_accounts_import_preview_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_preview_api_v1_accounts_import_preview_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountImportPreviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/import/{import_id}/confirm": {
+      "post": {
+        "tags": [
+          "account-import"
+        ],
+        "summary": "Import Confirm",
+        "description": "Turn a staged preview into a background import job (returns ``job_id``, 202).\n\nRe-reads the staged ZIP, pairs it again, and creates ONE job + N pending items (one\nper matched pair). NO Telegram connect happens here — the AccountImportWorker does the\nper-account work. Unknown staging → 404 ``IMPORT_NOT_FOUND``; expired → 410\n``IMPORT_EXPIRED``. Double-submit is allowed (a fresh job each time — the worker dedups\nper phone/telegram_id, so a re-confirm never creates duplicate senders; D-14/IMPT-06).",
+        "operationId": "import_confirm_api_v1_accounts_import__import_id__confirm_post",
+        "parameters": [
+          {
+            "name": "import_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Import Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportConfirmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportConfirmResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/import/{job_id}/status": {
+      "get": {
+        "tags": [
+          "account-import"
+        ],
+        "summary": "Import Status",
+        "description": "Poll an import job's progress: ``processed``/``total`` + a per-file result list.\n\nThe item payload is secrets-free by construction — only basename/status/result/reason.\n``processed`` is the worker-maintained counter; when it reaches ``total`` the worker has\nflipped ``status`` → ``done`` (whatever the row currently says is returned).",
+        "operationId": "import_status_api_v1_accounts_import__job_id__status_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Root",
@@ -9559,6 +9797,44 @@
   },
   "components": {
     "schemas": {
+      "AccountImportPreviewResponse": {
+        "properties": {
+          "import_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Import Id"
+          },
+          "matched": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewMatchedItem"
+            },
+            "type": "array",
+            "title": "Matched"
+          },
+          "unpaired": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewUnpairedItem"
+            },
+            "type": "array",
+            "title": "Unpaired"
+          },
+          "malformed": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewMalformedItem"
+            },
+            "type": "array",
+            "title": "Malformed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "import_id",
+          "matched",
+          "unpaired",
+          "malformed"
+        ],
+        "title": "AccountImportPreviewResponse"
+      },
       "AgentCreate": {
         "properties": {
           "name": {
@@ -10610,6 +10886,20 @@
         ],
         "title": "AuthMeResponse",
         "description": "Response from POST /auth/me — bootstrap. Triggers TENT-02 lazy create."
+      },
+      "Body_import_preview_api_v1_accounts_import_preview_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_preview_api_v1_accounts_import_preview_post"
       },
       "Body_import_preview_api_v1_contacts_import_preview_post": {
         "properties": {
@@ -12882,6 +13172,121 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "ImportConfirmRequest": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "sender",
+              "checker"
+            ],
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "ImportConfirmRequest",
+        "description": "Body for confirm. Role is chosen once for the whole batch (D-16); an invalid\nvalue is rejected by the ``Literal`` type (structured 422)."
+      },
+      "ImportConfirmResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "total"
+        ],
+        "title": "ImportConfirmResponse"
+      },
+      "ImportStatusItem": {
+        "properties": {
+          "basename": {
+            "type": "string",
+            "title": "Basename"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basename",
+          "status"
+        ],
+        "title": "ImportStatusItem",
+        "description": "A single per-file outcome — NEVER carries session bytes or the twoFA value."
+      },
+      "ImportStatusResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "processed": {
+            "type": "integer",
+            "title": "Processed"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ImportStatusItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "total",
+          "processed",
+          "items"
+        ],
+        "title": "ImportStatusResponse"
+      },
       "KbDocumentResponse": {
         "properties": {
           "id": {
@@ -13735,6 +14140,78 @@
         ],
         "title": "PoolHealth",
         "description": "POOLV-01 (D-08): numeric pool-health aggregate for a campaign's sender pool.\n\nPresentation-free — the green/yellow/red badge is derived ON THE FRONTEND\n(paused==0→green; 0<paused<total→yellow; paused==total && total>0→red).\nearliest_resume_at = MIN(restricted_until) among restricted senders (OQ#4\nrecheck horizon); None when no sender is restricted.\n\nhas_backup (quick-260706-c1p, SOFT advisory): True iff the pool has >=2\ntruly-sendable (active) senders, i.e. a single freeze still leaves a backup\nthat can carry the campaign. Purely advisory — the frontend renders a yellow\n\"no backup sender — a single freeze stalls this campaign\" nudge when False.\nNO blocking behaviour on attach/detach/start is derived from this field."
+      },
+      "PreviewMalformedItem": {
+        "properties": {
+          "basename": {
+            "type": "string",
+            "title": "Basename"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basename",
+          "filename",
+          "reason"
+        ],
+        "title": "PreviewMalformedItem",
+        "description": "A .json that failed to parse or failed schema validation."
+      },
+      "PreviewMatchedItem": {
+        "properties": {
+          "basename": {
+            "type": "string",
+            "title": "Basename"
+          },
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "has_2fa": {
+            "type": "boolean",
+            "title": "Has 2Fa"
+          },
+          "has_proxy": {
+            "type": "boolean",
+            "title": "Has Proxy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basename",
+          "phone",
+          "has_2fa",
+          "has_proxy"
+        ],
+        "title": "PreviewMatchedItem",
+        "description": "A recognized .json↔.session pair. Carries flags only — never the twoFA value\nnor the session bytes."
+      },
+      "PreviewUnpairedItem": {
+        "properties": {
+          "basename": {
+            "type": "string",
+            "title": "Basename"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basename",
+          "filename"
+        ],
+        "title": "PreviewUnpairedItem",
+        "description": "A file present without its partner (json without session, or vice versa)."
       },
       "ProfileUpdate": {
         "properties": {
