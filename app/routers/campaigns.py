@@ -22,7 +22,7 @@ import zoneinfo
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func as sql_func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +32,7 @@ from app.database import get_db
 from app.models import (
     AIContext,
     Campaign,
+    CampaignAttachment,
     CampaignSender,
     Folder,
     Sender,
@@ -60,6 +61,10 @@ router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
 # Telegram anti-spam). Supersedes the Phase-12 D-13/D-14 corridor (50/100).
 DIALOG_LIMIT_SOFT_CAP = 10
 DIALOG_LIMIT_HARD_CAP = 30
+
+# Phase 24 D-03: hard ceiling for the campaign first-message attachment blob.
+# Bytes go straight to the BYTEA column (D-02) — no temp file. Over this → 413.
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024   # 50 MB
 
 
 def _validate_max_new_dialogs(value: Optional[int]) -> List[WarningItem]:
@@ -1075,6 +1080,82 @@ async def duplicate_campaign(
         f"src={campaign_id} dst={new_c.id} name='{candidate}'"
     )
     return await _campaign_to_response(db, ctx, new_c)
+
+
+# ── Endpoints: first-message attachment (Phase 24 — D-01/D-03/D-19) ──────────
+
+
+@router.post("/{campaign_id}/attachment")
+async def upload_attachment(
+    campaign_id: UUID,
+    file: UploadFile = File(default=None),
+    attachment: UploadFile = File(default=None),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """D-19: attach ONE first-message file to a campaign (multipart upload).
+
+    Alias-tolerant to the multipart field name (``file`` or ``attachment``) so the
+    Lovable frontend works either way. Bytes stream straight to the BYTEA column
+    (D-02 — no temp file). D-03: over MAX_ATTACHMENT_BYTES → 413 FILE_TOO_LARGE.
+    D-01: exactly one attachment per campaign — delete-then-insert (upsert).
+    Workspace-scoped via _load_campaign (cross-workspace → 404).
+    """
+    upload = file or attachment
+    if upload is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "FILE_REQUIRED", "message": "no file field (file|attachment)"},
+        )
+
+    raw = await upload.read()
+    if len(raw) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "FILE_TOO_LARGE",
+                    "message": f"Max {MAX_ATTACHMENT_BYTES} bytes"},
+        )
+
+    c = await _load_campaign(db, ctx, campaign_id)
+
+    # D-01 upsert: one row per campaign — clear any existing blob first, then insert.
+    await db.execute(
+        delete(CampaignAttachment).where(CampaignAttachment.campaign_id == c.id)
+    )
+    db.add(CampaignAttachment(
+        campaign_id=c.id,
+        workspace_id=ctx.workspace_id,
+        file_data=raw,
+        file_name=(upload.filename or "file"),
+        content_type=upload.content_type,
+        size_bytes=len(raw),
+    ))
+    await db.commit()
+    logger.info(
+        "[campaigns] attachment stored workspace=%s campaign=%s name='%s' bytes=%d",
+        ctx.workspace_id, c.id, upload.filename or "file", len(raw),
+    )
+    return {
+        "campaign_id": str(c.id),
+        "file_name": upload.filename or "file",
+        "size_bytes": len(raw),
+        "content_type": upload.content_type,
+    }
+
+
+@router.delete("/{campaign_id}/attachment", status_code=204)
+async def delete_attachment(
+    campaign_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """D-19: remove the campaign's first-message attachment (idempotent → 204)."""
+    c = await _load_campaign(db, ctx, campaign_id)
+    await db.execute(
+        delete(CampaignAttachment).where(CampaignAttachment.campaign_id == c.id)
+    )
+    await db.commit()
+    return None
 
 
 # ── Endpoints: Pool management (Phase 8 — POOL-01..06b) ──────────────────────
