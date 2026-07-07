@@ -17,6 +17,8 @@ import {
   Upload,
   Loader2,
   Phone as PhoneIcon,
+  Search,
+  ShieldAlert,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
