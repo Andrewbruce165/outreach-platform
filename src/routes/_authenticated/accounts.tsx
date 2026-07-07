@@ -516,6 +516,20 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
                   Обновить профиль
                 </button>
                 <button
+                  disabled={spambotMut.isPending}
+                  onClick={() => {
+                    setOpen(false);
+                    spambotMut.mutate();
+                  }}
+                >
+                  {spambotMut.isPending ? (
+                    <Loader2 size={13} className="ob__spin" />
+                  ) : (
+                    <ShieldAlert size={13} />
+                  )}{" "}
+                  Check Spam Bot
+                </button>
+                <button
                   onClick={() => {
                     setOpen(false);
                     setHistoryOpen(true);
