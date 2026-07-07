@@ -81,6 +81,28 @@ function AccountsPage() {
         title="Telegram accounts"
         right={
           <>
+            <div style={{ position: "relative" }}>
+              <Search
+                size={13}
+                style={{
+                  position: "absolute",
+                  left: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-muted)",
+                  pointerEvents: "none",
+                }}
+              />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name…"
+                aria-label="Search accounts"
+                className="input input--sm"
+                style={{ width: 200, paddingLeft: 26, height: 28 }}
+              />
+            </div>
             <button className="btn btn--ghost btn--sm" type="button">
               <Filter size={14} /> Filters
             </button>
