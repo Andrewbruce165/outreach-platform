@@ -578,13 +578,35 @@ Plans:
 
 ### Phase 23: Edit and delete-for-everyone of sent messages plus file sending from inbox UI
 
-**Goal:** Из inbox UI можно удалить отправленное сообщение (у обеих сторон), отредактировать уже отправленное сообщение и отправить файл контакту.
-**Requirements**: TBD
+**Goal:** Из inbox UI можно удалить отправленное сообщение (у обеих сторон), отредактировать уже отправленное сообщение и отправить файл контакту; плюс входящие файлы ОТ контакта отображаются как file-бабблы с ленивым скачиванием.
+**Requirements**: INBM-01, INBM-02, INBM-03, INBM-04, INBM-05, INBM-06, INBM-07, INBM-08, INBM-09 (derived during /gsd:plan-phase 23 — see REQUIREMENTS.md §Phase 23; tracked via decisions D-01..D-22). Phase adds ONE migration (053).
 **Depends on:** Phase 22
+**Plans:** 6 plans
+
+Plans:
+**Wave 1** *(parallel — schema/schemas/tests vs Telethon service methods, no file overlap)*
+- [ ] 23-01-schema-migration-and-red-scaffold-PLAN.md — migration 053 (extend messages: message_type+CHECK, media metadata, edited_at, message_text DROP NOT NULL) + conftest 053-apply + MessageResponse/EditMessageRequest/SendFileFromUIResponse schemas + Wave-0 RED scaffold [Wave 1, no deps] — INBM-08
+- [ ] 23-02-telegram-service-inbox-mutation-methods-PLAN.md — TelegramService: _resolve_peer_by_telegram_id helper + edit/delete/send_file(force_document=False)/download methods (client-per-op) [Wave 1, no deps] — INBM-01/02/03/05/06
+
+**Wave 2** *(parallel — conversations.py edit/delete vs listener.py, no file overlap)*
+- [ ] 23-03-edit-delete-endpoints-no-takeover-PLAN.md — PATCH edit + DELETE revoke (Telethon-first, no takeover) + _raise_inbox_message_error + message-id/workspace gate + widened GET /messages SELECT [Wave 2, depends_on: 23-01, 23-02] — INBM-01/02/06/07
+- [ ] 23-04-listener-incoming-media-PLAN.md — save_message + incoming-media branch tag message_type + name/mime/size (no bytes), preserve voice→AI [Wave 2, depends_on: 23-01] — INBM-04
+
+**Wave 3** *(blocked on 23-03 — same file: conversations.py)*
+- [ ] 23-05-send-file-and-download-endpoints-PLAN.md — POST /send-file (streamed 50MB cap + auto-takeover + auto-media) + GET /messages/{id}/file (lazy download) [Wave 3, depends_on: 23-03] — INBM-03/05/07
+
+**Wave 4** *(handoff + live-smoke, human-verify, cross-repo)*
+- [ ] 23-06-handoff-and-live-smoke-PLAN.md — regen openapi.json (4 endpoints + schemas) + error-codes.md (D-17 codes) + human live-smoke [Wave 4, depends_on: 23-03, 23-05] — INBM-09
+
+### Phase 24: Campaign first-message file attachment plus invisible anti-spam text variation
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 23
 **Plans:** 0 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 23 to break down)
+- [ ] TBD (run /gsd:plan-phase 24 to break down)
 
 ---
 
