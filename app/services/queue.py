@@ -903,16 +903,61 @@ class QueueWorker:
                 client = await telegram_service.get_client(sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy, fingerprint=sender.client_fingerprint)
 
                 if item.item_type == QueueItemType.file:
-                    result = await telegram_service.send_file(
-                        client=client,
-                        phone=item.recipient_phone,
-                        recipient_name=item.recipient_name,
-                        file_url=item.file_url,
-                        file_name=item.file_name,
-                        caption=caption_to_send,
-                        sender_id=str(sender.id),
-                        workspace_id=str(item.workspace_id),
-                    )
+                    # Phase 24 D-05/D-06/D-08: a campaign file-opener stores its blob
+                    # in campaign_attachments (file_url NULL). Load it by campaign_id
+                    # and deliver as auto-media (force_document=False) with the varied
+                    # caption. Defensive fallback: no attachment row (legacy/edge) →
+                    # the existing URL path, so nothing crashes.
+                    att = None
+                    if item.campaign_id is not None and not item.file_url:
+                        att = (await db.execute(text(
+                            "SELECT file_data, file_name, content_type, size_bytes "
+                            "FROM campaign_attachments WHERE campaign_id = :cid"),
+                            {"cid": str(item.campaign_id)})).first()
+
+                    if att is not None:
+                        result = await telegram_service.send_file(
+                            client=client,
+                            phone=item.recipient_phone,
+                            recipient_name=item.recipient_name,
+                            file_bytes=att.file_data,
+                            file_name=att.file_name,
+                            caption=caption_to_send,
+                            force_document=False,
+                            sender_id=str(sender.id),
+                            workspace_id=str(item.workspace_id),
+                        )
+                        # Classify message_type from the extension (mirrors
+                        # telegram.py send_file force_document=False auto-media) and
+                        # stash media metadata on result so _upsert_conversation can
+                        # enrich the inbox row into a media bubble (Phase 23 mig 053).
+                        _ext = os.path.splitext(att.file_name or "")[1].lower()
+                        if _ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                            _mtype = "photo"
+                        elif _ext in (".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"):
+                            _mtype = "video"
+                        else:
+                            _mtype = "document"
+                        if isinstance(result, dict) and result.get("success"):
+                            result["media"] = {
+                                "message_type": _mtype,
+                                "file_name": att.file_name,
+                                "mime_type": att.content_type,
+                                "size_bytes": att.size_bytes,
+                            }
+                    else:
+                        # Legacy / defensive URL path (unchanged) — still pass the
+                        # varied caption; the messages row stays plain-text.
+                        result = await telegram_service.send_file(
+                            client=client,
+                            phone=item.recipient_phone,
+                            recipient_name=item.recipient_name,
+                            file_url=item.file_url,
+                            file_name=item.file_name,
+                            caption=caption_to_send,
+                            sender_id=str(sender.id),
+                            workspace_id=str(item.workspace_id),
+                        )
                 else:
                     result = await telegram_service.send_message(
                         client=client,
@@ -1613,18 +1658,47 @@ class QueueWorker:
 
             message_id = result.get("message_id")
             if message_id and not item.as_draft:
-                await db.execute(
-                    text("""
-                        INSERT INTO messages (conversation_id, direction, message_text, sent_by, telegram_message_id)
-                        VALUES (:cid, 'outbound', :txt, 'ai', :mid)
-                        ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
-                    """),
-                    {
-                        "cid": conversation_id,
-                        "txt": item.message_text or f"[file: {item.file_url}]",
-                        "mid": int(message_id),
-                    }
-                )
+                # Phase 24 (bridges Phase 23 mig 053): a campaign file-opener carries
+                # media metadata on result["media"] (message_type + file_name/mime_type/
+                # size_bytes) → its inbox row renders as a media bubble. Text openers
+                # (and legacy URL sends) have no media → the plain-text INSERT, where
+                # message_type falls back to the DB DEFAULT 'text'. message_text is the
+                # CLEAN (unvaried) caption/text (D-14).
+                media = result.get("media") if isinstance(result, dict) else None
+                if media:
+                    await db.execute(
+                        text("""
+                            INSERT INTO messages
+                                (conversation_id, direction, message_text, sent_by,
+                                 telegram_message_id, message_type, file_name,
+                                 mime_type, size_bytes)
+                            VALUES (:cid, 'outbound', :txt, 'ai', :mid,
+                                    :mtype, :fname, :mime, :size)
+                            ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+                        """),
+                        {
+                            "cid": conversation_id,
+                            "txt": item.message_text or item.caption,
+                            "mid": int(message_id),
+                            "mtype": media["message_type"],
+                            "fname": media["file_name"],
+                            "mime": media["mime_type"],
+                            "size": media["size_bytes"],
+                        }
+                    )
+                else:
+                    await db.execute(
+                        text("""
+                            INSERT INTO messages (conversation_id, direction, message_text, sent_by, telegram_message_id)
+                            VALUES (:cid, 'outbound', :txt, 'ai', :mid)
+                            ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+                        """),
+                        {
+                            "cid": conversation_id,
+                            "txt": item.message_text or f"[file: {item.file_url}]",
+                            "mid": int(message_id),
+                        }
+                    )
         except Exception as exc:
             logger.error(f"Failed to upsert conversation for queue item: {exc}")
 
