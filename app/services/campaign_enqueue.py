@@ -446,9 +446,11 @@ async def rerender_pending_queue(db: AsyncSession, campaign) -> int:
 
     The queue snapshots the rendered opener at enqueue time, so editing
     `campaign.message_template` afterwards does NOT reach rows already sitting in
-    the queue. This re-renders every `status='pending'`, `item_type='message'` row
-    for the campaign with the CURRENT template, using the same render path the
-    enqueue worker uses (render_template + the contact's fields).
+    the queue. This re-renders every `status='pending'` `message`/`file` row for
+    the campaign with the CURRENT template, using the same render path the enqueue
+    worker uses (render_template + the contact's fields). For `file` rows the
+    caption is re-rendered alongside message_text (D-17); `message` rows keep
+    caption NULL.
 
     Each pending row is matched back to its contact by identity key
     (`recipient_phone == COALESCE(phone,'@'||username)`) within the campaign's
@@ -471,11 +473,11 @@ async def rerender_pending_queue(db: AsyncSession, campaign) -> int:
 
     pending = (await db.execute(
         text("""
-            SELECT id, recipient_phone, recipient_name
+            SELECT id, recipient_phone, recipient_name, item_type
             FROM message_queue
             WHERE campaign_id = :cid
               AND status = 'pending'
-              AND item_type = 'message'
+              AND item_type IN ('message','file')
         """),
         {"cid": str(campaign.id)},
     )).fetchall()
@@ -522,10 +524,14 @@ async def rerender_pending_queue(db: AsyncSession, campaign) -> int:
             campaign_id=str(campaign.id),
             phone=row.recipient_phone,
         )
+        # D-17: message_text always re-rendered; caption ONLY for file rows (via a
+        # CASE) so message rows keep caption NULL. Per-row status re-check preserves
+        # in-flight safety — a row the send worker already grabbed is skipped.
         res = await db.execute(
             text("""
                 UPDATE message_queue
-                SET message_text = :txt
+                SET message_text = :txt,
+                    caption = CASE WHEN item_type = 'file' THEN :txt ELSE caption END
                 WHERE id = :id AND status = 'pending'
             """),
             {"txt": rendered, "id": str(row.id)},
