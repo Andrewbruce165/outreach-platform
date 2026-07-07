@@ -119,7 +119,7 @@ function AccountsPage() {
         }
       />
       <div className="scroll" style={{ flex: 1, padding: 24, background: "var(--bg-soft)" }}>
-        {senders.length > 0 && (
+        {allSenders.length > 0 && (
           <div
             style={{
               display: "grid",
@@ -162,13 +162,21 @@ function AccountsPage() {
           </div>
         )}
 
-        <FleetTable
-          senders={senders}
-          isLoading={isLoading}
-          errorMsg={error instanceof ApiError ? error.message : null}
-          onEmpty={() => setModal({ mode: "new" })}
-          onReauth={(s) => setModal({ mode: "reauth", phone: s.phone, slug: s.slug })}
-        />
+        {allSenders.length > 0 && senders.length === 0 && !isLoading && !error ? (
+          <div className="card">
+            <div className="card__body muted" style={{ textAlign: "center", padding: "32px 24px" }}>
+              No accounts match “{search}”.
+            </div>
+          </div>
+        ) : (
+          <FleetTable
+            senders={senders}
+            isLoading={isLoading}
+            errorMsg={error instanceof ApiError ? error.message : null}
+            onEmpty={() => setModal({ mode: "new" })}
+            onReauth={(s) => setModal({ mode: "reauth", phone: s.phone, slug: s.slug })}
+          />
+        )}
       </div>
 
       {modal && (
