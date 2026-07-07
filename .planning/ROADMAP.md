@@ -600,13 +600,24 @@ Plans:
 
 ### Phase 24: Campaign first-message file attachment plus invisible anti-spam text variation
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 23
-**Plans:** 0 plans
+**Goal:** Клиент прикрепляет ОДИН файл к первому сообщению кампании — он уходит одним media-сообщением с текстом опенера в caption (авто-медиа: фото приходит фото), и каждый исходящий опенер делается байт-уникальным невидимой вариацией (zero-width + near-invisible джиттер) без изменения читаемого текста — обход наивного дедупа Telegram (defense-in-depth, D-11).
+**Requirements**: Derived from CONTEXT decisions D-01..D-20 (no pre-mapped REQ-IDs in ROADMAP). Research-derived cluster: ATT-STORE/UPLOAD/DELIVER/OVERFLOW/ENQUEUE, VAR-INVIS/UNIQUE/SCOPE/FLAG, RER-FILE, DUP-COPY. Phase adds ONE migration (054).
+**Depends on:** Phase 23 (reserves migration slot 053; Phase 24 uses 054)
+**Plans:** 7 plans (waves 1->3)
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 24 to break down)
+**Wave 1** (parallel — independent)
+- [ ] 24-01-variation-pure-module-PLAN.md — pure vary()/strip_invisible() module (zero-width U+200B/U+200C/U+2060 + NBSP/U+202F jitter, U+200D excluded, letter-letter only, cap 20) + RED tests [D-09/10/11/15/16]
+- [ ] 24-02-data-model-migration-schemas-PLAN.md — migration 054 (campaign_attachments 1-1 BYTEA + campaigns.variation_enabled default true) + ORM + schemas + conftest + drift tests [D-01/02/04/13]
+- [ ] 24-03-send-file-blob-source-automedia-PLAN.md — send_file gains file_bytes + force_document (defaults preserve today); blob->temp auto-media; overflow reused [D-06/07/08]
+
+**Wave 2** (depend on Wave 1)
+- [ ] 24-04-attachment-endpoint-and-duplicate-PLAN.md — POST/DELETE /campaigns/{id}/attachment (50MB->FILE_TOO_LARGE, alias-tolerant) + variation_enabled/has_attachment wiring + duplicate copies blob+flag [D-03/13/19/20/01] [depends_on: 24-02]
+- [ ] 24-05-enqueue-file-opener-and-rerender-PLAN.md — enqueue emits item_type='file'+caption when attachment present (one send/one cap) + rerender extended to file-row captions [D-05/17/18] [depends_on: 24-02]
+- [ ] 24-06-worker-variation-and-blob-delivery-PLAN.md — worker varies a local copy at send (gate: campaign+not-followup+flag, DB clean) + loads blob -> send_file(force_document=False) [D-05/06/08/12/14/16] [depends_on: 24-01, 24-02, 24-03]
+
+**Wave 3** (handoff + live smoke)
+- [ ] 24-07-handoff-and-live-smoke-PLAN.md — regen openapi.json + error-codes.md (FILE_TOO_LARGE) + human-verify real photo arrives as photo with clean varied caption [D-06/09/19] [depends_on: 24-04, 24-05, 24-06]
 
 ---
 
