@@ -326,7 +326,7 @@ async def test_finalize_with_deleted_sender_falls_back_to_create(
     mock_client = _make_mock_client(new_session="fallback_session")
     # get_me нужен _create_sender_from_session
     mock_client.get_me = AsyncMock(
-        return_value=MagicMock(id=999111, first_name="Fallback")
+        return_value=MagicMock(id=999111, first_name="Fallback", last_name=None, username=None, premium=False)
     )
 
     row = OnboardingSession(
@@ -379,7 +379,7 @@ async def test_finalize_with_cross_workspace_original_sender_falls_back(
 
     mock_client = _make_mock_client(new_session="cross_ws_session")
     mock_client.get_me = AsyncMock(
-        return_value=MagicMock(id=999222, first_name="Cross")
+        return_value=MagicMock(id=999222, first_name="Cross", last_name=None, username=None, premium=False)
     )
 
     row = OnboardingSession(

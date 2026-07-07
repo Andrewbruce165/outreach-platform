@@ -128,6 +128,10 @@ class Sender(Base):
 
     # Phase 20 (PROF-01): cached Telegram profile (mig 049). NULL = not yet cached.
     tg_username = Column(String(32), nullable=True)
+    # Telegram Premium flag (mig 052), refreshed wherever get_me() runs (onboarding
+    # finalize, profile resync, bulk import). server_default mandatory — see
+    # profile_field_changed_at note below.
+    tg_premium = Column(Boolean, nullable=False, server_default=text('false'))
     tg_bio = Column(String(140), nullable=True)   # free ≤70 / premium ≤140; AboutTooLongError is the runtime backstop
     tg_photo = Column(LargeBinary, nullable=True)  # small square avatar bytes, served via authenticated endpoint (D-11)
     tg_photo_mime = Column(String(32), nullable=True)

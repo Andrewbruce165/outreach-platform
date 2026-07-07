@@ -478,6 +478,7 @@ async def import_one_account(db, item) -> str:
 
         tg_id = getattr(me, "id", None)
         tg_username = getattr(me, "username", None)
+        tg_premium = bool(getattr(me, "premium", False))  # mig 052: Premium badge
         first_name = getattr(me, "first_name", "") or ""
         slug = f"sender-{tg_id}" if tg_id is not None else f"sender-{basename}"
 
@@ -512,6 +513,7 @@ async def import_one_account(db, item) -> str:
             auth_status="ok",
             lifecycle_status="active",
             tg_username=tg_username,
+            tg_premium=tg_premium,
         )
         db.add(sender)
         try:

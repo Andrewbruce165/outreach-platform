@@ -54,7 +54,13 @@ def _make_mock_client(telegram_id: int, new_session: str, first_name: str = "Rea
     session.save = MagicMock(return_value=new_session)
     client.session = session
     client.get_me = AsyncMock(
-        return_value=MagicMock(id=telegram_id, first_name=first_name)
+        # username/last_name/premium must be REAL values, not MagicMock auto-attrs:
+        # the finalize path writes them into VARCHAR/BOOLEAN columns (PROF-08 / mig 052)
+        # and asyncpg rejects a MagicMock with DataError.
+        return_value=MagicMock(
+            id=telegram_id, first_name=first_name, last_name=None,
+            username=None, premium=False,
+        )
     )
     return client
 

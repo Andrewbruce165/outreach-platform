@@ -169,6 +169,8 @@ class SenderResponse(BaseModel):
     # Phase 20 (PROF-01/07/D-08): cached profile surfaced for the enriched row + edit form.
     tg_username: Optional[str] = None
     tg_bio: Optional[str] = None
+    # Telegram Premium flag (mig 052) — surfaced as a badge on the account card.
+    tg_premium: bool = False
     has_photo: bool = False   # list carries only this bool; photo bytes served via GET /senders/{slug}/photo (D-11)
     # Per-field last-change timestamps (iso8601 strings) so the UI can compute the D-08 1h countdown client-side.
     profile_field_changed_at: dict = {}

@@ -239,17 +239,19 @@ async def _refresh_sender_session(
     """
     sender.session_string = encrypt_session(client.session.save())
     sender.auth_status = "ok"
-    # Backfill telegram_id for legacy rows: older create code never set it on
-    # INSERT, so explicit-reauth of such rows would keep it NULL forever.
-    if sender.telegram_id is None:
-        try:
-            me = await client.get_me()
-            tg_id = getattr(me, "id", None)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[onboarding] get_me failed during reauth refresh: {e}")
-            tg_id = None
-        if tg_id is not None:
+    # get_me: backfill telegram_id for legacy rows (older create code never set it
+    # on INSERT) + refresh the Premium flag (mig 052). Client is already connected,
+    # so this is one cheap call; failure degrades to "leave both fields as-is".
+    try:
+        me = await client.get_me()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[onboarding] get_me failed during reauth refresh: {e}")
+        me = None
+    if me is not None:
+        tg_id = getattr(me, "id", None)
+        if sender.telegram_id is None and tg_id is not None:
             sender.telegram_id = tg_id
+        sender.tg_premium = bool(getattr(me, "premium", False))
     if session_row.proxy is not None:
         sender.proxy = session_row.proxy
     await db.commit()
@@ -329,6 +331,8 @@ async def _create_sender_from_session(
     # Phase 20 (PROF-08): cache the account's @username onto the sender at finalize
     # so the account list has it without a manual resync (D-10). None = no public handle.
     tg_username = getattr(me, "username", None)
+    # mig 052: Premium badge. Only trusted when get_me succeeded (me is not None).
+    tg_premium = bool(getattr(me, "premium", False))
     suffix = str(tg_id) if tg_id is not None else str(session_row.id)[:8]
     slug = f"sender-{suffix}"
 
@@ -349,6 +353,8 @@ async def _create_sender_from_session(
             row.telegram_id = tg_id
         if tg_username is not None:
             row.tg_username = tg_username  # PROF-08: refresh cached handle on re-auth upsert
+        if me is not None:
+            row.tg_premium = tg_premium  # mig 052: refresh Premium flag on re-auth upsert
         if session_row.proxy is not None:
             row.proxy = session_row.proxy
         await db.commit()
@@ -376,6 +382,7 @@ async def _create_sender_from_session(
         auth_status="ok",
         lifecycle_status="active",
         tg_username=tg_username,  # PROF-08: cache @username at onboarding finalize
+        tg_premium=tg_premium,    # mig 052: cache Premium flag at onboarding finalize
         # rate_per_* server_default = 4 / 20 / 150 (migration 013)
     )
     db.add(sender)

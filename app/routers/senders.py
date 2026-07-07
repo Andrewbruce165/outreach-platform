@@ -168,6 +168,7 @@ def _sender_to_response(
         # Phase 20 (PROF-01/02/03/07 + D-08): cached Telegram profile fields.
         tg_username=getattr(sender, "tg_username", None),
         tg_bio=getattr(sender, "tg_bio", None),
+        tg_premium=bool(getattr(sender, "tg_premium", False)),
         has_photo=bool(getattr(sender, "tg_photo", None)),
         profile_field_changed_at=getattr(sender, "profile_field_changed_at", {}) or {},
     )
@@ -1338,6 +1339,7 @@ async def resync_sender_profile(
     res = res or {}
     sender.tg_username = res.get("username")
     sender.tg_bio = res.get("bio")
+    sender.tg_premium = bool(res.get("premium", False))
     # PROF-06 gap-fix: also refresh the display name from the live account. There is
     # no separate first/last column on Sender — compose them into the single `name`
     # field the SAME way update_sender_profile does. Only overwrite when Telegram

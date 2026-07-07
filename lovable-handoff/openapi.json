@@ -15269,6 +15269,11 @@
             ],
             "title": "Tg Bio"
           },
+          "tg_premium": {
+            "type": "boolean",
+            "title": "Tg Premium",
+            "default": false
+          },
           "has_photo": {
             "type": "boolean",
             "title": "Has Photo",

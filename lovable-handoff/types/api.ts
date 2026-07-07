@@ -4470,6 +4470,11 @@ export interface components {
             /** Tg Bio */
             tg_bio?: string | null;
             /**
+             * Tg Premium
+             * @default false
+             */
+            tg_premium: boolean;
+            /**
              * Has Photo
              * @default false
              */

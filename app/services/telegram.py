@@ -1376,6 +1376,7 @@ class TelegramService:
                 # no separate first/last column — the router composes them into `name`).
                 "first_name": getattr(me, "first_name", None),
                 "last_name": getattr(me, "last_name", None),
+                "premium": bool(getattr(me, "premium", False)),
                 "bio": bio,
                 "photo": photo_bytes,
                 "photo_mime": "image/jpeg" if photo_bytes else None,
