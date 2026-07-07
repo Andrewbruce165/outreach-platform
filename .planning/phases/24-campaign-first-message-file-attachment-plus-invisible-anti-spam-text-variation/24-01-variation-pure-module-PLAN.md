@@ -23,7 +23,7 @@ must_haves:
       contains: "def vary("
       min_lines: 40
     - path: "tests/test_variation.py"
-      provides: "RED-first unit tests: invisibility, uniqueness, safe-spans, density-cap, U+200D-absent"
+      provides: "RED-first unit tests: invisibility, uniqueness, safe-spans (incl. bare domain), density-cap, U+200D-absent"
       min_lines: 60
   key_links:
     - from: "app/services/variation.py::vary"
@@ -70,14 +70,14 @@ def strip_invisible(s: str) -> str: ...  # inverse used by tests + any debug too
 <task type="auto" tdd="true">
   <name>Task 1: RED — invisibility / uniqueness / safe-span / density tests</name>
   <read_first>
-    - .planning/phases/24-.../24-RESEARCH.md §"Variation Algorithm" (codepoint table, insertion rules, green-corridor density) and §"Code Examples" (strip_invisible + assertions)
+    - .planning/phases/24-.../24-RESEARCH.md §"Variation Algorithm" (codepoint table, insertion rules incl. "URLs / bare domains / emails", green-corridor density) and §"Code Examples" (strip_invisible + assertions)
     - .planning/phases/24-.../24-VALIDATION.md (Per-Task Verification Map rows VAR-INVIS/UNIQUE/SAFE/density)
     - tests/test_send_campaign.py (existing pure/near-pure test style, assertion idioms)
   </read_first>
   <behavior>
     - strip_invisible(vary(x)) == x for fixtures: plain Latin, plain Cyrillic ("Здравствуйте, Иван"), emoji (base emoji is fine as a visible glyph), URL ("см. https://example.com/path тут"), @mention ("пиши @ivan_ceo"), markdown delims ("_текст_ и *жир* и `код`").
     - vary(x) byte-different across calls: over 5 renders of a >=20-word paragraph, at least 2 distinct outputs (avoids 1-in-a-billion collision flakiness).
-    - Safe spans: for URL/@mention/#hashtag/email/digit fixtures, assert NO codepoint from _ZW or _SPACE_JITTER appears inside the protected substring ("https://example.com" byte-identical in output; digit run "+79991234567" untouched).
+    - Safe spans: for URL/@mention/#hashtag/email/digit fixtures AND a BARE mid-sentence domain fixture (RESEARCH "Insertion rules" — Telegram auto-links `agsventurelab.com` even with no http/www prefix, so an insertion inside it breaks the link), assert NO codepoint from _ZW or _SPACE_JITTER appears inside the protected substring ("https://example.com" byte-identical in output; "agsventurelab.com" byte-identical in output; digit run "+79991234567" untouched).
     - No U+200D: assert `chr(0x200D) not in vary(x)` for every fixture.
     - Density cap: for a 400-word text, count of chars in _ZW present in the output <= 20 (D-15 hard cap).
     - Emoji integrity: build a ZWJ-family fixture as `"\U0001F468" + chr(0x200D) + "\U0001F469" + chr(0x200D) + "\U0001F467"` and assert strip_invisible(vary(fixture)) == fixture — the existing joiner is preserved (strip removes only _ZW, NOT U+200D) and no new insertion lands inside the grapheme.
@@ -92,7 +92,7 @@ def strip_invisible(s: str) -> str: ...  # inverse used by tests + any debug too
             s = s.replace(j, " ")
         return s
     ```
-    Tests: test_invisible_roundtrip (parametrized over fixtures asserting `_ref_strip(vary(x)) == x` AND `variation.strip_invisible(vary(x)) == x`), test_unique_bytes (5-render distinctness on a long paragraph), test_safe_spans (protected substrings byte-identical in output), test_no_zwj (`chr(0x200D)` absent from every output), test_density_cap (count of _ZW chars in output <= 20 on 400 words), test_emoji_family_preserved.
+    Tests: test_invisible_roundtrip (parametrized over fixtures asserting `_ref_strip(vary(x)) == x` AND `variation.strip_invisible(vary(x)) == x`), test_unique_bytes (5-render distinctness on a long paragraph), test_safe_spans (protected substrings byte-identical in output — MUST include a bare-domain case: for `x = "пишите на agsventurelab.com сегодня"`, assert `"agsventurelab.com" in vary(x)` verbatim, i.e. no invisible char spliced inside the domain label), test_no_zwj (`chr(0x200D)` absent from every output), test_density_cap (count of _ZW chars in output <= 20 on 400 words), test_emoji_family_preserved.
     These MUST fail initially (module absent) — RED state. Import inside the test body (or guarded) so collection does not ImportError.
   </action>
   <verify>
@@ -100,18 +100,19 @@ def strip_invisible(s: str) -> str: ...  # inverse used by tests + any debug too
   </verify>
   <acceptance_criteria>
     - `tests/test_variation.py` exists and contains `def test_invisible_roundtrip`, `def test_unique_bytes`, `def test_safe_spans`, `def test_no_zwj`, `def test_density_cap`
+    - `test_safe_spans` references a bare-domain fixture (grep `agsventurelab.com` OR another bare `\.(com|ru|...)` domain string in tests/test_variation.py returns >= 1)
     - `grep -c 'chr(0x200B)' tests/test_variation.py` >= 1 AND file references `chr(0x200C)`, `chr(0x2060)`, `chr(0x00A0)`, `chr(0x202F)`
     - `grep -P '[\x{200b}\x{200c}\x{200d}\x{2060}\x{00a0}\x{2009}\x{202f}]' tests/test_variation.py` returns NOTHING (no raw invisible glyphs — chr() only)
     - Running the command shows the tests FAIL/ERROR on missing module (RED); collection succeeds
   </acceptance_criteria>
-  <done>tests/test_variation.py collects and fails only because app/services/variation.py does not yet exist; the file contains zero raw invisible glyphs.</done>
+  <done>tests/test_variation.py collects and fails only because app/services/variation.py does not yet exist; a bare-domain safe-span case is present; the file contains zero raw invisible glyphs.</done>
 </task>
 
 <task type="auto" tdd="true">
   <name>Task 2: GREEN — implement vary() + strip_invisible()</name>
   <read_first>
     - app/services/template.py (module style: stdlib-only, docstring conventions to mirror)
-    - .planning/phases/24-.../24-RESEARCH.md §"Variation Algorithm" (insertion rules verbatim) and "Don't Hand-Roll" (~40 lines stdlib; NO homoglyph/spintax lib)
+    - .planning/phases/24-.../24-RESEARCH.md §"Variation Algorithm" (insertion rules verbatim — note "URLs / bare domains / emails … never insert inside those spans") and "Don't Hand-Roll" (~40 lines stdlib; NO homoglyph/spintax lib)
     - tests/test_variation.py (the contract just written)
   </read_first>
   <action>
@@ -121,12 +122,21 @@ def strip_invisible(s: str) -> str: ...  # inverse used by tests + any debug too
     _ZW = (chr(0x200B), chr(0x200C), chr(0x2060))   # ZWSP, ZWNJ, WORD JOINER (D-09)
     _SPACE_JITTER = (chr(0x00A0), chr(0x202F))       # NBSP, NARROW NO-BREAK SPACE (D-09/D-10)
     _MAX_INSERTIONS = 20                              # hard per-message cap (D-15)
-    _PROTECT_RE = re.compile(r"https?://\S+|www\.\S+|\S+@\S+\.\S+|[@#]\w+", re.IGNORECASE)
+    # Protect protocol/www URLs, emails, @mentions, #hashtags AND bare mid-sentence
+    # domains (Telegram auto-links agsventurelab.com with no http/www prefix — RESEARCH
+    # "Insertion rules"; inserting a zero-width inside the label breaks the auto-link).
+    # Bare-domain arm is a CONSERVATIVE TLD allowlist so ordinary words with dots
+    # (e.g. "т.е.") are NOT over-protected.
+    _PROTECT_RE = re.compile(
+        r"https?://\S+|www\.\S+|\S+@\S+\.\S+|[@#]\w+"
+        r"|\b[\w-]+\.(?:com|ru|net|org|io|dev|app|me|рф)\b",
+        re.IGNORECASE,
+    )
     _LETTER = "a-zA-Zа-яА-ЯёЁ"
     ```
     `vary(text)`:
-    1. Build a set of protected character indices from `_PROTECT_RE.finditer(text)` (every index in each match span).
-    2. Collect eligible gap positions i (insert BETWEEN text[i-1] and text[i]) where text[i-1] and text[i] are BOTH in `_LETTER` AND neither i-1 nor i is protected. Letter-letter-only inherently skips markdown delimiters, digits, emoji/combining pairs and spaces (per RESEARCH).
+    1. Build a set of protected character indices from `_PROTECT_RE.finditer(text)` (every index in each match span — this now covers bare domains too).
+    2. Collect eligible gap positions i (insert BETWEEN text[i-1] and text[i]) where text[i-1] and text[i] are BOTH in `_LETTER` AND neither i-1 nor i is protected. Letter-letter-only inherently skips markdown delimiters, digits, emoji/combining pairs and spaces (per RESEARCH); the protected-index set additionally blocks the letter run INSIDE a bare domain like the "agsventurelab" of "agsventurelab.com".
     3. Density: if eligible empty → return text unchanged (safe no-op). Else target = min(_MAX_INSERTIONS, max(1, round(len(eligible) * random.uniform(0.10, 0.20)))) (≈1-3 per 10 words, D-15).
     4. Pick `target` distinct positions via random.sample; at each splice random.choice(_ZW). Regenerated per call (no shared seed) → D-16 uniqueness.
     5. Space-jitter (occasional, D-10): for regular spaces flanked by letters on both sides and outside protected spans, replace ~10% (random) with random.choice(_SPACE_JITTER). These don't count toward the ZW cap and strip back to a space.
@@ -138,12 +148,13 @@ def strip_invisible(s: str) -> str: ...  # inverse used by tests + any debug too
   </verify>
   <acceptance_criteria>
     - `app/services/variation.py` contains `def vary(` and `def strip_invisible(`
+    - `_PROTECT_RE` includes the bare-domain arm: grep `\.(?:com|ru|net|org|io|dev|app|me` in app/services/variation.py returns >= 1 (protocol/www/email/@#-only regex is insufficient — Warning 3)
     - `grep -c 'chr(0x200B)' app/services/variation.py` >= 1 AND file references `chr(0x200C)`, `chr(0x2060)`, `chr(0x00A0)`, `chr(0x202F)` and NEVER `chr(0x200D)` (grep for `0x200D` returns nothing)
     - `grep -P '[\x{200b}\x{200c}\x{200d}\x{2060}\x{00a0}\x{2009}\x{202f}]' app/services/variation.py` returns NOTHING (chr() only, no raw glyphs)
     - grep shows NO third-party import (no `homoglyph`, no `spintax`, no `emoji` package)
-    - `pytest tests/test_variation.py` exits 0 (all GREEN)
+    - `pytest tests/test_variation.py` exits 0 (all GREEN) — including the bare-domain safe-span case
   </acceptance_criteria>
-  <done>All test_variation.py tests pass; strip_invisible(vary(x))==x holds, two renders differ, safe spans and density cap respected, U+200D never emitted, module contains zero raw invisible glyphs.</done>
+  <done>All test_variation.py tests pass; strip_invisible(vary(x))==x holds, two renders differ, safe spans (URLs, bare domains, emails, @/# tokens, digit runs, emoji) all byte-preserved, density cap respected, U+200D never emitted, module contains zero raw invisible glyphs.</done>
 </task>
 
 </tasks>
@@ -151,12 +162,14 @@ def strip_invisible(s: str) -> str: ...  # inverse used by tests + any debug too
 <verification>
 - `pytest tests/test_variation.py -x` GREEN.
 - Manual sanity (optional): `python -c "from app.services.variation import vary,strip_invisible as s; x='Здравствуйте Иван как ваши дела сегодня'; print(vary(x)!=vary(x), s(vary(x))==x)"` prints `True True`.
+- Bare-domain sanity: `python -c "from app.services.variation import vary; print('agsventurelab.com' in vary('пишите на agsventurelab.com сегодня'))"` prints `True`.
 </verification>
 
 <success_criteria>
-`vary()` is a pure stdlib function proven byte-unique per call and strip-invisible-equal to the input, never touching URLs/@mentions/emoji/markdown/digits, never emitting U+200D, capped at 20 insertions (D-09/D-10/D-11/D-15/D-16). Consumable by Plan 24-06 via `from app.services.variation import vary`.
+`vary()` is a pure stdlib function proven byte-unique per call and strip-invisible-equal to the input, never touching URLs/bare-domains/@mentions/emoji/markdown/digits, never emitting U+200D, capped at 20 insertions (D-09/D-10/D-11/D-15/D-16). Consumable by Plan 24-06 via `from app.services.variation import vary`.
 </success_criteria>
 
 <output>
 After completion, create `.planning/phases/24-campaign-first-message-file-attachment-plus-invisible-anti-spam-text-variation/24-01-SUMMARY.md`.
 </output>
+</content>

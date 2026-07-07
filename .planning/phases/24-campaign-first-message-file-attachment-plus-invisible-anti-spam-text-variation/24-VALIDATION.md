@@ -19,7 +19,7 @@ created: 2026-07-07
 |----------|-------|
 | **Framework** | pytest (async, existing suite) |
 | **Config file** | `tests/conftest.py` (test-overlay guarded) |
-| **Quick run command** | `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest -k "variation or attachment or send_file" -q` |
+| **Quick run command** | `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest -k "variation or attachment or send_file or file_opener" -q` |
 | **Full suite command** | `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest -q` |
 | **Estimated runtime** | ~60–120 seconds (full); ~15s (quick subset) |
 
@@ -46,7 +46,7 @@ created: 2026-07-07
 |----------|----------|-----------|-------------------|--------|
 | Variation invisibility invariant: `strip(zero-width + NBSP + thin-space) == original` | D-09/D-10/D-14 | unit | `pytest -k variation` | ⬜ pending |
 | Byte-uniqueness: two variations of same text differ in bytes | D-16 | unit | `pytest -k variation` | ⬜ pending |
-| Variation never inserts inside URLs / @mentions / emoji / markdown delimiters | D-09 | unit | `pytest -k variation` | ⬜ pending |
+| Variation never inserts inside URLs / bare domains / @mentions / emoji / markdown delimiters | D-09 | unit | `pytest -k variation` | ⬜ pending |
 | Density stays within green corridor (≤ cap insertions) | D-15 | unit | `pytest -k variation` | ⬜ pending |
 | `send_file` blob→temp→send round-trip with preserved extension (photo→photo) | D-06/D-08 | unit (Telethon mocked) | `pytest -k send_file` | ⬜ pending |
 | `send_file` auto-media flag defaults preserve existing force_document=True callers | D-06 | unit | `pytest -k send_file` | ⬜ pending |
@@ -56,6 +56,7 @@ created: 2026-07-07
 | Enqueue creates `item_type='file'` row with caption when campaign has attachment | D-05/D-17 | integration | `pytest -k attachment` | ⬜ pending |
 | `rerender_pending_queue` propagates template edit to pending file-row captions | D-17 | integration | `pytest -k rerender` | ⬜ pending |
 | Worker applies variation to opener copy only (kind != followup, flag on); DB stays clean | D-12/D-14 | integration | `pytest -k variation` | ⬜ pending |
+| File-opener messages inbox row carries concrete message_type (photo/video/document) + file_name/mime_type/size_bytes so it renders a media bubble (bridges Phase 23 mig 053); text opener row stays message_type='text' | D-05/D-06 (+ Phase 23 mig 053) | integration | `pytest -k file_opener` | ⬜ pending |
 | `duplicate_campaign` copies attachment blob + variation flag | D-20 | integration | `pytest -k attachment` | ⬜ pending |
 | New NOT NULL columns have server_default (no NotNullViolation on raw INSERT) | D-04/D-13 | integration | `pytest -k campaign` | ⬜ pending |
 
@@ -93,3 +94,4 @@ created: 2026-07-07
 - [ ] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
+</content>

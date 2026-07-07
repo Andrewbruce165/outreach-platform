@@ -115,15 +115,18 @@ class CampaignAttachment(Base):
     Then edit app/models/__init__.py: add the `variation_enabled` Column to Campaign (exactly as the interfaces block) and add the `CampaignAttachment` class (exactly as the interfaces block) near CsvImport/AccountImportStaging. Do NOT add any Campaign.relationship to the attachment (worker/endpoint query it by campaign_id directly — keeps the blob off every campaign SELECT, Pitfall 7).
   </action>
   <verify>
-    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest tests/test_campaign_attachment.py -k "drift or idempotent or default" -x</automated>
+    <!-- Self-contained: proves the ORM model imports + registers and the migration is idempotent-structured.
+         Does NOT depend on tests/test_campaign_attachment.py (authored in Task 2). Task 2 runs the full pytest. -->
+    <automated>docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api python -c "from app.models import CampaignAttachment, Campaign; from app.database import Base; assert hasattr(Campaign, 'variation_enabled'), 'no variation_enabled'; assert 'campaign_attachments' in Base.metadata.tables, 'attachment table unregistered'; print('model-ok')" && grep -q "SET DEFAULT true" migrations/054_campaign_attachment_and_variation.sql && grep -q "campaign_id uuid NOT NULL UNIQUE" migrations/054_campaign_attachment_and_variation.sql && [ "$(grep -c 'IF NOT EXISTS' migrations/054_campaign_attachment_and_variation.sql)" -ge 3 ] && echo mig-054-idempotent-structure-ok</automated>
   </verify>
   <acceptance_criteria>
     - `migrations/054_campaign_attachment_and_variation.sql` exists; `grep -c 'IF NOT EXISTS' migrations/054_*.sql` >= 3 AND contains `SET DEFAULT true` AND `campaign_id uuid NOT NULL UNIQUE`
     - No `migrations/053_*` created by this plan (053 is Phase 23's slot)
     - `app/models/__init__.py` contains `class CampaignAttachment` AND `variation_enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))`
     - CampaignAttachment.id has BOTH `default=uuid.uuid4` AND `server_default=text("gen_random_uuid()")`; size_bytes has BOTH `default=0` AND `server_default="0"`
+    - The verify command prints `model-ok` (ORM imports, campaign_attachments registered in Base.metadata) then `mig-054-idempotent-structure-ok`
   </acceptance_criteria>
-  <done>Migration 054 + ORM model in place; drift/idempotency tests GREEN; prod and create_all converge.</done>
+  <done>Migration 054 + ORM model in place; the ORM imports cleanly and campaign_attachments registers in Base.metadata; the migration is idempotent-structured (IF NOT EXISTS x3 + SET DEFAULT). The full drift/idempotency pytest is authored and run in Task 2.</done>
 </task>
 
 <task type="auto">
@@ -174,3 +177,5 @@ campaign_attachments (1-1, UNIQUE campaign_id, BYTEA blob, CASCADE) and campaign
 <output>
 After completion, create `.planning/phases/24-campaign-first-message-file-attachment-plus-invisible-anti-spam-text-variation/24-02-SUMMARY.md`.
 </output>
+</content>
+</invoke>
