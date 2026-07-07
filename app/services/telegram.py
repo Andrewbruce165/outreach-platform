@@ -258,7 +258,11 @@ def make_telegram_client(
     Pass client_class=ResilientTelegramClient for the listener subprocess.
     Must be called before client.connect().
     """
-    fp = {**_CLIENT_FINGERPRINT, **(fingerprint or {})}
+    # Merge the per-account override over the global default, but treat a None value as
+    # "not provided" so it does NOT clobber the default — some vendor JSONs omit
+    # lang_code/system_lang_code (only lang_pack), which would otherwise send None into
+    # Telethon's initConnection → "bytes or str expected, not NoneType" on the first request.
+    fp = {**_CLIENT_FINGERPRINT, **{k: v for k, v in (fingerprint or {}).items() if v is not None}}
     client = client_class(
         session,
         settings.telegram_api_id,

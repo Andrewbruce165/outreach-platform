@@ -114,14 +114,20 @@ def build_fingerprint(v: VendorAccountJson) -> dict:
 
     NOTE: ``lang_pack`` is deliberately NOT included — ``make_telegram_client`` always
     forces ``'tdesktop'`` (D-04), and ``api_id``/``api_hash`` stay global (D-03).
+
+    Keys whose vendor value is None are OMITTED (not emitted as None) so the client factory
+    keeps its global default for that field — some vendor JSONs ship only ``lang_pack`` and
+    leave ``lang_code``/``system_lang_code`` unset, and a None there breaks Telethon's
+    ``initConnection`` serialization.
     """
-    return {
+    fields = {
         "device_model": v.device,
         "system_version": v.sdk,
         "app_version": v.app_version,
         "lang_code": v.lang_code,
         "system_lang_code": v.system_lang_code,
     }
+    return {k: val for k, val in fields.items() if val is not None}
 
 
 # ─── Unzip + pair by basename (no Telegram connect) ─────────────────────────────

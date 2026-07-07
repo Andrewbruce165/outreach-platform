@@ -262,6 +262,35 @@ async def test_fingerprint_override_and_strict_fallback():
     assert init2.lang_pack == "tdesktop"  # strict — never dropped even when overriding
 
 
+async def test_fingerprint_none_fields_fall_back_to_global():
+    """A vendor JSON that omits ``lang_code``/``system_lang_code`` (ships only
+    ``lang_pack``) must NOT send None into Telethon's initConnection ('bytes or str
+    expected, not NoneType'). ``build_fingerprint`` OMITS None keys, and the client
+    factory keeps the global default for a missing field."""
+    from telethon.sessions import StringSession
+    from app.services.account_import import build_fingerprint, VendorAccountJson
+    from app.services.telegram import make_telegram_client, _CLIENT_FINGERPRINT
+
+    v = VendorAccountJson.model_validate(
+        {"session_file": "79325116823", "device": "Z97-AR", "sdk": "Windows 10 x64",
+         "app_version": "6.9.3 x64"}  # NO lang_code / system_lang_code
+    )
+    fp = build_fingerprint(v)
+    assert "lang_code" not in fp and "system_lang_code" not in fp   # None keys omitted
+    assert fp["device_model"] == "Z97-AR"
+
+    c = make_telegram_client(StringSession(), fingerprint=fp)
+    init = c._init_request
+    assert init.device_model == "Z97-AR"                            # vendor value kept
+    assert init.lang_code == _CLIENT_FINGERPRINT["lang_code"]       # default, NOT None
+    assert init.system_lang_code == _CLIENT_FINGERPRINT["system_lang_code"]
+    assert init.lang_code is not None and init.system_lang_code is not None
+
+    # Even an explicit None in the override dict must not clobber the default.
+    c2 = make_telegram_client(StringSession(), fingerprint={"lang_code": None})
+    assert c2._init_request.lang_code == _CLIENT_FINGERPRINT["lang_code"]
+
+
 # ─── IMPT-04 (21-02): NULL fingerprint is byte-identical on the CONSTRUCTOR kwargs ──
 
 async def test_null_fingerprint_matches_global():

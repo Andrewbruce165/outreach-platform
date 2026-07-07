@@ -53,6 +53,25 @@ connect stage. This session is the NEXT failure that surfaced there.
 - **Lesson:** never "retry" account-import items in place after they go terminal — the
   session bytes are purged by design. Re-import from the source archive instead.
 
+## Bug #3 (surfaced after the proxy fix) — None fingerprint field → initConnection TypeError
+- After the proxy fix, re-upload connected to Telegram fine (proxy OK) but failed with
+  `[account-import] connect_failed for 79325***: bytes or str expected, not <class 'NoneType'>`.
+- **Root cause:** these vendor JSONs ship `lang_code`/`system_lang_code` as **null** (they
+  only carry `lang_pack`/`system_lang_pack`). `build_fingerprint` emitted those as `None`,
+  and `make_telegram_client`'s merge `{**_CLIENT_FINGERPRINT, **fingerprint}` let the `None`
+  clobber the global default → Telethon serialized `lang_code=None` into `initConnection`
+  (the first request after connect) → `TypeError`. Caught by the broad `except` and mislabeled
+  `connect_failed`. Earlier-imported accounts had `lang_code` set (different vendor batch).
+- **Fix (DEPLOYED):**
+  - `make_telegram_client` (telegram.py:261) — merge now drops None-valued override keys:
+    `{**_CLIENT_FINGERPRINT, **{k:v for k,v in (fingerprint or {}).items() if v is not None}}`.
+  - `build_fingerprint` (account_import.py) — omits keys whose vendor value is None.
+  - Regression test `test_fingerprint_none_fields_fall_back_to_global`.
+- **VERIFIED end-to-end** on the real previously-failing account `79325116823` (from the live
+  staging zip): fingerprint omits lang_code → routed via Decodo pool → `connect()` →
+  `is_user_authorized()=True` → `get_me()` returned id 8606728473 / phone 79325116823. 17/17
+  account-import tests pass.
+
 ## Current Focus
-hypothesis: dead vendor proxy stranded accounts at connect; fix = always use our pool
-next_action: user re-uploads the 2 archives via UI → 19 accounts import via pool proxy
+hypothesis: RESOLVED — 3 stacked bugs (proxy list-shape, dead vendor proxy, None fingerprint)
+next_action: user re-uploads the 2 archives via UI → accounts now convert + connect + import
