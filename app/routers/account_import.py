@@ -17,15 +17,21 @@ bytes live only in the staged ``zip_data`` BYTEA, which the confirm step re-read
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
-from app.models import AccountImportStaging
+from app.models import (
+    AccountImportItem,
+    AccountImportJob,
+    AccountImportStaging,
+)
 from app.services.account_import import ImportZipError, unpack_and_pair
 from app.utils.auth import AuthCtx, auth_dep
 
@@ -168,4 +174,197 @@ async def import_preview(
         matched=matched,
         unpaired=unpaired,
         malformed=malformed,
+    )
+
+
+# ─── Step 2 (D-09): confirm → async job + status poll (Plan 21-05) ──────────────
+#
+# ``POST /import/{import_id}/confirm`` re-reads the staged ZIP, fans the matched pairs
+# into ``account_import_items`` (one row per pair, carrying its own session bytes +
+# parsed JSON), creates ONE ``account_import_jobs`` row, and returns ``job_id`` (202)
+# immediately — the AccountImportWorker drains the items in the background. The role is
+# chosen ONCE for the whole batch (D-16). ``GET /import/{job_id}/status`` polls progress.
+#
+# Security (D-07 / RESEARCH Pitfall 9): the status response carries ONLY bare basenames +
+# status/result/reason — never the ``session_blob``, the ``vendor_json`` (which holds the
+# twoFA value), or any other secret.
+
+
+class ImportConfirmRequest(BaseModel):
+    """Body for confirm. Role is chosen once for the whole batch (D-16); an invalid
+    value is rejected by the ``Literal`` type (structured 422)."""
+
+    role: Literal['sender', 'checker']
+
+
+class ImportConfirmResponse(BaseModel):
+    job_id: UUID
+    total: int
+
+
+class ImportStatusItem(BaseModel):
+    """A single per-file outcome — NEVER carries session bytes or the twoFA value."""
+
+    basename: str
+    status: str
+    result: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ImportStatusResponse(BaseModel):
+    job_id: UUID
+    status: str
+    total: int
+    processed: int
+    items: list[ImportStatusItem]
+
+
+@router.post(
+    "/import/{import_id}/confirm",
+    response_model=ImportConfirmResponse,
+    status_code=202,
+)
+async def import_confirm(
+    import_id: UUID,
+    payload: ImportConfirmRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn a staged preview into a background import job (returns ``job_id``, 202).
+
+    Re-reads the staged ZIP, pairs it again, and creates ONE job + N pending items (one
+    per matched pair). NO Telegram connect happens here — the AccountImportWorker does the
+    per-account work. Unknown staging → 404 ``IMPORT_NOT_FOUND``; expired → 410
+    ``IMPORT_EXPIRED``. Double-submit is allowed (a fresh job each time — the worker dedups
+    per phone/telegram_id, so a re-confirm never creates duplicate senders; D-14/IMPT-06).
+    """
+    staging = (
+        await db.execute(
+            select(AccountImportStaging).where(
+                AccountImportStaging.id == import_id,
+                AccountImportStaging.workspace_id == ctx.workspace_id,
+                # TODO(v2-rls): replaced by RLS policy
+            )
+        )
+    ).scalars().first()
+    if staging is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "IMPORT_NOT_FOUND", "message": "Import session not found"},
+        )
+
+    # Postgres stores tz-aware; a defensive naive→UTC coercion mirrors contacts.import.
+    expires_at = staging.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=410,
+            detail={"code": "IMPORT_EXPIRED", "message": "Import session expired"},
+        )
+
+    # Re-pair the staged ZIP. It was validated at preview, but a defensive re-read keeps a
+    # corrupt/oversized blob a structured 4xx (never a 500).
+    try:
+        result = unpack_and_pair(staging.zip_data)
+    except ImportZipError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": str(exc)},
+        )
+
+    matched = result["matched"]
+
+    job = AccountImportJob(
+        workspace_id=ctx.workspace_id,
+        staging_id=import_id,
+        role=payload.role,
+        status="running",
+        total=len(matched),
+        processed=0,
+    )
+    db.add(job)
+    await db.flush()  # populate job.id for the FK below
+
+    # One pending item per matched pair — each carries its own session bytes + parsed JSON
+    # so the worker never re-unzips. Unpaired/malformed were reported at preview and are
+    # intentionally NOT imported, so total == number of items actually created.
+    for m in matched:
+        db.add(
+            AccountImportItem(
+                job_id=job.id,
+                workspace_id=ctx.workspace_id,
+                basename=m["basename"],
+                session_blob=m["session_bytes"],
+                vendor_json=m["json"],
+                status="pending",
+            )
+        )
+
+    await db.commit()
+
+    logger.info(
+        "[account-import] confirm workspace=%s import_id=%s job_id=%s role=%s total=%d",
+        ctx.workspace_id,
+        import_id,
+        job.id,
+        payload.role,
+        len(matched),
+    )
+
+    return ImportConfirmResponse(job_id=job.id, total=job.total)
+
+
+@router.get("/import/{job_id}/status", response_model=ImportStatusResponse)
+async def import_status(
+    job_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Poll an import job's progress: ``processed``/``total`` + a per-file result list.
+
+    The item payload is secrets-free by construction — only basename/status/result/reason.
+    ``processed`` is the worker-maintained counter; when it reaches ``total`` the worker has
+    flipped ``status`` → ``done`` (whatever the row currently says is returned).
+    """
+    job = (
+        await db.execute(
+            select(AccountImportJob).where(
+                AccountImportJob.id == job_id,
+                AccountImportJob.workspace_id == ctx.workspace_id,
+                # TODO(v2-rls): replaced by RLS policy
+            )
+        )
+    ).scalars().first()
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": "Import job not found"},
+        )
+
+    items = (
+        await db.execute(
+            select(AccountImportItem)
+            .where(
+                AccountImportItem.job_id == job_id,
+                AccountImportItem.workspace_id == ctx.workspace_id,
+            )
+            .order_by(AccountImportItem.created_at.asc())
+        )
+    ).scalars().all()
+
+    return ImportStatusResponse(
+        job_id=job.id,
+        status=job.status,
+        total=job.total,
+        processed=job.processed,
+        items=[
+            ImportStatusItem(
+                basename=i.basename,
+                status=i.status,
+                result=i.result,
+                reason=i.reason,
+            )
+            for i in items
+        ],
     )
