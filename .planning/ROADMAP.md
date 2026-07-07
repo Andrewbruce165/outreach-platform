@@ -547,11 +547,11 @@ Plans:
 **Goal:** Import already-authorized Telegram accounts into a workspace by uploading vendor-format **pairs** `<phone>.json` + `<phone>.session` through the UI, with bulk (multi-account) upload support — bypassing the phone/SMS onboarding flow. The `.session` is a live Telethon SQLite session (auth_key present) that must be converted to our encrypted StringSession storage; the `.json` carries the client fingerprint (app_id/app_hash/device/sdk/app_version/lang) + optional proxy/2FA. **Key risk to design around:** our reconnect currently forces one hardcoded global api_id/api_hash + `_CLIENT_FINGERPRINT` — reconnecting an imported session with a different fingerprint than the one that created it risks a Telegram security-flag / forced re-login. See `21-NOTES.md` for the grounded file analysis and codebase findings.
 **Requirements**: IMPT-01, IMPT-02, IMPT-03, IMPT-04, IMPT-05, IMPT-06, IMPT-07, IMPT-08, IMPT-09, IMPT-10 (derived during /gsd:plan-phase 21 — see REQUIREMENTS.md §Bulk Telegram account import; tracked via decisions D-01..D-17)
 **Depends on:** Phase 20
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 21-01-schema-foundation-and-test-scaffold-PLAN.md — migration 051 (senders.client_fingerprint JSONB + twofa_password_enc TEXT + account_import_stagings/jobs/items tables) + ORM mirrors + Wave-0 RED test scaffold (Telethon stubbed) [Wave 1, no deps] — IMPT-08
+- [x] 21-01-schema-foundation-and-test-scaffold-PLAN.md — migration 051 (senders.client_fingerprint JSONB + twofa_password_enc TEXT + account_import_stagings/jobs/items tables) + ORM mirrors + Wave-0 RED test scaffold (Telethon stubbed) [Wave 1, no deps] — IMPT-08
 
 **Wave 2** *(parallel — telegram.py+call-sites vs new account_import module, no file overlap)*
 - [ ] 21-02-fingerprint-seam-and-2fa-autofill-PLAN.md — make_telegram_client/get_client optional fingerprint override (strict NULL fallback) + thread sender.client_fingerprint at hot-path call sites + Phase 20 2FA-change stored-password autofill (D-06) [Wave 2, depends_on: 21-01] — IMPT-04, IMPT-10

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 21 context gathered
-last_updated: "2026-07-06T17:39:23.995Z"
-last_activity: "2026-07-06 - Completed quick task 260706-mdz: lower per-account daily new-dialog limit to 10 (all campaigns + default + green corridor 10/30)"
+status: executing
+stopped_at: Completed 21-01-PLAN.md
+last_updated: "2026-07-07T07:14:37.604Z"
+last_activity: 2026-07-07
 progress:
   total_phases: 24
   completed_phases: 20
-  total_plans: 83
-  completed_plans: 82
+  total_plans: 89
+  completed_plans: 83
   percent: 99
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 20 — account-profile-management
+**Current focus:** Phase 21 — bulk-telegram-account-import-via-session-json-upload-in-ui
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-06 - Completed quick task 260706-mdz: lower per-account daily new-dialog limit to 10 (all campaigns + default + green corridor 10/30)
+Phase: 21 (bulk-telegram-account-import-via-session-json-upload-in-ui) — EXECUTING
+Plan: 2 of 6
+Status: Ready to execute
+Last activity: 2026-07-07
 
 Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05: profile schema/columns, identity+guardrails, photo+resync, 2FA+recovery-email, enriched accounts UI + handoff regen)
 
@@ -105,6 +105,7 @@ Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05:
 | Phase 20 P03 | 9min | 2 tasks | 2 files |
 | Phase 20 P04 | 22min | 2 tasks | 2 files |
 | Phase 20 P05 | multi-day (human-verify + 2 gap rounds) | 3 tasks | 6 files |
+| Phase 21 P01 | 11min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -188,6 +189,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 20]: 20-04: implemented to the RED test contract (like 20-02/20-03) — canonical change_2fa_password/start_recovery_email/confirm_recovery_email + router-facing edit_2fa/set_recovery_email aliases (test-patched names); router raise-based (mocks return bare {ok:True}/{code_length:6}), never res.get('success'); _status_for_profile_error (TOO_FRESH→409/FLOOD_WAIT→429/else 400) wired as single source of truth inside refactored _raise_profile_telegram_error
 - [Phase 20]: 20-04: full-suite red (91F+86E) is shared-DB test-ordering pollution (auth/me workspace-create fails deep in 900+ session, cascades to ~40 files incl. Phase-5 untouched ones), NOT a 20-04 regression — 2FA writes nothing to DB (D-03); all my-domain files GREEN in isolation (45 passed) + flagged files 28 passed as a group; logged to deferred-items.md, exacerbated by parallel quick-260704 buc/buq/bty merges
 - [Phase 20]: [Phase 20]: Plan 20-05 (frontend + handoff, cross-repo, human-verify) closes PROF-09 + Phase 20. Handoff openapi/types regenerated offline (1128ee8, backend); enriched accounts.tsx — avatar+@username row, Изменить/Обновить профиль kebab, two-section identity+2FA modal, two-step recovery-email, frequency guardrails (55c5c64, sibling). Two gap-closure rounds: (r1) resync now composes live first_name/last_name from get_me() into the single sender.name column (ed3960b, backend, mirrors PATCH /profile) + profile modal redesigned into bordered sections with Role selector in its own block + FleetTable→SenderCard grid grouped by role then priority tier needs-reauth>active>rest (1373bf6, sibling); (r2) avatar-photo staleness after resync raised but NOT fixed — known minor gap (profile_field_changed_at.photo stamp resync never sets + dead sender-photo invalidation key), user confirmed name/bio/username refresh + approved. Bulk/mass account editing explicitly scoped OUT of Phase 20 (separate backlog item). Cross-repo commit isolation held throughout (2 backend + 2 sibling commits, explicit per-repo staging, never git add -A).
+- [Phase 21]: 21-01: mig 051 + ORM mirrors — 2 nullable senders cols (client_fingerprint JSONB, twofa_password_enc TEXT; NULL=no regression) + 3 import tables; every NOT NULL col has server_default and ids use dual uuid.uuid4/gen_random_uuid so create_all matches prod. Wave-0 RED scaffold (7 tests) sets downstream contracts: account_import module (sqlite_to_string_session/unpack_and_pair/encrypt_twofa/import_one_account) + AccountImportWorker; synthetic-session + no-network Telethon stub fixtures.
 
 ### Roadmap Evolution
 
@@ -283,6 +285,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-06T17:39:23.956Z
-Stopped at: Phase 21 context gathered
-Resume file: .planning/phases/21-bulk-telegram-account-import-via-session-json-upload-in-ui/21-CONTEXT.md
+Last session: 2026-07-07T07:14:20.531Z
+Stopped at: Completed 21-01-PLAN.md
+Resume file: None
