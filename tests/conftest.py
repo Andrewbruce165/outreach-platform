@@ -248,6 +248,15 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_054.exists():
             await asyncpg_conn.execute(_mig_054.read_text())
 
+        # 055: messages media columns (message_type/file_name/mime_type/size_bytes).
+        # The `messages` table comes from raw migration 017 (no ORM model), so these
+        # columns only exist once the migration runs — apply it here so Plan 24-06's
+        # media-typed inbox INSERT works in the test DB. Bridges the Phase 23 mig-053
+        # gap (Phase 23 was never executed). Exists-guard + fully idempotent SQL.
+        _mig_055 = PROJECT_ROOT / "migrations" / "055_messages_media_columns.sql"
+        if _mig_055.exists():
+            await asyncpg_conn.execute(_mig_055.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
