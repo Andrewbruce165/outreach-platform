@@ -336,6 +336,11 @@ async def _campaign_to_response(
     failed_count = (await db.execute(text(
         "SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid AND status = 'failed'"
     ), {"cid": str(campaign.id)})).scalar() or 0
+    # Phase 24 D-13/D-19: EXISTS probe on campaign_attachments — the 50MB blob stays
+    # off every SELECT campaigns (Pitfall 7). has_attachment is computed, not a column.
+    has_attachment = (await db.execute(text(
+        "SELECT 1 FROM campaign_attachments WHERE campaign_id = :cid"
+    ), {"cid": str(campaign.id)})).first() is not None
     return CampaignResponse(
         id=campaign.id,
         workspace_id=campaign.workspace_id,
@@ -389,6 +394,9 @@ async def _campaign_to_response(
         is_exhausted=is_exhausted,
         failed_count=failed_count,
         pool_health=pool_health,
+        # Phase 24 D-13/D-19: variation toggle + computed attachment presence.
+        variation_enabled=campaign.variation_enabled,
+        has_attachment=has_attachment,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,
     )
@@ -506,6 +514,8 @@ async def create_campaign(
         # 026: per-campaign re-contact policy.
         allow_recontact=payload.allow_recontact,
         recontact_min_age_days=payload.recontact_min_age_days,
+        # Phase 24 D-13: invisible anti-spam text-variation toggle (default ON).
+        variation_enabled=payload.variation_enabled,
         # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
         max_new_dialogs_per_day=payload.max_new_dialogs_per_day,
         # Phase 19 NORP-02/NORP-05: follow-up + auto-finish (D-08/D-12).
@@ -1039,6 +1049,8 @@ async def duplicate_campaign(
         # 026: per-campaign re-contact policy — copy for parity with src.
         allow_recontact=src.allow_recontact,
         recontact_min_age_days=src.recontact_min_age_days,
+        # Phase 24 D-20: copy the variation flag so the duplicate is send-ready.
+        variation_enabled=src.variation_enabled,
         # Phase 19 NORP-02/NORP-05: follow-up + auto-finish — copy for parity with src.
         follow_up_enabled=src.follow_up_enabled,
         follow_up_interval_hours=src.follow_up_interval_hours,
@@ -1061,6 +1073,22 @@ async def duplicate_campaign(
     # IntegrityError into 409 (was surfacing as a raw 500).
     try:
         await db.flush()
+        # Phase 24 D-20: copy the first-message attachment blob into a NEW row for the
+        # duplicate (own campaign_attachments row) so the copy is send-ready. Done in
+        # the SAME transaction as new_c — either both land or neither.
+        att = (await db.execute(text(
+            "SELECT file_data, file_name, content_type, size_bytes "
+            "FROM campaign_attachments WHERE campaign_id = :cid"
+        ), {"cid": str(src.id)})).first()
+        if att is not None:
+            db.add(CampaignAttachment(
+                campaign_id=new_c.id,
+                workspace_id=ctx.workspace_id,
+                file_data=att.file_data,
+                file_name=att.file_name,
+                content_type=att.content_type,
+                size_bytes=att.size_bytes,
+            ))
         # Sender pool is NOT copied: the duplicate starts empty so accounts held by
         # the source's running campaign don't appear locked/undeletable in the copy.
         await db.commit()
