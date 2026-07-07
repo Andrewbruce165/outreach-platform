@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-07-07T07:14:37.604Z"
+stopped_at: Completed 21-02-PLAN.md
+last_updated: "2026-07-07T07:52:12.638Z"
 last_activity: 2026-07-07
 progress:
   total_phases: 24
   completed_phases: 20
   total_plans: 89
-  completed_plans: 83
+  completed_plans: 84
   percent: 99
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 21 (bulk-telegram-account-import-via-session-json-upload-in-ui) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-07
 
@@ -106,6 +106,7 @@ Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05:
 | Phase 20 P04 | 22min | 2 tasks | 2 files |
 | Phase 20 P05 | multi-day (human-verify + 2 gap rounds) | 3 tasks | 6 files |
 | Phase 21 P01 | 11min | 2 tasks | 5 files |
+| Phase 21 P02 | 36min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -190,6 +191,8 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 20]: 20-04: full-suite red (91F+86E) is shared-DB test-ordering pollution (auth/me workspace-create fails deep in 900+ session, cascades to ~40 files incl. Phase-5 untouched ones), NOT a 20-04 regression — 2FA writes nothing to DB (D-03); all my-domain files GREEN in isolation (45 passed) + flagged files 28 passed as a group; logged to deferred-items.md, exacerbated by parallel quick-260704 buc/buq/bty merges
 - [Phase 20]: [Phase 20]: Plan 20-05 (frontend + handoff, cross-repo, human-verify) closes PROF-09 + Phase 20. Handoff openapi/types regenerated offline (1128ee8, backend); enriched accounts.tsx — avatar+@username row, Изменить/Обновить профиль kebab, two-section identity+2FA modal, two-step recovery-email, frequency guardrails (55c5c64, sibling). Two gap-closure rounds: (r1) resync now composes live first_name/last_name from get_me() into the single sender.name column (ed3960b, backend, mirrors PATCH /profile) + profile modal redesigned into bordered sections with Role selector in its own block + FleetTable→SenderCard grid grouped by role then priority tier needs-reauth>active>rest (1373bf6, sibling); (r2) avatar-photo staleness after resync raised but NOT fixed — known minor gap (profile_field_changed_at.photo stamp resync never sets + dead sender-photo invalidation key), user confirmed name/bio/username refresh + approved. Bulk/mass account editing explicitly scoped OUT of Phase 20 (separate backlog item). Cross-repo commit isolation held throughout (2 backend + 2 sibling commits, explicit per-repo staging, never git add -A).
 - [Phase 21]: 21-01: mig 051 + ORM mirrors — 2 nullable senders cols (client_fingerprint JSONB, twofa_password_enc TEXT; NULL=no regression) + 3 import tables; every NOT NULL col has server_default and ids use dual uuid.uuid4/gen_random_uuid so create_all matches prod. Wave-0 RED scaffold (7 tests) sets downstream contracts: account_import module (sqlite_to_string_session/unpack_and_pair/encrypt_twofa/import_one_account) + AccountImportWorker; synthetic-session + no-network Telethon stub fixtures.
+- [Phase 21]: 21-02 (IMPT-04): per-account client_fingerprint override on make_telegram_client/get_client with STRICT NULL fallback (D-02, 13 phone senders byte-identical), lang_pack='tdesktop' forced (D-04), api_id/api_hash global (D-03); threaded through every automated hot path (queue/listener/warmup/checker+worker) and all 16 Phase-20 profile/2FA methods + senders.py call sites
+- [Phase 21]: 21-02 (IMPT-10, D-06/D-07): update_sender_2fa auto-fills decrypted twofa_password_enc as current_password for imported accounts when omitted, connects under account fingerprint, never returns/logs plaintext. contact_check_worker._tick two-level LATERAL needs the column on BOTH inner subquery + outer projection (grep can't catch — verified via test_contact_check_worker.py GREEN)
 
 ### Roadmap Evolution
 
@@ -285,6 +288,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-07T07:14:20.531Z
-Stopped at: Completed 21-01-PLAN.md
+Last session: 2026-07-07T07:51:56.609Z
+Stopped at: Completed 21-02-PLAN.md
 Resume file: None
