@@ -1440,13 +1440,13 @@ function ScheduleStep({
         <span className="field__hint">
           Лимит новых диалогов в сутки для каждого подключённого аккаунта (не на всю кампанию).
         </span>
-        {maxNewDialogsPerDay > 50 && (
+        {maxNewDialogsPerDay > 10 && (
           <span
             className="field__hint"
             role="alert"
             style={{ color: "var(--warning, var(--danger))", marginTop: 4 }}
           >
-            рекомендуем не больше 50 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана
+            рекомендуем не больше 10 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана (максимум 30)
           </span>
         )}
       </div>
