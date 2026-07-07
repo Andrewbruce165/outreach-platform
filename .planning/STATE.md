@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Phase 23 context gathered
-last_updated: "2026-07-07T12:22:37.126Z"
+stopped_at: Phase 24 context gathered
+last_updated: "2026-07-07T13:28:05.651Z"
 last_activity: 2026-07-07
 progress:
-  total_phases: 26
+  total_phases: 27
   completed_phases: 21
-  total_plans: 89
+  total_plans: 95
   completed_plans: 88
   percent: 99
 ---
@@ -221,6 +221,7 @@ See full log: PROJECT.md → Key Decisions
 - Phase 21 added (2026-07-06): Bulk Telegram account import via session JSON upload in UI — загрузка аккаунтов в UI через vendor-формат session-JSON (tdesktop-style метаданные: app_id/app_hash/device/sdk/proxy/2FA + парный session-файл, именованный по телефону), в обход phone/SMS-онбординга для уже авторизованных сессий. Массовая (multi-account) загрузка обязательна. Пример JSON и наблюдения для планирования: `.planning/phases/21-bulk-telegram-account-import-via-session-json-upload-in-ui/21-NOTES.md`. Depends on Phase 20. Requirements TBD (определить в discuss-phase). NB: `gsd-tools phase add` изначально выдал номер 1000 (посчитал max+1 от backlog-фазы 999.1) — вручную перенумеровано в 21.
 - Phase 22 added (2026-07-07): Warmup new-chat budget ladder with campaign priority reserve — единый бюджет «новых чатов в сутки» (скользящие 24ч) для аккаунтов в warmup-пуле: редактируемая лестница (недели 1–3 → 3/день, далее 4/6/8, после 42 дней кап 8), рассылка всегда в приоритете (warmup тратит только остаток после резерва под pending cold openers), реестр `sender_first_contacts` (mig 053, бэкфилл из conversations+warmup_messages) как источник правды первых контактов, гейт в `_process_next_for_sender` (только new-dialog ветка; follow-up'ы/ответы не гейтятся, opener ждёт а не сгорает), warmup: LEVEL_CONFIG → настраиваемый `max_messages_per_day`, инициатор новой пары = более старый аккаунт. API: GET/PUT /warmup/settings, GET /warmup/pool, GET /warmup/stats. Не трогаем: интервалы очереди 4/20/150, FloodWait, per-campaign кап Phase 12, pacing Phase 13 (эффективный лимит = минимум из всех). Решения зафиксированы при создании фазы: `.planning/phases/22-warmup-new-chat-budget-ladder-with-campaign-priority-reserve/22-CONTEXT.md` (D-01..D-19, discuss-phase не требуется). Depends on Phase 21. NB: `gsd-tools phase add` снова выдал 1000 — вручную перенумеровано в 22.
 - Phase 23 added (2026-07-07): Edit and delete-for-everyone of sent messages plus file sending from inbox UI — из inbox UI: удаление отправленного сообщения у обеих сторон (delete-for-everyone/revoke), редактирование уже отправленного сообщения, отправка файлов контакту. Requirements TBD (определить в discuss-phase). Depends on Phase 22. NB: `gsd-tools phase add` снова выдал 1000 (max+1 от backlog 999.1) — вручную перенумеровано в 23.
+- Phase 24 added (2026-07-07): Campaign first-message file attachment plus invisible anti-spam text variation — при настройке кампании (1) прикрепление файла к первому сообщению (attach в UI рядом с блоком текста опенера) и отправка файла вместе с первым сообщением; (2) «незаметная» вариация текста опенера через невидимые символы (zero-width / вариативные пробелы), которые пользователь не видит, но которые делают каждое исходящее первое сообщение уникальным для антиспам-детекторов Telegram (чтобы одинаковые опенеры с одного аккаунта не палились как рассылка). Requirements TBD (определить в discuss-phase). Depends on Phase 23. NB: `gsd-tools phase add` снова выдал 1000 (max+1 от backlog 999.1) — вручную перенумеровано в 24.
 
 ### Pending Todos
 
@@ -300,6 +301,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-07T12:22:37.110Z
-Stopped at: Phase 23 context gathered
-Resume file: .planning/phases/23-edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui/23-CONTEXT.md
+Last session: 2026-07-07T13:28:05.614Z
+Stopped at: Phase 24 context gathered
+Resume file: .planning/phases/24-campaign-first-message-file-attachment-plus-invisible-anti-spam-text-variation/24-CONTEXT.md
