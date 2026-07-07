@@ -411,7 +411,7 @@ class TelegramListener:
             # senders no longer carry agent linkage — see _send_to_ai above.
             result = await session.execute(
                 text("""
-                    SELECT id, slug, phone, session_string, proxy, workspace_id
+                    SELECT id, slug, phone, session_string, proxy, workspace_id, client_fingerprint
                     FROM senders
                     WHERE role = 'sender'
                       AND lifecycle_status = 'active'
@@ -431,6 +431,9 @@ class TelegramListener:
                     # Phase 15 D-01: workspace_id для детерминированного internal-short-circuit
                     # («свой со своим» по telegram_id ∈ senders этого workspace).
                     "workspace_id": str(r[5]),
+                    # Phase 21 IMPT-04: per-account fingerprint for imported accounts;
+                    # NULL for the 13 phone-onboarded senders → strict global fallback.
+                    "client_fingerprint": r[6],
                 }
                 for r in rows
             ]
@@ -1440,6 +1443,7 @@ class TelegramListener:
                     StringSession(session_string),
                     proxy=sender_info.get("proxy"),
                     client_class=ResilientTelegramClient,
+                    fingerprint=sender_info.get("client_fingerprint"),
                 )
 
                 await client.connect()

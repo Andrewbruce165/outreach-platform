@@ -250,10 +250,11 @@ class ContactCheckWorker:
                                s.id AS checker_id,
                                s.slug AS checker_slug,
                                s.session_string,
-                               s.proxy
+                               s.proxy,
+                               s.client_fingerprint
                         FROM contacts c
                         JOIN LATERAL (
-                            SELECT id, slug, session_string, proxy
+                            SELECT id, slug, session_string, proxy, client_fingerprint
                             FROM senders
                             WHERE workspace_id = c.workspace_id
                               AND role = 'checker'
@@ -354,6 +355,10 @@ class ContactCheckWorker:
                 checker_slug=first.checker_slug,
                 encrypted_session=first.session_string,
                 proxy=first.proxy,
+                # Phase 21 D-17/IMPT-04: imported checkers reconnect with THEIR
+                # fingerprint; NULL for phone-onboarded checkers → strict global
+                # fallback. Threads into check_phones(**common)/check_usernames(**common).
+                fingerprint=first.client_fingerprint,
             )
 
             # Plan 14-07 (Q3): did THIS checker complete a batch without raising? Only
@@ -606,7 +611,7 @@ class ContactCheckWorker:
         async with AsyncSessionLocal() as db:
             row = (await db.execute(
                 text("""
-                    SELECT workspace_id, slug, session_string, proxy
+                    SELECT workspace_id, slug, session_string, proxy, client_fingerprint
                     FROM senders WHERE id = :id
                 """),
                 {"id": checker_id},
@@ -621,6 +626,7 @@ class ContactCheckWorker:
                 phones=sample,
                 proxy=row.proxy,
                 checker_id=checker_id,  # WR-14: lock on id, not (non-unique) slug
+                fingerprint=row.client_fingerprint,
             )
         except Exception as exc:  # noqa: BLE001 — a probe error must not kill the tick
             logger.warning("control-probe for checker %s raised: %s", checker_id, exc)
@@ -806,7 +812,7 @@ class ContactCheckWorker:
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(
                 text("""
-                    SELECT id, workspace_id, slug, session_string, proxy
+                    SELECT id, workspace_id, slug, session_string, proxy, client_fingerprint
                     FROM senders
                     WHERE role = 'checker'
                       AND restriction_status = 'spam_limited'
@@ -839,6 +845,7 @@ class ContactCheckWorker:
                     phones=sample,
                     proxy=r.proxy,
                     checker_id=str(r.id),  # WR-14: lock on id, not (non-unique) slug
+                    fingerprint=r.client_fingerprint,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("recovery probe for checker %s raised: %s", r.id, exc)

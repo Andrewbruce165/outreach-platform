@@ -100,6 +100,82 @@ async def test_fingerprint_override_and_strict_fallback():
     assert init2.lang_pack == "tdesktop"  # strict — never dropped even when overriding
 
 
+# ─── IMPT-04 (21-02): NULL fingerprint is byte-identical on the CONSTRUCTOR kwargs ──
+
+async def test_null_fingerprint_matches_global():
+    """Regression on the built-client kwargs: ``make_telegram_client(fingerprint=None)``
+    passes EXACTLY the global ``_CLIENT_FINGERPRINT`` into the client constructor,
+    keeps ``api_id``/``api_hash`` at the global settings values (never per-account,
+    D-03) and forces ``lang_pack='tdesktop'`` (D-04) — so the 13 phone-onboarded
+    senders (all NULL fingerprint) connect byte-identically to pre-Phase-21."""
+    from telethon.sessions import StringSession
+    from app.services.telegram import make_telegram_client, _CLIENT_FINGERPRINT, settings
+
+    captured = {}
+
+    class _CapturingClient:
+        def __init__(self, session, api_id, api_hash, **kwargs):
+            captured["api_id"] = api_id
+            captured["api_hash"] = api_hash
+            captured["kwargs"] = kwargs
+            # make_telegram_client patches _init_request.lang_pack after construction.
+            self._init_request = type("_R", (), {})()
+
+    client = make_telegram_client(
+        StringSession(), client_class=_CapturingClient, fingerprint=None
+    )
+
+    # Every fingerprint key equals the global — strict fallback (D-02).
+    for key, value in _CLIENT_FINGERPRINT.items():
+        assert captured["kwargs"][key] == value
+    # api_id/api_hash are the global settings values, never per-account (D-03).
+    assert captured["api_id"] == settings.telegram_api_id
+    assert captured["api_hash"] == settings.telegram_api_hash
+    # lang_pack forced to 'tdesktop' unconditionally after construction (D-04).
+    assert client._init_request.lang_pack == "tdesktop"
+
+
+# ─── IMPT-04 (21-02): the checker seam FORWARDS the fingerprint (value flows) ───
+
+async def test_checker_get_client_threads_fingerprint(monkeypatch):
+    """``CheckerService._get_client`` forwards its ``fingerprint=`` kwarg into
+    ``make_telegram_client`` (so imported checkers reconnect with THEIR fingerprint),
+    and a NULL fingerprint stays NULL (the working checker pool is unchanged). Proven
+    by capturing the ``fingerprint=`` kwarg on a stubbed ``make_telegram_client`` — not
+    by grepping the literal."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import app.services.checker as checker_mod
+    from app.services.checker import CheckerService
+    from app.services.encryption import encrypt_session
+    from telethon.sessions import StringSession
+
+    captured = {}
+
+    def _fake_make_client(session, proxy=None, flood_sleep_threshold=60,
+                          client_class=None, fingerprint=None):
+        captured["fingerprint"] = fingerprint
+        stub = MagicMock()
+        stub.connect = AsyncMock()
+        stub.is_user_authorized = AsyncMock(return_value=True)
+        stub.disconnect = AsyncMock()
+        stub.is_connected = MagicMock(return_value=True)
+        return stub
+
+    monkeypatch.setattr(checker_mod, "make_telegram_client", _fake_make_client)
+
+    enc = encrypt_session(StringSession().save())
+    svc = CheckerService()
+
+    fp = {"device_model": "KVM", "system_version": "Windows 10 x64",
+          "app_version": "6.8.2 x64", "lang_code": "en", "system_lang_code": "en-US"}
+    await svc._get_client(enc, proxy=None, fingerprint=fp)
+    assert captured["fingerprint"] == fp
+
+    await svc._get_client(enc, proxy=None, fingerprint=None)
+    assert captured["fingerprint"] is None
+
+
 # ─── IMPT-01: preview unzip + pair by basename, no Telegram connect ─────────────
 
 async def test_preview_pairing():

@@ -221,6 +221,7 @@ class CheckerService:
         proxy: dict | None = None,
         sender_id: str | None = None,
         sender_slug: str | None = None,
+        fingerprint: dict | None = None,
     ) -> TelegramClient:
         """Create a connected Telethon client for the checker account.
 
@@ -240,6 +241,7 @@ class CheckerService:
         client = make_telegram_client(
             StringSession(session_string),
             proxy=proxy,
+            fingerprint=fingerprint,
         )
 
         try:
@@ -370,6 +372,7 @@ class CheckerService:
         encrypted_session: str,
         phones: list[str],
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """
         Check each phone via Telegram and cache the result.
@@ -384,7 +387,7 @@ class CheckerService:
         }
         """
         async with self._get_lock(checker_id):
-            return await self._check_phones_locked(workspace_id, checker_id, checker_slug, encrypted_session, phones, proxy)
+            return await self._check_phones_locked(workspace_id, checker_id, checker_slug, encrypted_session, phones, proxy, fingerprint)
 
     async def probe_control(
         self,
@@ -393,6 +396,7 @@ class CheckerService:
         phones: list[str],
         proxy: dict | None = None,
         checker_id: str | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """LIVE-only control probe — resolve known-live numbers, bypassing cache.
 
@@ -419,7 +423,7 @@ class CheckerService:
             flood_wait_hit = False
             client: Optional[TelegramClient] = None
             try:
-                client = await self._get_client(encrypted_session, proxy=proxy)
+                client = await self._get_client(encrypted_session, proxy=proxy, fingerprint=fingerprint)
                 from telethon.tl.functions.contacts import ResolvePhoneRequest
 
                 for i, phone in enumerate(phones):
@@ -475,6 +479,7 @@ class CheckerService:
         encrypted_session: str,
         phones: list[str],
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         results: list[dict] = []
         flood_wait_hit = False
@@ -487,6 +492,7 @@ class CheckerService:
             client = await self._get_client(
                 encrypted_session, proxy=proxy,
                 sender_id=checker_id, sender_slug=checker_slug,
+                fingerprint=fingerprint,
             )
 
             for i, phone in enumerate(phones):
@@ -600,6 +606,7 @@ class CheckerService:
         encrypted_session: str,
         usernames: list[str],
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Resolve each Telegram username and cache the result.
 
@@ -613,7 +620,7 @@ class CheckerService:
         """
         async with self._get_lock(checker_id):
             return await self._check_usernames_locked(
-                workspace_id, checker_id, checker_slug, encrypted_session, usernames, proxy
+                workspace_id, checker_id, checker_slug, encrypted_session, usernames, proxy, fingerprint
             )
 
     async def _check_usernames_locked(
@@ -624,6 +631,7 @@ class CheckerService:
         encrypted_session: str,
         usernames: list[str],
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         from telethon.tl.functions.contacts import ResolveUsernameRequest
 
@@ -638,6 +646,7 @@ class CheckerService:
             client = await self._get_client(
                 encrypted_session, proxy=proxy,
                 sender_id=checker_id, sender_slug=checker_slug,
+                fingerprint=fingerprint,
             )
 
             for i, uname in enumerate(usernames):

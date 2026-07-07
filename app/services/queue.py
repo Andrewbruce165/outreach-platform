@@ -876,7 +876,7 @@ class QueueWorker:
 
             client = None
             try:
-                client = await telegram_service.get_client(sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy)
+                client = await telegram_service.get_client(sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy, fingerprint=sender.client_fingerprint)
 
                 if item.item_type == QueueItemType.file:
                     result = await telegram_service.send_file(

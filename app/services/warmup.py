@@ -323,7 +323,7 @@ class WarmupWorker:
         result = await db.execute(
             text("""
                 SELECT id, slug, phone, session_string, lifecycle_status, auth_status,
-                       workspace_id, restriction_status, restricted_until
+                       workspace_id, restriction_status, restricted_until, client_fingerprint
                 FROM senders WHERE id = ANY(:ids)
             """),
             {"ids": [from_id, to_id]}
@@ -353,6 +353,9 @@ class WarmupWorker:
                 "workspace_id": str(r[6]),
                 "restriction_status": r[7],
                 "restricted_until": r[8],
+                # Phase 21 IMPT-04: per-account fingerprint (NULL for phone-onboarded
+                # senders → strict global fallback in make_telegram_client).
+                "client_fingerprint": r[9],
                 "is_eligible": (
                     r[4] == "active" and r[5] == "ok"
                     and _warmup_eligible(r[7], r[8])
@@ -714,7 +717,8 @@ class WarmupWorker:
             client = await telegram_service.get_client(
                 from_sender["slug"],
                 str(from_sender["id"]),
-                from_sender["session_string"]
+                from_sender["session_string"],
+                fingerprint=from_sender.get("client_fingerprint"),
             )
 
             # Резолвим получателя (кэш + ResolvePhoneRequest)
