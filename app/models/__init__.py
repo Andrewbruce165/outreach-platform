@@ -137,6 +137,12 @@ class Sender(Base):
     # raw INSERTs (_insert_sender_raw) that omit it.
     profile_field_changed_at = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
+    # Phase 21 (IMPT-04/05, mig 051): per-account import extras. NULL fingerprint =>
+    # make_telegram_client falls back to the global _CLIENT_FINGERPRINT (D-02, no regression).
+    # NULL twofa => no stored password. Both NULLABLE => no server_default required.
+    client_fingerprint = Column(JSONB, nullable=True)
+    twofa_password_enc = Column(Text, nullable=True)  # Fernet ciphertext (D-05/D-07); never logged/returned
+
     # Relationships
     messages = relationship("MessageLog", back_populates="sender")
     contacts = relationship("ContactCache", back_populates="sender")
@@ -600,6 +606,60 @@ class CsvImport(Base):
     delimiter = Column(String(5), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
+
+
+# ─── Phase 21: Bulk Telegram Account Import (IMPT-01..10, mig 051) ─────────────
+# Every NOT NULL column carries a matching server_default and every id uses BOTH
+# default=uuid.uuid4 AND server_default=text("gen_random_uuid()") because create_all
+# (test/fresh DB) builds the schema from the ORM, not the migration — a NOT NULL column
+# without a server_default breaks raw INSERTs that omit it, and create_all wins over the
+# migration DEFAULT (memory project-orm-default-vs-server-default-drift; KbDocument precedent).
+
+class AccountImportStaging(Base):
+    """ZIP preview blob with a TTL (mirrors CsvImport). summary holds the
+    matched/unpaired/malformed preview result computed at upload time."""
+    __tablename__ = "account_import_stagings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    zip_data = Column(LargeBinary, nullable=False)
+    summary = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class AccountImportJob(Base):
+    """One row per confirmed import batch. status running -> done; role sender|checker (D-16)."""
+    __tablename__ = "account_import_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    staging_id = Column(UUID(as_uuid=True), ForeignKey("account_import_stagings.id", ondelete="SET NULL"), nullable=True)
+    role = Column(String(20), nullable=False, server_default='sender')
+    status = Column(String(20), nullable=False, server_default='running')
+    total = Column(Integer, nullable=False, server_default='0')
+    processed = Column(Integer, nullable=False, server_default='0')
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AccountImportItem(Base):
+    """One row per file pair; carries its own session bytes + parsed JSON so the worker
+    never re-unzips. session_blob is NULLed by the worker on terminal status."""
+    __tablename__ = "account_import_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    job_id = Column(UUID(as_uuid=True), ForeignKey("account_import_jobs.id", ondelete="CASCADE"), nullable=False)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    basename = Column(String(64), nullable=False)
+    session_blob = Column(LargeBinary, nullable=True)
+    vendor_json = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status = Column(String(20), nullable=False, server_default='pending')
+    result = Column(String(30), nullable=True)
+    reason = Column(Text, nullable=True)
+    sender_id = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 # ─── Phase 4: Campaigns ───────────────────────────────────────────────────────
