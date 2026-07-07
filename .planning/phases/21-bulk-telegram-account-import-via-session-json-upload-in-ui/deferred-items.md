@@ -17,3 +17,12 @@ auto-fix issues directly caused by the current task's changes).
 - **File:** `tests/test_warmup_worker.py::test_restricted_sender_excluded`
 - **Symptom:** `spam_limited sender must be excluded from warmup pool selection — restriction clause not added yet (WARM-14)`.
 - **Status:** long-standing out-of-scope failure carried across many prior phase summaries ("1 pre-existing out-of-scope WARM-14 failure"). Belongs to a warmup-pool restriction task, not to Phase 21.
+
+## Discovered during 21-05 (async confirm + worker + status)
+
+### 3. Full-suite shared-DB test-ordering pollution (pre-existing, NOT caused by 21-05)
+
+- **Symptom:** A full `pytest -q` via test-overlay reports **89 failed + 115 errors** (`sqlalchemy.exc...` setup errors) spread across unrelated files — `test_send*`, `test_rotation_campaign`, `test_sender_lock`, `test_restriction_audit`, etc. Each of these files **passes when run in isolation** (verified: `test_sender_lock.py` → 5/5 pass alone); the failures only appear in the full ordered run → classic shared-DB / test-ordering pollution.
+- **Verified pre-existing:** ran the FULL suite at the parent commit `f9f718f` (21-04 completion, before any 21-05 code) → identical magnitude **89 failed / 115 errors / 853 passed**. My 21-05 HEAD (`549f7c4`) → **89 failed / 115 errors / 856 passed** — the only delta is my 3 new confirm/status endpoint tests passing (+ the worker test flipping green, absorbed in the flaky ±1). 21-05 does NOT increase the failure count, and its own targeted files are 4/4 green.
+- **Why 21-05 code can't be the cause:** the `async_client` conftest fixture uses `ASGITransport(app=app)` with **no LifespanManager**, so the FastAPI lifespan never runs in tests → `account_import_worker.start()` (my only cross-cutting change) is inert during the suite. All other 21-05 changes are additive to the account-import subsystem.
+- **Status:** matches the Phase-20 SUMMARY note ("full-suite run has pre-existing shared-DB test-ordering pollution unrelated to this phase"). Belongs to a test-isolation/conftest hardening task, not to Phase 21. Do NOT chase per-file — they pass alone.

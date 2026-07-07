@@ -547,7 +547,7 @@ Plans:
 **Goal:** Import already-authorized Telegram accounts into a workspace by uploading vendor-format **pairs** `<phone>.json` + `<phone>.session` through the UI, with bulk (multi-account) upload support — bypassing the phone/SMS onboarding flow. The `.session` is a live Telethon SQLite session (auth_key present) that must be converted to our encrypted StringSession storage; the `.json` carries the client fingerprint (app_id/app_hash/device/sdk/app_version/lang) + optional proxy/2FA. **Key risk to design around:** our reconnect currently forces one hardcoded global api_id/api_hash + `_CLIENT_FINGERPRINT` — reconnecting an imported session with a different fingerprint than the one that created it risks a Telegram security-flag / forced re-login. See `21-NOTES.md` for the grounded file analysis and codebase findings.
 **Requirements**: IMPT-01, IMPT-02, IMPT-03, IMPT-04, IMPT-05, IMPT-06, IMPT-07, IMPT-08, IMPT-09, IMPT-10 (derived during /gsd:plan-phase 21 — see REQUIREMENTS.md §Bulk Telegram account import; tracked via decisions D-01..D-17)
 **Depends on:** Phase 20
-**Plans:** 4/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 **Wave 1**
@@ -561,7 +561,7 @@ Plans:
 - [x] 21-04-per-account-import-routine-PLAN.md — offline SQLite→StringSession conversion + JSON→fingerprint mapping + 2FA Fernet-encrypt + proxy JSON-else-pool + per-account routine (connect/get_me/dedup-by-slug skip+report/create sender active+none) [Wave 3, depends_on: 21-02, 21-03] — IMPT-03, IMPT-05, IMPT-06, IMPT-07
 
 **Wave 4** *(blocked on 21-04 — worker consumes the per-account routine)*
-- [ ] 21-05-async-job-confirm-worker-status-PLAN.md — AccountImportWorker (mirror KnowledgeIngestWorker) + lifespan registration + config knobs + POST confirm (create job+items, role batch, 202 job_id) + GET status (processed/total + per-item results) [Wave 4, depends_on: 21-04] — IMPT-02, IMPT-07
+- [x] 21-05-async-job-confirm-worker-status-PLAN.md — AccountImportWorker (mirror KnowledgeIngestWorker) + lifespan registration + config knobs + POST confirm (create job+items, role batch, 202 job_id) + GET status (processed/total + per-item results) [Wave 4, depends_on: 21-04] — IMPT-02, IMPT-07
 
 **Wave 5** *(frontend + handoff, human-verify, cross-repo)*
 - [ ] 21-06-frontend-and-handoff-PLAN.md — openapi/types regen + sibling-repo two-step bulk-import UI (ZIP → preview → role radio → confirm → progress poll) + human UAT [Wave 5, depends_on: 21-05] — IMPT-09
