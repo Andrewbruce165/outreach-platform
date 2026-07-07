@@ -146,6 +146,88 @@ async def test_worker_enqueues_username_only_contact(
     assert q_cnt2 == 1
 
 
+async def _add_attachment(db, campaign, *, file_name="doc.pdf"):
+    """Seed a campaign_attachments row (D-02 blob table) for the campaign."""
+    import uuid as _uuid
+    await db.execute(text("""
+        INSERT INTO campaign_attachments
+            (id, campaign_id, workspace_id, file_data, file_name, content_type, size_bytes)
+        VALUES (:id, :cid, :wid, :data, :name, 'application/pdf', :sz)
+    """), {
+        "id": str(_uuid.uuid4()),
+        "cid": str(campaign["id"]),
+        "wid": str(campaign["workspace_id"]),
+        "data": b"%PDF-1.4 fake",
+        "name": file_name,
+        "sz": 12,
+    })
+    await db.commit()
+
+
+async def test_worker_enqueues_file_item_when_attachment_present(
+    async_db_session,
+    test_running_campaign_factory,
+    test_contacts_factory,
+):
+    """D-05/D-18: a campaign WITH a campaign_attachments row enqueues ONE
+    item_type='file' row per contact, caption == message_text == rendered opener,
+    status='pending'. One row per contact = one send / one new-dialog (limits
+    unchanged)."""
+    camp, _ = await test_running_campaign_factory(
+        sender_count=1, message_template="Привет, {{name}}!"
+    )
+    await _add_attachment(async_db_session, camp)
+    contacts = await test_contacts_factory(count=2, tg_status="registered")
+    await async_db_session.execute(text("""
+        UPDATE contacts SET folder_id = :fid WHERE id = ANY(:ids)
+    """), {"fid": str(camp["folder_id"]), "ids": [str(c.id) for c in contacts]})
+    await async_db_session.commit()
+
+    worker = await _make_worker()
+    enqueued = await worker._tick()
+    assert enqueued == 2
+
+    rows = (await async_db_session.execute(text("""
+        SELECT item_type, caption, message_text, status FROM message_queue
+        WHERE campaign_id = :cid
+    """), {"cid": str(camp["id"])})).fetchall()
+    assert len(rows) == 2
+    for r in rows:
+        # item_type stored as the enum value 'file'
+        assert str(r[0]).endswith("file"), f"expected file item_type, got {r[0]}"
+        assert r[1] is not None and r[1] == r[2], "caption must mirror message_text"
+        assert r[3] == "pending"
+        assert r[1].startswith("Привет,"), "caption is the rendered opener"
+
+
+async def test_worker_enqueues_message_item_when_no_attachment(
+    async_db_session,
+    test_running_campaign_factory,
+    test_contacts_factory,
+):
+    """A campaign WITHOUT an attachment enqueues item_type='message' rows with
+    caption NULL — no behavior change."""
+    camp, _ = await test_running_campaign_factory(
+        sender_count=1, message_template="Привет!"
+    )
+    contact = await test_contacts_factory(count=1, tg_status="registered")
+    await async_db_session.execute(text("""
+        UPDATE contacts SET folder_id = :fid WHERE id = :cid
+    """), {"fid": str(camp["folder_id"]), "cid": str(contact.id)})
+    await async_db_session.commit()
+
+    worker = await _make_worker()
+    await worker._tick()
+
+    row = (await async_db_session.execute(text("""
+        SELECT item_type, caption FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = :p
+    """), {"cid": str(camp["id"]), "p": contact.phone})).first()
+    assert row is not None
+    assert str(row[0]).endswith("message"), f"expected message item_type, got {row[0]}"
+    assert row[1] is None, "message rows keep caption NULL"
+
+
 async def test_worker_renders_template_at_enqueue(
     async_db_session,
     test_running_campaign_factory,
