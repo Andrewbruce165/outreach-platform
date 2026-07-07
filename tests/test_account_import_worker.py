@@ -56,6 +56,16 @@ async def test_worker_drives_items_and_status(async_db_session, test_workspace, 
     import app.services.account_import as ai_mod  # RED until 21-04
     from app.services.account_import_worker import AccountImportWorker  # RED until 21-05
 
+    # The worker claims pending items GLOBALLY (production runs one worker draining
+    # every job — WHERE status='pending' ... LIMIT 1, not job-scoped). Sibling tests
+    # in test_account_import.py exercise import_one_account directly and leave their
+    # item rows 'pending' (the worker, not the routine, owns the terminal flip). Clear
+    # those first so this test's two ticks claim exactly the two items seeded below —
+    # otherwise the ticks drain the older leaked rows and this job stays 'pending'
+    # (order-dependent flake). Scoped to 'pending' so no other test's terminal rows move.
+    await async_db_session.execute(_t("DELETE FROM account_import_items WHERE status = 'pending'"))
+    await async_db_session.commit()
+
     job_id, ids = await _seed_job_with_items(
         async_db_session, test_workspace.id, ["+15550000001", "+15550000002bad"]
     )
