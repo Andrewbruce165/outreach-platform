@@ -18,17 +18,17 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _insert_queue_row(db, *, camp, sender_id, status, phone, name, message,
-                            item_type="message"):
+                            item_type="message", caption=None):
     qid = uuid.uuid4()
     await db.execute(text("""
         INSERT INTO message_queue
             (id, workspace_id, campaign_id, sender_id, item_type, status,
-             recipient_phone, recipient_name, message_text, created_at)
-        VALUES (:id, :wid, :cid, :sid, :it, :st, :ph, :nm, :txt, NOW())
+             recipient_phone, recipient_name, message_text, caption, created_at)
+        VALUES (:id, :wid, :cid, :sid, :it, :st, :ph, :nm, :txt, :cap, NOW())
     """), {
         "id": str(qid), "wid": str(camp["workspace_id"]), "cid": str(camp["id"]),
         "sid": str(sender_id), "it": item_type, "st": status,
-        "ph": phone, "nm": name, "txt": message,
+        "ph": phone, "nm": name, "txt": message, "cap": caption,
     })
     return qid
 
@@ -46,6 +46,13 @@ def _campaign_shim(camp, template):
 async def _text_of(db, qid):
     return (await db.execute(
         text("SELECT message_text FROM message_queue WHERE id = :id"),
+        {"id": str(qid)},
+    )).scalar()
+
+
+async def _caption_of(db, qid):
+    return (await db.execute(
+        text("SELECT caption FROM message_queue WHERE id = :id"),
         {"id": str(qid)},
     )).scalar()
 
@@ -142,6 +149,47 @@ async def test_rerender_empty_template_is_noop(
 
     assert n == 0
     assert await _text_of(async_db_session, pend) == "KEEP"
+
+
+async def test_rerender_updates_file_row_caption_and_message_text(
+    async_db_session, test_running_campaign_factory
+):
+    """D-17: editing the template re-renders a pending item_type='file' row's
+    caption AND message_text. A message row keeps caption NULL. An in-flight
+    (non-pending) file row the send worker already grabbed is skipped."""
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    sid = senders[0].id
+
+    # Pending file row: both caption and message_text must update.
+    file_pending = await _insert_queue_row(
+        async_db_session, camp=camp, sender_id=sid, status="pending",
+        phone="+79990000010", name="Иван", message="OLD", item_type="file",
+        caption="OLD")
+    # Pending message row: message_text updates, caption stays NULL.
+    msg_pending = await _insert_queue_row(
+        async_db_session, camp=camp, sender_id=sid, status="pending",
+        phone="+79990000011", name="Пётр", message="OLD", item_type="message")
+    # In-flight file row (worker already flipped away from pending) — untouched.
+    file_inflight = await _insert_queue_row(
+        async_db_session, camp=camp, sender_id=sid, status="processing",
+        phone="+79990000012", name="Анна", message="OLD", item_type="file",
+        caption="OLD")
+    await async_db_session.commit()
+
+    n = await rerender_pending_queue(
+        async_db_session, _campaign_shim(camp, "NEW opener"))
+    await async_db_session.commit()
+
+    assert n == 2  # both pending rows (file + message), not the in-flight one
+    # File pending: caption AND message_text re-rendered.
+    assert await _text_of(async_db_session, file_pending) == "NEW opener"
+    assert await _caption_of(async_db_session, file_pending) == "NEW opener"
+    # Message pending: message_text re-rendered, caption stays NULL.
+    assert await _text_of(async_db_session, msg_pending) == "NEW opener"
+    assert await _caption_of(async_db_session, msg_pending) is None
+    # In-flight file: fully untouched (no clobber of what the worker is sending).
+    assert await _text_of(async_db_session, file_inflight) == "OLD"
+    assert await _caption_of(async_db_session, file_inflight) == "OLD"
 
 
 # ── Router tests (PATCH auto-hook + endpoint) ──────────────────────────────────
