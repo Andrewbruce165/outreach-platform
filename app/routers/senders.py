@@ -880,7 +880,8 @@ async def check_spambot(
     client = None
     try:
         client = await telegram_service.get_client(
-            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
         # selfcheck_key passed for intent/forward-compat. NOTE: this endpoint runs
         # in the api process; the SpamBot reply is handled by the listener's
@@ -1053,6 +1054,7 @@ async def username_check(
         res = await telegram_service.check_username(
             sender.slug, str(sender.id), sender.session_string, username,
             proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except TypeError:
         # CR-04 regression guard: a broken call signature is a programming error,
@@ -1115,6 +1117,7 @@ async def update_sender_profile(
             await telegram_service.update_profile(
                 sender.slug, str(sender.id), sender.session_string, req,
                 proxy=sender.proxy,
+                fingerprint=sender.client_fingerprint,
             )
             if request.first_name is not None:
                 composed = (
@@ -1130,6 +1133,7 @@ async def update_sender_profile(
             await telegram_service.update_username(
                 sender.slug, str(sender.id), sender.session_string, request.username,
                 proxy=sender.proxy,
+                fingerprint=sender.client_fingerprint,
             )
             sender.tg_username = request.username or None
             _stamp_profile_change(sender, "username")
@@ -1200,6 +1204,7 @@ async def upload_sender_photo(
             raw,
             file_name=file.filename or "avatar.jpg",
             proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1246,7 +1251,8 @@ async def delete_sender_photo(
 
     try:
         res = await telegram_service.delete_profile_photos(
-            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1312,7 +1318,8 @@ async def resync_sender_profile(
 
     try:
         res = await telegram_service.fetch_profile(
-            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy
+            sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1377,19 +1384,33 @@ async def update_sender_2fa(
 ):
     """PROF-05: set (no current_password) or change (with current_password, D-04) the
     account 2FA password via a single stateless ``edit_2fa`` request. Wrong current
-    password → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03)."""
+    password → 400 PASSWORD_INVALID. The password is NEVER persisted (D-03).
+
+    IMPT-10 (D-06): for an IMPORTED account whose 2FA password was stored (encrypted)
+    at import time, a request that OMITS ``current_password`` falls back to the stored,
+    decrypted password server-side — so the user need not re-type the 2FA password the
+    platform already knows. The decrypted plaintext is used ONLY to build the edit_2fa
+    request; it is never returned in the response, never logged, never re-persisted
+    (D-07). The reconnect uses the account's own fingerprint (Part B, site edit_2fa)."""
     from app.services.telegram import telegram_service, SessionAuthError
+    from app.services.encryption import decrypt_session
 
     sender = await _load_sender_by_slug(db, ctx, slug)
+    # IMPT-10 (D-06): imported-account autofill of the stored 2FA password. Server-side
+    # only — never surfaced to the client (D-07).
+    current_pw = request.current_password
+    if current_pw is None and getattr(sender, "twofa_password_enc", None):
+        current_pw = decrypt_session(sender.twofa_password_enc)
     try:
         await telegram_service.edit_2fa(
             sender.slug,
             str(sender.id),
             sender.session_string,
-            current_password=request.current_password,
+            current_password=current_pw,
             new_password=request.new_password,
             hint=request.hint or "",
             proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1429,6 +1450,7 @@ async def start_sender_recovery_email(
             current_password=request.current_password,
             email=str(request.email),
             proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except SessionAuthError as e:
         raise HTTPException(
@@ -1466,6 +1488,7 @@ async def confirm_sender_recovery_email(
             sender.session_string,
             code=request.code,
             proxy=sender.proxy,
+            fingerprint=sender.client_fingerprint,
         )
     except SessionAuthError as e:
         raise HTTPException(

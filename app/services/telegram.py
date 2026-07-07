@@ -1086,7 +1086,8 @@ class TelegramService:
         encrypted_session: str,
         telegram_id: int,
         message: str,
-        proxy: dict | None = None
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Send message directly by Telegram ID (for existing conversations).
 
@@ -1104,7 +1105,7 @@ class TelegramService:
         """
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
 
             try:
                 peer = await client.get_input_entity(telegram_id)
@@ -1156,6 +1157,7 @@ class TelegramService:
         request,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Dispatch a pre-built ``account.UpdateProfileRequest`` via a per-op client.
 
@@ -1165,7 +1167,7 @@ class TelegramService:
         """
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             await client(request)
             return {"success": True}
         finally:
@@ -1180,6 +1182,7 @@ class TelegramService:
         username: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Live username availability pre-check (``account.CheckUsernameRequest``).
 
@@ -1191,7 +1194,7 @@ class TelegramService:
         from telethon.errors import UsernameInvalidError
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             try:
                 available = await client(CheckUsernameRequest(username))
             except UsernameInvalidError:
@@ -1209,6 +1212,7 @@ class TelegramService:
         username: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Set (or clear via ``username=""``) the account username via
         ``account.UpdateUsernameRequest``.
@@ -1221,7 +1225,7 @@ class TelegramService:
         from telethon.errors import UsernameNotModifiedError
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             try:
                 await client(UpdateUsernameRequest(username))
             except UsernameNotModifiedError:
@@ -1239,11 +1243,12 @@ class TelegramService:
         username: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Router-facing alias for :meth:`set_username` (kept as the router's call
         target; delegates to the canonical per-op implementation above)."""
         return await self.set_username(
-            sender_slug, sender_id, encrypted_session, username, proxy=proxy
+            sender_slug, sender_id, encrypted_session, username, proxy=proxy, fingerprint=fingerprint
         )
 
     # ─── Account profile photo + resync (Phase 20 — PROF-04/06/07, D-11/D-12) ──
@@ -1261,6 +1266,7 @@ class TelegramService:
         *,
         file_name: str = "avatar.jpg",
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Upload a new profile photo, then re-download Telegram's OWN normalized
         avatar (OQ3: already square-ish / re-encoded) to cache instead of the raw
@@ -1270,7 +1276,7 @@ class TelegramService:
         from telethon.tl.functions.photos import UploadProfilePhotoRequest
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             input_file = await client.upload_file(io.BytesIO(raw_bytes), file_name=file_name)
             await client(UploadProfilePhotoRequest(file=input_file))
             # OQ3: cache Telegram's own normalized small avatar, not the raw upload.
@@ -1289,12 +1295,13 @@ class TelegramService:
         *,
         file_name: str = "avatar.jpg",
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Router-facing alias for :meth:`set_profile_photo` (the name the upload
         endpoint calls; delegates to the canonical per-op implementation above)."""
         return await self.set_profile_photo(
             sender_slug, sender_id, encrypted_session, raw_bytes,
-            file_name=file_name, proxy=proxy,
+            file_name=file_name, proxy=proxy, fingerprint=fingerprint,
         )
 
     async def delete_profile_photo(
@@ -1304,6 +1311,7 @@ class TelegramService:
         encrypted_session: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Remove the current profile photo. Fetches a FRESH photo object first
         (``get_profile_photos('me', limit=1)``) so DeletePhotosRequest carries a
@@ -1311,7 +1319,7 @@ class TelegramService:
         from telethon.tl.functions.photos import DeletePhotosRequest
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             photos = await client.get_profile_photos('me', limit=1)   # fresh file_reference (Pitfall 6)
             if photos:
                 await client(DeletePhotosRequest(id=[photos[0]]))
@@ -1327,11 +1335,12 @@ class TelegramService:
         encrypted_session: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Router-facing alias for :meth:`delete_profile_photo` (the name the delete
         endpoint calls; delegates to the canonical per-op implementation above)."""
         return await self.delete_profile_photo(
-            sender_slug, sender_id, encrypted_session, proxy=proxy
+            sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
         )
 
     async def resync_profile(
@@ -1341,6 +1350,7 @@ class TelegramService:
         encrypted_session: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """D-12: re-fetch the LIVE username / bio / photo from Telegram into the cache.
 
@@ -1350,7 +1360,7 @@ class TelegramService:
         from telethon.tl.functions.users import GetFullUserRequest
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             me = await client.get_me()
             try:
                 full = await client(GetFullUserRequest('me'))
@@ -1382,11 +1392,12 @@ class TelegramService:
         encrypted_session: str,
         *,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Router-facing alias for :meth:`resync_profile` (the name the resync
         endpoint calls; delegates to the canonical per-op implementation above)."""
         return await self.resync_profile(
-            sender_slug, sender_id, encrypted_session, proxy=proxy
+            sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
         )
 
     # ─── Account 2FA + recovery email (Phase 20 — PROF-05, D-03/D-04) ──────────
@@ -1409,6 +1420,7 @@ class TelegramService:
         new_password: str,
         hint: str = "",
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Set (current_password=None) or change the account's 2FA password via the
         high-level ``client.edit_2fa`` in ONE stateless request.
@@ -1423,7 +1435,7 @@ class TelegramService:
         """
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             # No email here → no email_code_callback → completes synchronously (Pitfall 2).
             await client.edit_2fa(
                 current_password=current_password,
@@ -1445,6 +1457,7 @@ class TelegramService:
         new_password: str,
         hint: str = "",
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Router-facing alias for :meth:`change_2fa_password` (the name the 2FA
         endpoint calls; delegates to the canonical per-op implementation above)."""
@@ -1456,6 +1469,7 @@ class TelegramService:
             new_password=new_password,
             hint=hint,
             proxy=proxy,
+            fingerprint=fingerprint,
         )
 
     async def start_recovery_email(
@@ -1467,6 +1481,7 @@ class TelegramService:
         current_password: str | None = None,
         email: str,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Step 1 of the recovery-email change — the TWO-request raw flow.
 
@@ -1492,7 +1507,7 @@ class TelegramService:
 
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             pwd = await client(GetPasswordRequest())
             srp = compute_check(pwd, current_password or "")
             try:
@@ -1520,6 +1535,7 @@ class TelegramService:
         current_password: str | None = None,
         email: str,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Router-facing alias for :meth:`start_recovery_email` (the name the
         recovery-email endpoint calls; delegates to the canonical per-op impl above)."""
@@ -1530,6 +1546,7 @@ class TelegramService:
             current_password=current_password,
             email=email,
             proxy=proxy,
+            fingerprint=fingerprint,
         )
 
     async def confirm_recovery_email(
@@ -1540,6 +1557,7 @@ class TelegramService:
         *,
         code: str,
         proxy: dict | None = None,
+        fingerprint: dict | None = None,
     ) -> dict:
         """Step 2 of the recovery-email change — submit the emailed code via
         ``ConfirmPasswordEmailRequest`` on a FRESH per-op client (the pending-email
@@ -1549,7 +1567,7 @@ class TelegramService:
 
         client = None
         try:
-            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy)
+            client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             await client(ConfirmPasswordEmailRequest(code=str(code)))
             return {"success": True}
         finally:

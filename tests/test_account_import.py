@@ -339,3 +339,98 @@ async def test_partial_success_and_start_state(
     assert created is not None
     assert created["lifecycle_status"] == "active"
     assert created["restriction_status"] == "none"
+
+
+# ─── IMPT-10 (21-02): 2FA autofill uses the stored password + account fingerprint ──
+
+async def test_2fa_autofill_uses_stored_password(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """IMPT-10 (D-06/D-07): ``POST /senders/{slug}/2fa`` with ``current_password``
+    OMITTED on an IMPORTED account falls back to the stored, decrypted
+    ``twofa_password_enc`` as ``current_password`` AND connects under the account's
+    ``client_fingerprint`` — while the plaintext is NEVER returned in the response."""
+    from unittest.mock import AsyncMock, patch
+
+    import app.services.telegram as telegram_module
+    from app.services.encryption import encrypt_session
+
+    token = valid_supabase_jwt(sub="imp-2fa", email="imp-2fa@test.com")
+    r = await async_client.post(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    ws = r.json()["workspace_id"]
+
+    plaintext = "imported-2fa-pass"
+    enc = encrypt_session(plaintext)
+    fp = {"device_model": "KVM", "system_version": "Windows 10 x64",
+          "app_version": "6.8.2 x64", "lang_code": "en", "system_lang_code": "en-US"}
+
+    sid = str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO senders (id, workspace_id, slug, name, phone, session_string,
+                             role, auth_status, lifecycle_status,
+                             twofa_password_enc, client_fingerprint)
+        VALUES (:id, :ws, 'imp-2fa-1', 'Imported', '+18646884306', 'encrypted_stub',
+                'sender', 'ok', 'active', :enc, CAST(:fp AS JSONB))
+    """), {"id": sid, "ws": ws, "enc": enc, "fp": json.dumps(fp)})
+    await async_db_session.commit()
+
+    with patch.object(
+        telegram_module.telegram_service, "edit_2fa",
+        new=AsyncMock(return_value={"success": True}), create=True,
+    ) as mock_2fa:
+        resp = await async_client.post(
+            "/api/v1/senders/imp-2fa-1/2fa",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"new_password": "brand-new-pass"},  # current_password OMITTED
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert mock_2fa.await_count == 1
+    kwargs = mock_2fa.await_args.kwargs
+    # (a) D-06: the stored decrypted password is used as current_password.
+    assert kwargs["current_password"] == plaintext
+    # (b) the account fingerprint reached edit_2fa (Part-B threading, site edit_2fa).
+    assert kwargs["fingerprint"] == fp
+    # (c) D-07: the plaintext is NOWHERE in the response body.
+    assert plaintext not in resp.text
+
+
+# ─── IMPT-04 (21-02): a profile method forwards fingerprint into get_client ─────
+
+async def test_profile_method_accepts_fingerprint():
+    """A Phase-20 TelegramService profile method accepts + forwards a ``fingerprint``
+    into ``self.get_client`` — so the router can pass ``sender.client_fingerprint``
+    without raising ``TypeError``. Proven by capturing the ``fingerprint=`` kwarg on a
+    stubbed ``get_client``.
+
+    NB: patch via ``patch.object`` (context manager), NOT ``monkeypatch.setattr`` on
+    the singleton instance — monkeypatch restores a resolved-from-class attribute by
+    re-setting a bound method onto the instance ``__dict__``, which then shadows the
+    class-level ``patch.object`` a later test relies on (poisons
+    test_cr04_profile_call_signatures). ``patch.object`` deletes the instance attr on
+    exit, so no cross-test leakage."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.telegram import telegram_service
+
+    captured = {}
+
+    async def _fake_get_client(sender_slug, sender_id, encrypted_session,
+                               proxy=None, fingerprint=None):
+        captured["fingerprint"] = fingerprint
+        return AsyncMock()
+
+    fp = {"device_model": "KVM", "system_version": "Windows 10 x64",
+          "app_version": "6.8.2 x64", "lang_code": "en", "system_lang_code": "en-US"}
+
+    with patch.object(telegram_service, "get_client", new=_fake_get_client), \
+            patch.object(telegram_service, "disconnect_client", new=AsyncMock()):
+        # update_profile just dispatches the pre-built request via `await client(request)`.
+        result = await telegram_service.update_profile(
+            "slug", "sid", "enc", object(), proxy=None, fingerprint=fp
+        )
+    assert result == {"success": True}
+    assert captured["fingerprint"] == fp
