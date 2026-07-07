@@ -387,11 +387,29 @@ function FleetTable({
   );
 }
 
+type SpambotResult = {
+  status?: string;
+  raw_text?: string;
+  auth_status_updated?: string | null;
+};
+
 function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [spambotResult, setSpambotResult] = useState<SpambotResult | null>(null);
+
+  const spambotMut = useMutation({
+    mutationFn: () =>
+      api<SpambotResult>(`/api/v1/senders/${sender.slug}/spambot-check`),
+    onSuccess: (res) => {
+      setSpambotResult(res ?? {});
+      void qc.invalidateQueries({ queryKey: ["senders"] });
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.message : "Spam Bot check failed"),
+  });
 
   const deleteMut = useMutation({
     mutationFn: () => api(`/api/v1/senders/${sender.slug}`, { method: "DELETE" }),
