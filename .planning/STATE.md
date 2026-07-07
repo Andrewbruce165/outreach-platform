@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 21-05-PLAN.md
-last_updated: "2026-07-07T08:58:49.683Z"
+status: verifying
+stopped_at: Completed 21-06-PLAN.md — Phase 21 execution complete (6/6), ready for verification
+last_updated: "2026-07-07T09:49:45.920Z"
 last_activity: 2026-07-07
 progress:
   total_phases: 24
-  completed_phases: 20
+  completed_phases: 21
   total_plans: 89
-  completed_plans: 87
+  completed_plans: 88
   percent: 99
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 21 (bulk-telegram-account-import-via-session-json-upload-in-ui) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-07
 
 Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05: profile schema/columns, identity+guardrails, photo+resync, 2FA+recovery-email, enriched accounts UI + handoff regen)
@@ -110,6 +110,7 @@ Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05:
 | Phase 21 P03 | 5min | 2 tasks | 5 files |
 | Phase 21 P04 | 20min | 2 tasks | 1 files |
 | Phase 21 P05 | 23min | 2 tasks | 5 files |
+| Phase 21 P06 | 45min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -199,6 +200,9 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 21]: 21-03: preview endpoint POST /accounts/import/preview — synchronous unzip+pair+validate, stages raw ZIP in account_import_stagings (BYTEA+30min TTL), returns import_id + matched/unpaired/malformed, no Telegram connect; ZIP-safety (traversal/bomb/over-count) via ImportZipError->4xx; secrets-free response (has_2fa/has_proxy flags only, D-07); session_file required but injected from filename basename when absent
 - [Phase 21]: 21-04: import_one_account(db, item)->result_str follows the 21-01 RED contract (not the plan's dict signature); dedup is phone-pre-connect (never overwrites a live session, D-14) + telegram_id-post-connect (IMPT-06); imported phone=basename; restriction_status defaults 'none' (no @SpamBot probe, D-11); partial-failure-safe (never raises into batch, D-10)
 - [Phase 21]: 21-05: async two-step import — POST confirm creates job+N pending items (202, batch role D-16), AccountImportWorker (claim FOR UPDATE SKIP LOCKED → processing → import_one_account off the claim TX → terminal ok/failed, session_blob NULLed, job→done, never-die D-10/IMPT-07), GET status polls secrets-free processed/total+per-item. Worker calls the authoritative 21-04 import_one_account(db, item)->str (not the plan's dict); {imported,already_connected}→ok else failed.
+- [Phase 21]: 21-06: sibling src/types/api.ts synced wholesale from regenerated lovable-handoff/types/api.ts (purely additive: 3 import ops + backend-truth daily_cap 10/30 & has_backup->required); sibling only reads has_backup so tsc clean
+- [Phase 21]: 21-06: two-step import UI (upload->preview+role radio->202 confirm->2s status poll until done->per-account chips); result chip maps item.status+result (ok+already_connected->ghost, ok+imported->green, failed->red+reason)
+- [Phase 21]: 21-06: IMPT-09 human-UAT PASSED live — mixed batch preview exact (2 matched/2 unpaired/1 malformed) + real 13/13 import (job da5998a0), IMPT-04 reconnect verified (fingerprints set, 0 auth errors, 0 restriction events)
 
 ### Roadmap Evolution
 
@@ -294,6 +298,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-07T08:58:40.510Z
-Stopped at: Completed 21-05-PLAN.md
+Last session: 2026-07-07T09:49:45.907Z
+Stopped at: Completed 21-06-PLAN.md — Phase 21 execution complete (6/6), ready for verification
 Resume file: None
