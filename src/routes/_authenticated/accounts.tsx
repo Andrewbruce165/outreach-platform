@@ -16,6 +16,9 @@ import {
   History,
   Upload,
   Loader2,
+  Pause,
+  Play,
+  Star,
   Phone as PhoneIcon,
   Search,
   ShieldAlert,
@@ -436,6 +439,44 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось обновить профиль"),
   });
 
+  // UI-SPEC §5.10 row actions Pause / Resume — flip lifecycle_status via the
+  // dedicated endpoints (idempotent on the backend). Both return
+  // SenderCreateResponse {sender, warnings} — unwrap .sender for the cache.
+  const applyFreshSender = (fresh: Sender) => {
+    qc.setQueryData<{ senders: Sender[] }>(["senders"], (prev) =>
+      prev ? { senders: prev.senders.map((x) => (x.slug === sender.slug ? fresh : x)) } : prev,
+    );
+    void qc.invalidateQueries({ queryKey: ["senders"] });
+  };
+  const pauseMut = useMutation({
+    mutationFn: () =>
+      api<{ sender: Sender }>(`/api/v1/senders/${sender.slug}/pause`, { method: "POST" }),
+    onSuccess: (res) => {
+      applyFreshSender(res.sender);
+      toast.success("Аккаунт поставлен на паузу");
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === "SENDER_USED_BY_RUNNING_CAMPAIGN") {
+        const campaigns = (e.detail as { campaigns?: { name: string }[] } | undefined)?.campaigns;
+        const names = campaigns?.map((c) => c.name).join(", ");
+        toast.error(
+          `Аккаунт занят в запущенной кампании${names ? ` (${names})` : ""} — сначала остановите её`,
+        );
+        return;
+      }
+      toast.error(e instanceof ApiError ? e.message : "Не удалось поставить на паузу");
+    },
+  });
+  const resumeMut = useMutation({
+    mutationFn: () =>
+      api<{ sender: Sender }>(`/api/v1/senders/${sender.slug}/resume`, { method: "POST" }),
+    onSuccess: (res) => {
+      applyFreshSender(res.sender);
+      toast.success("Аккаунт снят с паузы");
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось снять с паузы"),
+  });
+
   const sty = SENDER_STATUS_STYLE[sender.status] ?? SENDER_STATUS_STYLE.paused;
   const isRestricted = sender.status === "limited" || sender.status === "frozen";
   const restrictedUntil =
@@ -515,6 +556,37 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
                   )}{" "}
                   Обновить профиль
                 </button>
+                {sender.lifecycle_status === "paused" ? (
+                  <button
+                    disabled={resumeMut.isPending}
+                    onClick={() => {
+                      setOpen(false);
+                      resumeMut.mutate();
+                    }}
+                  >
+                    {resumeMut.isPending ? (
+                      <Loader2 size={13} className="ob__spin" />
+                    ) : (
+                      <Play size={13} />
+                    )}{" "}
+                    Снять с паузы
+                  </button>
+                ) : sender.lifecycle_status === "active" ? (
+                  <button
+                    disabled={pauseMut.isPending}
+                    onClick={() => {
+                      setOpen(false);
+                      pauseMut.mutate();
+                    }}
+                  >
+                    {pauseMut.isPending ? (
+                      <Loader2 size={13} className="ob__spin" />
+                    ) : (
+                      <Pause size={13} />
+                    )}{" "}
+                    Поставить на паузу
+                  </button>
+                ) : null}
                 <button
                   disabled={spambotMut.isPending}
                   onClick={() => {
@@ -582,6 +654,11 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
             {isChecker ? <ShieldCheck size={11} /> : <PhoneIcon size={11} />}
             {isChecker ? "Checker" : "Sender"}
           </span>
+          {sender.tg_premium && (
+            <span className="pill pill--orange" title="У аккаунта есть Telegram Premium">
+              <Star size={11} /> Premium
+            </span>
+          )}
           {showReauth && (
             <button className="ob__link" onClick={onReauth}>
               re-auth
