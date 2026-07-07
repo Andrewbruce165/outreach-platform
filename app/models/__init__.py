@@ -666,6 +666,36 @@ class AccountImportItem(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class CampaignAttachment(Base):
+    """Phase 24 (D-01/D-02/D-04): 1-1 campaign first-message file attachment.
+
+    BYTEA-blob mirror of CsvImport — the 50 MB blob is kept OUT of every plain
+    SELECT campaigns (worker/endpoint query it by campaign_id directly, no
+    Campaign.relationship — Pitfall 7); the blob rides pg_dump backups.
+    campaign_id is UNIQUE + ON DELETE CASCADE → exactly one attachment/campaign.
+
+    server_default on id + size_bytes duplicates the migration-054 DB defaults
+    for the create_all rebuild path: create_all wins over the migration in
+    init_db, so without server_default a raw text() INSERT omitting those columns
+    would hit NotNullViolation (same drift rule as knowledge_bases / warmup_sessions).
+    """
+    __tablename__ = "campaign_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+                server_default=text("gen_random_uuid()"))
+    campaign_id = Column(UUID(as_uuid=True),
+                         ForeignKey("campaigns.id", ondelete="CASCADE"),
+                         nullable=False, unique=True)
+    workspace_id = Column(UUID(as_uuid=True),
+                          ForeignKey("workspaces.id", ondelete="CASCADE"),
+                          nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    file_name = Column(String(255), nullable=False)
+    content_type = Column(String(100), nullable=True)
+    size_bytes = Column(BigInteger, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 # ─── Phase 4: Campaigns ───────────────────────────────────────────────────────
 
 class Campaign(Base):
@@ -752,6 +782,11 @@ class Campaign(Base):
     follow_up_interval_hours = Column(Integer, nullable=False, server_default="24")
     follow_up_max_pings = Column(Integer, nullable=False, server_default="2")
     auto_finish_hours = Column(Integer, nullable=False, server_default="72")
+    # Phase 24 (D-13): per-campaign invisible anti-spam text-variation toggle.
+    # DEFAULT true retro-enables ALL existing campaigns (migration 054, no backfill).
+    # server_default="true" duplicates the migration-054 DB default for the
+    # create_all rebuild path. API enforces the type (bool); no DB CHECK.
+    variation_enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     # 029: auto-pause visibility. NULL = manual pause / never paused; a machine
     # code ('no_senders_attached' | 'senders_unavailable') = auto-paused by the
     # enqueue worker because the campaign could no longer send. Cleared on start/resume.
