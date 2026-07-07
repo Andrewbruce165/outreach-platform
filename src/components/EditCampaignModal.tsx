@@ -271,7 +271,7 @@ export function EditCampaignModal({
   function handleAttachmentFile(file: File) {
     if (uploadAttachmentMut.isPending) return;
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      setAttachmentError("Файл слишком большой (максимум 50 МБ)");
+      setAttachmentError("File is too large (max 50 MB).");
       return;
     }
     uploadAttachmentMut.mutate(file);
@@ -513,7 +513,7 @@ export function EditCampaignModal({
 
           {/* Phase 24 D-01/D-03/D-19: first-message file attachment (photo/document). */}
           <div className="field">
-            <label className="field__label">Вложение к первому сообщению</label>
+            <label className="field__label">First message attachment</label>
             <input
               ref={fileRef}
               type="file"
@@ -538,14 +538,14 @@ export function EditCampaignModal({
                   }}
                 >
                   <Paperclip size={13} />
-                  {attachmentName ?? "Файл прикреплён"}
+                  {attachmentName ?? "File attached"}
                 </div>
                 <button
                   type="button"
                   className="btn btn--ghost btn--sm"
                   disabled={deleteAttachmentMut.isPending}
                   onClick={() => {
-                    if (window.confirm("Удалить вложение?")) deleteAttachmentMut.mutate();
+                    if (window.confirm("Remove attachment?")) deleteAttachmentMut.mutate();
                   }}
                 >
                   <Trash2 size={13} />
@@ -554,16 +554,29 @@ export function EditCampaignModal({
             ) : (
               <button
                 type="button"
-                className="btn btn--ghost btn--sm"
-                disabled={uploadAttachmentMut.isPending}
                 onClick={() => fileRef.current?.click()}
+                disabled={uploadAttachmentMut.isPending}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "100%",
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1.5px dashed var(--border-strong)",
+                  background: "var(--bg)",
+                  color: "var(--text-soft)",
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
               >
-                {uploadAttachmentMut.isPending ? "Загрузка…" : "Прикрепить файл"}
+                <Paperclip size={14} />
+                {uploadAttachmentMut.isPending ? "Uploading…" : "Attach a photo or file"}
               </button>
             )}
             <span className="field__hint">
-              Одно фото/файл на кампанию (максимум 50 МБ). Фото приходит получателю как медиа с
-              подписью — текст первого сообщения. При variation-вариации подпись меняется невидимо.
+              One photo/file per campaign (max 50 MB). It arrives to the recipient as media with
+              the opener as its caption. The caption is varied invisibly when variation is on.
             </span>
             {attachmentError && (
               <span className="field__hint" role="alert" style={{ color: "var(--danger)" }}>
@@ -816,7 +829,7 @@ export function EditCampaignModal({
               className="field__label"
               style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
             >
-              <span>Анти-спам вариация текста</span>
+              <span>Anti-spam text variation</span>
               <button
                 type="button"
                 role="switch"
@@ -848,8 +861,8 @@ export function EditCampaignModal({
               </button>
             </label>
             <span className="field__hint">
-              Невидимые вариации в каждом отправленном сообщении (без изменения читаемого текста) —
-              снижают риск спам-фильтров Telegram. Рекомендуем оставить включённым.
+              Every outgoing message gets invisible variations (without changing the visible text)
+              to lower the risk of Telegram spam filters. We recommend keeping this on.
             </span>
           </div>
 

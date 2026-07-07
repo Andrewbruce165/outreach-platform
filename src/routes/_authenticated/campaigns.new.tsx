@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Sparkles,
   Bot,
@@ -22,6 +22,7 @@ import {
   Smile,
   Info,
   Loader2,
+  Paperclip,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { StageEditor } from "@/components/StageEditor";
@@ -37,8 +38,12 @@ type CampaignCreate = components["schemas"]["CampaignCreate"];
 type Campaign = components["schemas"]["CampaignResponse"];
 // Phase 12 NDLG-06: create/update now return {campaign, warnings[]}
 type CampaignWriteResponse = components["schemas"]["CampaignWriteResponse"];
+type CampaignAttachmentUploadResponse = components["schemas"]["CampaignAttachmentUploadResponse"];
 type ToolSpec = components["schemas"]["ToolSpec"];
 type ToolParamSpec = components["schemas"]["ToolParamSpec"];
+
+// Phase 24 D-03: hard ceiling mirrored from the backend MAX_ATTACHMENT_BYTES check.
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 type PrimaryGoal = "book_meeting" | "qualify" | "click" | "engage";
 
 // Phase 11 D-04: dialogue stage local type (matches DialogueStage schema)
@@ -139,6 +144,10 @@ function CampaignBuilder() {
   const [autoFinishHours, setAutoFinishHours] = useState(72);
   // Phase 24 D-13: invisible anti-spam text variation on the campaign opener. On by default.
   const [variationEnabled, setVariationEnabled] = useState(true);
+  // Phase 24 D-01/D-03/D-19: first-message file attachment.
+  const [hasAttachment, setHasAttachment] = useState(false);
+  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
   // Phase 11 D-13: lead_trigger_hint now also absorbs migrated success_criteria.
@@ -257,6 +266,61 @@ function CampaignBuilder() {
     },
     onError: (e) => toast.error(`Draft not saved: ${errMsg(e)}`),
   });
+
+  // Phase 24 D-01/D-03/D-19: the attachment endpoint needs a campaign id. If the
+  // wizard hasn't auto-saved a draft yet (message template still empty, etc.),
+  // create one on demand from the current form state before uploading.
+  async function ensureDraftId(): Promise<string> {
+    if (draftId) return draftId;
+    const c = await saveDraftMut.mutateAsync();
+    if (!c) {
+      throw new Error(
+        "Fill in name, agent, folder and message template before attaching a file.",
+      );
+    }
+    return c.id;
+  }
+
+  const uploadAttachmentMut = useMutation({
+    mutationFn: async (file: File) => {
+      const id = await ensureDraftId();
+      const fd = new FormData();
+      fd.append("file", file);
+      return api<CampaignAttachmentUploadResponse>(`/api/v1/campaigns/${id}/attachment`, {
+        method: "POST",
+        body: fd,
+      });
+    },
+    onSuccess: (res) => {
+      setHasAttachment(true);
+      setAttachmentName(res.file_name);
+      setAttachmentError(null);
+    },
+    onError: (e) => setAttachmentError(errMsg(e)),
+  });
+
+  const deleteAttachmentMut = useMutation({
+    mutationFn: async () => {
+      if (!draftId) return;
+      await api(`/api/v1/campaigns/${draftId}/attachment`, { method: "DELETE" });
+    },
+    onSuccess: () => {
+      setHasAttachment(false);
+      setAttachmentName(null);
+      setAttachmentError(null);
+    },
+    onError: (e) => setAttachmentError(errMsg(e)),
+  });
+
+  function handleAttachmentFile(file: File) {
+    if (uploadAttachmentMut.isPending) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setAttachmentError("File is too large (max 50 MB).");
+      return;
+    }
+    setAttachmentError(null);
+    uploadAttachmentMut.mutate(file);
+  }
 
   const goNext = async () => {
     try {
@@ -592,6 +656,13 @@ function CampaignBuilder() {
                   setAutoFinishHours={setAutoFinishHours}
                   variationEnabled={variationEnabled}
                   setVariationEnabled={setVariationEnabled}
+                  hasAttachment={hasAttachment}
+                  attachmentName={attachmentName}
+                  attachmentError={attachmentError}
+                  attaching={uploadAttachmentMut.isPending}
+                  deletingAttachment={deleteAttachmentMut.isPending}
+                  onAttachFile={handleAttachmentFile}
+                  onDeleteAttachment={() => deleteAttachmentMut.mutate()}
                 />
               )}
               {cur.id === "integrations" && (
@@ -1270,6 +1341,13 @@ function ScheduleStep({
   setAutoFinishHours,
   variationEnabled,
   setVariationEnabled,
+  hasAttachment,
+  attachmentName,
+  attachmentError,
+  attaching,
+  deletingAttachment,
+  onAttachFile,
+  onDeleteAttachment,
 }: {
   days: string[];
   setDays: (v: string[]) => void;
@@ -1297,7 +1375,15 @@ function ScheduleStep({
   setAutoFinishHours: (v: number) => void;
   variationEnabled: boolean;
   setVariationEnabled: (v: boolean) => void;
+  hasAttachment: boolean;
+  attachmentName: string | null;
+  attachmentError: string | null;
+  attaching: boolean;
+  deletingAttachment: boolean;
+  onAttachFile: (file: File) => void;
+  onDeleteAttachment: () => void;
 }) {
+  const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div className="field">
@@ -1374,6 +1460,78 @@ function ScheduleStep({
           Use <code>&#123;&#123;first_name&#125;&#125;</code>, <code>&#123;&#123;full_name&#125;&#125;</code>,{" "}
           <code>&#123;&#123;username&#125;&#125;</code> as placeholders.
         </span>
+      </div>
+
+      {/* Phase 24 D-01/D-03/D-19: first-message file attachment (photo/document). */}
+      <div className="field">
+        <label className="field__label">First message attachment</label>
+        <input
+          ref={fileRef}
+          type="file"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onAttachFile(f);
+            e.target.value = "";
+          }}
+        />
+        {hasAttachment ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 10px",
+                borderRadius: 8,
+                background: "var(--bg-soft)",
+                fontSize: 13,
+              }}
+            >
+              <Paperclip size={13} />
+              {attachmentName ?? "File attached"}
+            </div>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              disabled={deletingAttachment}
+              onClick={onDeleteAttachment}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={attaching}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              width: "100%",
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1.5px dashed var(--border-strong)",
+              background: "var(--bg)",
+              color: "var(--text-soft)",
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            <Paperclip size={14} />
+            {attaching ? "Uploading…" : "Attach a photo or file"}
+          </button>
+        )}
+        <span className="field__hint">
+          One photo/file per campaign (max 50 MB). It arrives to the recipient as media with the
+          opener as its caption. Saved automatically as a draft if you haven&apos;t saved one yet.
+        </span>
+        {attachmentError && (
+          <span className="field__hint" role="alert" style={{ color: "var(--danger)" }}>
+            {attachmentError}
+          </span>
+        )}
       </div>
 
       <div className="field">
@@ -1556,7 +1714,7 @@ function ScheduleStep({
           className="field__label"
           style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
         >
-          <span>Анти-спам вариация текста</span>
+          <span>Anti-spam text variation</span>
           <button
             type="button"
             role="switch"
@@ -1588,8 +1746,8 @@ function ScheduleStep({
           </button>
         </label>
         <span className="field__hint">
-          Каждое отправляемое сообщение получает невидимые вариации (без изменения читаемого
-          текста), чтобы снизить риск спам-фильтров Telegram. Рекомендуем оставить включённым.
+          Every outgoing message gets invisible variations (without changing the visible text) to
+          lower the risk of Telegram spam filters. We recommend keeping this on.
         </span>
       </div>
 
