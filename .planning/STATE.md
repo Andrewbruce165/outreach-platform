@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 21-03-PLAN.md
-last_updated: "2026-07-07T08:03:55.915Z"
+stopped_at: Completed 21-04-PLAN.md
+last_updated: "2026-07-07T08:26:14.917Z"
 last_activity: 2026-07-07
 progress:
   total_phases: 24
   completed_phases: 20
   total_plans: 89
-  completed_plans: 85
+  completed_plans: 86
   percent: 99
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 21 (bulk-telegram-account-import-via-session-json-upload-in-ui) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-07-07
 
@@ -108,6 +108,7 @@ Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05:
 | Phase 21 P01 | 11min | 2 tasks | 5 files |
 | Phase 21 P02 | 36min | 3 tasks | 8 files |
 | Phase 21 P03 | 5min | 2 tasks | 5 files |
+| Phase 21 P04 | 20min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -195,6 +196,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 21]: 21-02 (IMPT-04): per-account client_fingerprint override on make_telegram_client/get_client with STRICT NULL fallback (D-02, 13 phone senders byte-identical), lang_pack='tdesktop' forced (D-04), api_id/api_hash global (D-03); threaded through every automated hot path (queue/listener/warmup/checker+worker) and all 16 Phase-20 profile/2FA methods + senders.py call sites
 - [Phase 21]: 21-02 (IMPT-10, D-06/D-07): update_sender_2fa auto-fills decrypted twofa_password_enc as current_password for imported accounts when omitted, connects under account fingerprint, never returns/logs plaintext. contact_check_worker._tick two-level LATERAL needs the column on BOTH inner subquery + outer projection (grep can't catch — verified via test_contact_check_worker.py GREEN)
 - [Phase 21]: 21-03: preview endpoint POST /accounts/import/preview — synchronous unzip+pair+validate, stages raw ZIP in account_import_stagings (BYTEA+30min TTL), returns import_id + matched/unpaired/malformed, no Telegram connect; ZIP-safety (traversal/bomb/over-count) via ImportZipError->4xx; secrets-free response (has_2fa/has_proxy flags only, D-07); session_file required but injected from filename basename when absent
+- [Phase 21]: 21-04: import_one_account(db, item)->result_str follows the 21-01 RED contract (not the plan's dict signature); dedup is phone-pre-connect (never overwrites a live session, D-14) + telegram_id-post-connect (IMPT-06); imported phone=basename; restriction_status defaults 'none' (no @SpamBot probe, D-11); partial-failure-safe (never raises into batch, D-10)
 
 ### Roadmap Evolution
 
@@ -290,6 +292,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-07T08:03:45.045Z
-Stopped at: Completed 21-03-PLAN.md
+Last session: 2026-07-07T08:26:06.073Z
+Stopped at: Completed 21-04-PLAN.md
 Resume file: None
