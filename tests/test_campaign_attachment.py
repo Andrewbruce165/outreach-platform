@@ -312,3 +312,96 @@ async def test_upload_cross_workspace_404(
     assert r.status_code == 404, r.text
     assert r.json()["detail"]["code"] == "CAMPAIGN_NOT_FOUND"
     assert await _count_attachments(async_db_session, camp["id"]) == 0
+
+
+async def test_has_attachment_reflects_blob(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """GET campaign → has_attachment False before upload, True after (D-13/D-19)."""
+    await _bind(async_db_session, test_workspace.id, "u-has")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-has')}"}
+
+    before = await async_client.get(f"/api/v1/campaigns/{camp['id']}", headers=hdr)
+    assert before.status_code == 200, before.text
+    assert before.json()["has_attachment"] is False
+
+    up = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("h.pdf", b"has-blob", "application/pdf")}, headers=hdr,
+    )
+    assert up.status_code == 200, up.text
+
+    after = await async_client.get(f"/api/v1/campaigns/{camp['id']}", headers=hdr)
+    assert after.status_code == 200, after.text
+    assert after.json()["has_attachment"] is True
+
+
+async def test_variation_enabled_roundtrips_through_patch(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """variation_enabled defaults True and round-trips through PATCH → response (D-13)."""
+    await _bind(async_db_session, test_workspace.id, "u-var")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-var')}"}
+
+    got = await async_client.get(f"/api/v1/campaigns/{camp['id']}", headers=hdr)
+    assert got.status_code == 200, got.text
+    assert got.json()["variation_enabled"] is True
+
+    patched = await async_client.patch(
+        f"/api/v1/campaigns/{camp['id']}",
+        json={"variation_enabled": False}, headers=hdr,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["campaign"]["variation_enabled"] is False
+
+    again = await async_client.get(f"/api/v1/campaigns/{camp['id']}", headers=hdr)
+    assert again.json()["variation_enabled"] is False
+
+
+async def test_duplicate_copies_flag_and_blob(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """duplicate_campaign copies BOTH variation_enabled AND the attachment blob into
+    a NEW campaign_attachments row for the copy (D-20 send-ready duplicate)."""
+    await _bind(async_db_session, test_workspace.id, "u-dup")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-dup')}"}
+
+    # Flip the flag off (prove it's the copied value, not just the default).
+    p = await async_client.patch(
+        f"/api/v1/campaigns/{camp['id']}",
+        json={"variation_enabled": False}, headers=hdr,
+    )
+    assert p.status_code == 200, p.text
+
+    blob = b"duplicate-me-attachment-bytes"
+    up = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files={"file": ("dup.pdf", blob, "application/pdf")}, headers=hdr,
+    )
+    assert up.status_code == 200, up.text
+
+    dup = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/duplicate", headers=hdr,
+    )
+    assert dup.status_code == 201, dup.text
+    copy = dup.json()
+    assert copy["id"] != str(camp["id"])
+    assert copy["variation_enabled"] is False        # flag copied (D-20)
+    assert copy["has_attachment"] is True            # blob copied (D-20)
+
+    # The copy owns its OWN campaign_attachments row with the same bytes.
+    assert await _count_attachments(async_db_session, copy["id"]) == 1
+    row = (await async_db_session.execute(
+        text("SELECT file_data, file_name FROM campaign_attachments WHERE campaign_id = :cid"),
+        {"cid": copy["id"]},
+    )).first()
+    assert bytes(row[0]) == blob
+    assert row[1] == "dup.pdf"
+    # Source blob still intact (copy is independent).
+    assert await _count_attachments(async_db_session, camp["id"]) == 1
