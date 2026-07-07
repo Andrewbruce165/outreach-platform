@@ -336,6 +336,18 @@ class CampaignEnqueueWorker:
         now_utc = datetime.now(timezone.utc)
         scheduled_at = max(now_utc, c.start_date) if c.start_date else now_utc
 
+        # D-05/D-18: resolve attachment presence ONCE per campaign per tick (not per
+        # contact). A campaign with a campaign_attachments row emits file-opener rows
+        # (item_type='file', caption=<opener>); still exactly ONE row per contact =
+        # one rate-limit tick / one new-dialog cap (limits unchanged). The blob itself
+        # lives in campaign_attachments and is loaded by the send worker by
+        # campaign_id — we never set file_url here (RESEARCH §4).
+        has_attachment = (await db.execute(
+            text("SELECT 1 FROM campaign_attachments WHERE campaign_id = :cid"),
+            {"cid": str(c.id)},
+        )).first() is not None
+        item_type = "file" if has_attachment else "message"
+
         enqueued = 0
         for contact in contacts:
             # Identity key: phone (+7…) or '@username'. Used as the pipeline key
@@ -384,14 +396,19 @@ class CampaignEnqueueWorker:
                     # we never create a zombie 'pending' item on a finished
                     # campaign. Only count an enqueue when a row was actually
                     # inserted (rowcount == 1); an EXISTS-miss is a no-op.
+                    # D-05: item_type/caption resolved once per campaign above.
+                    # For a file campaign, caption == message_text == rendered opener
+                    # (caption is the source of truth for the file caption;
+                    # message_text mirrors it so inbox/log stay readable). For a
+                    # message campaign, caption is NULL — no behaviour change.
                     result = await db.execute(
                         text("""
                             INSERT INTO message_queue
                                 (workspace_id, campaign_id, sender_id, item_type, status,
-                                 recipient_phone, recipient_name, message_text,
+                                 recipient_phone, recipient_name, message_text, caption,
                                  priority, scheduled_at, created_at)
-                            SELECT :wid, :cid, :sid, 'message', 'pending',
-                                   :phone, :name, :text, :priority, :scheduled, NOW()
+                            SELECT :wid, :cid, :sid, :item_type, 'pending',
+                                   :phone, :name, :text, :caption, :priority, :scheduled, NOW()
                             WHERE EXISTS (
                                 SELECT 1 FROM campaigns
                                 WHERE id = :cid AND status = 'running'
@@ -401,9 +418,11 @@ class CampaignEnqueueWorker:
                             "wid": str(c.workspace_id),
                             "cid": str(c.id),
                             "sid": str(sender.id),
+                            "item_type": item_type,
                             "phone": identity,
                             "name": contact.full_name or "",
                             "text": rendered,
+                            "caption": rendered if has_attachment else None,
                             "priority": 0,  # WR-02: explicit default; NULL sorted first under ORDER BY priority DESC
                             "scheduled": scheduled_at,
                         },
