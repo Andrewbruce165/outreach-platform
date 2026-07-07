@@ -576,6 +576,16 @@ Plans:
 Plans:
 - [ ] TBD (run /gsd:plan-phase 22 to break down)
 
+### Phase 23: Edit and delete-for-everyone of sent messages plus file sending from inbox UI
+
+**Goal:** Из inbox UI можно удалить отправленное сообщение (у обеих сторон), отредактировать уже отправленное сообщение и отправить файл контакту.
+**Requirements**: TBD
+**Depends on:** Phase 22
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 23 to break down)
+
 ---
 
 ## Progress
