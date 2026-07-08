@@ -1522,9 +1522,259 @@ function SuggestionChip({
   );
 }
 
-function MessageBubble({ m }: { m: Message }) {
+function formatBytes(n: number | null | undefined): string {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function downloadMessageFile(
+  conversationId: string,
+  messageId: string,
+  fallbackName: string,
+): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const res = await fetch(
+    `${apiBaseUrl}/api/v1/conversations/${conversationId}/messages/${messageId}/download`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (!res.ok) {
+    let code = "DOWNLOAD_FAILED";
+    let detail: Record<string, unknown> = {};
+    try {
+      const j = (await res.json()) as { detail?: unknown };
+      if (j?.detail && typeof j.detail === "object" && "code" in j.detail) {
+        code = String((j.detail as { code: unknown }).code);
+        detail = j.detail as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+    throw new ApiError(res.status, code, errorMessageFromEnvelope(code, detail), detail);
+  }
+  const cd = res.headers.get("content-disposition") || "";
+  const match =
+    cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i) ||
+    cd.match(/filename="?([^";]+)"?/i);
+  const filename = match ? decodeURIComponent(match[1].replace(/"/g, "")) : fallbackName;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+interface MessageBubbleProps {
+  m: Message;
+  conversationId: string;
+  contactName: string;
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  editPendingId: string | null;
+  onEdit: (id: string, text: string) => Promise<unknown>;
+  onRequestDelete: (m: Message) => void;
+}
+
+function MessageBubble({
+  m,
+  conversationId,
+  editingId,
+  setEditingId,
+  editPendingId,
+  onEdit,
+  onRequestDelete,
+}: MessageBubbleProps) {
   const isOutbound = m.direction === "outbound";
   const isAI = m.sent_by === "ai" || m.sent_by === "bot";
+  const type = (m.message_type ?? "text") as
+    | "text"
+    | "photo"
+    | "video"
+    | "voice"
+    | "document"
+    | string;
+  const isTextType = type === "text";
+  const isFileType = type === "photo" || type === "video" || type === "voice" || type === "document";
+  const isEditing = editingId === m.id;
+  const isEditPending = editPendingId === m.id;
+
+  const [hovered, setHovered] = useState(false);
+  const [editText, setEditText] = useState(m.message_text ?? "");
+  const [downloading, setDownloading] = useState(false);
+  const [mediaGone, setMediaGone] = useState(false);
+
+  useEffect(() => {
+    if (isEditing) setEditText(m.message_text ?? "");
+  }, [isEditing, m.message_text]);
+
+  const startEdit = () => {
+    setEditText(m.message_text ?? "");
+    setEditingId(m.id);
+  };
+  const cancelEdit = () => setEditingId(null);
+  const saveEdit = () => {
+    const t = editText.trim();
+    if (!t) return;
+    onEdit(m.id, t).catch(() => {
+      /* rollback handled by mutation */
+    });
+  };
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadMessageFile(conversationId, m.id, m.file_name ?? "file");
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "MEDIA_UNAVAILABLE") {
+        setMediaGone(true);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Download failed");
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const bubbleBg = isOutbound
+    ? isAI
+      ? "color-mix(in oklab, var(--ai-purple, #8774e1) 14%, white)"
+      : "var(--tg-blue, #3390ec)"
+    : "white";
+  const bubbleColor = isOutbound && !isAI ? "white" : "var(--text)";
+  const captionColor =
+    isOutbound && !isAI ? "rgba(255,255,255,0.85)" : "var(--text-muted)";
+
+  const renderBody = () => {
+    if (isEditing && isTextType) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 220 }}>
+          <textarea
+            autoFocus
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEdit();
+              } else if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                saveEdit();
+              }
+            }}
+            disabled={isEditPending}
+            style={{
+              width: "100%",
+              minHeight: 60,
+              resize: "vertical",
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              color: bubbleColor,
+              fontSize: 13.5,
+              lineHeight: 1.5,
+              fontFamily: "inherit",
+            }}
+          />
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={cancelEdit}
+              disabled={isEditPending}
+              style={
+                isOutbound && !isAI
+                  ? { color: "white", background: "rgba(255,255,255,0.15)" }
+                  : undefined
+              }
+            >
+              <X size={12} /> Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              onClick={saveEdit}
+              disabled={isEditPending || !editText.trim()}
+            >
+              <Check size={12} /> {isEditPending ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (isFileType) {
+      const caption = m.message_text || null;
+      const fileName = m.file_name || "File";
+      const size = formatBytes(m.size_bytes ?? null);
+      let icon = <FileText size={16} />;
+      let label = fileName;
+      if (type === "photo") {
+        icon = <ImageIcon size={16} />;
+        label = fileName === "File" ? "Photo" : fileName;
+      } else if (type === "video") {
+        icon = <Play size={16} />;
+        label = fileName === "File" ? "Video" : fileName;
+      } else if (type === "voice") {
+        icon = <Mic size={16} />;
+        label = "Voice message";
+      }
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 180 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ display: "inline-flex", flexShrink: 0 }}>{icon}</span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+              </div>
+              {size && (
+                <div style={{ fontSize: 11, color: captionColor }}>{size}</div>
+              )}
+            </div>
+            {!isOutbound && (
+              mediaGone ? (
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  No longer available in Telegram
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  aria-label="Download"
+                >
+                  <Download size={12} /> {downloading ? "Downloading…" : "Download"}
+                </button>
+              )
+            )}
+          </div>
+          {caption && (
+            <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {caption}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return <>{m.message_text}</>;
+  };
+
   return (
     <div
       style={{
@@ -1532,36 +1782,93 @@ function MessageBubble({ m }: { m: Message }) {
         justifyContent: isOutbound ? "flex-end" : "flex-start",
         marginBottom: 14,
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      <div style={{ maxWidth: "70%" }}>
+      <div style={{ maxWidth: "70%", position: "relative" }}>
         {!isOutbound && (
           <div
             className="muted"
             style={{ fontSize: 11, marginBottom: 4, paddingLeft: 14 }}
           >
             {new Date(m.created_at).toLocaleString()}
+            {m.edited_at && <span> · (edited)</span>}
+          </div>
+        )}
+        {isOutbound && hovered && !isEditing && (
+          <div
+            style={{
+              position: "absolute",
+              top: -12,
+              right: 8,
+              display: "flex",
+              gap: 4,
+              padding: 3,
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              boxShadow: "0 2px 6px rgba(15,20,25,0.08)",
+              zIndex: 2,
+            }}
+          >
+            {isTextType && (
+              <button
+                type="button"
+                onClick={startEdit}
+                aria-label="Edit message"
+                style={{
+                  width: 26,
+                  height: 26,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  borderRadius: 6,
+                }}
+              >
+                <Pencil size={13} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onRequestDelete(m)}
+              aria-label="Delete for everyone"
+              style={{
+                width: 26,
+                height: 26,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                background: "transparent",
+                color: "var(--danger)",
+                cursor: "pointer",
+                borderRadius: 6,
+              }}
+            >
+              <Trash2 size={13} />
+            </button>
           </div>
         )}
         <div
           style={{
             padding: "10px 14px",
             borderRadius: isOutbound ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-            background: isOutbound
-              ? isAI
-                ? "color-mix(in oklab, var(--ai-purple, #8774e1) 14%, white)"
-                : "var(--tg-blue, #3390ec)"
-              : "white",
-            color: isOutbound && !isAI ? "white" : "var(--text)",
+            background: bubbleBg,
+            color: bubbleColor,
             fontSize: 13.5,
             lineHeight: 1.5,
             boxShadow: isOutbound
               ? "none"
               : "0 1px 1px rgba(15,20,25,0.04), 0 0 0 1px rgba(15,20,25,0.04)",
-            whiteSpace: "pre-wrap",
+            whiteSpace: isEditing || isFileType ? "normal" : "pre-wrap",
             wordBreak: "break-word",
           }}
         >
-          {m.message_text}
+          {renderBody()}
         </div>
         {isOutbound && (
           <div
@@ -1578,6 +1885,7 @@ function MessageBubble({ m }: { m: Message }) {
             }}
           >
             {new Date(m.created_at).toLocaleString()}
+            {m.edited_at && <span>· (edited)</span>}
             {isAI && <span>· 🤖</span>}
             <Check size={11} />
           </div>
