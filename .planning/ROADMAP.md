@@ -603,7 +603,7 @@ Plans:
 **Goal:** Клиент прикрепляет ОДИН файл к первому сообщению кампании — он уходит одним media-сообщением с текстом опенера в caption (авто-медиа: фото приходит фото), и каждый исходящий опенер делается байт-уникальным невидимой вариацией (zero-width + near-invisible джиттер) без изменения читаемого текста — обход наивного дедупа Telegram (defense-in-depth, D-11).
 **Requirements**: Derived from CONTEXT decisions D-01..D-20 (no pre-mapped REQ-IDs in ROADMAP). Research-derived cluster: ATT-STORE/UPLOAD/DELIVER/OVERFLOW/ENQUEUE, VAR-INVIS/UNIQUE/SCOPE/FLAG, RER-FILE, DUP-COPY. Phase adds ONE migration (054).
 **Depends on:** Phase 23 (reserves migration slot 053; Phase 24 uses 054)
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1** (parallel — independent)
@@ -617,7 +617,7 @@ Plans:
 - [x] 24-06-worker-variation-and-blob-delivery-PLAN.md — worker varies a local copy at send (gate: campaign+not-followup+flag, DB clean) + loads blob -> send_file(force_document=False) [D-05/06/08/12/14/16] [depends_on: 24-01, 24-02, 24-03]
 
 **Wave 3** (handoff + live smoke)
-- [ ] 24-07-handoff-and-live-smoke-PLAN.md — regen openapi.json + error-codes.md (FILE_TOO_LARGE) + human-verify real photo arrives as photo with clean varied caption [D-06/09/19] [depends_on: 24-04, 24-05, 24-06]
+- [x] 24-07-handoff-and-live-smoke-PLAN.md — regen openapi.json + error-codes.md (FILE_TOO_LARGE) + human-verify real photo arrives as photo with clean varied caption [D-06/09/19] [depends_on: 24-04, 24-05, 24-06]
 
 ---
 
