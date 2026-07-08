@@ -50,12 +50,12 @@ async def _add_sender(db, workspace_id, slug, phone):
                 INSERT INTO senders (
                     workspace_id, slug, name, phone, session_string,
                     role, auth_status, lifecycle_status,
-                    rate_per_min, rate_per_hour, rate_per_day
+                    rate_per_min, rate_per_hour
                 )
                 VALUES (
                     :wid, :slug, :name, :phone, 'encrypted_stub',
                     'sender', 'ok', 'active',
-                    4, 20, 150
+                    4, 20
                 )
                 RETURNING id
                 """

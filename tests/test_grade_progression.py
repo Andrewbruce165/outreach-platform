@@ -44,10 +44,10 @@ async def _make_sender(db, wid: str, slug: str, level: int, age_days: int) -> st
             """
             INSERT INTO senders (id, workspace_id, slug, name, phone, session_string,
                                  role, auth_status, lifecycle_status,
-                                 rate_per_min, rate_per_hour, rate_per_day,
+                                 rate_per_min, rate_per_hour,
                                  current_level, level_updated_at)
             VALUES (:id, :wid, :slug, :name, :phone, 'stub',
-                    'sender', 'ok', 'active', 4, 20, 150,
+                    'sender', 'ok', 'active', 4, 20,
                     :lvl, NOW() - make_interval(days => :age))
             """
         ),

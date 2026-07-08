@@ -52,7 +52,6 @@ async def _mk_sender(db, workspace_id, slug: str, **overrides) -> Sender:
         lifecycle_status="active",
         rate_per_min=4,
         rate_per_hour=20,
-        rate_per_day=150,
     )
     defaults.update(overrides)
     s = Sender(**defaults)

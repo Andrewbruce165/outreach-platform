@@ -147,7 +147,7 @@ class _FakeResult:
 # The fake serves a minimal sender row so the helper runs inside the mocked tick.
 _FAKE_SENDER_ROW = SimpleNamespace(
     workspace_id="ws-1", proxy=None,
-    rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+    rate_per_min=4, rate_per_hour=20,
     restricted_until=None,
 )
 

@@ -143,7 +143,7 @@ async def test_create_with_other_workspace_sender_404(
         name="Other Sender", phone="+79111111111",
         session_string="x", role="sender",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(other_sender)
     await async_db_session.commit()

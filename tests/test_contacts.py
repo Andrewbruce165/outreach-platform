@@ -345,9 +345,9 @@ async def test_import_with_checker_sets_pending(
             """
             INSERT INTO senders
                 (workspace_id, slug, name, phone, session_string, role,
-                 auth_status, lifecycle_status, rate_per_min, rate_per_hour, rate_per_day)
+                 auth_status, lifecycle_status, rate_per_min, rate_per_hour)
             VALUES (:wid, :slug, 'Chk', '+79009998877', 'enc_stub', 'checker',
-                    'ok', 'active', 4, 20, 150)
+                    'ok', 'active', 4, 20)
             """
         ),
         {"wid": ws_id, "slug": checker_slug},

@@ -96,17 +96,12 @@ async def _set_cap(db, *, campaign_id, cap: int):
 
     Phase 22 (D-01/D-05): the new-dialog cap is now driven by the ACCOUNT grade
     budget — sender_grade_settings.level1_chats_per_day for a level-1 sender
-    (test senders default to current_level=1) — NOT campaigns.max_new_dialogs_per_day.
-    We upsert the workspace grade-settings row so a level-1 sender resolves
-    budget == cap. The legacy campaign column is still set (harmless; it physically
-    exists until 22-06) so the intent stays readable, but it is no longer read by
-    the queue pick path."""
+    (test senders default to current_level=1). The legacy per-campaign cap column
+    was dropped in 22-06 (mig 059), so we only upsert the workspace grade-settings
+    row so a level-1 sender resolves budget == cap."""
     wid = (await db.execute(text(
         "SELECT workspace_id FROM campaigns WHERE id = :cid"
     ), {"cid": str(campaign_id)})).scalar()
-    await db.execute(text(
-        "UPDATE campaigns SET max_new_dialogs_per_day = :cap WHERE id = :cid"
-    ), {"cap": cap, "cid": str(campaign_id)})
     await db.execute(text("""
         INSERT INTO sender_grade_settings (workspace_id, level1_chats_per_day)
         VALUES (:wid, :cap)
