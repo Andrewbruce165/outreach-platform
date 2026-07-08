@@ -21,6 +21,11 @@ from telethon.errors import FloodWaitError, UserIsBlockedError, RPCError
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.telegram import telegram_service
+# Phase 22 (D-03/D-08/D-09): shared new-chat grade ladder — the single source of
+# truth for per-level new-chat budgets, shared with the queue rewrite (22-03),
+# the settings API (22-02) and the sender API (22-04). Warmup spends this same
+# budget for genuinely-new pairs, behind an outreach-priority reserve.
+from app.services.grade_ladder import load_ladder, budget_for_level
 # Phase 18 D-11: warmup routes through the SAME workspace-aware provider factory
 # as the answerer (single tone everywhere). No standalone AsyncOpenAI here.
 from app.services.llm import resolve_llm_config, get_provider, platform_fallback_config
@@ -185,9 +190,15 @@ class WarmupWorker:
         # Phase 15 (D-14): restriction-skip (RESV-05 модель из contact_check_worker)
         # — аккаунт с restriction_status != 'none' ИЛИ будущим restricted_until
         # НЕ греется. lifecycle уже ограничен 'active' (исключает 'paused').
+        #
+        # Phase 22 (D-08/D-09): also SELECT s.current_level so the new-pair
+        # budget check in _create_new_sessions knows the initiator's grade
+        # level without an extra round-trip. current_level defaults to 1
+        # (migration 056) so an unbackfilled account resolves to the level-1
+        # budget — the safest (smallest) new-chat allowance.
         result = await db.execute(text("""
             SELECT wp.sender_id, wp.workspace_id, wp.enrolled_at,
-                   s.slug, s.phone, s.session_string
+                   s.slug, s.phone, s.session_string, s.current_level
             FROM warmup_pool wp
             JOIN senders s
               ON s.id = wp.sender_id
@@ -221,10 +232,92 @@ class WarmupWorker:
                 "slug":          r[3],
                 "phone":         r[4],
                 "session_string": r[5],
+                # Phase 22: grade level for the shared new-chat budget (D-08/D-09).
+                "current_level": int(r[6]) if r[6] is not None else 1,
                 "enrolled_days": max(0, (now - r[2]).days),
             }
             for r in rows
         ]
+
+    # ─── Shared new-chat budget (Phase 22, D-03/D-08/D-09) ──────────────────────
+
+    @staticmethod
+    def _pick_initiator(a: dict, b: dict) -> tuple[dict, dict]:
+        """Return (initiator, other) for a NEW warmup pair.
+
+        The initiator is the OLDER / more-warmed account (D-08 discretion): it is
+        charged the new-chat budget and, because it becomes ``sender_a``, it
+        writes first (``_process_session``'s NEW-session ``else`` branch fires when
+        ``last_sender_id IS NULL`` → sender_a sends). "Older" = greater warmup-pool
+        tenure (``enrolled_days``); ties break to the EARLIER ``enrolled_at`` (the
+        genuinely-older enrolment, since ``enrolled_days`` is a truncated day-count).
+        """
+        if a["enrolled_days"] != b["enrolled_days"]:
+            return (a, b) if a["enrolled_days"] > b["enrolled_days"] else (b, a)
+        # tie on truncated day-count → earlier enrolled_at is the older account
+        return (a, b) if a["enrolled_at"] <= b["enrolled_at"] else (b, a)
+
+    async def _remaining_new_chat_budget(
+        self,
+        db: AsyncSession,
+        sender_id: str,
+        workspace_id: str,
+        current_level: int,
+    ) -> int:
+        """Initiator's remaining shared new-chat budget on the trailing-24h window.
+
+        D-09 (outreach priority reserve): warmup may only open a NEW pair with the
+        budget outreach does not need today. Remaining is computed on the SAME
+        trailing-24h window the queue new-dialog cap uses (D-03, RESEARCH Pitfall
+        4 — NOT CURRENT_DATE), so the two workers never disagree on "spent today":
+
+            remaining = account_budget - spent_24h - reserved_pending_openers
+
+        - ``account_budget`` = ``budget_for_level(ladder, current_level)`` — the
+          workspace ladder (code-default 5/9/13 when unconfigured, D-16).
+        - ``spent`` = DISTINCT recipients this sender already sent to in the
+          trailing 24h (sender-wide, mirrors the queue cap window).
+        - ``pending`` = DISTINCT cold openers still queued for this sender (a
+          campaign message with no prior *sent* to that phone by this sender) —
+          the outreach reserve. Bounded to ``account_budget`` so a large backlog
+          can zero-out warmup but never drive the arithmetic negative.
+
+        Bind params only. Returns an int >= 0.
+        """
+        ladder = await load_ladder(db, workspace_id)
+        account_budget = budget_for_level(ladder, current_level)
+
+        spent = (await db.execute(
+            text("""
+                SELECT COUNT(DISTINCT recipient_phone)
+                FROM message_queue
+                WHERE sender_id = :sid
+                  AND status = 'sent'
+                  AND finished_at >= NOW() - INTERVAL '24 hours'
+            """),
+            {"sid": sender_id},
+        )).scalar() or 0
+
+        pending = (await db.execute(
+            text("""
+                SELECT COUNT(DISTINCT mq.recipient_phone)
+                FROM message_queue mq
+                WHERE mq.sender_id = :sid
+                  AND mq.status = 'pending'
+                  AND mq.campaign_id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM message_queue prior
+                      WHERE prior.sender_id = mq.sender_id
+                        AND prior.recipient_phone = mq.recipient_phone
+                        AND prior.status = 'sent'
+                  )
+            """),
+            {"sid": sender_id},
+        )).scalar() or 0
+        # Bound the reserve so a huge backlog zeroes warmup but never goes negative.
+        pending = min(pending, account_budget)
+
+        return max(0, account_budget - spent - pending)
 
     async def _count_sent_today(self, db: AsyncSession, sender_id: str) -> int:
         """Сколько warmup-сообщений отправлено сегодня этим аккаунтом."""
@@ -593,10 +686,53 @@ class WarmupWorker:
         if not pairs:
             return
 
+        # Phase 22 (D-08): classify each candidate pair against the new-warmup-pair
+        # registry. A pair already in sender_first_contacts warmed together before
+        # → KNOWN → session is free (current behaviour). A pair NOT in the registry
+        # → NEW → it may only open if the initiator has remaining shared new-chat
+        # budget after the outreach reserve (D-09), and on creation the canonical
+        # (LEAST,GREATEST) pair is recorded so future repeats are free.
+        #
+        # Load the registry ONCE per tick into a set[frozenset] (same shape as
+        # active_pairs). Entries are same-workspace by construction (both senders
+        # were partitioned into one workspace before insert), so this global read
+        # cannot leak a cross-tenant pair into any workspace's candidate set.
+        known_result = await db.execute(
+            text("SELECT sender_a_id, sender_b_id FROM sender_first_contacts")
+        )
+        known_pairs: set[frozenset] = {
+            frozenset({str(row[0]), str(row[1])})
+            for row in known_result.fetchall()
+        }
+
         for sender_a, sender_b, ws_topics in pairs:
             # Защита-в-глубину: после partitioning оба sender'а из одного workspace.
             assert sender_a["workspace_id"] == sender_b["workspace_id"], \
                 "Cross-tenant warmup pair attempted — partitioning bug!"
+
+            pair_fs = frozenset({sender_a["sender_id"], sender_b["sender_id"]})
+            is_new_pair = pair_fs not in known_pairs
+
+            if is_new_pair:
+                # NEW pair: the initiator (older/more-warmed) becomes sender_a so it
+                # writes first, and only if it has budget left after outreach (D-09).
+                sender_a, sender_b = self._pick_initiator(sender_a, sender_b)
+                remaining = await self._remaining_new_chat_budget(
+                    db,
+                    sender_a["sender_id"],
+                    sender_a["workspace_id"],
+                    sender_a["current_level"],
+                )
+                if remaining < 1:
+                    # Outreach has reserved the whole account budget today — skip
+                    # this new pair; it becomes eligible once outreach frees budget.
+                    logger.info(
+                        f"🔥 Warmup: пропускаем НОВУЮ пару "
+                        f"{sender_a['slug']} → {sender_b['slug']} "
+                        f"(инициатор {sender_a['slug']} без остатка нового-чат бюджета "
+                        f"после резерва аутрича, level={sender_a['current_level']})"
+                    )
+                    continue
 
             topic  = random.choice(ws_topics)
             target = random.randint(4, 10)
@@ -620,10 +756,30 @@ class WarmupWorker:
                     "first_at": first_at,
                 }
             )
+
+            if is_new_pair:
+                # Record the pair canonically (LEAST < GREATEST, matching migration
+                # 057's PK invariant) so this pair is FREE on every future tick.
+                # Mark it known in-memory too, so a duplicate candidate in the same
+                # tick (should not happen, defence-in-depth) is not re-charged.
+                await db.execute(
+                    text("""
+                        INSERT INTO sender_first_contacts
+                            (sender_a_id, sender_b_id, first_contact_at)
+                        VALUES (LEAST(CAST(:a AS uuid), CAST(:b AS uuid)),
+                                GREATEST(CAST(:a AS uuid), CAST(:b AS uuid)),
+                                NOW())
+                        ON CONFLICT DO NOTHING
+                    """),
+                    {"a": sender_a["sender_id"], "b": sender_b["sender_id"]},
+                )
+                known_pairs.add(pair_fs)
+
             logger.info(
                 f"🔥 Новая warmup сессия (workspace={sender_a['workspace_id'][:8]}): "
                 f"{sender_a['slug']} ↔ {sender_b['slug']} "
-                f"(тема: «{topic}», {target} сообщений)"
+                f"(тема: «{topic}», {target} сообщений, "
+                f"{'НОВАЯ пара' if is_new_pair else 'знакомая пара'})"
             )
 
         await db.commit()
