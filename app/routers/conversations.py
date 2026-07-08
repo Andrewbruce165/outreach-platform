@@ -424,6 +424,48 @@ async def edit_message(
     return MessageResponse(**dict(updated._mapping))
 
 
+@router.delete("/{conversation_id}/messages/{message_id}", status_code=204)
+async def delete_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """INBM-01 / D-04 — delete-for-everyone (revoke) + hard-delete the row.
+
+    Inverted vs POST /send: the Telethon revoke runs FIRST, then the DB delete.
+    This mutates a PAST message and MUST NOT auto-takeover — it never touches
+    conversations.status / ai_enabled / message_queue. The list-preview LATERAL
+    subquery auto-recomputes last_message from the next remaining row (D-03).
+
+    Gate (D-01/D-19): any outbound ai/human-sent message in this workspace+
+    conversation is deletable (no text-type requirement); anything else → 404.
+    DELETE_FAILED is reserved for real connection/flood/frozen failures — a
+    stale/own-message revoke is a silent Telegram no-op = success (Pitfall 4).
+    """
+    row = await _load_message_for_mutation(db, ctx, conversation_id, message_id)
+
+    # Telethon revoke (revoke=True is the service default) OUTSIDE any txn.
+    result = await telegram_service.delete_message_by_telegram_id(
+        sender_slug=row.sender_slug,
+        sender_id=str(row.sender_id),
+        encrypted_session=row.session_string,
+        telegram_id=row.contact_telegram_id,
+        telegram_message_id=row.telegram_message_id,
+        proxy=row.proxy,
+        fingerprint=row.client_fingerprint,
+    )
+    if not result.get("success"):
+        _raise_inbox_message_error(result)
+
+    # On success: hard-delete the row (D-03, DB row is the source of truth).
+    await db.execute(
+        text("DELETE FROM messages WHERE id = :mid"), {"mid": str(message_id)}
+    )
+    await db.commit()
+    return None
+
+
 # ── Mutating endpoints ────────────────────────────────────────────────────────
 
 
