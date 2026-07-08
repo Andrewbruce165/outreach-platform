@@ -28,6 +28,7 @@ from app.routers import (
     contacts,
     conversations,  # Phase 5 — re-register (was legacy, not previously wired)
     folders,
+    grade_settings,  # Phase 22 — per-workspace new-chat grade ladder (D-16)
     health,
     knowledge_bases,  # Phase 16 — RAG knowledge bases
     llm_settings,  # Phase 18 — switchable LLM provider settings
@@ -194,6 +195,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 app.include_router(workspace.router)
 app.include_router(senders.router)
+app.include_router(grade_settings.router)  # Phase 22 — new-chat grade ladder (D-16)
 app.include_router(folders.router)
 app.include_router(contacts.router)
 app.include_router(check_contacts.router)
