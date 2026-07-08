@@ -4486,6 +4486,8 @@ export interface components {
             name: string;
             /** Phone */
             phone: string;
+            /** Location */
+            location?: string | null;
             /**
              * Status
              * @enum {string}

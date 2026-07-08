@@ -12981,6 +12981,17 @@
               }
             ],
             "title": "Locked By Campaign Name"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
           }
         },
         "type": "object",

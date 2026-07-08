@@ -525,6 +525,7 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
           <span className="acct-card__name">{sender.name || sender.phone}</span>
           {sender.tg_username && <span className="muted text-xs">@{sender.tg_username}</span>}
           <span className="muted text-xs mono">{sender.phone}</span>
+          {sender.location && <span className="muted text-xs">Location: {sender.location}</span>}
         </div>
         <div className="acct-card__actions">
           <button className="tb__icon-btn" aria-label="Actions" onClick={() => setOpen((v) => !v)}>
@@ -1411,6 +1412,9 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
   return (
     <Modal title={`Профиль · ${sender.name || sender.phone}`} onClose={onClose} wide>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {sender.location && (
+          <span className="muted text-xs">Location: {sender.location}</span>
+        )}
         {/* ── Section A — Профиль ─────────────────────────────────────── */}
         <div className="profile-section">
           <div className="profile-section__head">

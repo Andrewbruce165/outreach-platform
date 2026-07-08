@@ -10441,6 +10441,17 @@
             "type": "string",
             "title": "Phone"
           },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
           "status": {
             "type": "string",
             "enum": [
