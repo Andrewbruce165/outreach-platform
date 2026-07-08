@@ -122,6 +122,12 @@ class Sender(Base):
     rate_per_hour = Column(Integer, nullable=False, server_default='20')
     rate_per_day = Column(Integer, nullable=False, server_default='150')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Phase 22 (D-14): account grade level 1..3 (mig 056). server_default MANDATORY —
+    # create_all builds the test/fresh-DB schema from the ORM, and raw INSERTs in
+    # _insert_sender_raw / bulk import omit it (project-orm-default-vs-server-default-drift).
+    current_level = Column(Integer, nullable=False, server_default='1')  # Phase 22 D-14: account grade level 1..3
+    # Phase 22 (D-14): grade timer (mig 056); backfilled = created_at for existing rows.
+    level_updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())  # Phase 22 D-14: grade timer; backfilled = created_at (mig 056)
     last_used_at = Column(DateTime(timezone=True), onupdate=func.now())
     # NB: ai_context_id dropped (Phase 3 D-04). Sender больше не «знает» агента —
     # связь идёт через Campaign в Phase 4.
