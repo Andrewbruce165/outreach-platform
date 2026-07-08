@@ -120,7 +120,9 @@ class Sender(Base):
     checker_trip_count = Column(Integer, nullable=False, server_default='0')  # escalating-backoff trip counter
     rate_per_min = Column(Integer, nullable=False, server_default='4')
     rate_per_hour = Column(Integer, nullable=False, server_default='20')
-    rate_per_day = Column(Integer, nullable=False, server_default='150')
+    # Phase 22 (D-04): the per-sender daily-message cap column was dropped (mig 059).
+    # The daily throttle is now the account grade new-chat budget resolved from the
+    # workspace ladder. Only rate_per_min / rate_per_hour remain.
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     # Phase 22 (D-14): account grade level 1..3 (mig 056). server_default MANDATORY —
     # create_all builds the test/fresh-DB schema from the ORM, and raw INSERTs in
@@ -819,12 +821,9 @@ class Campaign(Base):
     # threshold for "fresh".
     allow_recontact = Column(Boolean, nullable=False, server_default="false")
     recontact_min_age_days = Column(Integer, nullable=False, server_default="30")
-    # Phase 12 (D-10/D-11, NDLG-01): per-sender-per-campaign daily new-dialog cap.
-    # DEFAULT 10 (quick 260706-mdz supersedes migration-033's DEFAULT 50 — the old 50
-    # was too aggressive for Telegram anti-spam). server_default="10" duplicates the
-    # migration-050 DB default for the create_all path (post-DROP-incident rebuild
-    # reconstructs tables from the ORM). API enforces the ge=1/le=30 bounds; no DB CHECK.
-    max_new_dialogs_per_day = Column(Integer, nullable=False, server_default="10")
+    # Phase 22 (D-07): the per-campaign daily new-dialog cap column was dropped
+    # (mig 059). It is superseded by the account-level grade budget resolved from the
+    # workspace ladder; queue.py stopped reading it in 22-03.
     # Phase 19 (D-08/D-12): no-reply follow-up + auto-finish policy per campaign.
     # follow_up_enabled off by default (opt-in). server_default values duplicate the
     # migration-045 DB defaults for the create_all rebuild path. API enforces the

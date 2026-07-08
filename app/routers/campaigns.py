@@ -57,49 +57,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
 
-# Quick 260706-mdz: green corridor <=10; hard cap 30 (50 was too aggressive for
-# Telegram anti-spam). Supersedes the Phase-12 D-13/D-14 corridor (50/100).
-DIALOG_LIMIT_SOFT_CAP = 10
-DIALOG_LIMIT_HARD_CAP = 30
-
 # Phase 24 D-03: hard ceiling for the campaign first-message attachment blob.
 # Bytes go straight to the BYTEA column (D-02) — no temp file. Over this → 413.
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024   # 50 MB
 
-
-def _validate_max_new_dialogs(value: Optional[int]) -> List[WarningItem]:
-    """Quick 260706-mdz: hard cap 30 → 422; soft cap 10 → warnings[].
-
-    Mirrors senders._validate_rate_limits: Pydantic already clips the hard cap via
-    Field(le=30), but Lovable sometimes posts raw JSON — the explicit check here is
-    harmless and yields a clearer senders-style detail payload.
-    """
-    warnings: List[WarningItem] = []
-    if value is None:
-        return warnings
-    if value > DIALOG_LIMIT_HARD_CAP:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "NEW_DIALOG_LIMIT_EXCEEDS_HARD_CAP",
-                "field": "max_new_dialogs_per_day",
-                "value": value,
-                "hard_cap": DIALOG_LIMIT_HARD_CAP,
-                "message": (
-                    "превышает максимально безопасный лимит новых диалогов на "
-                    "аккаунт; обратитесь в поддержку, если нужно выше"
-                ),
-            },
-        )
-    if value > DIALOG_LIMIT_SOFT_CAP:
-        warnings.append(
-            WarningItem(
-                field="max_new_dialogs_per_day",
-                value=value,
-                recommended_max=DIALOG_LIMIT_SOFT_CAP,
-            )
-        )
-    return warnings
+# Phase 22 (D-07): the per-campaign daily new-dialog cap and its validation helper
+# were removed — the daily throttle is now the account-level grade budget resolved
+# from the workspace ladder. Campaign create/update no longer emit cap warnings here.
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -371,8 +335,6 @@ async def _campaign_to_response(
         # 026: per-campaign re-contact policy.
         allow_recontact=campaign.allow_recontact,
         recontact_min_age_days=campaign.recontact_min_age_days,
-        # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
-        max_new_dialogs_per_day=campaign.max_new_dialogs_per_day,
         # Phase 19 NORP-02/NORP-05: follow-up + auto-finish (D-08/D-12).
         follow_up_enabled=campaign.follow_up_enabled,
         follow_up_interval_hours=campaign.follow_up_interval_hours,
@@ -460,8 +422,9 @@ async def create_campaign(
     5. Duplicate name → 409
     """
     _validate_timezone(payload.timezone)
-    # Phase 12 D-13/D-14: soft cap → warnings[]; hard cap → 422.
-    warnings = _validate_max_new_dialogs(payload.max_new_dialogs_per_day)
+    # Phase 22 (D-07): the per-campaign dialog-cap validation was removed; the daily
+    # throttle is now the account grade budget. No cap warnings on create.
+    warnings: List[WarningItem] = []
     # 024: agent/folder опциональны для draft — валидируем принадлежность workspace
     # только когда значение передано (None = ещё не заполнено в визарде).
     if payload.agent_id is not None:
@@ -516,8 +479,6 @@ async def create_campaign(
         recontact_min_age_days=payload.recontact_min_age_days,
         # Phase 24 D-13: invisible anti-spam text-variation toggle (default ON).
         variation_enabled=payload.variation_enabled,
-        # Phase 12 NDLG-03/NDLG-04: per-campaign daily new-dialog cap.
-        max_new_dialogs_per_day=payload.max_new_dialogs_per_day,
         # Phase 19 NORP-02/NORP-05: follow-up + auto-finish (D-08/D-12).
         follow_up_enabled=payload.follow_up_enabled,
         follow_up_interval_hours=payload.follow_up_interval_hours,
@@ -649,10 +610,9 @@ async def patch_campaign(
     c = await _load_campaign(db, ctx, campaign_id)
     update_data = payload.model_dump(exclude_unset=True)
 
-    # Phase 12 D-14: re-validate the cap when the field changes (soft → warnings[], hard → 422).
+    # Phase 22 (D-07): the per-campaign dialog-cap validation was removed; the daily
+    # throttle is now the account grade budget. PATCH emits no cap warnings.
     warnings: List[WarningItem] = []
-    if "max_new_dialogs_per_day" in update_data and update_data["max_new_dialogs_per_day"] is not None:
-        warnings = _validate_max_new_dialogs(update_data["max_new_dialogs_per_day"])
 
     if c.status == "running":
         forbidden = {"agent_id", "folder_id"}

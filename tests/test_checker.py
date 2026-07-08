@@ -221,7 +221,7 @@ async def test_confidence_gated_cache_checker_read(async_db_session):
         workspace_id=ws.id, slug=f"srld07-chk-{suffix}", name="SRLD07 checker",
         phone="+79995550001", session_string="enc", role="checker",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(checker)
     await async_db_session.commit()

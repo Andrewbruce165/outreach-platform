@@ -40,7 +40,6 @@ async def _insert_sender_raw(
     auth_status: str = "ok",
     rate_per_min: int = 4,
     rate_per_hour: int = 20,
-    rate_per_day: int = 150,
     phone: str | None = None,
 ) -> str:
     """Прямой INSERT в senders. Возвращает sender_id."""
@@ -50,16 +49,16 @@ async def _insert_sender_raw(
         text("""
             INSERT INTO senders
                 (id, workspace_id, slug, name, phone, session_string, role,
-                 lifecycle_status, auth_status, rate_per_min, rate_per_hour, rate_per_day)
+                 lifecycle_status, auth_status, rate_per_min, rate_per_hour)
             VALUES
                 (:id, :wid, :slug, :name, :phone, 'encrypted_stub', :role,
-                 :lifecycle, :auth, :rmin, :rhour, :rday)
+                 :lifecycle, :auth, :rmin, :rhour)
         """),
         {
             "id": sid, "wid": workspace_id, "slug": slug, "name": slug,
             "phone": phone, "role": role,
             "lifecycle": lifecycle_status, "auth": auth_status,
-            "rmin": rate_per_min, "rhour": rate_per_hour, "rday": rate_per_day,
+            "rmin": rate_per_min, "rhour": rate_per_hour,
         }
     )
     await db.commit()

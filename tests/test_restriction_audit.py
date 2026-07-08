@@ -314,7 +314,9 @@ async def test_event_carries_activity_slice(
     rate = slice_["rate"]
     assert rate["configured_per_min"] == 4
     assert rate["configured_per_hour"] == 20
-    assert rate["configured_per_day"] == 150
+    # Phase 22 (D-04): configured_per_day was dropped from the slice — the per-sender
+    # daily cap column (rate_per_day) no longer exists (mig 059).
+    assert "configured_per_day" not in rate
 
 
 # ─── HLTH-02b ─────────────────────────────────────────────────────────────────
@@ -574,7 +576,7 @@ async def test_history_endpoint(
         workspace_id=other.id, slug="foreign-hist-sender", name="Foreign Hist",
         phone="+79995551234", session_string="enc", role="sender",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(foreign)
     await async_db_session.commit()

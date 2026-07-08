@@ -45,10 +45,10 @@ async def _enroll_active_sender(db, wid: str, slug: str, **sender_overrides) -> 
         INSERT INTO senders (id, workspace_id, slug, name, phone, session_string,
                              role, auth_status, lifecycle_status,
                              restriction_status, restricted_until,
-                             rate_per_min, rate_per_hour, rate_per_day)
+                             rate_per_min, rate_per_hour)
         VALUES (:id, :wid, :slug, :name, :phone, 'stub',
                 'sender', 'ok', 'active',
-                :restriction_status, :restricted_until, 4, 20, 150)
+                :restriction_status, :restricted_until, 4, 20)
     """), {"id": sid, "wid": wid, "slug": slug, "name": slug,
            "phone": f"+790{abs(hash(sid)) % 10_000_000:07d}", **cols})
     await db.execute(text("""

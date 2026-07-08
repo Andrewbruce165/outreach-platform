@@ -344,7 +344,7 @@ async def test_confidence_gated_cache_sender_read(
         workspace_id=test_workspace.id, slug=f"srld07-snd-{suffix}", name="poison writer",
         phone="+79995559999", session_string="enc", role="checker",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(other_sender)
     await async_db_session.commit()
@@ -403,7 +403,7 @@ async def test_user_blocked_records_event(
         workspace_id=test_workspace.id, slug=f"srld08-snd-{suffix}", name="block sender",
         phone="+79995558888", session_string="enc", role="sender",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(sender)
     await async_db_session.commit()
@@ -476,7 +476,7 @@ async def test_no_daily_message_cap_but_rate_limits_still_gate(
         workspace_id=test_workspace.id, slug=f"rate-nocap-{suffix}", name="rate",
         phone="+79994440000", session_string="enc", role="sender",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(sender)
     await async_db_session.commit()

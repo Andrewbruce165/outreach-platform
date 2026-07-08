@@ -137,7 +137,7 @@ async def test_attach_foreign_sender_404(
         workspace_id=other.id, slug="foreign-sender", name="Foreign Sender",
         phone="+79995550000", session_string="enc", role="sender",
         auth_status="ok", lifecycle_status="active",
-        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+        rate_per_min=4, rate_per_hour=20,
     )
     async_db_session.add(foreign)
     await async_db_session.commit()

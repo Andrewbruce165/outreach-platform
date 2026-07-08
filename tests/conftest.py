@@ -287,6 +287,13 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_057.exists():
             await asyncpg_conn.execute(_mig_057.read_text())
 
+        # 059: Phase 22 (D-07/D-04) drops campaigns.max_new_dialogs_per_day and
+        # senders.rate_per_day. NO conftest block is needed — this migration is a
+        # pure DROP and the ORM no longer declares either column, so create_all
+        # simply never builds them and the test schema inherits the dropped state
+        # (RESEARCH Pitfall 1: create_all mirrors the ORM). Applying the SQL here
+        # would be a redundant no-op.
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
@@ -581,7 +588,6 @@ async def test_sender_factory(async_db_session: AsyncSession, test_workspace: Wo
             lifecycle_status="active",
             rate_per_min=4,
             rate_per_hour=20,
-            rate_per_day=150,
         )
         defaults.update(overrides)
         s = Sender(**defaults)

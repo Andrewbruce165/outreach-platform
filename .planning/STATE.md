@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 22-05-PLAN.md (Wave 2 complete, 4/4)
-last_updated: "2026-07-08T17:55:51.589Z"
-last_activity: 2026-07-08 -- Phase 22 Wave 2 complete (22-02/22-03/22-04/22-05)
+stopped_at: Completed 22-06-PLAN.md (Wave 3 terminal cleanup)
+last_updated: "2026-07-08T18:27:42.615Z"
+last_activity: 2026-07-08
 progress:
   total_phases: 27
   completed_phases: 23
   total_plans: 109
-  completed_plans: 106
-  percent: 97
+  completed_plans: 107
+  percent: 85
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 ## Current Position
 
 Phase: 22 (account-level-new-chat-limit-grades) — EXECUTING
-Plan: 4 of 7 complete (22-01 schema foundation, 22-02 ladder API+worker, 22-03 per-account queue gate, 22-04 sender API cleanup+override)
-Status: Wave 2 (of 4) in progress — 22-05 pending merge
-Last activity: 2026-07-08 -- Phase 22 Wave 2 merges (22-02/22-03/22-04)
+Plan: 5 of 7 complete (22-01 schema foundation, 22-02 ladder API+worker, 22-03 per-account queue gate, 22-04 sender API cleanup+override)
+Status: Ready to execute
+Last activity: 2026-07-08
 
-Progress: [█████████░] 96%
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -121,6 +121,7 @@ Progress: [█████████░] 96%
 | Phase 22 P03 | 20min | 3 tasks | 4 files |
 | Phase 22 P04 | 18min | 3 tasks | 3 files |
 | Phase 22 P05 | 15m | 3 tasks | 2 files |
+| Phase 22 P06 | 16min | 3 tasks | 27 files |
 
 ## Accumulated Context
 
@@ -220,6 +221,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase ?]: 22-03: daily-message cap (rate_per_day) removed from _check_rate_limits; per-min/hour/interval floors intact (D-04)
 - [Phase ?]: 22-04: rate_per_day removed from sender API; grade (current_level/level_updated_at) + remaining_daily_budget surfaced; PATCH /senders/{slug}/grade resets timer (workspace-scoped via _load_sender_by_slug)
 - [Phase ?]: 22-05: warmup spends shared new-chat budget only for NEW pairs (sender_first_contacts registry), initiator = older account writes first, behind an outreach-priority reserve on the trailing-24h window (D-08/D-09/D-03)
+- [Phase ?]: [Phase 22] Plan 22-06: migration 059 drops campaigns.max_new_dialogs_per_day (D-07) + senders.rate_per_day (D-04) from DB+ORM; per-campaign dialog-cap API surface removed; daily throttle is now exclusively the account grade budget. Rule-3 sweep: restriction_audit.py rate_per_day read removed, queue.py comments reworded, ~19 test files purged of raw-insert rate_per_day (create_all mirrors ORM). Zero app/ references (grep gate).
 
 ### Roadmap Evolution
 
@@ -321,6 +323,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-08T17:55:37.970Z
-Stopped at: Completed 22-05-PLAN.md (Wave 2 complete, 4/4)
+Last session: 2026-07-08T18:27:42.504Z
+Stopped at: Completed 22-06-PLAN.md (Wave 3 terminal cleanup)
 Resume file: None

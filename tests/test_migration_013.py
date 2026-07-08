@@ -6,7 +6,8 @@ Tests для миграции 013_phase2.sql.
 - CHECK constraints на role/lifecycle_status/tg_status/onboarding_sessions.status
 - partial UNIQUE индексы по (workspace_id, phone) / (workspace_id, username)
 - senders.is_active колонки больше не существует
-- senders.lifecycle_status + rate_per_min/hour/day с правильными defaults
+- senders.lifecycle_status + rate_per_min/hour с правильными defaults
+  (rate_per_day dropped in Phase 22 mig 059 — no longer asserted)
 
 Стратегия:
 - _setup_database fixture (conftest.py, session-scope) применила миграции 012 + 013.
@@ -54,14 +55,18 @@ async def test_senders_is_active_column_dropped(async_db_session: AsyncSession):
 
 
 async def test_senders_new_columns_with_defaults(async_db_session: AsyncSession):
-    """D-13: senders.lifecycle_status + rate_per_min/hour/day с правильными defaults."""
+    """D-13: senders.lifecycle_status + rate_per_min/hour с правильными defaults.
+
+    Phase 22 (D-04): rate_per_day was dropped (mig 059) — the daily throttle is now
+    the account grade budget. It is no longer asserted here (the column is gone from
+    the ORM/test schema)."""
     result = await async_db_session.execute(
         text(
             """
             SELECT column_name, column_default, is_nullable
             FROM information_schema.columns
             WHERE table_name = 'senders'
-              AND column_name IN ('lifecycle_status', 'rate_per_min', 'rate_per_hour', 'rate_per_day')
+              AND column_name IN ('lifecycle_status', 'rate_per_min', 'rate_per_hour')
             ORDER BY column_name
             """
         )
@@ -71,7 +76,6 @@ async def test_senders_new_columns_with_defaults(async_db_session: AsyncSession)
     assert "lifecycle_status" in rows, "lifecycle_status column missing"
     assert "rate_per_min" in rows, "rate_per_min column missing"
     assert "rate_per_hour" in rows, "rate_per_hour column missing"
-    assert "rate_per_day" in rows, "rate_per_day column missing"
 
     # NOT NULL на всех
     for col, (_, is_nullable) in rows.items():
@@ -83,7 +87,6 @@ async def test_senders_new_columns_with_defaults(async_db_session: AsyncSession)
     )
     assert rows["rate_per_min"][0] == "4", f"rate_per_min default is {rows['rate_per_min'][0]}"
     assert rows["rate_per_hour"][0] == "20", f"rate_per_hour default is {rows['rate_per_hour'][0]}"
-    assert rows["rate_per_day"][0] == "150", f"rate_per_day default is {rows['rate_per_day'][0]}"
 
 
 async def test_senders_role_check_constraint(async_db_session: AsyncSession):

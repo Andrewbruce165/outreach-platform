@@ -118,17 +118,12 @@ async def _set_cap(db, *, campaign_id, cap: int):
 
     Phase 22 (D-01/D-05): the new-dialog cap is now driven by the ACCOUNT grade
     budget — sender_grade_settings.level1_chats_per_day for a level-1 sender
-    (test senders default to current_level=1) — NOT campaigns.max_new_dialogs_per_day.
-    We upsert the workspace grade-settings row so a level-1 sender resolves
-    budget == cap. The legacy campaign column is still set (harmless; it physically
-    exists until 22-06) so the intent stays readable, but it is no longer read by
-    the queue pick path."""
+    (test senders default to current_level=1). The legacy per-campaign cap column
+    was dropped in 22-06 (mig 059), so we only upsert the workspace grade-settings
+    row so a level-1 sender resolves budget == cap."""
     wid = (await db.execute(text(
         "SELECT workspace_id FROM campaigns WHERE id = :cid"
     ), {"cid": str(campaign_id)})).scalar()
-    await db.execute(text(
-        "UPDATE campaigns SET max_new_dialogs_per_day = :cap WHERE id = :cid"
-    ), {"cap": cap, "cid": str(campaign_id)})
     await db.execute(text("""
         INSERT INTO sender_grade_settings (workspace_id, level1_chats_per_day)
         VALUES (:wid, :cap)
@@ -693,15 +688,14 @@ async def test_expected_now_uses_account_budget_source():
 async def test_pacing_numerator_is_account_budget(
     async_db_session, test_running_campaign_factory
 ):
-    """D-05: the expected-by-now pace numerator is the ACCOUNT grade budget, NOT
-    campaigns.max_new_dialogs_per_day.
+    """D-05: the expected-by-now pace numerator is the ACCOUNT grade budget.
 
-    Diverge the two: account budget = 10 (via _set_cap) but the legacy campaign
-    column = 1000. Pin frac=0.1, jitter=1.0:
-      - numerator = account budget (10) → expected = 1.0; 2 opened ≥ 1.0 ⇒ BLOCKED;
-      - numerator = campaign column (1000) → expected = 100; 2 opened < 100 ⇒ allowed.
+    Account budget = 10 (via _set_cap). Pin frac=0.1, jitter=1.0:
+      - numerator = account budget (10) → expected = 1.0; 2 opened ≥ 1.0 ⇒ BLOCKED.
     The item is blocked, proving the numerator is the account budget. The cap
-    (budget 10) allows (2 < 10), so pacing is the sole binding constraint.
+    (budget 10) allows (2 < 10), so pacing is the sole binding constraint. The
+    legacy per-campaign cap column was dropped in 22-06 (mig 059); the source-
+    introspection test above guards that the queue no longer reads it.
     """
     camp, senders = await test_running_campaign_factory(
         sender_count=1,
@@ -715,12 +709,6 @@ async def test_pacing_numerator_is_account_budget(
     ws = now - timedelta(hours=2)  # window start 2h ago: seeded NOW() rows count
 
     await _set_cap(async_db_session, campaign_id=cid, cap=10)  # account budget = 10
-    # Diverge the legacy campaign column: a regression reading it would flip the
-    # verdict from blocked (expected 1.0) to allowed (expected 100).
-    await async_db_session.execute(text(
-        "UPDATE campaigns SET max_new_dialogs_per_day = 1000 WHERE id = :cid"
-    ), {"cid": str(cid)})
-    await async_db_session.commit()
 
     await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
                             campaign_id=cid, recipient_phone="+79997770001")

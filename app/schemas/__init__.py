@@ -818,12 +818,8 @@ class CampaignCreate(BaseModel):
     # dialogs block; closed/stale ones are re-contactable.
     allow_recontact: bool = False
     recontact_min_age_days: int = Field(default=30, ge=1, le=365)
-    # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14). ──
-    max_new_dialogs_per_day: int = Field(
-        default=10, ge=1, le=30,
-        description="Daily new-dialog cap per sender within this campaign (D-12). "
-                    "Green corridor <=10; soft-warn >10; hard cap 30.",
-    )
+    # ── Phase 22 (D-07): the per-campaign daily new-dialog cap field was dropped —
+    # the daily throttle is now the account-level grade budget. ──
     # ── Phase 19 NORP-02/NORP-05 follow-up + auto-finish (D-08/D-12). ──
     # Toggle defaults OFF; bounds enforced at the API layer (Pydantic), no DB CHECK.
     follow_up_enabled: bool = False
@@ -895,8 +891,7 @@ class CampaignUpdate(BaseModel):
     # 026: per-campaign re-contact policy (partial PATCH).
     allow_recontact: Optional[bool] = None
     recontact_min_age_days: Optional[int] = Field(default=None, ge=1, le=365)
-    # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14) — partial PATCH. ──
-    max_new_dialogs_per_day: Optional[int] = Field(default=None, ge=1, le=30)
+    # ── Phase 22 (D-07): the per-campaign daily new-dialog cap field was dropped. ──
     # ── Phase 19 NORP-02/NORP-05 follow-up + auto-finish (D-08/D-12) — partial PATCH. ──
     follow_up_enabled: Optional[bool] = None
     follow_up_interval_hours: Optional[int] = Field(default=None, ge=4, le=168)
@@ -959,8 +954,7 @@ class CampaignResponse(BaseModel):
     # 026: per-campaign re-contact policy.
     allow_recontact: bool = False
     recontact_min_age_days: int = 30
-    # ── Phase 12 NDLG-03/NDLG-04 (D-12/D-13/D-14). ──
-    max_new_dialogs_per_day: int = 10
+    # ── Phase 22 (D-07): the per-campaign daily new-dialog cap field was dropped. ──
     # ── Phase 19 NORP-02/NORP-05 follow-up + auto-finish (D-08/D-12). ──
     follow_up_enabled: bool = False
     follow_up_interval_hours: int = 24

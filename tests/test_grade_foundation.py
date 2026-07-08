@@ -38,9 +38,9 @@ async def _make_sender(db, wid: str, slug: str) -> str:
             """
         INSERT INTO senders (id, workspace_id, slug, name, phone, session_string,
                              role, auth_status, lifecycle_status,
-                             rate_per_min, rate_per_hour, rate_per_day)
+                             rate_per_min, rate_per_hour)
         VALUES (:id, :wid, :slug, :name, :phone, 'stub',
-                'sender', 'ok', 'active', 4, 20, 150)
+                'sender', 'ok', 'active', 4, 20)
     """
         ),
         {"id": sid, "wid": wid, "slug": slug, "name": slug,

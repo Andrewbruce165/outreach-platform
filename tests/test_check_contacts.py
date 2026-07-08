@@ -243,9 +243,9 @@ async def test_workspace_has_checker_true_with_active_checker(
             """
             INSERT INTO senders (workspace_id, slug, name, phone, session_string,
                                  role, auth_status, lifecycle_status,
-                                 rate_per_min, rate_per_hour, rate_per_day)
+                                 rate_per_min, rate_per_hour)
             VALUES (:wid, :slug, 'Checker 1', '+79001234500', 'enc', 'checker',
-                    'ok', 'active', 4, 20, 150)
+                    'ok', 'active', 4, 20)
             """
         ),
         {"wid": wid, "slug": f"ch-true-{uuid4()}"},
@@ -269,9 +269,9 @@ async def test_workspace_has_checker_false_when_checker_auth_expired(
             """
             INSERT INTO senders (workspace_id, slug, name, phone, session_string,
                                  role, auth_status, lifecycle_status,
-                                 rate_per_min, rate_per_hour, rate_per_day)
+                                 rate_per_min, rate_per_hour)
             VALUES (:wid, :slug, 'Broken Checker', '+79001234501', 'enc', 'checker',
-                    'session_expired', 'active', 4, 20, 150)
+                    'session_expired', 'active', 4, 20)
             """
         ),
         {"wid": wid, "slug": f"ch-exp-{uuid4()}"},
