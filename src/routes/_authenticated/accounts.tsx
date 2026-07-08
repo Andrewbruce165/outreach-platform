@@ -1024,6 +1024,12 @@ function profileErrorMessage(e: unknown): string {
       return `Telegram временно блокирует это действие на новом аккаунте. Попробуйте через ${retry}.`;
     case "TOO_FREQUENT":
       return "Слишком часто. Это действие можно повторять не чаще раза в час.";
+    case "PROFILE_CHANGE_REJECTED":
+      return "Telegram не применил изменение профиля — вероятно, ограничение на слишком частую смену имени/описания (особенно на новых аккаунтах). Попробуйте позже.";
+    case "FIRST_NAME_REQUIRED":
+      return "Имя обязательно — его нельзя оставить пустым.";
+    case "NAME_INVALID":
+      return "Недопустимое имя";
     case "FLOOD_WAIT":
       return `Слишком часто. Повторите через ${retry}.`;
     case "FILE_TOO_LARGE":
@@ -1220,9 +1226,15 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
   // ── Section A save (identity + optional app-level role) ─────────────────
   const saveProfileMut = useMutation({
     mutationFn: async () => {
+      // Send an explicit "" (NOT null) for a field the user cleared, so the backend
+      // can distinguish "explicitly cleared" ("") from "not touched" (null/omitted).
+      // Telethon treats null as "leave unchanged" and only clears a field on "".
+      // (Sending null for a cleared last_name was a silent no-op on Telegram while
+      // the local cache was wrongly emptied — see debug/telegram-profile-update-not-applying.)
+      // first_name cannot be cleared (Telegram requires it); guarded in handleSaveProfile.
       const body: Record<string, unknown> = {
-        first_name: firstName.trim() || null,
-        last_name: lastName.trim() || null,
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
         about: about,
       };
       if (usernameChanged) body.username = username.trim() || null;
@@ -1252,6 +1264,12 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
 
   function handleSaveProfile() {
     if (usernameBlocked) return; // hard block (button already disabled)
+    // Telegram requires a non-empty first name — it cannot be cleared. Guard here so
+    // the user gets an immediate, clear message instead of a round-trip 400.
+    if (firstName.trim() === "") {
+      toast.error("Имя обязательно — его нельзя оставить пустым.");
+      return;
+    }
     if (usernameChanged && (uState === "taken" || uState === "invalid")) {
       toast.error(
         uState === "taken"
