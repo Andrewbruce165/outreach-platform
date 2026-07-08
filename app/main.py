@@ -19,6 +19,7 @@ from app.services.campaign_enqueue import campaign_enqueue_worker  # Phase 4 D-1
 from app.services.kb_ingest_worker import kb_ingest_worker  # Phase 16 — KB ingest pipeline
 from app.services.follow_up import follow_up_worker  # Phase 19 — no-reply follow-up + auto-finish
 from app.services.account_import_worker import account_import_worker  # Phase 21 — bulk account import
+from app.services.grade_progression import grade_progression_worker  # Phase 22 — grade auto-progression (D-14/D-17)
 from app.routers import (
     account_import,  # Phase 21 — bulk Telegram account import
     agents,
@@ -28,6 +29,7 @@ from app.routers import (
     contacts,
     conversations,  # Phase 5 — re-register (was legacy, not previously wired)
     folders,
+    grade_settings,  # Phase 22 — per-workspace new-chat grade ladder (D-16)
     health,
     knowledge_bases,  # Phase 16 — RAG knowledge bases
     llm_settings,  # Phase 18 — switchable LLM provider settings
@@ -73,11 +75,14 @@ async def lifespan(app: FastAPI):
     logger.info("Follow-up worker started")
     account_import_worker.start()  # Phase 21 — bulk Telegram account import
     logger.info("Account import worker started")
+    grade_progression_worker.start()  # Phase 22 — grade auto-progression (D-14/D-17)
+    logger.info("Grade progression worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await grade_progression_worker.stop()  # Phase 22 — grade auto-progression (D-14/D-17)
     await account_import_worker.stop()  # Phase 21 — bulk Telegram account import
     await follow_up_worker.stop()  # Phase 19 — no-reply follow-up + auto-finish
     await kb_ingest_worker.stop()  # Phase 16 — KB ingest pipeline
@@ -194,6 +199,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 app.include_router(workspace.router)
 app.include_router(senders.router)
+app.include_router(grade_settings.router)  # Phase 22 — new-chat grade ladder (D-16)
 app.include_router(folders.router)
 app.include_router(contacts.router)
 app.include_router(check_contacts.router)
