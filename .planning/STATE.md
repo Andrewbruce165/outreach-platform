@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
+status: executing
 stopped_at: Completed 22-01-PLAN.md
-last_updated: "2026-07-08T17:30:18.099Z"
-last_activity: "2026-07-08 - Completed quick task 260708-icz: PeerFlood/spam_limited keeps existing chats, blocks only new contacts"
+last_updated: "2026-07-08T17:54:03.962Z"
+last_activity: "2026-07-08 - Completed 22-01: grade schema foundation (mig 056/057/058, grade_ladder.py, 3 tests green)"
 progress:
   total_phases: 27
   completed_phases: 23
   total_plans: 109
-  completed_plans: 102
+  completed_plans: 103
   percent: 85
 ---
 
@@ -117,6 +117,7 @@ Progress: [█████████░] 94%
 | Phase 23 P04 | 22 | 2 tasks | 1 files |
 | Phase 23 P05 | 30 | 2 tasks | 1 files |
 | Phase 22 P01 | 8min | 3 tasks | 7 files |
+| Phase 22 P04 | 18min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -211,6 +212,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 21]: 21-06: IMPT-09 human-UAT PASSED live — mixed batch preview exact (2 matched/2 unpaired/1 malformed) + real 13/13 import (job da5998a0), IMPT-04 reconnect verified (fingerprints set, 0 auth errors, 0 restriction events)
 - [Phase 23-edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui]: 23-06: handoff openapi regenerated from rebuilt api via export-handoff (not hand-edited); D-17 inbox error codes documented in error-codes.md; download endpoint is /messages/{id}/download (23-05 impl), not the plan's /file draft; live-smoke (Task 2) pending human sign-off
 - [Phase ?]: [Phase 22-01]: grade schema foundation — senders.current_level/level_updated_at (D-14, timer backfilled to created_at per D-10); sender_first_contacts canonical LEAST/GREATEST pair registry idempotently backfilled from warmup_sessions+warmup_messages (D-08); sender_grade_settings 3-level ladder, absent row=code-defaults 5/30,9/30,13 (D-16), level 3 permanent no step (D-17); shared grade_ladder.py resolver; rate_per_day/max_new_dialogs_per_day removal deferred to 22-06
+- [Phase ?]: 22-04: rate_per_day removed from sender API; grade (current_level/level_updated_at) + remaining_daily_budget surfaced; PATCH /senders/{slug}/grade resets timer (workspace-scoped via _load_sender_by_slug)
 
 ### Roadmap Evolution
 
