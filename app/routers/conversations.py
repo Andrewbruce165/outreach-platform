@@ -46,6 +46,7 @@ from app.schemas import (
     ConversationResponse,
     ConversationUpdate,
     DeleteConversationsBatchRequest,
+    EditMessageRequest,
     LLMCallListResponse,
     LLMCallResponse,
     MessageListResponse,
@@ -362,6 +363,65 @@ async def get_messages(
         messages=[MessageResponse(**dict(r._mapping)) for r in rows],
         total=total,
     )
+
+
+# ── Phase 23: edit / delete a past message (INVERTED ordering, NO takeover) ────
+
+
+@router.patch(
+    "/{conversation_id}/messages/{message_id}", response_model=MessageResponse
+)
+async def edit_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    payload: EditMessageRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """INBM-02 / D-08 — edit an outbound TEXT message for everyone (NO takeover).
+
+    Inverted vs POST /send: the Telethon edit runs FIRST, then the DB write.
+    This mutates a PAST message and MUST NOT auto-takeover — it never touches
+    conversations.status / ai_enabled / paused_reason / message_queue.
+
+    Gate (D-01/D-05/D-19): only an outbound, ai/human-sent, TEXT message in this
+    workspace+conversation is editable; anything else → opaque 404.
+    """
+    row = await _load_message_for_mutation(
+        db, ctx, conversation_id, message_id, require_type_text=True
+    )
+
+    # Telethon edit OUTSIDE any transaction (Pitfall 1: no pre-gate on the
+    # edit window — attempt then map the error; MessageNotModified = no-op OK).
+    result = await telegram_service.edit_message_by_telegram_id(
+        sender_slug=row.sender_slug,
+        sender_id=str(row.sender_id),
+        encrypted_session=row.session_string,
+        telegram_id=row.contact_telegram_id,
+        telegram_message_id=row.telegram_message_id,
+        new_text=payload.message,
+        proxy=row.proxy,
+        fingerprint=row.client_fingerprint,
+    )
+    if not result.get("success"):
+        _raise_inbox_message_error(result)
+
+    # On success (incl. no_op): persist the new text + edited_at marker.
+    await db.execute(text("""
+        UPDATE messages
+        SET message_text = :txt, edited_at = NOW()
+        WHERE id = :mid
+    """), {"txt": payload.message, "mid": str(message_id)})
+    await db.commit()
+
+    updated = (await db.execute(text("""
+        SELECT m.id, m.conversation_id, m.direction, m.message_text, m.sent_by,
+               m.telegram_message_id, m.created_at,
+               m.message_type, m.file_name, m.mime_type, m.size_bytes, m.edited_at
+        FROM messages m
+        WHERE m.id = :mid
+    """), {"mid": str(message_id)})).first()
+    return MessageResponse(**dict(updated._mapping))
 
 
 # ── Mutating endpoints ────────────────────────────────────────────────────────
