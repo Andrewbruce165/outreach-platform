@@ -20,6 +20,11 @@ import {
   ChevronDown,
   Phone,
   Bot,
+  Pencil,
+  Play,
+  Mic,
+  Image as ImageIcon,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
@@ -33,14 +38,29 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, apiBaseUrl } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
 
 type Conversation = components["schemas"]["ConversationResponse"];
 type ConversationList = components["schemas"]["ConversationListResponse"];
-type Message = components["schemas"]["MessageResponse"];
-type MessageList = components["schemas"]["MessageListResponse"];
+// Phase 23 extends MessageResponse with typed messages + edit marker + file meta.
+// The generated schema hasn't caught up yet; extend locally without touching
+// the codegen output.
+type BaseMessage = components["schemas"]["MessageResponse"];
+type Message = Omit<BaseMessage, "message_text"> & {
+  message_text?: string | null;
+  message_type?: "text" | "photo" | "video" | "voice" | "document" | string | null;
+  edited_at?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+};
+type MessageList = Omit<components["schemas"]["MessageListResponse"], "messages"> & {
+  messages: Message[];
+};
 type LLMCall = components["schemas"]["LLMCallResponse"];
 type LLMCallList = components["schemas"]["LLMCallListResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
@@ -973,6 +993,102 @@ function Thread({
     onError: (e) => setSendError(errMsg(e)),
   });
 
+  // ── Phase 23: message edit / delete-for-everyone / send-file ─────────────
+  const [pendingMsgDelete, setPendingMsgDelete] = useState<Message | null>(null);
+  const [stagedFile, setStagedFile] = useState<File | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const editMut = useMutation({
+    mutationFn: ({ id, text }: { id: string; text: string }) =>
+      api(`/api/v1/conversations/${conversationId}/messages/${id}`, {
+        method: "PATCH",
+        body: { message: text },
+      }),
+    onMutate: async ({ id, text }) => {
+      await qc.cancelQueries({ queryKey: ["messages", conversationId] });
+      const prev = qc.getQueryData<MessageList>(["messages", conversationId]);
+      const stamp = new Date().toISOString();
+      qc.setQueryData<MessageList>(["messages", conversationId], (old) =>
+        old
+          ? {
+              ...old,
+              messages: old.messages.map((m) =>
+                m.id === id ? { ...m, message_text: text, edited_at: stamp } : m,
+              ),
+            }
+          : old,
+      );
+      return { prev };
+    },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["messages", conversationId], ctx.prev);
+      toast.error(errMsg(e));
+    },
+    onSuccess: () => {
+      setEditingId(null);
+      void qc.invalidateQueries({ queryKey: ["messages", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
+  const deleteMsgMut = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/v1/conversations/${conversationId}/messages/${id}`, {
+        method: "DELETE",
+      }),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["messages", conversationId] });
+      const prev = qc.getQueryData<MessageList>(["messages", conversationId]);
+      qc.setQueryData<MessageList>(["messages", conversationId], (old) =>
+        old ? { ...old, messages: old.messages.filter((m) => m.id !== id) } : old,
+      );
+      return { prev };
+    },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["messages", conversationId], ctx.prev);
+      toast.error(errMsg(e));
+    },
+    onSuccess: () => {
+      toast.success("Message deleted");
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
+  const sendFileMut = useMutation({
+    mutationFn: ({ file, caption }: { file: File; caption: string }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (caption) fd.append("caption", caption);
+      return api(`/api/v1/conversations/${conversationId}/send-file`, {
+        method: "POST",
+        body: fd,
+      });
+    },
+    onSuccess: () => {
+      setStagedFile(null);
+      setDraft("");
+      setSendError(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      void qc.invalidateQueries({ queryKey: ["messages", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+    },
+    onError: (e) => setSendError(errMsg(e)),
+  });
+
+  const onPickFile = (f: File | null) => {
+    if (!f) return;
+    if (f.size > 50 * 1024 * 1024) {
+      setSendError("File is larger than 50 MB.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setSendError(null);
+    setStagedFile(f);
+  };
+
+
   const sendersQ = useQuery({
     queryKey: ["senders"],
     queryFn: () => api<SenderList>("/api/v1/senders"),
@@ -1118,7 +1234,17 @@ function Thread({
           <div style={{ color: "var(--danger)" }}>{errMsg(messagesQ.error)}</div>
         )}
         {messages.map((m) => (
-          <MessageBubble key={m.id} m={m} />
+          <MessageBubble
+            key={m.id}
+            m={m}
+            conversationId={conversationId}
+            contactName={name}
+            editingId={editingId}
+            setEditingId={setEditingId}
+            editPendingId={editMut.isPending ? editMut.variables?.id ?? null : null}
+            onEdit={(id, text) => editMut.mutateAsync({ id, text })}
+            onRequestDelete={(msg) => setPendingMsgDelete(msg)}
+          />
         ))}
       </div>
 
@@ -1126,6 +1252,11 @@ function Thread({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (sendFileMut.isPending || sendMut.isPending) return;
+          if (stagedFile) {
+            sendFileMut.mutate({ file: stagedFile, caption: draft.trim() });
+            return;
+          }
           const text = draft.trim();
           if (!text) return;
           sendMut.mutate(text);
@@ -1178,19 +1309,75 @@ function Thread({
               Confirm pricing
             </SuggestionChip>
           </div>
+          {stagedFile && (
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 10px",
+                marginBottom: 10,
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                background: "var(--bg-soft)",
+                fontSize: 12,
+                maxWidth: "100%",
+              }}
+            >
+              <FileText size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 320,
+                }}
+              >
+                {stagedFile.name}
+              </span>
+              <span className="muted" style={{ fontSize: 11 }}>
+                · {formatBytes(stagedFile.size)}
+              </span>
+              <button
+                type="button"
+                aria-label="Remove attachment"
+                onClick={() => {
+                  setStagedFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = "";
+                }}
+                disabled={sendFileMut.isPending}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                  display: "inline-flex",
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
           <textarea
             className="textarea"
             placeholder={
               conv?.ai_enabled
                 ? "Disable AI to send manually…"
-                : "Type a message, or click a suggestion above"
+                : stagedFile
+                  ? "Add a caption (optional)…"
+                  : "Type a message, or click a suggestion above"
             }
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            disabled={!conv || conv.ai_enabled || sendMut.isPending}
+            disabled={!conv || conv.ai_enabled || sendMut.isPending || sendFileMut.isPending}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
+                if (stagedFile) {
+                  sendFileMut.mutate({ file: stagedFile, caption: draft.trim() });
+                  return;
+                }
                 const text = draft.trim();
                 if (text) sendMut.mutate(text);
               }
@@ -1215,11 +1402,19 @@ function Thread({
               borderTop: "1px solid var(--border)",
             }}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              style={{ display: "none" }}
+              onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+            />
             <button
               type="button"
               className="tb__icon-btn"
               style={{ width: 32, height: 32 }}
               aria-label="Attach file"
+              disabled={!conv || conv.ai_enabled || sendMut.isPending || sendFileMut.isPending}
+              onClick={() => fileInputRef.current?.click()}
             >
               <Paperclip size={16} />
             </button>
@@ -1238,13 +1433,55 @@ function Thread({
             <button
               type="submit"
               className="btn btn--primary btn--sm"
-              disabled={!conv || conv.ai_enabled || !draft.trim() || sendMut.isPending}
+              disabled={
+                !conv ||
+                conv.ai_enabled ||
+                sendMut.isPending ||
+                sendFileMut.isPending ||
+                (!stagedFile && !draft.trim())
+              }
             >
-              <Send size={12} /> {sendMut.isPending ? "Sending…" : "Send"}
+              <Send size={12} />{" "}
+              {sendFileMut.isPending
+                ? "Uploading…"
+                : sendMut.isPending
+                  ? "Sending…"
+                  : stagedFile
+                    ? "Send file"
+                    : "Send"}
             </button>
           </div>
         </div>
       </form>
+
+      <AlertDialog
+        open={pendingMsgDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingMsgDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this message for everyone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This message will be permanently removed from your chat and from{" "}
+              {conv?.contact_name || "the recipient"}'s Telegram. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingMsgDelete) deleteMsgMut.mutate(pendingMsgDelete.id);
+                setPendingMsgDelete(null);
+              }}
+              style={{ background: "var(--danger)", color: "#fff" }}
+            >
+              Delete for everyone
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
@@ -1285,9 +1522,259 @@ function SuggestionChip({
   );
 }
 
-function MessageBubble({ m }: { m: Message }) {
+function formatBytes(n: number | null | undefined): string {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function downloadMessageFile(
+  conversationId: string,
+  messageId: string,
+  fallbackName: string,
+): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const res = await fetch(
+    `${apiBaseUrl}/api/v1/conversations/${conversationId}/messages/${messageId}/download`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (!res.ok) {
+    let code = "DOWNLOAD_FAILED";
+    let detail: Record<string, unknown> = {};
+    try {
+      const j = (await res.json()) as { detail?: unknown };
+      if (j?.detail && typeof j.detail === "object" && "code" in j.detail) {
+        code = String((j.detail as { code: unknown }).code);
+        detail = j.detail as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+    throw new ApiError(res.status, code, errorMessageFromEnvelope(code, detail), detail);
+  }
+  const cd = res.headers.get("content-disposition") || "";
+  const match =
+    cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i) ||
+    cd.match(/filename="?([^";]+)"?/i);
+  const filename = match ? decodeURIComponent(match[1].replace(/"/g, "")) : fallbackName;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+interface MessageBubbleProps {
+  m: Message;
+  conversationId: string;
+  contactName: string;
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  editPendingId: string | null;
+  onEdit: (id: string, text: string) => Promise<unknown>;
+  onRequestDelete: (m: Message) => void;
+}
+
+function MessageBubble({
+  m,
+  conversationId,
+  editingId,
+  setEditingId,
+  editPendingId,
+  onEdit,
+  onRequestDelete,
+}: MessageBubbleProps) {
   const isOutbound = m.direction === "outbound";
   const isAI = m.sent_by === "ai" || m.sent_by === "bot";
+  const type = (m.message_type ?? "text") as
+    | "text"
+    | "photo"
+    | "video"
+    | "voice"
+    | "document"
+    | string;
+  const isTextType = type === "text";
+  const isFileType = type === "photo" || type === "video" || type === "voice" || type === "document";
+  const isEditing = editingId === m.id;
+  const isEditPending = editPendingId === m.id;
+
+  const [hovered, setHovered] = useState(false);
+  const [editText, setEditText] = useState(m.message_text ?? "");
+  const [downloading, setDownloading] = useState(false);
+  const [mediaGone, setMediaGone] = useState(false);
+
+  useEffect(() => {
+    if (isEditing) setEditText(m.message_text ?? "");
+  }, [isEditing, m.message_text]);
+
+  const startEdit = () => {
+    setEditText(m.message_text ?? "");
+    setEditingId(m.id);
+  };
+  const cancelEdit = () => setEditingId(null);
+  const saveEdit = () => {
+    const t = editText.trim();
+    if (!t) return;
+    onEdit(m.id, t).catch(() => {
+      /* rollback handled by mutation */
+    });
+  };
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadMessageFile(conversationId, m.id, m.file_name ?? "file");
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "MEDIA_UNAVAILABLE") {
+        setMediaGone(true);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Download failed");
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const bubbleBg = isOutbound
+    ? isAI
+      ? "color-mix(in oklab, var(--ai-purple, #8774e1) 14%, white)"
+      : "var(--tg-blue, #3390ec)"
+    : "white";
+  const bubbleColor = isOutbound && !isAI ? "white" : "var(--text)";
+  const captionColor =
+    isOutbound && !isAI ? "rgba(255,255,255,0.85)" : "var(--text-muted)";
+
+  const renderBody = () => {
+    if (isEditing && isTextType) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 220 }}>
+          <textarea
+            autoFocus
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEdit();
+              } else if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                saveEdit();
+              }
+            }}
+            disabled={isEditPending}
+            style={{
+              width: "100%",
+              minHeight: 60,
+              resize: "vertical",
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              color: bubbleColor,
+              fontSize: 13.5,
+              lineHeight: 1.5,
+              fontFamily: "inherit",
+            }}
+          />
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={cancelEdit}
+              disabled={isEditPending}
+              style={
+                isOutbound && !isAI
+                  ? { color: "white", background: "rgba(255,255,255,0.15)" }
+                  : undefined
+              }
+            >
+              <X size={12} /> Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              onClick={saveEdit}
+              disabled={isEditPending || !editText.trim()}
+            >
+              <Check size={12} /> {isEditPending ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (isFileType) {
+      const caption = m.message_text || null;
+      const fileName = m.file_name || "File";
+      const size = formatBytes(m.size_bytes ?? null);
+      let icon = <FileText size={16} />;
+      let label = fileName;
+      if (type === "photo") {
+        icon = <ImageIcon size={16} />;
+        label = fileName === "File" ? "Photo" : fileName;
+      } else if (type === "video") {
+        icon = <Play size={16} />;
+        label = fileName === "File" ? "Video" : fileName;
+      } else if (type === "voice") {
+        icon = <Mic size={16} />;
+        label = "Voice message";
+      }
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 180 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ display: "inline-flex", flexShrink: 0 }}>{icon}</span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+              </div>
+              {size && (
+                <div style={{ fontSize: 11, color: captionColor }}>{size}</div>
+              )}
+            </div>
+            {!isOutbound && (
+              mediaGone ? (
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  No longer available in Telegram
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  aria-label="Download"
+                >
+                  <Download size={12} /> {downloading ? "Downloading…" : "Download"}
+                </button>
+              )
+            )}
+          </div>
+          {caption && (
+            <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {caption}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return <>{m.message_text}</>;
+  };
+
   return (
     <div
       style={{
@@ -1295,36 +1782,93 @@ function MessageBubble({ m }: { m: Message }) {
         justifyContent: isOutbound ? "flex-end" : "flex-start",
         marginBottom: 14,
       }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
-      <div style={{ maxWidth: "70%" }}>
+      <div style={{ maxWidth: "70%", position: "relative" }}>
         {!isOutbound && (
           <div
             className="muted"
             style={{ fontSize: 11, marginBottom: 4, paddingLeft: 14 }}
           >
             {new Date(m.created_at).toLocaleString()}
+            {m.edited_at && <span> · (edited)</span>}
+          </div>
+        )}
+        {isOutbound && hovered && !isEditing && (
+          <div
+            style={{
+              position: "absolute",
+              top: -12,
+              right: 8,
+              display: "flex",
+              gap: 4,
+              padding: 3,
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              boxShadow: "0 2px 6px rgba(15,20,25,0.08)",
+              zIndex: 2,
+            }}
+          >
+            {isTextType && (
+              <button
+                type="button"
+                onClick={startEdit}
+                aria-label="Edit message"
+                style={{
+                  width: 26,
+                  height: 26,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  borderRadius: 6,
+                }}
+              >
+                <Pencil size={13} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onRequestDelete(m)}
+              aria-label="Delete for everyone"
+              style={{
+                width: 26,
+                height: 26,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                background: "transparent",
+                color: "var(--danger)",
+                cursor: "pointer",
+                borderRadius: 6,
+              }}
+            >
+              <Trash2 size={13} />
+            </button>
           </div>
         )}
         <div
           style={{
             padding: "10px 14px",
             borderRadius: isOutbound ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-            background: isOutbound
-              ? isAI
-                ? "color-mix(in oklab, var(--ai-purple, #8774e1) 14%, white)"
-                : "var(--tg-blue, #3390ec)"
-              : "white",
-            color: isOutbound && !isAI ? "white" : "var(--text)",
+            background: bubbleBg,
+            color: bubbleColor,
             fontSize: 13.5,
             lineHeight: 1.5,
             boxShadow: isOutbound
               ? "none"
               : "0 1px 1px rgba(15,20,25,0.04), 0 0 0 1px rgba(15,20,25,0.04)",
-            whiteSpace: "pre-wrap",
+            whiteSpace: isEditing || isFileType ? "normal" : "pre-wrap",
             wordBreak: "break-word",
           }}
         >
-          {m.message_text}
+          {renderBody()}
         </div>
         {isOutbound && (
           <div
@@ -1341,6 +1885,7 @@ function MessageBubble({ m }: { m: Message }) {
             }}
           >
             {new Date(m.created_at).toLocaleString()}
+            {m.edited_at && <span>· (edited)</span>}
             {isAI && <span>· 🤖</span>}
             <Check size={11} />
           </div>
