@@ -1668,10 +1668,20 @@ function MessageBubble({
   const [downloading, setDownloading] = useState(false);
   const [loadingMedia, setLoadingMedia] = useState(false);
   const [mediaGone, setMediaGone] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   useEffect(() => {
     if (isEditing) setEditText(m.message_text ?? "");
   }, [isEditing, m.message_text]);
+
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxOpen]);
 
   const startEdit = () => {
     setEditText(m.message_text ?? "");
@@ -1819,18 +1829,25 @@ function MessageBubble({
               No longer available in Telegram
             </div>
           ) : mediaUrl ? (
-            <div style={{ position: "relative", maxWidth: 260 }}>
+            <div style={{ position: "relative", maxWidth: 360 }}>
               {type === "photo" ? (
                 <img
                   src={mediaUrl}
                   alt={m.file_name || "Photo"}
-                  style={{ display: "block", maxWidth: "100%", maxHeight: 320, borderRadius: 12 }}
+                  onClick={() => setLightboxOpen(true)}
+                  style={{
+                    display: "block",
+                    maxWidth: "100%",
+                    maxHeight: 420,
+                    borderRadius: 12,
+                    cursor: "zoom-in",
+                  }}
                 />
               ) : (
                 <video
                   src={mediaUrl}
                   controls
-                  style={{ display: "block", maxWidth: "100%", maxHeight: 320, borderRadius: 12 }}
+                  style={{ display: "block", maxWidth: "100%", maxHeight: 420, borderRadius: 12 }}
                 />
               )}
               <button
@@ -1848,6 +1865,45 @@ function MessageBubble({
               >
                 <Download size={14} />
               </button>
+              {type === "photo" && lightboxOpen && (
+                <div
+                  className="modal__scrim"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Photo"
+                  onClick={() => setLightboxOpen(false)}
+                  style={{ zIndex: 200 }}
+                >
+                  <img
+                    src={mediaUrl}
+                    alt={m.file_name || "Photo"}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: "block",
+                      maxWidth: "min(92vw, 1100px)",
+                      maxHeight: "92vh",
+                      borderRadius: 8,
+                      boxShadow: "var(--shadow-lg)",
+                      cursor: "default",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="tb__icon-btn"
+                    aria-label="Close"
+                    onClick={() => setLightboxOpen(false)}
+                    style={{
+                      position: "fixed",
+                      top: 16,
+                      right: 16,
+                      background: "rgba(0,0,0,0.45)",
+                      color: "white",
+                    }}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <button
@@ -1861,8 +1917,8 @@ function MessageBubble({
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 6,
-                width: 200,
-                height: 140,
+                width: 260,
+                height: 190,
                 border: "none",
                 borderRadius: 12,
                 background: "rgba(0,0,0,0.06)",
@@ -1874,7 +1930,7 @@ function MessageBubble({
                 <Loader2 size={20} className="ob__spin" />
               ) : (
                 <>
-                  {type === "photo" ? <ImageIcon size={22} /> : <Play size={22} />}
+                  {type === "photo" ? <ImageIcon size={28} /> : <Play size={28} />}
                   <span style={{ fontSize: 12 }}>Tap to view</span>
                 </>
               )}
