@@ -1253,9 +1253,8 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
       }
       return res;
     },
-    onSuccess: (res) => {
+    onSuccess: () => {
       toast.success("Профиль обновлён");
-      (res.warnings ?? []).forEach((w) => toast.warning(w.message));
       void qc.invalidateQueries({ queryKey: ["senders"] });
       void qc.invalidateQueries({ queryKey: ["sender-photo", sender.slug] });
     },
