@@ -993,6 +993,102 @@ function Thread({
     onError: (e) => setSendError(errMsg(e)),
   });
 
+  // ── Phase 23: message edit / delete-for-everyone / send-file ─────────────
+  const [pendingMsgDelete, setPendingMsgDelete] = useState<Message | null>(null);
+  const [stagedFile, setStagedFile] = useState<File | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const editMut = useMutation({
+    mutationFn: ({ id, text }: { id: string; text: string }) =>
+      api(`/api/v1/conversations/${conversationId}/messages/${id}`, {
+        method: "PATCH",
+        body: { message: text },
+      }),
+    onMutate: async ({ id, text }) => {
+      await qc.cancelQueries({ queryKey: ["messages", conversationId] });
+      const prev = qc.getQueryData<MessageList>(["messages", conversationId]);
+      const stamp = new Date().toISOString();
+      qc.setQueryData<MessageList>(["messages", conversationId], (old) =>
+        old
+          ? {
+              ...old,
+              messages: old.messages.map((m) =>
+                m.id === id ? { ...m, message_text: text, edited_at: stamp } : m,
+              ),
+            }
+          : old,
+      );
+      return { prev };
+    },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["messages", conversationId], ctx.prev);
+      toast.error(errMsg(e));
+    },
+    onSuccess: () => {
+      setEditingId(null);
+      void qc.invalidateQueries({ queryKey: ["messages", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
+  const deleteMsgMut = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/v1/conversations/${conversationId}/messages/${id}`, {
+        method: "DELETE",
+      }),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["messages", conversationId] });
+      const prev = qc.getQueryData<MessageList>(["messages", conversationId]);
+      qc.setQueryData<MessageList>(["messages", conversationId], (old) =>
+        old ? { ...old, messages: old.messages.filter((m) => m.id !== id) } : old,
+      );
+      return { prev };
+    },
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["messages", conversationId], ctx.prev);
+      toast.error(errMsg(e));
+    },
+    onSuccess: () => {
+      toast.success("Message deleted");
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
+  const sendFileMut = useMutation({
+    mutationFn: ({ file, caption }: { file: File; caption: string }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (caption) fd.append("caption", caption);
+      return api(`/api/v1/conversations/${conversationId}/send-file`, {
+        method: "POST",
+        body: fd,
+      });
+    },
+    onSuccess: () => {
+      setStagedFile(null);
+      setDraft("");
+      setSendError(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      void qc.invalidateQueries({ queryKey: ["messages", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+    },
+    onError: (e) => setSendError(errMsg(e)),
+  });
+
+  const onPickFile = (f: File | null) => {
+    if (!f) return;
+    if (f.size > 50 * 1024 * 1024) {
+      setSendError("File is larger than 50 MB.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setSendError(null);
+    setStagedFile(f);
+  };
+
+
   const sendersQ = useQuery({
     queryKey: ["senders"],
     queryFn: () => api<SenderList>("/api/v1/senders"),
