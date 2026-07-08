@@ -25,6 +25,7 @@ import {
   Mic,
   Image as ImageIcon,
   FileText,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
@@ -61,6 +62,14 @@ type Message = Omit<BaseMessage, "message_text"> & {
 type MessageList = Omit<components["schemas"]["MessageListResponse"], "messages"> & {
   messages: Message[];
 };
+// Phase 23 send-file response — not yet in the generated schema either.
+interface SendFileFromUIResponse {
+  success: boolean;
+  message_id?: string | null;
+  telegram_message_id?: number | null;
+  message_type?: string | null;
+  error?: string | null;
+}
 type LLMCall = components["schemas"]["LLMCallResponse"];
 type LLMCallList = components["schemas"]["LLMCallListResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
@@ -998,6 +1007,26 @@ function Thread({
   const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // message_id -> object URL for already-viewed/sent photo/video bytes (23-UI-SPEC
+  // Surface 4 / C2). Populated either by a manager tapping to view an inbound
+  // bubble, or immediately on a successful send-file (from the local File the
+  // manager just picked, zero network round-trip). Never re-fetched once cached;
+  // revoked on unmount only, not on scroll.
+  const mediaBlobUrlsRef = useRef<Map<string, string>>(new Map());
+  const [, forceMediaCacheTick] = useState(0);
+  const registerMediaBlobUrl = (messageId: string, url: string) => {
+    const prev = mediaBlobUrlsRef.current.get(messageId);
+    if (prev) URL.revokeObjectURL(prev);
+    mediaBlobUrlsRef.current.set(messageId, url);
+    forceMediaCacheTick((n) => n + 1);
+  };
+  useEffect(() => {
+    const cache = mediaBlobUrlsRef.current;
+    return () => {
+      cache.forEach((url) => URL.revokeObjectURL(url));
+      cache.clear();
+    };
+  }, []);
 
   const editMut = useMutation({
     mutationFn: ({ id, text }: { id: string; text: string }) =>
@@ -1060,12 +1089,17 @@ function Thread({
       const fd = new FormData();
       fd.append("file", file);
       if (caption) fd.append("caption", caption);
-      return api(`/api/v1/conversations/${conversationId}/send-file`, {
-        method: "POST",
-        body: fd,
-      });
+      return api<SendFileFromUIResponse>(
+        `/api/v1/conversations/${conversationId}/send-file`,
+        { method: "POST", body: fd },
+      );
     },
-    onSuccess: () => {
+    onSuccess: (data, { file }) => {
+      // The manager already has these bytes locally — show the real image/video
+      // immediately, no round-trip to re-fetch what was just uploaded.
+      if (data.message_id && (data.message_type === "photo" || data.message_type === "video")) {
+        registerMediaBlobUrl(data.message_id, URL.createObjectURL(file));
+      }
       setStagedFile(null);
       setDraft("");
       setSendError(null);
@@ -1244,6 +1278,8 @@ function Thread({
             editPendingId={editMut.isPending ? editMut.variables?.id ?? null : null}
             onEdit={(id, text) => editMut.mutateAsync({ id, text })}
             onRequestDelete={(msg) => setPendingMsgDelete(msg)}
+            mediaUrl={mediaBlobUrlsRef.current.get(m.id)}
+            onMediaLoaded={registerMediaBlobUrl}
           />
         ))}
       </div>
@@ -1529,15 +1565,18 @@ function formatBytes(n: number | null | undefined): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-async function downloadMessageFile(
+// Fetches a message's media bytes. `disposition=inline` is used for the
+// photo/video tap-to-view path (D-16 / 23-UI-SPEC Surface 4) — same lazy
+// endpoint, the result is just rendered instead of saved to disk.
+async function fetchMessageMedia(
   conversationId: string,
   messageId: string,
-  fallbackName: string,
-): Promise<void> {
+  disposition: "inline" | "attachment" = "attachment",
+): Promise<{ blob: Blob; filename: string }> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   const res = await fetch(
-    `${apiBaseUrl}/api/v1/conversations/${conversationId}/messages/${messageId}/download`,
+    `${apiBaseUrl}/api/v1/conversations/${conversationId}/messages/${messageId}/download?disposition=${disposition}`,
     { headers: token ? { Authorization: `Bearer ${token}` } : {} },
   );
   if (!res.ok) {
@@ -1558,8 +1597,12 @@ async function downloadMessageFile(
   const match =
     cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i) ||
     cd.match(/filename="?([^";]+)"?/i);
-  const filename = match ? decodeURIComponent(match[1].replace(/"/g, "")) : fallbackName;
+  const filename = match ? decodeURIComponent(match[1].replace(/"/g, "")) : "file";
   const blob = await res.blob();
+  return { blob, filename };
+}
+
+function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -1568,6 +1611,15 @@ async function downloadMessageFile(
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function downloadMessageFile(
+  conversationId: string,
+  messageId: string,
+  fallbackName: string,
+): Promise<void> {
+  const { blob, filename } = await fetchMessageMedia(conversationId, messageId, "attachment");
+  saveBlob(blob, filename === "file" ? fallbackName : filename);
 }
 
 interface MessageBubbleProps {
@@ -1579,6 +1631,10 @@ interface MessageBubbleProps {
   editPendingId: string | null;
   onEdit: (id: string, text: string) => Promise<unknown>;
   onRequestDelete: (m: Message) => void;
+  /** Cached object URL for this message's media, if already viewed/sent (23-UI-SPEC C2). */
+  mediaUrl?: string;
+  /** Registers a freshly-fetched object URL in the parent's shared cache. */
+  onMediaLoaded: (messageId: string, url: string) => void;
 }
 
 function MessageBubble({
@@ -1589,6 +1645,8 @@ function MessageBubble({
   editPendingId,
   onEdit,
   onRequestDelete,
+  mediaUrl,
+  onMediaLoaded,
 }: MessageBubbleProps) {
   const isOutbound = m.direction === "outbound";
   const isAI = m.sent_by === "ai" || m.sent_by === "bot";
@@ -1600,13 +1658,15 @@ function MessageBubble({
     | "document"
     | string;
   const isTextType = type === "text";
-  const isFileType = type === "photo" || type === "video" || type === "voice" || type === "document";
+  const isMediaType = type === "photo" || type === "video";
+  const isFileType = isMediaType || type === "voice" || type === "document";
   const isEditing = editingId === m.id;
   const isEditPending = editPendingId === m.id;
 
   const [hovered, setHovered] = useState(false);
   const [editText, setEditText] = useState(m.message_text ?? "");
   const [downloading, setDownloading] = useState(false);
+  const [loadingMedia, setLoadingMedia] = useState(false);
   const [mediaGone, setMediaGone] = useState(false);
 
   useEffect(() => {
@@ -1640,6 +1700,35 @@ function MessageBubble({
     } finally {
       setDownloading(false);
     }
+  };
+
+  // Tap-to-view for photo/video (23-UI-SPEC Surface 4): fetches once, caches
+  // the object URL in the parent so scrolling away and back never re-fetches.
+  // No auto-fetch on mount/scroll-into-view — D-16 stays intact, only the
+  // *result* of the tap changed (inline render, not a disk save).
+  const handleViewMedia = async () => {
+    if (loadingMedia || mediaUrl) return;
+    setLoadingMedia(true);
+    try {
+      const { blob } = await fetchMessageMedia(conversationId, m.id, "inline");
+      onMediaLoaded(m.id, URL.createObjectURL(blob));
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "MEDIA_UNAVAILABLE") {
+        setMediaGone(true);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Couldn't load the file. Try again.");
+      }
+    } finally {
+      setLoadingMedia(false);
+    }
+  };
+
+  // Reuses the already-cached blob to save it to disk — no second network fetch.
+  const handleDownloadCachedMedia = () => {
+    if (!mediaUrl) return;
+    fetch(mediaUrl)
+      .then((r) => r.blob())
+      .then((blob) => saveBlob(blob, m.file_name || "file"));
   };
 
   const bubbleBg = isOutbound
@@ -1709,19 +1798,104 @@ function MessageBubble({
       );
     }
 
+    if (isMediaType) {
+      const caption = m.message_text || null;
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {mediaGone ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                borderRadius: 12,
+                background: "rgba(0,0,0,0.05)",
+                color: "var(--text-muted)",
+                fontSize: 12.5,
+              }}
+            >
+              {type === "photo" ? <ImageIcon size={16} /> : <Play size={16} />}
+              No longer available in Telegram
+            </div>
+          ) : mediaUrl ? (
+            <div style={{ position: "relative", maxWidth: 260 }}>
+              {type === "photo" ? (
+                <img
+                  src={mediaUrl}
+                  alt={m.file_name || "Photo"}
+                  style={{ display: "block", maxWidth: "100%", maxHeight: 320, borderRadius: 12 }}
+                />
+              ) : (
+                <video
+                  src={mediaUrl}
+                  controls
+                  style={{ display: "block", maxWidth: "100%", maxHeight: 320, borderRadius: 12 }}
+                />
+              )}
+              <button
+                type="button"
+                className="tb__icon-btn"
+                onClick={handleDownloadCachedMedia}
+                aria-label="Download"
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  right: 6,
+                  background: "rgba(0,0,0,0.45)",
+                  color: "white",
+                }}
+              >
+                <Download size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleViewMedia}
+              disabled={loadingMedia}
+              aria-label={type === "photo" ? "View photo" : "View video"}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                width: 200,
+                height: 140,
+                border: "none",
+                borderRadius: 12,
+                background: "rgba(0,0,0,0.06)",
+                color: captionColor,
+                cursor: loadingMedia ? "default" : "pointer",
+              }}
+            >
+              {loadingMedia ? (
+                <Loader2 size={20} className="ob__spin" />
+              ) : (
+                <>
+                  {type === "photo" ? <ImageIcon size={22} /> : <Play size={22} />}
+                  <span style={{ fontSize: 12 }}>Tap to view</span>
+                </>
+              )}
+            </button>
+          )}
+          {caption && (
+            <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {caption}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     if (isFileType) {
       const caption = m.message_text || null;
       const fileName = m.file_name || "File";
       const size = formatBytes(m.size_bytes ?? null);
       let icon = <FileText size={16} />;
       let label = fileName;
-      if (type === "photo") {
-        icon = <ImageIcon size={16} />;
-        label = fileName === "File" ? "Photo" : fileName;
-      } else if (type === "video") {
-        icon = <Play size={16} />;
-        label = fileName === "File" ? "Video" : fileName;
-      } else if (type === "voice") {
+      if (type === "voice") {
         icon = <Mic size={16} />;
         label = "Voice message";
       }
@@ -1745,22 +1919,20 @@ function MessageBubble({
                 <div style={{ fontSize: 11, color: captionColor }}>{size}</div>
               )}
             </div>
-            {!isOutbound && (
-              mediaGone ? (
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  No longer available in Telegram
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={handleDownload}
-                  disabled={downloading}
-                  aria-label="Download"
-                >
-                  <Download size={12} /> {downloading ? "Downloading…" : "Download"}
-                </button>
-              )
+            {mediaGone ? (
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                No longer available in Telegram
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={handleDownload}
+                disabled={downloading}
+                aria-label="Download"
+              >
+                <Download size={12} /> {downloading ? "Downloading…" : "Download"}
+              </button>
             )}
           </div>
           {caption && (
