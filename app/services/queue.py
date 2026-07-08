@@ -589,19 +589,25 @@ class QueueWorker:
     async def _check_rate_limits(self, db: AsyncSession, sender_id) -> bool:
         """Return False if the sender has hit any rate limit.
 
-        Phase 2 (D-13): rate limits живут per-sender в senders.rate_per_min/hour/day.
+        Phase 2 (D-13): rate limits живут per-sender в senders.rate_per_min/hour.
         Sender row читаем один раз в начале tick'а, глобальные константы выпилены.
+
+        Phase 22 (D-04): the daily-message cap (the old 150-a-day column) is GONE
+        from this gate. The daily new-dialog allowance is now the sender-wide
+        account grade budget enforced in _process_next_for_sender's pick SELECT.
+        Here only the per-minute, per-hour, unique-contacts-per-hour and the
+        randomised interval/fatigue floor remain (the empirically-tuned structural
+        gates — never touch rate_per_min/hour/interval/FloodWait).
         """
         now = datetime.now(timezone.utc)
         one_minute_ago = now - timedelta(minutes=1)
         one_hour_ago = now - timedelta(hours=1)
-        one_day_ago = now - timedelta(hours=24)
 
         # Phase 2 D-13: read per-sender rate limits from DB (once per tick).
         # Если sender удалён concurrently — пропускаем тик (вернёт False).
         sender_row = (await db.execute(
             text("""
-                SELECT rate_per_min, rate_per_hour, rate_per_day,
+                SELECT rate_per_min, rate_per_hour,
                        lifecycle_status, auth_status,
                        restriction_status, restricted_until
                 FROM senders WHERE id = :sid
@@ -638,7 +644,6 @@ class QueueWorker:
 
         max_per_min = sender_row.rate_per_min
         max_per_hour = sender_row.rate_per_hour
-        max_per_day = sender_row.rate_per_day
 
         # Messages sent in last minute
         r = await db.execute(
@@ -691,23 +696,10 @@ class QueueWorker:
             )
             return False
 
-        # Messages sent in last 24 hours (daily cap)
-        r = await db.execute(
-            text("""
-                SELECT COUNT(*) FROM message_queue
-                WHERE sender_id = :sid
-                  AND status = 'sent'
-                  AND finished_at >= :since
-            """),
-            {"sid": str(sender_id), "since": one_day_ago}
-        )
-        msgs_today = r.scalar()
-        if msgs_today >= max_per_day:
-            logger.warning(
-                f"Sender {sender_id}: daily limit reached ({msgs_today}/{max_per_day}), "
-                f"pausing until 24h window slides"
-            )
-            return False
+        # Phase 22 (D-04): the daily-message cap was removed here. New-dialog volume
+        # is bounded sender-wide by the account grade budget in
+        # _process_next_for_sender's pick SELECT; the per-minute/hour and interval
+        # floors below remain the empirical anti-spam gates.
 
         # Time since last send — randomised interval with fatigue factor
         r = await db.execute(
