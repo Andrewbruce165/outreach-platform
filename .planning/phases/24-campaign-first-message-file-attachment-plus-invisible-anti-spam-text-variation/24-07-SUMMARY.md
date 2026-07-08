@@ -41,7 +41,7 @@ key-decisions:
   - "Full openapi-typescript regen from types-openapi.json was rejected mid-execution (would have dropped ~35 endpoint types already hand-patched into types/api.ts but never synced back to the JSON snapshot) in favor of a targeted patch mirroring the exact fields the backend actually added."
   - "Declined two workaround paths for live-smoke API auth (raw SQL writes to prod bypassing the API; forging a Supabase JWT from the .env signing secret) after the sandbox's safety classifier flagged both — deferred to the user completing the smoke test via the real UI instead."
 
-requirements-completed: [D-19, D-06, D-09]
+requirements-completed: [D-19, D-09]  # D-06 mechanism verified (mocked); real-device photo confirmation NOT done (live smoke used a PDF, not a .jpg) — see Issues Encountered #4 and 24-VERIFICATION.md item 32
 
 # Metrics
 duration: ~3h (including UI build-out and live debugging across two sessions)
