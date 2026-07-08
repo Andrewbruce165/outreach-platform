@@ -238,6 +238,16 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_046.exists():
             await asyncpg_conn.execute(_mig_046.read_text())
 
+        # 053: Phase 23 messages media/edit extension (message_type/file_name/mime_type/
+        # size_bytes/edited_at + message_text nullable). messages has NO ORM model, so
+        # create_all never builds these columns — the hardcoded list does NOT glob
+        # (RESEARCH Pitfall 2). Coexists with 055 (Phase 24 bridge for the same 4 media
+        # columns): both are idempotent, 053 additionally adds edited_at + drops
+        # message_text NOT NULL. Exists-guard keeps this green until migrations/053 lands.
+        _mig_053 = PROJECT_ROOT / "migrations" / "053_phase23_messages_media.sql"
+        if _mig_053.exists():
+            await asyncpg_conn.execute(_mig_053.read_text())
+
         # 054: Phase 24 campaign attachment + variation flag. The campaign_attachments
         # table and campaigns.variation_enabled column come from ORM create_all (CREATE
         # TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS are no-ops here), but the
