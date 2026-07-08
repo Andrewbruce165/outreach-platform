@@ -432,6 +432,209 @@ async def test_guard_cancels_ping_when_conversation_left_active(
     send_mock.assert_not_called()
 
 
+# ── HYBRID MARKING PASS (2026-07-08, debug no-reply-followup-not-marked) ───────
+# Direction-based active ⇄ no_reply flip, DECOUPLED from follow_up_enabled and
+# from ping timing. Runs as step 0 of FollowUpWorker.tick(). These tests seed a
+# campaign with follow_up_enabled=False (the prod reality on every campaign) to
+# prove the marking fires REGARDLESS of that flag, and assert ONLY on their own
+# conversation ids (the bulk pass is workspace-global but idempotent/correct).
+
+
+async def _status_of(db, conv_id):
+    return (await db.execute(text(
+        "SELECT status FROM conversations WHERE id = :id"
+    ), {"id": str(conv_id)})).scalar()
+
+
+async def test_marking_active_to_no_reply_when_last_outbound(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """Core hybrid rule: an ACTIVE conversation whose LAST message is outbound
+    (we messaged, they never answered) flips to no_reply on a tick — even though
+    follow_up_enabled is FALSE (ungated marking, decoupled from pinging)."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="active",
+    )
+    # Only outbound message → last message is outbound, unanswered.
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "no_reply"
+
+
+async def test_marking_stays_active_when_last_inbound(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """An ACTIVE conversation whose last message is inbound (ball in our court)
+    is NOT marked no_reply."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="active",
+    )
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+    await test_message_factory(conv["id"], direction="inbound", sent_by="contact")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "active"
+
+
+async def test_marking_reverts_no_reply_to_active_when_last_inbound(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """Self-healing reverse (safety net alongside listener D-03): a NO_REPLY
+    conversation whose last message is inbound reverts to active."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="no_reply",
+    )
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+    await test_message_factory(conv["id"], direction="inbound", sent_by="contact")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "active"
+
+
+async def test_marking_includes_paused_campaigns(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """Scope widened 2026-07-08: a PAUSED campaign's active/last-outbound
+    conversation IS now marked no_reply (paused is in the eligible set alongside
+    running and no-campaign)."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET status='paused' WHERE id = :id"
+    ), {"id": str(camp["id"])})
+    await async_db_session.commit()
+
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="active",
+    )
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "no_reply"
+
+
+async def test_marking_includes_no_campaign_conversations(
+    test_conversation_factory, test_message_factory, async_db_session,
+):
+    """Scope widened 2026-07-08: a conversation with NO campaign
+    (campaign_id IS NULL) and a last-outbound message IS now marked no_reply."""
+    from app.services.follow_up import FollowUpWorker
+
+    conv = await test_conversation_factory(campaign_id=None, status="active")
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "no_reply"
+
+
+async def test_marking_excludes_done_campaigns(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """Scope boundary: a DONE campaign's active/last-outbound conversation is
+    NOT marked no_reply — there is no point flagging a finished campaign."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET status='done' WHERE id = :id"
+    ), {"id": str(camp["id"])})
+    await async_db_session.commit()
+
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="active",
+    )
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "active"
+
+
+async def test_marking_never_touches_non_active_no_reply_statuses(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """Marking only flips active⇄no_reply. A 'manual' (or lead/handoff/finished)
+    conversation with a last-outbound message is preserved."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="manual",
+    )
+    await test_message_factory(conv["id"], direction="outbound", sent_by="human")
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "manual"
+
+
+async def test_marking_leaves_conversation_with_no_messages(
+    test_running_campaign_factory, test_conversation_factory, async_db_session,
+):
+    """A conversation with zero messages has no last-message direction → it is
+    left active (never spuriously marked no_reply)."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="active",
+    )
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    assert await _status_of(async_db_session, conv["id"]) == "active"
+
+
+async def test_marking_does_not_bump_updated_at(
+    test_running_campaign_factory, test_conversation_factory,
+    test_message_factory, async_db_session,
+):
+    """Deploy-impact guard: the marking pass is a derived sweep, not new activity
+    — it must NOT bump updated_at (otherwise ~all rows jump to the top of the
+    inbox on first tick). Status changes; updated_at is preserved."""
+    from app.services.follow_up import FollowUpWorker
+
+    camp, senders = await test_running_campaign_factory(follow_up_enabled=False)
+    conv = await test_conversation_factory(
+        sender=senders[0], campaign_id=camp["id"], status="active",
+    )
+    await test_message_factory(conv["id"], direction="outbound", sent_by="ai")
+
+    before = (await async_db_session.execute(text(
+        "SELECT updated_at FROM conversations WHERE id = :id"
+    ), {"id": str(conv["id"])})).scalar()
+
+    await FollowUpWorker()._mark_no_reply_pass()
+
+    after_row = (await async_db_session.execute(text(
+        "SELECT status, updated_at FROM conversations WHERE id = :id"
+    ), {"id": str(conv["id"])})).first()
+    assert after_row.status == "no_reply"
+    assert after_row.updated_at == before
+
+
 async def test_guard_lets_ping_through_when_no_reply_since(
     async_db_session, test_workspace, test_sender_factory,
     test_conversation_factory, test_campaign_factory, monkeypatch,

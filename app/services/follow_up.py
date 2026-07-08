@@ -5,7 +5,23 @@ Pattern: ``CampaignEnqueueWorker`` (Phase 4) — module-level singleton,
 ``start()`` / ``stop()`` registered in the FastAPI lifespan, a broad-except
 ``_run`` loop that never dies, ``asyncio.sleep(poll_interval)`` between ticks.
 
-Tick algorithm (one ``AsyncSessionLocal`` session):
+Tick algorithm:
+    0. HYBRID MARKING PASS (added 2026-07-08, debug ``no-reply-followup-not-marked``):
+       a direction-based ``active ⇄ no_reply`` flip decoupled from
+       ``follow_up_enabled`` and from ping timing. A conversation whose LAST
+       message is outbound (we sent, they have not answered) reads ``no_reply``;
+       one whose last message is inbound reverts to ``active``. Scoped to
+       conversations with NO campaign OR a campaign in ``running``/``paused``
+       (``done`` and other terminal campaign states excluded), ``NO
+       follow_up_enabled filter`` — this
+       is a pure inbox-visibility signal, it sends zero Telegram messages and does
+       not touch the ping counter. Supersedes D-02's original "status flips only at
+       first-ping time" coupling (status marking is now decoupled from ping cadence
+       going forward; the ping/auto-finish sweep below is UNCHANGED). Does NOT bump
+       ``updated_at`` (a derived sweep is not new activity — preserves inbox sort
+       order by real message activity). Runs in its own session/transaction so a
+       marking failure never blocks the interval-gated sweep and vice-versa.
+
     1. SELECT eligible conversations JOINed to their campaign (and owning
        sender), gated on ``campaigns.status='running' AND follow_up_enabled=true``
        and ``conversations.status IN ('active','no_reply')`` — D-06/D-16.
@@ -96,9 +112,102 @@ class FollowUpWorker:
                 logger.error("❌ FollowUpWorker tick error: %s", exc, exc_info=True)
             await asyncio.sleep(self.poll_interval)
 
+    async def _mark_no_reply_pass(self) -> int:
+        """Step 0 (hybrid, 2026-07-08): direction-based ``active ⇄ no_reply`` flip.
+
+        Two idempotent bulk UPDATEs in one transaction, WITHOUT any
+        ``follow_up_enabled`` filter (this is a visibility signal, not the ping
+        trigger):
+
+          A. ``active → no_reply``   when the conversation's LAST message is
+             ``outbound`` (we messaged them and they have not answered).
+          B. ``no_reply → active``   when the last message is ``inbound`` (they
+             replied) — a self-healing safety net alongside ``listener.
+             handle_no_reply_revert`` (D-03), which is the primary reply-triggered
+             revert. B only touches rows already in ``no_reply`` so it can never
+             clobber ``manual``/``lead``/``handoff``/``finished``/``bot_ignored``.
+
+        Scope (widened 2026-07-08 per user decision): a conversation is eligible
+        when it has NO campaign (``campaign_id IS NULL``) OR its campaign is in
+        ``running``/``paused``. Conversations of ``done`` (and any other terminal/
+        non-active) campaigns are excluded — there is no point flagging no_reply on
+        a finished campaign. The predicate is expressed as ``campaign_id IS NULL OR
+        EXISTS(campaign in running/paused)`` (a LEFT-JOIN-style test) rather than an
+        inner ``FROM campaigns`` join, so orphan/no-campaign conversations are
+        included instead of silently dropped.
+
+        "Last message direction" is the most-recent ``messages`` row overall
+        (``ORDER BY created_at DESC, id DESC LIMIT 1``): if it is outbound there is
+        by construction ≥1 outbound and no inbound after it; a conversation with no
+        messages yields NULL and is left untouched. Sends ZERO Telegram messages,
+        does NOT touch ``pings_sent``, and deliberately does NOT bump ``updated_at``
+        (a derived sweep is not new activity — keeps the inbox ordered by real
+        message activity rather than jumping ~all rows to the top on first tick).
+
+        Returns the number of conversations whose status changed this pass.
+        """
+        async with AsyncSessionLocal() as db:
+            marked = (await db.execute(text("""
+                UPDATE conversations c
+                SET status = 'no_reply'
+                WHERE c.status = 'active'
+                  AND (
+                      c.campaign_id IS NULL
+                      OR EXISTS (
+                          SELECT 1 FROM campaigns cp
+                          WHERE cp.id = c.campaign_id
+                            AND cp.status IN ('running', 'paused')
+                      )
+                  )
+                  AND (
+                      SELECT m.direction FROM messages m
+                      WHERE m.conversation_id = c.id
+                      ORDER BY m.created_at DESC, m.id DESC
+                      LIMIT 1
+                  ) = 'outbound'
+            """))).rowcount or 0
+
+            reverted = (await db.execute(text("""
+                UPDATE conversations c
+                SET status = 'active'
+                WHERE c.status = 'no_reply'
+                  AND (
+                      c.campaign_id IS NULL
+                      OR EXISTS (
+                          SELECT 1 FROM campaigns cp
+                          WHERE cp.id = c.campaign_id
+                            AND cp.status IN ('running', 'paused')
+                      )
+                  )
+                  AND (
+                      SELECT m.direction FROM messages m
+                      WHERE m.conversation_id = c.id
+                      ORDER BY m.created_at DESC, m.id DESC
+                      LIMIT 1
+                  ) = 'inbound'
+            """))).rowcount or 0
+
+            await db.commit()
+
+        total = marked + reverted
+        if total:
+            logger.info(
+                "🔔 FollowUpWorker marking pass: %s active→no_reply, %s no_reply→active",
+                marked, reverted,
+            )
+        return total
+
     async def tick(self) -> int:
-        """One tick — sweep eligible conversations. Returns count of actions taken
-        (auto-finishes + pings enqueued)."""
+        """One tick — mark no_reply (step 0), then sweep eligible conversations.
+        Returns count of actions taken (auto-finishes + pings enqueued)."""
+        # Step 0: hybrid direction-based marking, decoupled from follow_up_enabled
+        # and ping timing. Isolated in its own session — a marking failure must not
+        # block the interval-gated ping/auto-finish sweep below.
+        try:
+            await self._mark_no_reply_pass()
+        except Exception as exc:  # noqa: BLE001 — never let marking kill the tick
+            logger.error("❌ FollowUpWorker marking pass error: %s", exc, exc_info=True)
+
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(text("""
                 SELECT c.id, c.status, c.pings_sent, c.workspace_id, c.sender_id,
