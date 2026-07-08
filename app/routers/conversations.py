@@ -29,12 +29,24 @@ the transaction. Workspace + sender lifecycle/auth_status checked BEFORE
 the Telegram call.
 """
 
+import asyncio
 import logging
+import os
+import tempfile
 import uuid
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,8 +63,9 @@ from app.schemas import (
     LLMCallResponse,
     MessageListResponse,
     MessageResponse,
-    SendMessageFromUIRequest,
+    SendFileFromUIResponse,
     SendMessageFromUIResponse,
+    SendMessageFromUIRequest,
 )
 from app.services.telegram import telegram_service
 from app.utils.auth import AuthCtx, auth_dep
@@ -170,6 +183,43 @@ async def _load_message_for_mutation(
             detail={"code": "MESSAGE_NOT_FOUND", "message": "Message not found"},
         )
     return row
+
+
+# ── Phase 23: multipart upload streaming size-guard (D-10) ────────────────────
+
+MAX_FILE_BYTES = 50 * 1024 * 1024  # ~50 MB (D-10)
+
+
+async def _spool_upload_with_cap(upload: UploadFile) -> tuple[str, int]:
+    """Stream a multipart upload to a temp file with a hard 50 MB cap.
+
+    NEVER trusts ``Content-Length`` (spoofable, Pitfall 7) and NEVER loads the
+    whole upload into RAM — reads in 1 MB chunks and aborts the moment the
+    running total crosses ``MAX_FILE_BYTES`` (413 FILE_TOO_LARGE). The temp file
+    is unlinked on any error so an oversize/aborted upload leaves nothing behind;
+    on success the caller owns ``tmp_path`` and MUST unlink it (D-14).
+    """
+    fd, tmp_path = tempfile.mkstemp()
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_FILE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail={"code": "FILE_TOO_LARGE",
+                                "message": "Файл больше 50 МБ"},
+                    )
+                await asyncio.to_thread(out.write, chunk)
+        return tmp_path, total
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 
 # ── List / detail endpoints ───────────────────────────────────────────────────
@@ -464,6 +514,245 @@ async def delete_message(
     )
     await db.commit()
     return None
+
+
+# ── Phase 23: send a file from inbox (NEW outbound → auto-takeover, D-12) ──────
+
+
+@router.post("/{conversation_id}/send-file", response_model=SendFileFromUIResponse)
+async def send_file_from_ui(
+    conversation_id: UUID,
+    file: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> SendFileFromUIResponse:
+    """INBM-03 / D-12 — send a file from inbox WITH auto-takeover (mirrors POST /send).
+
+    Unlike edit/delete (past-message mutations, no takeover), sending a file is a
+    NEW outbound intervention → it flips the conversation to manual and cancels the
+    pending queue, exactly like POST /send. Ordering mirrors POST /send: gate → spool
+    (413 before any takeover) → takeover UPDATE + queue-cancel → commit → Telethon
+    OUTSIDE the txn → INSERT a typed messages row. The temp upload is unlinked in a
+    finally and the byte payload is NEVER persisted to the DB (D-14).
+
+    D-22: ``caption`` is a brand-new multipart field with no legacy/Lovable naming
+    precedent (unlike message/message_text), so it needs NO Form alias. The persisted
+    ``message_type`` is a BEST-EFFORT label off the browser ``file.content_type``;
+    actual Telegram rendering is governed by ``force_document=False`` (Telethon
+    auto-detect), so any label/render mismatch is cosmetic only.
+    """
+    # 1. Load conversation + sender; workspace + sender lifecycle/auth gate
+    #    (mirror POST /send, plus client_fingerprint for the send helper).
+    row = (await db.execute(text("""
+        SELECT c.contact_telegram_id,
+               s.id AS sender_id, s.slug AS sender_slug,
+               s.session_string, s.proxy, s.client_fingerprint
+        FROM conversations c
+        JOIN senders s ON c.sender_id = s.id
+        WHERE c.id = :cid
+          AND c.workspace_id = :wid
+          AND s.lifecycle_status = 'active'
+          AND s.auth_status = 'ok'
+        -- TODO(v2-rls): replaced by RLS policy app.workspace_id
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).first()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CONVERSATION_NOT_FOUND",
+                    "message": "Conversation not found or sender inactive"},
+        )
+    if row.contact_telegram_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NO_TELEGRAM_ID",
+                    "message": "Contact has no Telegram ID"},
+        )
+
+    # 2. Stream the upload to a temp file with a 50 MB cap (413 BEFORE any
+    #    takeover/Telethon so an oversize upload changes nothing).
+    tmp_path, _size = await _spool_upload_with_cap(file)
+
+    try:
+        # 3. Auto-takeover UPDATE (D-12, mirrors POST /send step 2).
+        await db.execute(text("""
+            UPDATE conversations
+            SET ai_enabled = false,
+                status = 'manual',
+                paused_at = NOW(),
+                paused_reason = 'Manager sent file via UI',
+                updated_at = NOW()
+            WHERE id = :cid AND workspace_id = :wid
+        """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+
+        # 4. Cancel pending queue items for the recipient_phone (D-02 pattern).
+        await db.execute(text("""
+            UPDATE message_queue
+            SET status = 'failed',
+                error_message = 'Conversation taken over manually',
+                finished_at = NOW()
+            WHERE workspace_id = :wid
+              AND recipient_phone = (
+                  SELECT contact_phone FROM conversations WHERE id = :cid
+              )
+              AND status = 'pending'
+        """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+
+        # 5. Commit takeover BEFORE the Telegram call (legacy pattern).
+        await db.commit()
+
+        # 6. Telethon send OUTSIDE the transaction.
+        result = await telegram_service.send_file_by_telegram_id(
+            sender_slug=row.sender_slug,
+            sender_id=str(row.sender_id),
+            encrypted_session=row.session_string,
+            telegram_id=row.contact_telegram_id,
+            tmp_path=tmp_path,
+            file_name=file.filename,
+            caption=caption,
+            proxy=row.proxy,
+            fingerprint=row.client_fingerprint,
+        )
+
+        # 7. Map a failed send to a structured error (D-17).
+        if not result.get("success"):
+            _raise_inbox_message_error(result)
+
+        telegram_message_id = result.get("telegram_message_id")
+
+        # 8. Best-effort message_type off the browser mime (matches Telethon
+        #    auto-media): image/* → photo, video/* → video, else document.
+        ct = (file.content_type or "").lower()
+        if ct.startswith("image/"):
+            mtype = "photo"
+        elif ct.startswith("video/"):
+            mtype = "video"
+        else:
+            mtype = "document"
+
+        # 9. INSERT a typed messages row (byte payload NEVER stored, D-14).
+        message_id = uuid.uuid4()
+        await db.execute(text("""
+            INSERT INTO messages (id, workspace_id, conversation_id, direction,
+                                  message_text, sent_by, telegram_message_id,
+                                  message_type, file_name, mime_type, size_bytes)
+            VALUES (:id, :wid, :cid, 'outbound', :cap, 'human', :tg_mid,
+                    :mtype, :fname, :mime, :size)
+            ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+        """), {
+            "id": str(message_id),
+            "wid": str(ctx.workspace_id),
+            "cid": str(conversation_id),
+            "cap": caption,
+            "tg_mid": telegram_message_id,
+            "mtype": mtype,
+            "fname": file.filename,
+            "mime": file.content_type,
+            "size": _size,
+        })
+        await db.commit()
+
+        return SendFileFromUIResponse(
+            success=True,
+            message_id=message_id,
+            telegram_message_id=telegram_message_id,
+            message_type=mtype,
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+@router.get("/{conversation_id}/messages/{message_id}/download")
+async def download_message_file(
+    conversation_id: UUID,
+    message_id: UUID,
+    disposition: str = Query("attachment"),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """INBM-05 / D-16 — lazy on-demand download of an incoming file.
+
+    The listener (23-04) records incoming media as metadata-only rows; the bytes
+    are fetched from Telegram only when the manager clicks download. Gate is the
+    INBOUND counterpart to _load_message_for_mutation: the message must belong to
+    this conversation+workspace and carry media (does NOT require outbound). Bytes
+    are streamed straight through — NEVER persisted (D-16). ``?disposition=inline``
+    is optional (OQ3); the default is ``attachment``.
+    """
+    # 1. Media-message gate (workspace-scoped, inbound-friendly, opaque 404).
+    row = (await db.execute(text("""
+        SELECT m.telegram_message_id, m.file_name, m.mime_type,
+               c.contact_telegram_id,
+               s.id AS sender_id, s.slug AS sender_slug, s.session_string,
+               s.proxy, s.client_fingerprint
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        JOIN senders s ON s.id = c.sender_id
+        WHERE m.id = :mid AND m.conversation_id = :cid AND c.workspace_id = :wid
+          AND m.message_type IN ('photo', 'video', 'voice', 'document')
+        -- TODO(v2-rls): replaced by RLS policy app.workspace_id
+    """), {
+        "mid": str(message_id),
+        "cid": str(conversation_id),
+        "wid": str(ctx.workspace_id),
+    })).first()
+
+    if row is None or row.telegram_message_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "MESSAGE_NOT_FOUND", "message": "Message not found"},
+        )
+
+    # 2. Fetch bytes from Telegram (lazy). Never persisted.
+    result = await telegram_service.download_media_by_telegram_id(
+        sender_slug=row.sender_slug,
+        sender_id=str(row.sender_id),
+        encrypted_session=row.session_string,
+        telegram_id=row.contact_telegram_id,
+        telegram_message_id=row.telegram_message_id,
+        proxy=row.proxy,
+        fingerprint=row.client_fingerprint,
+    )
+
+    # 3. Normalize the service result: the real method returns a dict
+    #    ({"success", "data", "mime", "name"} | {"success": False, "error": ...});
+    #    a bare-bytes / None shape is also tolerated (defensive).
+    data = None
+    svc_mime = None
+    svc_name = None
+    if result is None:
+        raise HTTPException(
+            status_code=410,
+            detail={"code": "MEDIA_UNAVAILABLE",
+                    "message": "Файл больше недоступен в Telegram"},
+        )
+    if isinstance(result, dict):
+        if not result.get("success"):
+            _raise_inbox_message_error(result)
+        data = result.get("data")
+        svc_mime = result.get("mime")
+        svc_name = result.get("name")
+    else:
+        data = result  # raw bytes
+
+    if data is None:
+        raise HTTPException(
+            status_code=410,
+            detail={"code": "MEDIA_UNAVAILABLE",
+                    "message": "Файл больше недоступен в Telegram"},
+        )
+
+    # 4. Stream bytes with correct headers (mirror PROF-07 byte-serving).
+    name = row.file_name or svc_name or "file"
+    mime = row.mime_type or svc_mime or "application/octet-stream"
+    disp = "inline" if disposition == "inline" else "attachment"
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Content-Disposition": f'{disp}; filename="{name}"'},
+    )
 
 
 # ── Mutating endpoints ────────────────────────────────────────────────────────
