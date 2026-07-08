@@ -581,7 +581,7 @@ Plans:
 **Goal:** Из inbox UI можно удалить отправленное сообщение (у обеих сторон), отредактировать уже отправленное сообщение и отправить файл контакту; плюс входящие файлы ОТ контакта отображаются как file-бабблы с ленивым скачиванием.
 **Requirements**: INBM-01, INBM-02, INBM-03, INBM-04, INBM-05, INBM-06, INBM-07, INBM-08, INBM-09 (derived during /gsd:plan-phase 23 — see REQUIREMENTS.md §Phase 23; tracked via decisions D-01..D-22). Phase adds ONE migration (053).
 **Depends on:** Phase 22
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 **Wave 1** *(parallel — schema/schemas/tests vs Telethon service methods, no file overlap)*
@@ -596,7 +596,7 @@ Plans:
 - [x] 23-05-send-file-and-download-endpoints-PLAN.md — POST /send-file (streamed 50MB cap + auto-takeover + auto-media) + GET /messages/{id}/file (lazy download) [Wave 3, depends_on: 23-03] — INBM-03/05/07
 
 **Wave 4** *(handoff + live-smoke, human-verify, cross-repo)*
-- [ ] 23-06-handoff-and-live-smoke-PLAN.md — regen openapi.json (4 endpoints + schemas) + error-codes.md (D-17 codes) + human live-smoke [Wave 4, depends_on: 23-03, 23-05] — INBM-09
+- [x] 23-06-handoff-and-live-smoke-PLAN.md — regen openapi.json (4 endpoints + schemas) + error-codes.md (D-17 codes) + human live-smoke [Wave 4, depends_on: 23-03, 23-05] — INBM-09
 
 ### Phase 24: Campaign first-message file attachment plus invisible anti-spam text variation
 

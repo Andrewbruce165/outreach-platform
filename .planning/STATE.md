@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: verifying
 stopped_at: Paused at 23-06 Task 2 (blocking human-verify live-smoke); Task 1 handoff regen committed 9a35227
-last_updated: "2026-07-08T09:32:46.572Z"
+last_updated: "2026-07-08T10:54:12.898Z"
 last_activity: 2026-07-08
 progress:
   total_phases: 27
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 Phase: 23 (edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-08
 
 Progress: [██████████] 99% — Phase 20 COMPLETE (20-01..05: profile schema/columns, identity+guardrails, photo+resync, 2FA+recovery-email, enriched accounts UI + handoff regen)
