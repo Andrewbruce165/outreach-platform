@@ -534,25 +534,41 @@ class TelegramListener:
         direction: str,
         message_text: str,
         sent_by: str,
-        telegram_message_id: int
+        telegram_message_id: int,
+        message_type: str = "text",
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        size_bytes: int | None = None,
     ) -> bool:
         """
         Сохранить сообщение в БД
+
+        message_type/file_name/mime_type/size_bytes (Phase 23, mig 053) — media metadata
+        for incoming file bubbles. Keyword-optional so every existing text call-site keeps
+        working; the DB DEFAULT 'text' backfills message_type when not passed. message_text
+        may be None for a file bubble без caption (column relaxed in mig 053).
+
         Returns: True if message was saved, False if it was a duplicate
         """
         async with AsyncSessionLocal() as session:
             try:
                 await session.execute(
                     text("""
-                        INSERT INTO messages (conversation_id, direction, message_text, sent_by, telegram_message_id)
-                        VALUES (:conv_id, :direction, :msg_text, :sent_by, :msg_id)
+                        INSERT INTO messages (conversation_id, direction, message_text, sent_by,
+                                              telegram_message_id, message_type, file_name, mime_type, size_bytes)
+                        VALUES (:conv_id, :direction, :msg_text, :sent_by,
+                                :msg_id, :message_type, :file_name, :mime_type, :size_bytes)
                     """),
                     {
                         "conv_id": conversation_id,
                         "direction": direction,
                         "msg_text": message_text,
                         "sent_by": sent_by,
-                        "msg_id": telegram_message_id
+                        "msg_id": telegram_message_id,
+                        "message_type": message_type,
+                        "file_name": file_name,
+                        "mime_type": mime_type,
+                        "size_bytes": size_bytes,
                     }
                 )
                 await session.commit()
