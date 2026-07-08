@@ -49,6 +49,20 @@ const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   IMPORT_EXPIRED: () => "This import session expired. Upload the ZIP again to start over.",
   JOB_NOT_FOUND: () => "Import job not found.",
   INVALID_ROLE: () => "Pick a role (sender or checker) before confirming.",
+  // ── Inbox message operations (Phase 23 / D-17) ──────────────────────────
+  MESSAGE_EDIT_TOO_OLD: () => "This message is too old to edit.",
+  MESSAGE_NOT_EDITABLE: () => "This message can't be edited.",
+  MESSAGE_NOT_FOUND: () => "Message not found",
+  DELETE_FAILED: () => "Couldn't delete the message. Try again.",
+  MEDIA_UNAVAILABLE: () => "This file is no longer available in Telegram.",
+  DOWNLOAD_FAILED: () => "Couldn't download the file. Try again.",
+  NO_TELEGRAM_ID: () => "This contact has no Telegram account on file.",
+  RECIPIENT_NOT_IN_TELEGRAM: () => "This contact isn't reachable on Telegram.",
+  FLOOD_WAIT: (d) =>
+    `Sending too fast. Try again in ${String(d.retry_after ?? "a few")}s.`,
+  ACCOUNT_FROZEN: () => "This account is temporarily restricted by Telegram.",
+  USER_IS_BLOCKED: () => "The recipient has blocked this account.",
+  TELEGRAM_OP_FAILED: () => "Telegram operation failed. Try again.",
 };
 
 export function errorMessageFromEnvelope(
