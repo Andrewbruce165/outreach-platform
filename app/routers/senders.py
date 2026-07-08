@@ -38,6 +38,7 @@ from app.database import get_db
 from app.models import Sender, ProxyPool, SenderRestrictionEvent
 from app.schemas import (
     AssignProxyRequest,
+    GradeOverrideRequest,
     ProfileUpdate,
     ProfileUpdateResponse,
     ProfileWarningItem,
@@ -60,6 +61,7 @@ from app.schemas import (
     WarningItem,
 )
 from app.services.encryption import encrypt_session
+from app.services.grade_ladder import budget_for_level, load_ladder
 from app.utils.auth import AuthCtx, auth_dep
 from app.utils.location import phone_location
 
@@ -516,6 +518,33 @@ async def list_senders(
         )).fetchall()
         lock_map = {row[0]: (row[1], row[2]) for row in lock_rows}
 
+    # Phase 22 D-12: remaining daily new-chat budget per sender = the grade
+    # budget for its current level minus distinct new dialogs opened in the
+    # trailing 24h, clamped at 0. The ladder is workspace-level (single load
+    # via grade_ladder.load_ladder, code-defaults if unconfigured — D-16); the
+    # new-dialog count is per-sender (one grouped query, no N+1). Only computed
+    # on the list endpoint; single-sender paths report None.
+    ladder = await load_ladder(db, ctx.workspace_id)
+    new_dialogs_map: dict = {}
+    if sender_ids:
+        dialog_rows = (await db.execute(
+            text("""
+                SELECT sender_id, COUNT(DISTINCT recipient_phone) AS new_dialogs
+                  FROM message_queue
+                 WHERE sender_id = ANY(:sender_ids)
+                   AND status = 'sent'
+                   AND finished_at >= now() - interval '24 hours'
+                 GROUP BY sender_id
+            """),
+            {"sender_ids": sender_ids},
+        )).fetchall()
+        new_dialogs_map = {row[0]: row[1] for row in dialog_rows}
+
+    def _remaining_budget(s: Sender) -> int:
+        level = getattr(s, "current_level", 1) or 1
+        opened = new_dialogs_map.get(s.id, 0)
+        return max(0, budget_for_level(ladder, level) - opened)
+
     return SenderListResponse(
         senders=[
             _sender_to_response(
@@ -523,6 +552,7 @@ async def list_senders(
                 sent_today=sent_today_map.get(s.id, 0),
                 locked_by_campaign_id=lock_map.get(s.id, (None, None))[0],
                 locked_by_campaign_name=lock_map.get(s.id, (None, None))[1],
+                remaining_daily_budget=_remaining_budget(s),
             )
             for s in senders
         ]
@@ -699,6 +729,44 @@ async def update_sender(
         f"lifecycle={sender.lifecycle_status} warnings={len(warnings)}"
     )
     return SenderCreateResponse(sender=_sender_to_response(sender), warnings=warnings)
+
+
+@router.patch("/senders/{slug}/grade", response_model=SenderResponse)
+async def override_sender_grade(
+    slug: str,
+    request: GradeOverrideRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually override a sender's account grade (Phase 22 D-15).
+
+    Writes the SAME two fields as auto-progression — current_level and
+    level_updated_at = NOW() — in one operation, so the progression timer
+    restarts from the override baseline (no separate frozen flag, D-15).
+
+    Workspace-scoped: `_load_sender_by_slug` resolves the sender only within
+    ctx.workspace_id and 404s otherwise, so a tenant cannot re-grade a sender it
+    does not own (T-22-10). `current_level` is bounded 1..3 by GradeOverrideRequest
+    (T-22-11) and mirrored by the mig 056 CHECK; the UPDATE binds params only
+    (T-22-12).
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    await db.execute(
+        text(
+            "UPDATE senders SET current_level = :lvl, level_updated_at = NOW() "
+            "WHERE id = :sid"
+        ),
+        {"lvl": request.current_level, "sid": str(sender.id)},
+    )
+    await db.commit()
+    await db.refresh(sender)
+
+    logger.info(
+        f"[senders] grade override workspace={ctx.workspace_id} slug={sender.slug} "
+        f"level={request.current_level}"
+    )
+    return _sender_to_response(sender)
 
 
 @router.delete("/senders/{slug}", status_code=204)
