@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 22-06-PLAN.md (Wave 3 terminal cleanup)
-last_updated: "2026-07-08T18:27:42.615Z"
+stopped_at: 22-07 Tasks 1-2 complete; Task 3 human-verify checkpoint PENDING (blocking)
+last_updated: "2026-07-08T18:38:57.045Z"
 last_activity: 2026-07-08
 progress:
   total_phases: 27
-  completed_phases: 23
+  completed_phases: 24
   total_plans: 109
-  completed_plans: 107
-  percent: 85
+  completed_plans: 108
+  percent: 89
 ---
 
 # Project State
@@ -222,6 +222,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase ?]: 22-04: rate_per_day removed from sender API; grade (current_level/level_updated_at) + remaining_daily_budget surfaced; PATCH /senders/{slug}/grade resets timer (workspace-scoped via _load_sender_by_slug)
 - [Phase ?]: 22-05: warmup spends shared new-chat budget only for NEW pairs (sender_first_contacts registry), initiator = older account writes first, behind an outreach-priority reserve on the trailing-24h window (D-08/D-09/D-03)
 - [Phase ?]: [Phase 22] Plan 22-06: migration 059 drops campaigns.max_new_dialogs_per_day (D-07) + senders.rate_per_day (D-04) from DB+ORM; per-campaign dialog-cap API surface removed; daily throttle is now exclusively the account grade budget. Rule-3 sweep: restriction_audit.py rate_per_day read removed, queue.py comments reworded, ~19 test files purged of raw-insert rate_per_day (create_all mirrors ORM). Zero app/ references (grep gate).
+- [Phase ?]: Phase 22-07: rebuilt prod api from main checkout + export-handoff.sh to regenerate openapi.json/types against live app (worktree volume-conflict-safe); grade contract published, frontend handoff noted (D-11/D-12)
 
 ### Roadmap Evolution
 
@@ -323,6 +324,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-08T18:27:42.504Z
-Stopped at: Completed 22-06-PLAN.md (Wave 3 terminal cleanup)
-Resume file: None
+Last session: 2026-07-08T18:38:56.315Z
+Stopped at: 22-07 Tasks 1-2 complete; Task 3 human-verify checkpoint PENDING (blocking)
+Resume file: .planning/phases/22-account-level-new-chat-limit-grades/22-07-PLAN.md
