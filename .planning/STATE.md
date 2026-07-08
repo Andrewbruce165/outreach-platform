@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 24 context gathered
-last_updated: "2026-07-08T09:26:35.522Z"
+stopped_at: Paused at 23-06 Task 2 (blocking human-verify live-smoke); Task 1 handoff regen committed 9a35227
+last_updated: "2026-07-08T09:32:46.572Z"
 last_activity: 2026-07-08
 progress:
   total_phases: 27
-  completed_phases: 22
+  completed_phases: 23
   total_plans: 102
-  completed_plans: 100
+  completed_plans: 101
   percent: 99
 ---
 
@@ -208,6 +208,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 21]: 21-06: sibling src/types/api.ts synced wholesale from regenerated lovable-handoff/types/api.ts (purely additive: 3 import ops + backend-truth daily_cap 10/30 & has_backup->required); sibling only reads has_backup so tsc clean
 - [Phase 21]: 21-06: two-step import UI (upload->preview+role radio->202 confirm->2s status poll until done->per-account chips); result chip maps item.status+result (ok+already_connected->ghost, ok+imported->green, failed->red+reason)
 - [Phase 21]: 21-06: IMPT-09 human-UAT PASSED live — mixed batch preview exact (2 matched/2 unpaired/1 malformed) + real 13/13 import (job da5998a0), IMPT-04 reconnect verified (fingerprints set, 0 auth errors, 0 restriction events)
+- [Phase 23-edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui]: 23-06: handoff openapi regenerated from rebuilt api via export-handoff (not hand-edited); D-17 inbox error codes documented in error-codes.md; download endpoint is /messages/{id}/download (23-05 impl), not the plan's /file draft; live-smoke (Task 2) pending human sign-off
 
 ### Roadmap Evolution
 
@@ -306,6 +307,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-07T13:28:05.614Z
-Stopped at: Phase 24 context gathered
-Resume file: .planning/phases/24-campaign-first-message-file-attachment-plus-invisible-anti-spam-text-variation/24-CONTEXT.md
+Last session: 2026-07-08T09:32:36.166Z
+Stopped at: Paused at 23-06 Task 2 (blocking human-verify live-smoke); Task 1 handoff regen committed 9a35227
+Resume file: None
