@@ -145,7 +145,7 @@ def _window_elapsed_fraction(
 
     D-01: the denominator is the RAW window width
     ``(work_hour_end − work_hour_start)`` — NO long-pause subtraction. The caller
-    multiplies ``max_new_dialogs_per_day × elapsed_fraction × jitter`` to get the
+    multiplies ``account_budget × elapsed_fraction × jitter`` to get the
     "expected-by-now" count.
 
     Clamp rationale (Pitfall 2): ``(now − window_start)`` is not guaranteed inside
@@ -386,7 +386,7 @@ class QueueWorker:
         # ── Phase 13 (PACE-03..07, D-05/D-06/D-08/D-10): even-pacing pre-query ──
         # ── Phase 22 (D-01/D-05): the daily numerator is now the ACCOUNT grade   ──
         # budget (from the workspace ladder resolved for this sender's grade
-        # level), NOT campaigns.max_new_dialogs_per_day. The campaign is still the
+        # level), NOT the old per-campaign dialog cap. The campaign is still the
         # source of the working WINDOW (timezone/hours) for pacing (D-05).
         #
         # Compute the "expected-by-now" new-dialog count for THIS sender BEFORE the
@@ -469,8 +469,8 @@ class QueueWorker:
             # sender has opened >= account_budget distinct new phones (across all its
             # campaigns combined) in the trailing 24h (D-03 shared window), new-dialog
             # items are excluded. Follow-ups (any campaign) stay eligible. The cap
-            # RHS is the account grade budget (:account_budget), NOT
-            # campaigns.max_new_dialogs_per_day (D-01/D-05). _check_rate_limits
+            # RHS is the account grade budget (:account_budget), NOT the old
+            # per-campaign dialog cap (D-01/D-05). _check_rate_limits
             # (4/20 + 15/h) untouched (D-09); the daily-message cap was removed (D-04).
             # Phase 13 → Phase 22 (PACE-03..07 + D-05): the expected-by-now pacing
             # subquery is ANDed BESIDE the sender-wide cap inside the new-dialog

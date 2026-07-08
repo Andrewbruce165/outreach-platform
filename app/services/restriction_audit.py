@@ -149,7 +149,7 @@ async def _record(
     # resume the audit row documents). An audit write must never roll back the
     # state change it records: use .one_or_none() and skip the write if gone.
     s = (await db.execute(text("""
-        SELECT workspace_id, proxy, rate_per_min, rate_per_hour, rate_per_day,
+        SELECT workspace_id, proxy, rate_per_min, rate_per_hour,
                restricted_until
         FROM senders WHERE id = :sid
     """), {"sid": str(sender_id)})).one_or_none()
@@ -193,9 +193,11 @@ async def _record(
             "unique_contacts_1h": counts.u1,
             "unique_contacts_24h": counts.u24,
             "rate": {
+                # Phase 22 (D-04): the per-sender daily cap was dropped (mig 059);
+                # the daily throttle is now the account grade budget. Only the
+                # per-minute / per-hour configured rates remain in the slice.
                 "configured_per_min": s.rate_per_min,
                 "configured_per_hour": s.rate_per_hour,
-                "configured_per_day": s.rate_per_day,
                 "actual_per_hour": counts.s1,
                 "actual_per_day": counts.s24,
             },
