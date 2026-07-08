@@ -33,6 +33,10 @@ from telethon.errors import (
     AuthKeyDuplicatedError,
     AuthKeyPermEmptyError,
     UserDeactivatedBanError,
+    MessageNotModifiedError,
+    MessageEditTimeExpiredError,
+    MessageAuthorRequiredError,
+    MessageIdInvalidError,
 )
 from sqlalchemy import text
 
@@ -1611,6 +1615,356 @@ class TelegramService:
         finally:
             if client:
                 await self.disconnect_client(client)
+
+    # ─── Inbox mutation methods (Phase 23 — INBM-01/02/03/05) ────────────────
+    # Each clones the send_message_by_telegram_id client-per-op skeleton: create a
+    # client via get_client, resolve the peer via _resolve_peer_by_telegram_id, do
+    # the op, ALWAYS disconnect_client in finally. Each returns a structured dict so
+    # the router logic (gates, ordering, DB writes) is fully testable against mocks.
+
+    async def _resolve_peer_by_telegram_id(self, client: TelegramClient, telegram_id: int):
+        """Resolve an input peer by telegram_id: cache → get_dialogs(200) → retry.
+
+        Extracted from the send_message_by_telegram_id cold-cache fix: a bare
+        telegram_id may miss Telethon's session entity cache (no access_hash), so
+        on ValueError we warm the cache by enumerating recent dialogs and retry.
+        Shared by every inbox mutation method in this class.
+        """
+        try:
+            return await client.get_input_entity(telegram_id)
+        except ValueError:
+            await client.get_dialogs(limit=200)
+            return await client.get_input_entity(telegram_id)
+
+    async def edit_message_by_telegram_id(
+        self,
+        sender_slug: str,
+        sender_id: str,
+        encrypted_session: str,
+        telegram_id: int,
+        telegram_message_id: int,
+        new_text: str,
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
+    ) -> dict:
+        """Edit a previously-sent message (edit-for-everyone).
+
+        The edit window is server-controlled (D-05): we do NOT pre-gate it — we
+        attempt the edit and map Telethon's error classes (Pitfall 1). Re-editing
+        to identical text raises MessageNotModifiedError → treated as an idempotent
+        success no-op, mirroring how set_username treats UsernameNotModifiedError.
+        """
+        client = None
+        try:
+            client = await self.get_client(
+                sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
+            )
+            peer = await self._resolve_peer_by_telegram_id(client, telegram_id)
+            await client.edit_message(peer, telegram_message_id, new_text)
+            return {"success": True}
+        except MessageNotModifiedError:
+            # Identical text — idempotent no-op; the edit still "succeeds".
+            return {"success": True, "no_op": True}
+        except MessageEditTimeExpiredError:
+            return {
+                "success": False,
+                "error": {
+                    "code": "MESSAGE_EDIT_TOO_OLD",
+                    "message": "Сообщение слишком старое для редактирования"
+                }
+            }
+        except (MessageAuthorRequiredError, MessageIdInvalidError):
+            return {
+                "success": False,
+                "error": {
+                    "code": "MESSAGE_NOT_EDITABLE",
+                    "message": "Это сообщение нельзя изменить"
+                }
+            }
+        except FloodWaitError as e:
+            return {
+                "success": False,
+                "error": {
+                    "code": "FLOOD_WAIT",
+                    "message": f"Rate limited. Retry after {e.seconds} seconds",
+                    "retry_after": e.seconds
+                }
+            }
+        except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while editing message: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            logger.error(f"Error editing message by telegram_id: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "MESSAGE_NOT_EDITABLE",
+                    "message": str(e)
+                }
+            }
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def delete_message_by_telegram_id(
+        self,
+        sender_slug: str,
+        sender_id: str,
+        encrypted_session: str,
+        telegram_id: int,
+        telegram_message_id: int,
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
+    ) -> dict:
+        """Delete a message for everyone (revoke=True).
+
+        Deleting an already-gone / own message in a private chat is a SILENT no-op
+        in Telegram — delete_messages never raises for it (Pitfall 4). So reaching
+        completion IS success; the DB row is the source of truth. We reserve failure
+        for connection / flood / frozen / session errors.
+        """
+        client = None
+        try:
+            client = await self.get_client(
+                sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
+            )
+            peer = await self._resolve_peer_by_telegram_id(client, telegram_id)
+            await client.delete_messages(peer, [telegram_message_id], revoke=True)
+            return {"success": True}
+        except FloodWaitError as e:
+            return {
+                "success": False,
+                "error": {
+                    "code": "FLOOD_WAIT",
+                    "message": f"Rate limited. Retry after {e.seconds} seconds",
+                    "retry_after": e.seconds
+                }
+            }
+        except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while deleting message: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            logger.error(f"Error deleting message by telegram_id: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "DELETE_FAILED",
+                    "message": str(e)
+                }
+            }
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def send_file_by_telegram_id(
+        self,
+        sender_slug: str,
+        sender_id: str,
+        encrypted_session: str,
+        telegram_id: int,
+        tmp_path: str,
+        file_name: str | None = None,
+        caption: str | None = None,
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
+    ) -> dict:
+        """Send a file from the inbox by telegram_id (multipart→temp-file path).
+
+        Unlike the queue ``send_file`` this is the temp-file path: the router owns
+        the temp file lifecycle (D-14) — we do NOT unlink ``tmp_path`` here and we do
+        NOT download from a URL. Media type is auto-detected (``force_document=False``,
+        D-11): photos arrive as photos, not documents (the temp file keeps the
+        original extension). A caption over 1024 chars is sent as a separate
+        follow-up text message so nothing is lost.
+        """
+        client = None
+        try:
+            client = await self.get_client(
+                sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
+            )
+            peer = await self._resolve_peer_by_telegram_id(client, telegram_id)
+
+            # Telegram caption limit for media is 1024 chars. If the caption
+            # exceeds it, send the file without a caption and follow up with a
+            # separate text message so the full text is delivered.
+            CAPTION_LIMIT = 1024
+            file_caption = None
+            overflow_text = None
+            if caption:
+                if len(caption) <= CAPTION_LIMIT:
+                    file_caption = caption
+                else:
+                    overflow_text = caption
+
+            sent = await client.send_file(
+                peer,
+                tmp_path,
+                caption=file_caption,
+                file_name=file_name,
+                force_document=False,   # D-11 auto-media
+            )
+
+            if overflow_text:
+                try:
+                    await client.send_message(peer, overflow_text)
+                except Exception as e:
+                    logger.warning(f"File sent but overflow text failed: {e}")
+
+            return {"success": True, "telegram_message_id": sent.id}
+
+        except FloodWaitError as e:
+            return {
+                "success": False,
+                "error": {
+                    "code": "FLOOD_WAIT",
+                    "message": f"Rate limited. Retry after {e.seconds} seconds",
+                    "retry_after": e.seconds
+                }
+            }
+        except PeerFloodError:
+            return {
+                "success": False,
+                "error": {
+                    "code": "PEER_FLOOD",
+                    "message": "Спам-ограничение аккаунта. Требуется пауза и ручная проверка."
+                }
+            }
+        except UserIsBlockedError:
+            # SRLD-08 (D-15): recipient blocked THIS sender — parity with send_message.
+            return {
+                "success": False,
+                "error": {
+                    "code": "USER_IS_BLOCKED",
+                    "message": "Получатель заблокировал отправителя"
+                }
+            }
+        except ValueError as e:
+            # Peer never resolved even after the get_dialogs retry — the recipient
+            # is unreachable from this sender (cold entity).
+            logger.error(f"Error sending file by telegram_id (unresolved peer): {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "RECIPIENT_NOT_IN_TELEGRAM",
+                    "message": "Получатель недоступен в Telegram"
+                }
+            }
+        except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while sending file: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            if "USER_IS_BLOCKED" in str(e):
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "USER_IS_BLOCKED",
+                        "message": "Получатель заблокировал отправителя"
+                    }
+                }
+            logger.error(f"Error sending file by telegram_id: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "SEND_FAILED",
+                    "message": str(e)
+                }
+            }
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+    async def download_media_by_telegram_id(
+        self,
+        sender_slug: str,
+        sender_id: str,
+        encrypted_session: str,
+        telegram_id: int,
+        telegram_message_id: int,
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
+    ) -> dict:
+        """Lazily download a message's media by (peer, message_id).
+
+        NEVER uses the deprecated bot-API file identifier (unreliable for user
+        accounts — Pitfall 6). The reliable key is the stored ``telegram_message_id``
+        + the peer. If the message is gone (contact deleted it) or carries no media,
+        the contact is no longer downloadable → MEDIA_UNAVAILABLE.
+        """
+        client = None
+        try:
+            client = await self.get_client(
+                sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
+            )
+            peer = await self._resolve_peer_by_telegram_id(client, telegram_id)
+
+            msg = await client.get_messages(peer, ids=telegram_message_id)
+            if not msg or not msg.media:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "MEDIA_UNAVAILABLE",
+                        "message": "Файл больше недоступен в Telegram"
+                    }
+                }
+
+            data = await msg.download_media(file=bytes)
+            return {
+                "success": True,
+                "data": data,
+                "mime": (msg.file.mime_type if msg.file else "application/octet-stream"),
+                "name": (msg.file.name if msg.file else "file"),
+            }
+
+        except FloodWaitError as e:
+            return {
+                "success": False,
+                "error": {
+                    "code": "DOWNLOAD_FAILED",
+                    "message": f"Rate limited. Retry after {e.seconds} seconds",
+                    "retry_after": e.seconds
+                }
+            }
+        except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while downloading media: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            logger.error(f"Error downloading media by telegram_id: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "DOWNLOAD_FAILED",
+                    "message": str(e)
+                }
+            }
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
+
 
 
 # Global instance
