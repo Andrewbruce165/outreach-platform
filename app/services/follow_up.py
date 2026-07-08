@@ -221,13 +221,16 @@ class FollowUpWorker:
 
         Returns True if a ping was enqueued.
         """
-        # D-14: skip if the owning sender is restricted — retry next tick. The
-        # auto-finish clock still runs, so a durably-restricted dialog closes on
-        # the time threshold above regardless.
-        if r.sender_restriction_status and r.sender_restriction_status != "none":
+        # D-14 (amended quick-260708-icz): spam_limited no longer blocks follow-up
+        # pings — a spam_limited (PeerFlood'd) sender keeps pinging already-messaged
+        # contacts (PeerFlood is a "back off NEW outreach" signal, not "stop
+        # everything"). Only 'frozen' (Telegram ACCOUNT_FROZEN — all writes blocked)
+        # skips the ping and retries next tick. The auto-finish time threshold still
+        # closes durably-frozen dialogs regardless.
+        if r.sender_restriction_status == "frozen":
             logger.info(
-                "🔔 Skip ping for conversation %s — sender %s restricted (%s)",
-                r.id, r.sender_slug, r.sender_restriction_status,
+                "🔔 Skip ping for conversation %s — sender %s frozen",
+                r.id, r.sender_slug,
             )
             return False
 

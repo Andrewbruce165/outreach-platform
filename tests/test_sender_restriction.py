@@ -282,10 +282,17 @@ def test_queue_flags_restriction_on_send_errors():
 
 
 def test_queue_pre_send_skips_restricted():
+    """quick-260708-icz: _check_rate_limits now skips the whole tick ONLY when the
+    sender is 'frozen' (Telegram ACCOUNT_FROZEN — all writes blocked). A spam_limited
+    (PeerFlood'd) sender is NO LONGER early-returned here — it falls through to the
+    normal rate-limit checks so follow-ups keep flowing; its new-dialog sends are gated
+    separately in the pick SELECT (s.restriction_status <> 'spam_limited')."""
     from app.services.queue import QueueWorker
 
     src = inspect.getsource(QueueWorker._check_rate_limits)
-    assert 'restriction_status != "none"' in src
+    assert 'restriction_status == "frozen"' in src
+    # spam_limited no longer early-returns the whole tick.
+    assert 'restriction_status != "none"' not in src
 
 
 # ─── 5. quick 260706-fw7: spam-limit recheck window is 1h, not 6h ─────────────
