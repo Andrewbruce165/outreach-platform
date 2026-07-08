@@ -395,20 +395,23 @@ expected_now = camp_row.c_cap * frac * random.uniform(PACE_JITTER_LOW, PACE_JITT
 | A4 | New ORM tables/columns are picked up by conftest `create_all` without a conftest edit; only SQL-only ops need a manual block | Pitfall 1 | Low — verified by reading conftest's create_all-first flow; a mis-declared model would surface immediately as a test-collection error. |
 | A5 | The initiator (charged account) should be the older/more-warmed one and must be `sender_a` so it writes first | code §3 | Low-Med — from `[SUPERSEDED]` D-12 (safety bonus); user marked initiator choice as Claude's discretion. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Shared-budget window: trailing-24h or calendar-day?**
    - What we know: queue uses trailing-24h; warmup `_count_sent_today` uses calendar-day.
    - What's unclear: which the user expects for the unified budget.
    - Recommendation: trailing-24h (consistency + anti-midnight-burst); confirm at plan review.
+   - **RESOLVED:** trailing-24h adopted for both queue and warmup — decided in plan 22-03 (Task 1, account-budget rewrite) and 22-05 (Task 2, outreach-priority reserve on the shared trailing-24h budget).
 
 2. **One migration or several (056–058)?**
    - What we know: next slot is 056; operations are separable.
    - Recommendation: separate idempotent files per concern (columns+drop, registry+backfill, ladder table) for clean rollback reasoning; planner's call.
+   - **RESOLVED:** split into separate idempotent files — 056 (sender grade columns) + 057 (sender_first_contacts + backfill) + 058 (sender_grade_settings) in plan 22-01, and 059 (drop dead limit columns) in plan 22-06.
 
 3. **Manual override transport (extend `SenderUpdate` vs dedicated sub-route)?**
    - What we know: PATCH `/senders/{slug}` exists (line 618); a dedicated `/senders/{slug}/grade` mirrors the profile sub-routes.
    - Recommendation: dedicated PATCH sub-route to keep grade semantics (timer reset) explicit and out of the generic update path.
+   - **RESOLVED:** dedicated `PATCH /senders/{slug}/grade` sub-route adopted — decided in plan 22-04 (Task 2, SenderResponse grade fields + override).
 
 ## Environment Availability
 

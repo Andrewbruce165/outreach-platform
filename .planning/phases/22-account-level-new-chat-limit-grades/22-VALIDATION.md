@@ -1,9 +1,9 @@
 ---
 phase: 22
 slug: account-level-new-chat-limit-grades
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: final
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-08
 ---
 
@@ -40,18 +40,30 @@ created: 2026-07-08
 
 | Task ID | Decision | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|----------|-------------|-----------|-------------------|-------------|--------|
-| 22-xx | D-13 | sender-wide dedup: phone contacted in campaign A blocks re-open in campaign B | integration | `pytest tests/test_queue_new_dialog_limit.py -k sender_wide` | ❌ W0 (extend existing) | ⬜ pending |
-| 22-xx | D-01/D-06 | account budget cap counts across campaigns, not per-campaign | integration | `pytest tests/test_queue_new_dialog_limit.py` | ✅ extend | ⬜ pending |
-| 22-xx | D-05 | pacing numerator = account budget, campaign window preserved | integration | `pytest tests/test_queue_even_pacing.py` | ✅ extend | ⬜ pending |
-| 22-xx | D-04 | rate_per_day gate removed; min/hour/15-per-hour intact | integration | `pytest tests/test_senders.py tests/test_send.py -k rate` | ✅ extend | ⬜ pending |
-| 22-xx | D-14 | auto-progression advances level after step days; stops at 3 | unit/integration | `pytest tests/test_senders.py -k grade` | ❌ W0 | ⬜ pending |
-| 22-xx | D-15 | manual override sets level + resets timer | integration | `pytest tests/test_senders.py -k override` | ❌ W0 | ⬜ pending |
-| 22-xx | D-16 | ladder GET/PUT, code-defaults on absent row | integration | `pytest tests/test_grade_settings.py` (new, mirror `test_warmup_router.py`) | ❌ W0 | ⬜ pending |
-| 22-xx | D-08 | new warmup pair charges initiator; known pair free; backfill idempotent | integration | `pytest tests/test_warmup_worker.py -k pair` | ✅ extend | ⬜ pending |
-| 22-xx | D-09 | outreach reserve leaves warmup only the remainder | integration | `pytest tests/test_warmup_worker.py -k reserve` | ❌ W0 | ⬜ pending |
+| 22-01-01 | D-14/D-10 | sender grade columns (current_level/level_updated_at) + backfill to created_at | grep/migration | `grep -n "current_level" app/models/__init__.py && grep -c "IF NOT EXISTS" migrations/056_sender_grade_columns.sql` | ✅ create | ⬜ pending |
+| 22-01-02 | D-16/D-08 | sender_first_contacts (idempotent backfill) + sender_grade_settings + grade_ladder defaults 5/30,9/30,13 | grep/migration | `grep -c "ON CONFLICT DO NOTHING" migrations/057_sender_first_contacts.sql && grep -n "sender_grade_settings" app/models/__init__.py` | ✅ create | ⬜ pending |
+| 22-01-03 | D-14/D-16/D-08 | foundation: fresh test DB has grade columns/tables + conftest SQL-only blocks | integration | `pytest tests/test_grade_foundation.py -x` | ❌ W0 (new) | ⬜ pending |
+| 22-02-01 | D-16 | ladder GET/PUT, code-defaults on absent row, green-corridor warnings, workspace-scoped upsert | integration | `grep -n "ON CONFLICT (workspace_id) DO UPDATE" app/routers/grade_settings.py && grep -n "grade_settings.router" app/main.py` | ✅ create | ⬜ pending |
+| 22-02-02 | D-14/D-17 | auto-progression sweep advances level after step days; stops at 3 | integration | `grep -n "grade_progression_worker.start()" app/main.py && grep -n "current_level < 3" app/services/grade_progression.py` | ✅ create | ⬜ pending |
+| 22-02-03 | D-16/D-14/D-17 | ladder GET/PUT defaults + cross-tenant isolation + progression/stop-at-3 tests | integration | `pytest tests/test_grade_settings.py tests/test_grade_progression.py -x` | ❌ W0 (new) | ⬜ pending |
+| 22-03-01 | D-01/D-06/D-13/D-05 | sender-wide DISTINCT-phone cap across campaigns; account grade budget as cap RHS + pace numerator; campaign window preserved | integration | `pytest tests/test_queue_new_dialog_limit.py tests/test_queue_even_pacing.py -x` | ✅ extend | ⬜ pending |
+| 22-03-02 | D-04 | rate_per_day gate removed from _check_rate_limits; min/hour/15-per-hour + interval floor intact | grep/integration | `grep -c "rate_per_day\|max_per_day" app/services/queue.py; pytest tests/test_send.py -k rate -x` | ✅ extend | ⬜ pending |
+| 22-03-03 | D-01/D-05/D-13/D-04 | extend queue/pacing/rate tests for account-wide behavior | integration | `pytest tests/test_queue_new_dialog_limit.py tests/test_queue_even_pacing.py tests/test_send.py -k "rate or sender_wide or budget or pacing" -x` | ✅ extend | ⬜ pending |
+| 22-04-01 | D-04 | sender API no longer exposes/validates/accepts rate_per_day (per_day) | grep | `grep -c "rate_per_day\|per_day" app/routers/senders.py; grep -n "per_day" app/schemas/__init__.py` | ✅ edit | ⬜ pending |
+| 22-04-02 | D-12/D-15 | SenderResponse grade fields (current_level/level_updated_at/remaining budget) + PATCH /senders/{slug}/grade override resets timer | grep/integration | `grep -n "current_level" app/schemas/__init__.py && grep -n "senders/{slug}/grade" app/routers/senders.py` | ✅ edit | ⬜ pending |
+| 22-04-03 | D-04/D-12/D-15 | test_senders.py: rate removal + grade fields + override + out-of-range reject | integration | `pytest tests/test_senders.py -k "rate or grade or override" -x` | ✅ extend | ⬜ pending |
+| 22-05-01 | D-08 | new-pair charges initiator + registry insert; known pair free | integration | `grep -n "sender_first_contacts" app/services/warmup.py && pytest tests/test_warmup_worker.py -k pair -x` | ✅ extend | ⬜ pending |
+| 22-05-02 | D-09/D-03 | outreach-priority reserve on shared trailing-24h budget; warmup gets remainder | integration | `grep -n "INTERVAL '24 hours'" app/services/warmup.py && pytest tests/test_warmup_worker.py -k reserve -x` | ❌ W0 (extend) | ⬜ pending |
+| 22-05-03 | D-08/D-09 | warmup budget/reserve/idempotent-backfill tests | integration | `pytest tests/test_warmup_worker.py -k "pair or reserve" -x` | ✅ extend | ⬜ pending |
+| 22-06-01 | D-04/D-07 | migration 059 drops campaigns.max_new_dialogs_per_day + senders.rate_per_day from DB + ORM | grep/migration | `grep -c "DROP COLUMN IF EXISTS" migrations/059_drop_dead_limit_columns.sql; grep -c "rate_per_day\|max_new_dialogs_per_day" app/models/__init__.py` | ✅ create | ⬜ pending |
+| 22-06-02 | D-07 | campaign schema + router cleanup (no dialog-limit field/validation) | grep | `grep -rc "max_new_dialogs_per_day\|_validate_max_new_dialogs\|DIALOG_LIMIT" app/routers/campaigns.py app/schemas/__init__.py` | ✅ edit | ⬜ pending |
+| 22-06-03 | D-07/D-04 | conftest note + campaign tests + repo-wide grep gate (no references remain) | integration | `test -z "$(grep -rn --include=*.py 'max_new_dialogs_per_day\|rate_per_day' app/)" && pytest tests/test_send_campaign.py -x` | ✅ extend | ⬜ pending |
+| 22-07-01 | D-12 | openapi.json + types regenerated: grade endpoints/fields in, retired fields out | grep | `grep -c "sender-grade-settings" lovable-handoff/openapi.json; grep -c "max_new_dialogs_per_day" lovable-handoff/openapi.json` | ✅ regen | ⬜ pending |
+| 22-07-02 | D-11 | frontend handoff note references grade endpoints + lists removals | file/grep | `test -f 22-FRONTEND-HANDOFF.md && grep -c "sender-grade-settings\|current_level\|/grade" 22-FRONTEND-HANDOFF.md` | ✅ create | ⬜ pending |
+| 22-07-03 | D-11/D-15/D-16 | human-verify: ladder editor, grade display, override, field removals (UI in sibling repo) | manual (checkpoint) | manual-only — see Manual-Only Verifications | — | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
-*Task IDs are placeholders — gsd-planner fills in real `{N}-{plan}-{task}` IDs against this decision map.*
+*Task IDs are real `{phase}-{plan}-{task}` IDs pulled from the 7 executed PLAN.md files. Every code-producing task carries an `<automated>` verify; Wave-0 gaps (new test files) are created by the tdd-typed foundation/test tasks in their owning plans.*
 
 ---
 
@@ -79,11 +91,11 @@ created: 2026-07-08
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (22-07-03 is a human-verify checkpoint, manual-only by design)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (new test files 22-01-03/22-02-03 + reserve cases 22-05-02)
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** finalized 2026-07-08 against the 7 executed PLAN.md files (Dimension 8 passes)
