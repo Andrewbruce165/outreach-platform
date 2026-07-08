@@ -433,3 +433,73 @@ async def test_user_blocked_records_event(
         "a recipient block must surface as the structured USER_IS_BLOCKED code "
         f"(SRLD-08/D-15), not generic SEND_FAILED; got {res['error']}"
     )
+
+
+# ── Phase 22 (D-04): daily-message cap removed from _check_rate_limits ─────────
+
+
+async def _seed_sent_rate(db, *, workspace_id, sender_id, count, interval, phone_prefix):
+    """Seed ``count`` status='sent' message_queue rows finished ``interval`` ago
+    (a raw INTERVAL literal like '2 hours' / '5 minutes'), each to a distinct phone.
+    finished_at is set explicitly so the rate-limit COUNT windows include them."""
+    for i in range(count):
+        await db.execute(text(f"""
+            INSERT INTO message_queue (
+                id, workspace_id, sender_id, item_type, status,
+                recipient_phone, message_text, scheduled_at, finished_at
+            ) VALUES (
+                :id, :wid, :sid, 'message', 'sent',
+                :rp, 'x', NOW() - INTERVAL '{interval}', NOW() - INTERVAL '{interval}'
+            )
+        """), {
+            "id": str(_uuid4()), "wid": str(workspace_id),
+            "sid": str(sender_id), "rp": f"{phone_prefix}{i:04d}",
+        })
+    await db.commit()
+
+
+async def test_no_daily_message_cap_but_rate_limits_still_gate(
+    async_db_session, test_workspace
+):
+    """Phase 22 (D-04): _check_rate_limits no longer enforces a daily-message cap.
+
+    160 messages sent in the trailing 24h (all >1h ago) exceeds the OLD 150/day
+    cap, yet the sender is NOT blocked — the daily gate is gone. The per-hour gate
+    still blocks once 20 sends land inside the last hour, proving the empirical
+    per-minute/per-hour floors are intact.
+    """
+    from app.models import Sender
+    from app.services.queue import QueueWorker
+
+    suffix = _uuid4().hex[:8]
+    sender = Sender(
+        workspace_id=test_workspace.id, slug=f"rate-nocap-{suffix}", name="rate",
+        phone="+79994440000", session_string="enc", role="sender",
+        auth_status="ok", lifecycle_status="active",
+        rate_per_min=4, rate_per_hour=20, rate_per_day=150,
+    )
+    async_db_session.add(sender)
+    await async_db_session.commit()
+    await async_db_session.refresh(sender)
+
+    worker = QueueWorker()
+
+    # 160 sent, all finished 2h ago → outside the 1-minute and 1-hour windows, so
+    # per-minute/per-hour counters are 0. Under the OLD rule 160 >= 150 would block.
+    await _seed_sent_rate(
+        async_db_session, workspace_id=test_workspace.id, sender_id=sender.id,
+        count=160, interval="2 hours", phone_prefix="+7999500",
+    )
+    assert await worker._check_rate_limits(async_db_session, sender.id) is True, (
+        "D-04: exceeding the old 150/day cap must NOT block — the daily gate is removed"
+    )
+
+    # 20 more sent within the last 5 minutes → the per-hour gate (rate_per_hour=20)
+    # now fires. The structural per-minute/per-hour floors remain intact.
+    await _seed_sent_rate(
+        async_db_session, workspace_id=test_workspace.id, sender_id=sender.id,
+        count=20, interval="5 minutes", phone_prefix="+7999600",
+    )
+    assert await worker._check_rate_limits(async_db_session, sender.id) is False, (
+        "per-hour rate limit must still gate after the daily cap removal (D-04)"
+    )

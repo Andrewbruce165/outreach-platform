@@ -114,14 +114,27 @@ async def _seed_sent_dialog(
 
 
 async def _set_cap(db, *, campaign_id, cap: int):
-    """Set campaigns.max_new_dialogs_per_day for a campaign.
+    """Set the sender-wide daily new-chat budget for the campaign's workspace.
 
-    The conftest test_campaign_factory does NOT accept this column as a kwarg
-    (its INSERT column list is fixed), so we UPDATE it explicitly. The column
-    exists with DEFAULT 50 (migration 033 / ORM server_default)."""
+    Phase 22 (D-01/D-05): the new-dialog cap is now driven by the ACCOUNT grade
+    budget — sender_grade_settings.level1_chats_per_day for a level-1 sender
+    (test senders default to current_level=1) — NOT campaigns.max_new_dialogs_per_day.
+    We upsert the workspace grade-settings row so a level-1 sender resolves
+    budget == cap. The legacy campaign column is still set (harmless; it physically
+    exists until 22-06) so the intent stays readable, but it is no longer read by
+    the queue pick path."""
+    wid = (await db.execute(text(
+        "SELECT workspace_id FROM campaigns WHERE id = :cid"
+    ), {"cid": str(campaign_id)})).scalar()
     await db.execute(text(
         "UPDATE campaigns SET max_new_dialogs_per_day = :cap WHERE id = :cid"
     ), {"cap": cap, "cid": str(campaign_id)})
+    await db.execute(text("""
+        INSERT INTO sender_grade_settings (workspace_id, level1_chats_per_day)
+        VALUES (:wid, :cap)
+        ON CONFLICT (workspace_id)
+        DO UPDATE SET level1_chats_per_day = EXCLUDED.level1_chats_per_day
+    """), {"wid": str(wid), "cap": cap})
     await db.commit()
 
 
@@ -657,3 +670,75 @@ async def test_followup_bypasses_pacing(
     assert "PACE_JITTER" not in rate_src, (
         "_check_rate_limits must NOT reference the pacing jitter constants (D-07)"
     )
+
+
+# ── Phase 22 (D-05): pace numerator = account grade budget, window preserved ───
+
+
+async def test_expected_now_uses_account_budget_source():
+    """D-05 guard: expected_now is computed from the account grade budget, and the
+    campaign working window (timezone/hours) still feeds the elapsed fraction."""
+    src = inspect.getsource(QueueWorker._process_next_for_sender)
+    assert "account_budget * frac" in src, (
+        "expected_now numerator must be the account budget (D-05)"
+    )
+    assert "c.max_new_dialogs_per_day" not in src, (
+        "the legacy per-campaign cap column must no longer drive pacing (D-01/D-05)"
+    )
+    assert "c.timezone AS c_tz" in src and "_window_elapsed_fraction" in src, (
+        "the campaign working window must still supply the pacing fraction (D-05)"
+    )
+
+
+async def test_pacing_numerator_is_account_budget(
+    async_db_session, test_running_campaign_factory
+):
+    """D-05: the expected-by-now pace numerator is the ACCOUNT grade budget, NOT
+    campaigns.max_new_dialogs_per_day.
+
+    Diverge the two: account budget = 10 (via _set_cap) but the legacy campaign
+    column = 1000. Pin frac=0.1, jitter=1.0:
+      - numerator = account budget (10) → expected = 1.0; 2 opened ≥ 1.0 ⇒ BLOCKED;
+      - numerator = campaign column (1000) → expected = 100; 2 opened < 100 ⇒ allowed.
+    The item is blocked, proving the numerator is the account budget. The cap
+    (budget 10) allows (2 < 10), so pacing is the sole binding constraint.
+    """
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp["workspace_id"]
+    cid = camp["id"]
+
+    now = datetime.now(timezone.utc)
+    ws = now - timedelta(hours=2)  # window start 2h ago: seeded NOW() rows count
+
+    await _set_cap(async_db_session, campaign_id=cid, cap=10)  # account budget = 10
+    # Diverge the legacy campaign column: a regression reading it would flip the
+    # verdict from blocked (expected 1.0) to allowed (expected 100).
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET max_new_dialogs_per_day = 1000 WHERE id = :cid"
+    ), {"cid": str(cid)})
+    await async_db_session.commit()
+
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid, recipient_phone="+79997770001")
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid, recipient_phone="+79997770002")
+
+    blocked_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid, recipient_phone="+79997770003",
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with _pin_pacing(window_start_utc=ws, frac=0.1), cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert blocked_qid not in captured["picked"], (
+        "pace numerator must be the account budget (10 → expected 1.0), not the "
+        "legacy campaign column (1000 → expected 100 would allow) (D-05)"
+    )
+    assert await _item_status(async_db_session, blocked_qid) == "pending"

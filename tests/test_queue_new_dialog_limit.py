@@ -92,14 +92,27 @@ async def _seed_sent_dialog(
 
 
 async def _set_cap(db, *, campaign_id, cap: int):
-    """Set campaigns.max_new_dialogs_per_day for a campaign.
+    """Set the sender-wide daily new-chat budget for the campaign's workspace.
 
-    The conftest test_campaign_factory does NOT accept this column as a kwarg
-    (its INSERT column list is fixed), so we UPDATE it explicitly. The column
-    exists with DEFAULT 50 (migration 033 / ORM server_default)."""
+    Phase 22 (D-01/D-05): the new-dialog cap is now driven by the ACCOUNT grade
+    budget — sender_grade_settings.level1_chats_per_day for a level-1 sender
+    (test senders default to current_level=1) — NOT campaigns.max_new_dialogs_per_day.
+    We upsert the workspace grade-settings row so a level-1 sender resolves
+    budget == cap. The legacy campaign column is still set (harmless; it physically
+    exists until 22-06) so the intent stays readable, but it is no longer read by
+    the queue pick path."""
+    wid = (await db.execute(text(
+        "SELECT workspace_id FROM campaigns WHERE id = :cid"
+    ), {"cid": str(campaign_id)})).scalar()
     await db.execute(text(
         "UPDATE campaigns SET max_new_dialogs_per_day = :cap WHERE id = :cid"
     ), {"cap": cap, "cid": str(campaign_id)})
+    await db.execute(text("""
+        INSERT INTO sender_grade_settings (workspace_id, level1_chats_per_day)
+        VALUES (:wid, :cap)
+        ON CONFLICT (workspace_id)
+        DO UPDATE SET level1_chats_per_day = EXCLUDED.level1_chats_per_day
+    """), {"wid": str(wid), "cap": cap})
     await db.commit()
 
 
@@ -283,3 +296,188 @@ async def test_check_rate_limits_untouched():
     assert "max_new_dialogs_per_day" not in src, (
         "_check_rate_limits must NOT reference the new-dialog cap (D-07/D-09)"
     )
+
+
+# ── Phase 22 (D-01/D-06/D-13): sender-wide, account-budget-driven cap ──────────
+
+
+async def test_followup_is_sender_wide_across_campaigns(
+    async_db_session, test_running_campaign_factory,
+    test_campaign_factory, attach_sender_to_campaign,
+):
+    """D-13: a phone the sender already sent to in campaign A is a KNOWN peer when
+    the same phone is queued in campaign B — serviced as a follow-up, spending no
+    new-dialog budget. Even with the account budget set to 0 (all NEW dialogs
+    blocked), the cross-campaign follow-up is still picked."""
+    camp_a, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp_a["workspace_id"]
+    cid_a = camp_a["id"]
+
+    # Second running campaign in the SAME workspace, same sender attached.
+    camp_b = await test_campaign_factory(
+        status="running", work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    cid_b = camp_b["id"]
+    await attach_sender_to_campaign(cid_b, sid)
+
+    # Budget 0 → every NEW dialog is blocked; only sender-wide follow-ups survive.
+    await _set_cap(async_db_session, campaign_id=cid_a, cap=0)
+
+    # Sent to phone P in campaign A → P is now a known peer for this sender.
+    phone_p = "+79990000777"
+    await _seed_sent_dialog(async_db_session, workspace_id=wid, sender_id=sid,
+                            campaign_id=cid_a, recipient_phone=phone_p)
+
+    # Same phone queued in campaign B — sender-wide dedup makes it a follow-up.
+    followup_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid_b, recipient_phone=phone_p,
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert followup_qid in captured["picked"], (
+        "a phone contacted in ANOTHER campaign must be a sender-wide follow-up "
+        "(D-13) — picked even at budget 0"
+    )
+    assert await _item_status(async_db_session, followup_qid) == "processing"
+
+
+async def test_account_budget_shared_across_campaigns_blocks(
+    async_db_session, test_running_campaign_factory,
+    test_campaign_factory, attach_sender_to_campaign,
+):
+    """D-01/D-06: the daily new-dialog budget is SENDER-WIDE, spent across all of a
+    sender's campaigns combined. Budget 5, 3 new dialogs opened in campaign A + 2
+    in campaign B = 5 exhausted → a 6th new dialog (in campaign A) is blocked, even
+    though campaign A alone only opened 3 (< 5). Per-campaign logic would allow it;
+    sender-wide logic blocks it.
+
+    The 5 prior dialogs are seeded finished 23h ago: inside the trailing-24h cap
+    window (so the cap counts 5) but before today's UTC-midnight pace window start
+    (so the pace numerator is 0 and pacing ALLOWS) — isolating the sender-wide cap
+    as the sole blocker (same technique as test_new_dialog_allowed_under_cap)."""
+    camp_a, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp_a["workspace_id"]
+    cid_a = camp_a["id"]
+
+    camp_b = await test_campaign_factory(
+        status="running", work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    cid_b = camp_b["id"]
+    await attach_sender_to_campaign(cid_b, sid)
+
+    await _set_cap(async_db_session, campaign_id=cid_a, cap=5)
+
+    async def _seed_old_sent(campaign_id, phone):
+        await async_db_session.execute(text("""
+            INSERT INTO message_queue (
+                id, workspace_id, sender_id, campaign_id,
+                item_type, status, recipient_phone, message_text,
+                scheduled_at, finished_at
+            ) VALUES (
+                :qid, :wid, :sid, :cid,
+                'message', 'sent', :rp, 'older',
+                NOW() - INTERVAL '23 hours', NOW() - INTERVAL '23 hours'
+            )
+        """), {
+            "qid": str(uuid.uuid4()), "wid": str(wid), "sid": str(sid),
+            "cid": str(campaign_id), "rp": phone,
+        })
+        await async_db_session.commit()
+
+    # 3 distinct new dialogs in A + 2 in B = 5 sender-wide (== budget).
+    for i in range(3):
+        await _seed_old_sent(cid_a, f"+799911100{i:02d}")
+    for i in range(2):
+        await _seed_old_sent(cid_b, f"+799922200{i:02d}")
+
+    # A fresh never-contacted new dialog in campaign A. Campaign A alone opened
+    # only 3 (< 5); a per-campaign cap would ALLOW this. Sender-wide (3+2=5) blocks.
+    blocked_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid_a, recipient_phone="+79993330099",
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert blocked_qid not in captured["picked"], (
+        "sender-wide budget (3 in A + 2 in B = 5) must block a 6th new dialog "
+        "even though campaign A alone is under budget (D-01/D-06)"
+    )
+    assert await _item_status(async_db_session, blocked_qid) == "pending"
+
+
+async def test_account_budget_shared_across_campaigns_allows_under_total(
+    async_db_session, test_running_campaign_factory,
+    test_campaign_factory, attach_sender_to_campaign,
+):
+    """D-01/D-06 complement: with budget 5 and only 2 (A) + 2 (B) = 4 opened
+    sender-wide (< 5), a fresh new dialog in campaign B IS selectable — proving the
+    shared budget boundary, not a per-campaign one."""
+    camp_a, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    sid = senders[0].id
+    wid = camp_a["workspace_id"]
+    cid_a = camp_a["id"]
+
+    camp_b = await test_campaign_factory(
+        status="running", work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    cid_b = camp_b["id"]
+    await attach_sender_to_campaign(cid_b, sid)
+
+    await _set_cap(async_db_session, campaign_id=cid_a, cap=5)
+
+    async def _seed_old_sent(campaign_id, phone):
+        await async_db_session.execute(text("""
+            INSERT INTO message_queue (
+                id, workspace_id, sender_id, campaign_id,
+                item_type, status, recipient_phone, message_text,
+                scheduled_at, finished_at
+            ) VALUES (
+                :qid, :wid, :sid, :cid,
+                'message', 'sent', :rp, 'older',
+                NOW() - INTERVAL '23 hours', NOW() - INTERVAL '23 hours'
+            )
+        """), {
+            "qid": str(uuid.uuid4()), "wid": str(wid), "sid": str(sid),
+            "cid": str(campaign_id), "rp": phone,
+        })
+        await async_db_session.commit()
+
+    for i in range(2):
+        await _seed_old_sent(cid_a, f"+799944400{i:02d}")
+    for i in range(2):
+        await _seed_old_sent(cid_b, f"+799955500{i:02d}")
+
+    allowed_qid = await _insert_pending_item(
+        async_db_session, workspace_id=wid, sender_id=sid,
+        campaign_id=cid_b, recipient_phone="+79996660099",
+    )
+
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    with cm_rate, cm_pause, cm_send:
+        await worker._process_next_for_sender(sid)
+
+    assert allowed_qid in captured["picked"], (
+        "4 opened sender-wide (< budget 5) must leave a new dialog selectable (D-01)"
+    )
+    assert await _item_status(async_db_session, allowed_qid) == "processing"

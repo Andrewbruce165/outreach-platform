@@ -579,7 +579,7 @@ Plans:
 
 **Wave 2** *(parallel — distinct files: queue vs warmup vs senders/schemas vs new-router/worker)*
 - [ ] 22-02-PLAN.md — GET/PUT /sender-grade-settings ladder API + grade auto-progression worker + main.py wiring [Wave 2, depends_on: 22-01] — D-16/D-14/D-17
-- [ ] 22-03-PLAN.md — queue account-budget + sender-wide dedup rewrite of _process_next_for_sender + rate_per_day gate removal from _check_rate_limits [Wave 2, depends_on: 22-01] — D-01/D-05/D-06/D-13/D-03/D-04
+- [x] 22-03-PLAN.md — queue account-budget + sender-wide dedup rewrite of _process_next_for_sender + rate_per_day gate removal from _check_rate_limits [Wave 2, depends_on: 22-01] — D-01/D-05/D-06/D-13/D-03/D-04 (completed 2026-07-08)
 - [ ] 22-04-PLAN.md — remove rate_per_day from sender schemas/router + SenderResponse grade fields + PATCH /senders/{slug}/grade override [Wave 2, depends_on: 22-01] — D-04/D-12/D-15
 - [ ] 22-05-PLAN.md — warmup new-pair budget via sender_first_contacts + outreach-priority reserve (trailing-24h shared window) [Wave 2, depends_on: 22-01] — D-08/D-09/D-03
 

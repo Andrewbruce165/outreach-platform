@@ -33,6 +33,7 @@ from app.models import MessageQueue, QueueItemStatus, QueueItemType, Sender, Mes
 from app.services.telegram import telegram_service, SessionAuthError
 from app.services.recontact import protected_conversation_sql
 from app.services.restriction_audit import record_restriction_event
+from app.services import grade_ladder
 from app.services.variation import vary
 from telethon.errors import FloodWaitError
 from sqlalchemy import text
@@ -383,30 +384,38 @@ class QueueWorker:
             return
 
         # ── Phase 13 (PACE-03..07, D-05/D-06/D-08/D-10): even-pacing pre-query ──
-        # Compute the "expected-by-now" new-dialog count for THIS sender's active
-        # campaign BEFORE the candidate SELECT, because the elapsed-fraction math
-        # (zoneinfo / DST / midnight) lives in tested Python (mirrors Phase 4 D-15
-        # which kept the working-window decision Python-side), and `expected_now`
-        # is a per-(sender,campaign) Python-computed bind.
+        # ── Phase 22 (D-01/D-05): the daily numerator is now the ACCOUNT grade   ──
+        # budget (from the workspace ladder resolved for this sender's grade
+        # level), NOT campaigns.max_new_dialogs_per_day. The campaign is still the
+        # source of the working WINDOW (timezone/hours) for pacing (D-05).
+        #
+        # Compute the "expected-by-now" new-dialog count for THIS sender BEFORE the
+        # candidate SELECT, because the elapsed-fraction math (zoneinfo / DST /
+        # midnight) lives in tested Python (mirrors Phase 4 D-15 which kept the
+        # working-window decision Python-side), and `expected_now` is a Python-
+        # computed bind. The account budget is likewise resolved once per tick in
+        # Python via grade_ladder (mirrors how expected_now is a computed bind).
         #
         # We target the campaign of the NEXT eligible pending item (priority DESC,
         # created_at ASC) with the same base WHERE as the main SELECT minus the
-        # new-dialog/follow-up predicate. In practice a sender's queued items
-        # belong to its attached campaign; if a sender ever spans multiple running
-        # campaigns the pace uses that item's campaign window — acceptable, since
-        # per-(sender,campaign) isolation already holds from Phase 12.
+        # new-dialog/follow-up predicate — that item's campaign supplies the pacing
+        # WINDOW. The budget itself is sender-wide (D-01): one daily allowance
+        # spent across ALL of the sender's campaigns combined (D-06/D-13).
         now_utc = datetime.now(timezone.utc)
         window_start_utc = now_utc          # conservative defaults (no campaign
         expected_now = 0.0                  # → expected 0 → no new dialog picked)
+        account_budget = 0
         async with AsyncSessionLocal() as db:
             camp_row = (await db.execute(
                 text("""
                     SELECT c.timezone AS c_tz,
                            c.work_hour_start AS c_whs,
                            c.work_hour_end AS c_whe,
-                           c.max_new_dialogs_per_day AS c_cap
+                           s.current_level AS s_level,
+                           s.workspace_id AS s_wid
                     FROM message_queue mq
                     JOIN campaigns c ON c.id = mq.campaign_id
+                    JOIN senders s ON s.id = mq.sender_id
                     WHERE mq.sender_id = :sid
                       AND mq.status = 'pending'
                       AND mq.scheduled_at <= NOW()
@@ -419,8 +428,15 @@ class QueueWorker:
                 {"sid": str(sender_id)}
             )).fetchone()
 
-        if camp_row is None:
-            return  # nothing eligible to pace/pick
+            if camp_row is None:
+                return  # nothing eligible to pace/pick
+
+            # Phase 22 D-01/D-05: resolve this sender's account grade budget from
+            # the workspace ladder (code-defaults to LADDER_DEFAULTS when the
+            # workspace has no sender_grade_settings row — D-16). This is the
+            # sender-wide daily new-dialog allowance and the pacing numerator.
+            ladder = await grade_ladder.load_ladder(db, camp_row.s_wid)
+            account_budget = grade_ladder.budget_for_level(ladder, camp_row.s_level)
 
         window_start_utc, frac = _window_elapsed_fraction(
             campaign_tz=camp_row.c_tz,
@@ -428,15 +444,16 @@ class QueueWorker:
             work_hour_end=camp_row.c_whe,
             now=now_utc,
         )
-        # Expected-by-now = daily limit × elapsed fraction × jitter (D-08, fresh
-        # each call so openings don't form a machine grid). No floor/ceil — the
-        # jitter already blurs the boundary. NOTE: the SELECT compares the bigint
-        # COUNT against CAST(:expected_now AS DOUBLE PRECISION); without the cast PG
-        # infers the untyped bind as bigint and truncates a fractional expected_now
-        # (e.g. 0.86 → 0), silently blocking all new dialogs until expected reaches
-        # an integer — keep the explicit float cast so the gate stays fractional.
+        # Expected-by-now = account budget × elapsed fraction × jitter (D-05/D-08,
+        # fresh each call so openings don't form a machine grid). No floor/ceil —
+        # the jitter already blurs the boundary. NOTE: the SELECT compares the
+        # bigint COUNT against CAST(:expected_now AS DOUBLE PRECISION); without the
+        # cast PG infers the untyped bind as bigint and truncates a fractional
+        # expected_now (e.g. 0.86 → 0), silently blocking all new dialogs until
+        # expected reaches an integer — keep the explicit float cast so the gate
+        # stays fractional.
         expected_now = (
-            camp_row.c_cap * frac * random.uniform(PACE_JITTER_LOW, PACE_JITTER_HIGH)
+            account_budget * frac * random.uniform(PACE_JITTER_LOW, PACE_JITTER_HIGH)
         )
 
         async with AsyncSessionLocal() as db:
@@ -446,17 +463,22 @@ class QueueWorker:
             # eligible based on one campaign, but the actual SELECT picks the
             # next item by (priority, created_at); we must re-verify the
             # campaign of THAT item is still running/in-window.
-            # Phase 12 (NDLG-02, D-07/D-08): per-(sender,campaign) new-dialog cap.
-            # New dialogs (no prior sent to this phone in this campaign) are excluded
-            # once max_new_dialogs_per_day unique new dialogs were opened in the
-            # trailing 24h; follow-ups stay eligible. _check_rate_limits
-            # (4/20/150 + 15/h) untouched (D-09).
-            # Phase 13 (PACE-03..07): the expected-by-now pacing subquery is ANDed
-            # BESIDE the Phase 12 cap inside the new-dialog branch. Two DISTINCT
-            # counters (Pitfall 1): the cap counts the trailing-24h window
-            # (NOW() - INTERVAL '24 hours'), the pace counts from TODAY's window
-            # start (:window_start_utc, D-06). :expected_now / :window_start_utc are
-            # passed STRICTLY as binds (never f-string interpolated). Structural
+            # Phase 12 → Phase 22 (NDLG-02 → D-01/D-06/D-13): the new-dialog cap is
+            # now SENDER-WIDE, not per-(sender,campaign). A new dialog = a phone the
+            # sender has NO prior status='sent' row for in ANY campaign; once the
+            # sender has opened >= account_budget distinct new phones (across all its
+            # campaigns combined) in the trailing 24h (D-03 shared window), new-dialog
+            # items are excluded. Follow-ups (any campaign) stay eligible. The cap
+            # RHS is the account grade budget (:account_budget), NOT
+            # campaigns.max_new_dialogs_per_day (D-01/D-05). _check_rate_limits
+            # (4/20 + 15/h) untouched (D-09); the daily-message cap was removed (D-04).
+            # Phase 13 → Phase 22 (PACE-03..07 + D-05): the expected-by-now pacing
+            # subquery is ANDed BESIDE the sender-wide cap inside the new-dialog
+            # branch. Two DISTINCT counters (Pitfall 1): the cap counts the
+            # trailing-24h window (NOW() - INTERVAL '24 hours'), the pace counts from
+            # TODAY's window start (:window_start_utc, D-06). Both are sender-wide.
+            # :expected_now / :window_start_utc / :account_budget are passed STRICTLY
+            # as binds (never f-string interpolated). Structural
             # interval floor (D-03/D-10): there is NO numeric max(target, base) —
             # the PROTECTED base 20–55s gate in _check_rate_limits stays the floor;
             # this predicate is only the ceiling. Benign double-open race
@@ -489,31 +511,31 @@ class QueueWorker:
                       AND c.status = 'running'
                       AND (c.start_date IS NULL OR NOW() >= c.start_date)
                       AND (
-                        /* follow-up to an existing contact — never blocked by the new-dialog cap OR pacing (D-06/D-07/D-08/D-10),
-                           and never blocked by spam_limited: a PeerFlood'd sender keeps servicing already-started dialogs */
+                        /* follow-up to an existing contact — SENDER-WIDE (Phase 22 D-13): a phone the sender already
+                           sent to in ANY campaign is a known peer, never blocked by the new-dialog cap OR pacing
+                           (D-06/D-07/D-08/D-10), and never blocked by spam_limited: a PeerFlood'd sender keeps
+                           servicing already-started dialogs */
                         EXISTS (
                           SELECT 1 FROM message_queue prior
-                          WHERE prior.campaign_id = mq.campaign_id
+                          WHERE prior.sender_id = mq.sender_id
                             AND prior.recipient_phone = mq.recipient_phone
                             AND prior.status = 'sent'
                         )
                         OR
                         /* new dialog — additionally gated by the sender NOT being spam_limited (PeerFlood = back off NEW
                            outreach; follow-ups above bypass this just as they bypass cap+pace; 'frozen' never reaches this
-                           SELECT because _check_rate_limits skips its whole tick) — and only if under BOTH the Phase 12
-                           trailing-24h cap (D-01/D-02/D-05) … */
+                           SELECT because _check_rate_limits skips its whole tick) — and only if under BOTH the Phase 22
+                           SENDER-WIDE trailing-24h account-budget cap (D-01/D-03/D-06) … */
                         (s.restriction_status <> 'spam_limited'
                          AND ((SELECT COUNT(DISTINCT opened.recipient_phone)
                            FROM message_queue opened
                           WHERE opened.sender_id = mq.sender_id
-                            AND opened.campaign_id = mq.campaign_id
                             AND opened.status = 'sent'
-                            AND opened.finished_at >= NOW() - INTERVAL '24 hours') < c.max_new_dialogs_per_day
-                         /* … AND the Phase 13 expected-by-now pace, counted from TODAY's window start (D-05/D-06) */
+                            AND opened.finished_at >= NOW() - INTERVAL '24 hours') < CAST(:account_budget AS INTEGER)
+                         /* … AND the Phase 13/22 expected-by-now pace, sender-wide, counted from TODAY's window start (D-05/D-06) */
                          AND (SELECT COUNT(DISTINCT paced.recipient_phone)
                                 FROM message_queue paced
                                WHERE paced.sender_id = mq.sender_id
-                                 AND paced.campaign_id = mq.campaign_id
                                  AND paced.status = 'sent'
                                  AND paced.finished_at >= :window_start_utc) < CAST(:expected_now AS DOUBLE PRECISION)))
                       )
@@ -525,6 +547,7 @@ class QueueWorker:
                     "sid": str(sender_id),
                     "window_start_utc": window_start_utc,
                     "expected_now": expected_now,
+                    "account_budget": account_budget,
                 }
             )
 
@@ -566,19 +589,25 @@ class QueueWorker:
     async def _check_rate_limits(self, db: AsyncSession, sender_id) -> bool:
         """Return False if the sender has hit any rate limit.
 
-        Phase 2 (D-13): rate limits живут per-sender в senders.rate_per_min/hour/day.
+        Phase 2 (D-13): rate limits живут per-sender в senders.rate_per_min/hour.
         Sender row читаем один раз в начале tick'а, глобальные константы выпилены.
+
+        Phase 22 (D-04): the daily-message cap (the old 150-a-day column) is GONE
+        from this gate. The daily new-dialog allowance is now the sender-wide
+        account grade budget enforced in _process_next_for_sender's pick SELECT.
+        Here only the per-minute, per-hour, unique-contacts-per-hour and the
+        randomised interval/fatigue floor remain (the empirically-tuned structural
+        gates — never touch rate_per_min/hour/interval/FloodWait).
         """
         now = datetime.now(timezone.utc)
         one_minute_ago = now - timedelta(minutes=1)
         one_hour_ago = now - timedelta(hours=1)
-        one_day_ago = now - timedelta(hours=24)
 
         # Phase 2 D-13: read per-sender rate limits from DB (once per tick).
         # Если sender удалён concurrently — пропускаем тик (вернёт False).
         sender_row = (await db.execute(
             text("""
-                SELECT rate_per_min, rate_per_hour, rate_per_day,
+                SELECT rate_per_min, rate_per_hour,
                        lifecycle_status, auth_status,
                        restriction_status, restricted_until
                 FROM senders WHERE id = :sid
@@ -615,7 +644,6 @@ class QueueWorker:
 
         max_per_min = sender_row.rate_per_min
         max_per_hour = sender_row.rate_per_hour
-        max_per_day = sender_row.rate_per_day
 
         # Messages sent in last minute
         r = await db.execute(
@@ -668,23 +696,10 @@ class QueueWorker:
             )
             return False
 
-        # Messages sent in last 24 hours (daily cap)
-        r = await db.execute(
-            text("""
-                SELECT COUNT(*) FROM message_queue
-                WHERE sender_id = :sid
-                  AND status = 'sent'
-                  AND finished_at >= :since
-            """),
-            {"sid": str(sender_id), "since": one_day_ago}
-        )
-        msgs_today = r.scalar()
-        if msgs_today >= max_per_day:
-            logger.warning(
-                f"Sender {sender_id}: daily limit reached ({msgs_today}/{max_per_day}), "
-                f"pausing until 24h window slides"
-            )
-            return False
+        # Phase 22 (D-04): the daily-message cap was removed here. New-dialog volume
+        # is bounded sender-wide by the account grade budget in
+        # _process_next_for_sender's pick SELECT; the per-minute/hour and interval
+        # floors below remain the empirical anti-spam gates.
 
         # Time since last send — randomised interval with fatigue factor
         r = await db.execute(
