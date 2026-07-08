@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Paused at 23-06 Task 2 (blocking human-verify live-smoke); Task 1 handoff regen committed 9a35227
-last_updated: "2026-07-08T11:02:33.104Z"
-last_activity: 2026-07-08
+stopped_at: Phase 22 context gathered
+last_updated: "2026-07-08T16:05:26.219Z"
+last_activity: "2026-07-08 - Completed quick task 260708-icz: PeerFlood/spam_limited keeps existing chats, blocks only new contacts"
 progress:
   total_phases: 27
   completed_phases: 23
@@ -228,6 +228,7 @@ See full log: PROJECT.md → Key Decisions
 - Phase 22 added (2026-07-07): Warmup new-chat budget ladder with campaign priority reserve — единый бюджет «новых чатов в сутки» (скользящие 24ч) для аккаунтов в warmup-пуле: редактируемая лестница (недели 1–3 → 3/день, далее 4/6/8, после 42 дней кап 8), рассылка всегда в приоритете (warmup тратит только остаток после резерва под pending cold openers), реестр `sender_first_contacts` (mig 053, бэкфилл из conversations+warmup_messages) как источник правды первых контактов, гейт в `_process_next_for_sender` (только new-dialog ветка; follow-up'ы/ответы не гейтятся, opener ждёт а не сгорает), warmup: LEVEL_CONFIG → настраиваемый `max_messages_per_day`, инициатор новой пары = более старый аккаунт. API: GET/PUT /warmup/settings, GET /warmup/pool, GET /warmup/stats. Не трогаем: интервалы очереди 4/20/150, FloodWait, per-campaign кап Phase 12, pacing Phase 13 (эффективный лимит = минимум из всех). Решения зафиксированы при создании фазы: `.planning/phases/22-warmup-new-chat-budget-ladder-with-campaign-priority-reserve/22-CONTEXT.md` (D-01..D-19, discuss-phase не требуется). Depends on Phase 21. NB: `gsd-tools phase add` снова выдал 1000 — вручную перенумеровано в 22.
 - Phase 23 added (2026-07-07): Edit and delete-for-everyone of sent messages plus file sending from inbox UI — из inbox UI: удаление отправленного сообщения у обеих сторон (delete-for-everyone/revoke), редактирование уже отправленного сообщения, отправка файлов контакту. Requirements TBD (определить в discuss-phase). Depends on Phase 22. NB: `gsd-tools phase add` снова выдал 1000 (max+1 от backlog 999.1) — вручную перенумеровано в 23.
 - Phase 24 added (2026-07-07): Campaign first-message file attachment plus invisible anti-spam text variation — при настройке кампании (1) прикрепление файла к первому сообщению (attach в UI рядом с блоком текста опенера) и отправка файла вместе с первым сообщением; (2) «незаметная» вариация текста опенера через невидимые символы (zero-width / вариативные пробелы), которые пользователь не видит, но которые делают каждое исходящее первое сообщение уникальным для антиспам-детекторов Telegram (чтобы одинаковые опенеры с одного аккаунта не палились как рассылка). Requirements TBD (определить в discuss-phase). Depends on Phase 23. NB: `gsd-tools phase add` снова выдал 1000 (max+1 от backlog 999.1) — вручную перенумеровано в 24.
+- Phase 22 rewritten (2026-07-08): пользователь запросил `/gsd:add-phase` для «перенести лимит новых чатов с кампании на аккаунт, грейды 5/9/13 по 30-дневным периодам, убрать лимит сообщений/сутки из платформы+UI» — обнаружено прямое пересечение с уже существующей неисполненной Phase 22 (warmup-pool-only budget ladder, 0 планов). Спросил пользователя явно (AskUserQuestion) — выбрал «переписать Phase 22» вместо создания новой Phase 25. Новый Goal + новые decisions в ROADMAP.md и `.planning/phases/22-account-level-new-chat-limit-grades/22-CONTEXT.md` (директория переименована с `22-warmup-new-chat-budget-ladder-with-campaign-priority-reserve`); старые decisions D-01..D-19 сохранены в файле под заголовком `[SUPERSEDED]` для справки при discuss-phase (warmup priority-reserve идея и `sender_first_contacts` вероятно переносятся в новый дизайн). Открытые вопросы (pacing, распределение бюджета между несколькими кампаниями одного sender'а) явно оставлены нерешёнными пользователем — Phase 22 теперь требует discuss-phase, а не сразу planning.
 
 ### Pending Todos
 
@@ -309,6 +310,6 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 
 ## Session Continuity
 
-Last session: 2026-07-08T09:32:36.166Z
-Stopped at: Paused at 23-06 Task 2 (blocking human-verify live-smoke); Task 1 handoff regen committed 9a35227
-Resume file: None
+Last session: 2026-07-08T16:05:26.200Z
+Stopped at: Phase 22 context gathered
+Resume file: .planning/phases/22-account-level-new-chat-limit-grades/22-CONTEXT.md
