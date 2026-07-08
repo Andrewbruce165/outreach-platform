@@ -122,6 +122,12 @@ class Sender(Base):
     rate_per_hour = Column(Integer, nullable=False, server_default='20')
     rate_per_day = Column(Integer, nullable=False, server_default='150')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Phase 22 (D-14): account grade level 1..3 (mig 056). server_default MANDATORY —
+    # create_all builds the test/fresh-DB schema from the ORM, and raw INSERTs in
+    # _insert_sender_raw / bulk import omit it (project-orm-default-vs-server-default-drift).
+    current_level = Column(Integer, nullable=False, server_default='1')  # Phase 22 D-14: account grade level 1..3
+    # Phase 22 (D-14): grade timer (mig 056); backfilled = created_at for existing rows.
+    level_updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())  # Phase 22 D-14: grade timer; backfilled = created_at (mig 056)
     last_used_at = Column(DateTime(timezone=True), onupdate=func.now())
     # NB: ai_context_id dropped (Phase 3 D-04). Sender больше не «знает» агента —
     # связь идёт через Campaign в Phase 4.
@@ -450,6 +456,51 @@ class WarmupSettings(Base):
     created_at    = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at    = Column(DateTime(timezone=True), server_default=func.now(),
                            onupdate=func.now(), nullable=False)
+
+
+class SenderFirstContact(Base):
+    """Phase 22 (D-08) — new-warmup-pair registry (mig 057).
+
+    Records the FIRST contact between two sender accounts so the warmup-budget
+    feature (22-05) does not charge an already-warmed pair as a NEW chat.
+    Canonical order invariant: sender_a_id < sender_b_id — any writer MUST
+    canonicalise with LEAST/GREATEST so an unordered pair maps to exactly one
+    row (the composite PK dedups it). first_contact_at carries server_default
+    (create_all builds the fresh/test schema from the ORM; raw INSERTs may omit it).
+    """
+    __tablename__ = "sender_first_contacts"
+
+    sender_a_id      = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
+                              primary_key=True)
+    sender_b_id      = Column(UUID(as_uuid=True), ForeignKey("senders.id", ondelete="CASCADE"),
+                              primary_key=True)
+    first_contact_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SenderGradeSettings(Base):
+    """Phase 22 (D-16) — per-workspace new-chat grade ladder (mig 058).
+
+    One row per workspace holds the fixed 3-level ladder. Absence of a row
+    resolves in app/services/grade_ladder.py to LADDER_DEFAULTS (5/30, 9/30, 13);
+    the migration seeds nothing. Level 3 is permanent — no level3_step_days (D-17).
+
+    Every NOT NULL column carries server_default matching the SQL DEFAULT in
+    migration 058 (project-orm-default-vs-server-default-drift): create_all builds
+    the test schema WITH the DB default so raw-SQL INSERTs don't NotNull.
+    """
+    __tablename__ = "sender_grade_settings"
+
+    workspace_id         = Column(UUID(as_uuid=True),
+                                  ForeignKey("workspaces.id", ondelete="CASCADE"),
+                                  primary_key=True)
+    level1_chats_per_day = Column(Integer, nullable=False, server_default='5')
+    level1_step_days     = Column(Integer, nullable=False, server_default='30')
+    level2_chats_per_day = Column(Integer, nullable=False, server_default='9')
+    level2_step_days     = Column(Integer, nullable=False, server_default='30')
+    level3_chats_per_day = Column(Integer, nullable=False, server_default='13')  # D-17: level 3 permanent
+    created_at           = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at           = Column(DateTime(timezone=True), server_default=func.now(),
+                                  onupdate=func.now(), nullable=False)
 
 
 class LLMSettings(Base):
