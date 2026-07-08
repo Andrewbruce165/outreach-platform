@@ -267,6 +267,26 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_055.exists():
             await asyncpg_conn.execute(_mig_055.read_text())
 
+        # 056: Phase 22 grade columns. senders.current_level / level_updated_at come
+        # from ORM create_all (ADD COLUMN IF NOT EXISTS are no-ops here), but the
+        # level_updated_at=created_at backfill and the senders_current_level_range
+        # CHECK are SQL-only — apply the migration so the test DB matches prod exactly.
+        # This conftest hardcodes the filename (RESEARCH Pitfall 1 — conftest does NOT
+        # glob migrations). Exists-guard keeps this green until migrations/056 lands.
+        _mig_056 = PROJECT_ROOT / "migrations" / "056_sender_grade_columns.sql"
+        if _mig_056.exists():
+            await asyncpg_conn.execute(_mig_056.read_text())
+
+        # 057: Phase 22 new-warmup-pair registry. The sender_first_contacts table comes
+        # from ORM create_all (CREATE TABLE IF NOT EXISTS is a no-op here), but the
+        # warmup-pair backfill (from warmup_sessions / warmup_messages) is SQL-only —
+        # apply the migration so the test DB exercises the same backfill path as prod.
+        # Hardcoded filename (RESEARCH Pitfall 1 — conftest does NOT glob migrations).
+        # Exists-guard keeps this green until migrations/057 lands.
+        _mig_057 = PROJECT_ROOT / "migrations" / "057_sender_first_contacts.sql"
+        if _mig_057.exists():
+            await asyncpg_conn.execute(_mig_057.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
