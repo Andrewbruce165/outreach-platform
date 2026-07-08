@@ -388,8 +388,8 @@ function CampaignDetailPage() {
                   }}
                 >
                   <Metric
-                    label="Sent"
-                    value={statsQ.data?.sent ?? 0}
+                    label="Chats"
+                    value={statsQ.data?.contacts_messaged ?? 0}
                     color="var(--tg-blue)"
                   />
                   <Metric
