@@ -463,6 +463,13 @@ class QueueWorker:
             # (READ COMMITTED, same posture as Phase 12): two parallel workers may
             # both see count < expected → at worst ~1 extra new dialog per tick,
             # self-correcting next tick. Follow-ups bypass pacing entirely (D-07/D-10).
+            # PeerFlood (quick-260708-icz): the pick JOINs senders and additionally
+            # gates the NEW-DIALOG branch on `s.restriction_status <> 'spam_limited'`
+            # — a spam_limited (PeerFlood'd) sender opens no new dialogs but keeps
+            # servicing follow-ups (the EXISTS branch bypasses the guard exactly as it
+            # bypasses cap+pace). 'frozen' never reaches this SELECT: _check_rate_limits
+            # skips its whole tick. Only mq is locked (FOR UPDATE OF mq SKIP LOCKED) —
+            # the joined senders/campaigns rows are not locked.
             rows = await db.execute(
                 text("""
                     SELECT
@@ -474,6 +481,7 @@ class QueueWorker:
                         c.stop_date AS c_stop
                     FROM message_queue mq
                     JOIN campaigns c ON c.id = mq.campaign_id
+                    JOIN senders s ON s.id = mq.sender_id
                     WHERE mq.sender_id = :sid
                       AND mq.status = 'pending'
                       AND mq.scheduled_at <= NOW()
@@ -481,7 +489,8 @@ class QueueWorker:
                       AND c.status = 'running'
                       AND (c.start_date IS NULL OR NOW() >= c.start_date)
                       AND (
-                        /* follow-up to an existing contact — never blocked by the new-dialog cap OR pacing (D-06/D-07/D-08/D-10) */
+                        /* follow-up to an existing contact — never blocked by the new-dialog cap OR pacing (D-06/D-07/D-08/D-10),
+                           and never blocked by spam_limited: a PeerFlood'd sender keeps servicing already-started dialogs */
                         EXISTS (
                           SELECT 1 FROM message_queue prior
                           WHERE prior.campaign_id = mq.campaign_id
@@ -489,8 +498,12 @@ class QueueWorker:
                             AND prior.status = 'sent'
                         )
                         OR
-                        /* new dialog — only if under BOTH the Phase 12 trailing-24h cap (D-01/D-02/D-05) … */
-                        ((SELECT COUNT(DISTINCT opened.recipient_phone)
+                        /* new dialog — additionally gated by the sender NOT being spam_limited (PeerFlood = back off NEW
+                           outreach; follow-ups above bypass this just as they bypass cap+pace; 'frozen' never reaches this
+                           SELECT because _check_rate_limits skips its whole tick) — and only if under BOTH the Phase 12
+                           trailing-24h cap (D-01/D-02/D-05) … */
+                        (s.restriction_status <> 'spam_limited'
+                         AND ((SELECT COUNT(DISTINCT opened.recipient_phone)
                            FROM message_queue opened
                           WHERE opened.sender_id = mq.sender_id
                             AND opened.campaign_id = mq.campaign_id
@@ -502,7 +515,7 @@ class QueueWorker:
                                WHERE paced.sender_id = mq.sender_id
                                  AND paced.campaign_id = mq.campaign_id
                                  AND paced.status = 'sent'
-                                 AND paced.finished_at >= :window_start_utc) < CAST(:expected_now AS DOUBLE PRECISION))
+                                 AND paced.finished_at >= :window_start_utc) < CAST(:expected_now AS DOUBLE PRECISION)))
                       )
                     ORDER BY mq.priority DESC, mq.created_at ASC
                     LIMIT 8
@@ -585,14 +598,18 @@ class QueueWorker:
             )
             return False
 
-        # Migration 028: don't burn sends on a restricted (spam_limited/frozen)
-        # account. The listener reconcile sweep clears the flag once SpamBot says
-        # the account is free again. While restricted_until is in the future we skip;
-        # once it elapses we let the sweep (not the worker) re-check.
-        if sender_row.restriction_status != "none":
+        # PeerFlood (spam_limited) is a "back off NEW outreach" signal, not
+        # "stop everything": a spam_limited sender must keep servicing already-
+        # started dialogs and follow-up pings, so we DO let the tick proceed to
+        # the normal rate-limit checks. New-contact (new-dialog) sends are gated
+        # separately in _process_next_for_sender's pick SELECT. Only 'frozen'
+        # (Telegram ACCOUNT_FROZEN — all writes blocked) skips the whole tick.
+        # The listener reconcile sweep clears the spam_limited flag once SpamBot
+        # says the account is free again (~1h RESTRICTION_RECHECK_INTERVAL).
+        if sender_row.restriction_status == "frozen":
             logger.debug(
-                f"Sender {sender_id}: restricted "
-                f"({sender_row.restriction_status}, until={sender_row.restricted_until}) — skipping tick"
+                f"Sender {sender_id}: frozen "
+                f"(until={sender_row.restricted_until}) — skipping tick"
             )
             return False
 
@@ -1075,20 +1092,22 @@ class QueueWorker:
                         return
 
                     elif error_code == "PEER_FLOOD":
-                        # Spam restriction — worse than FloodWait, pause all tasks 24h.
-                        # Migration 028: also flag the sender as spam_limited so the UI
-                        # stops showing 'active' and the listener reconcile sweep re-checks
-                        # via SpamBot once restricted_until elapses (recheck interval, not
-                        # the 24h queue pause — the empirical pause is left untouched).
-                        pause_until = datetime.now(timezone.utc) + timedelta(hours=24)
+                        # Spam restriction (PeerFlood) — "back off NEW outreach", NOT
+                        # "stop everything". quick-260708-icz: the pending queue is NO
+                        # LONGER bulk-paused +24h. Instead we only flag the sender
+                        # spam_limited (with restricted_until ~= now + recheck interval).
+                        # New-contact sends are then suppressed by that flag via
+                        # _check_rate_limits' fall-through + the new-dialog SELECT guard
+                        # (s.restriction_status <> 'spam_limited'), while engaged dialogs
+                        # + follow-up pings keep flowing. New-contact sends resume on
+                        # their own once the listener reconcile sweep clears the flag
+                        # (~1h RESTRICTION_RECHECK_INTERVAL, when SpamBot says the account
+                        # is free again). Migration 028: flag also stops the UI showing
+                        # 'active'.
                         recheck_at = datetime.now(timezone.utc) + timedelta(
                             seconds=get_settings().restriction_recheck_interval_seconds
                         )
                         async with AsyncSessionLocal() as db2:
-                            await db2.execute(text("""
-                                UPDATE message_queue SET scheduled_at = :pause_until
-                                WHERE sender_id = :sid AND status = 'pending'
-                            """), {"pause_until": pause_until, "sid": str(sender.id)})
                             await db2.execute(text("""
                                 UPDATE senders
                                 SET restriction_status = 'spam_limited',
@@ -1100,11 +1119,12 @@ class QueueWorker:
                             await record_restriction_event(sender.id, "spam_limited", "queue_error", recheck_at, error_msg, db=db2)
                             await db2.commit()
                         logger.critical(
-                            f"PEER_FLOOD for sender {sender.slug} — all tasks paused 24h "
-                            f"until {pause_until.strftime('%Y-%m-%d %H:%M UTC')}. "
-                            f"Sender flagged spam_limited (recheck "
-                            f"{recheck_at.strftime('%Y-%m-%d %H:%M UTC')}). "
-                            f"Manual account review required before resuming!"
+                            f"PEER_FLOOD for sender {sender.slug} — flagged spam_limited "
+                            f"(recheck {recheck_at.strftime('%Y-%m-%d %H:%M UTC')}). "
+                            f"Pending queue is NO LONGER bulk-paused: new-contact sends are "
+                            f"suppressed by the spam_limited flag and resume after the ~1h "
+                            f"reconcile sweep clears it; engaged dialogs + follow-ups keep flowing. "
+                            f"Manual account review recommended."
                             # TODO: add external alert (webhook/email) when monitoring infrastructure is available
                         )
                         # Phase 9 (FAIL-02): the sender is now flagged spam_limited
