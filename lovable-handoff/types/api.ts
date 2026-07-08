@@ -173,6 +173,36 @@ export interface paths {
         patch: operations["update_sender_api_v1_senders__slug__patch"];
         trace?: never;
     };
+    "/api/v1/senders/{slug}/grade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Override Sender Grade
+         * @description Manually override a sender's account grade (Phase 22 D-15).
+         *
+         *     Writes the SAME two fields as auto-progression — current_level and
+         *     level_updated_at = NOW() — in one operation, so the progression timer
+         *     restarts from the override baseline (no separate frozen flag, D-15).
+         *
+         *     Workspace-scoped: `_load_sender_by_slug` resolves the sender only within
+         *     ctx.workspace_id and 404s otherwise, so a tenant cannot re-grade a sender it
+         *     does not own (T-22-10). `current_level` is bounded 1..3 by GradeOverrideRequest
+         *     (T-22-11) and mirrored by the mig 056 CHECK; the UPDATE binds params only
+         *     (T-22-12).
+         */
+        patch: operations["override_sender_grade_api_v1_senders__slug__grade_patch"];
+        trace?: never;
+    };
     "/api/v1/senders/{slug}/pause": {
         parameters: {
             query?: never;
@@ -551,6 +581,37 @@ export interface paths {
          * @description Remove proxy from workspace pool (D-22).
          */
         delete: operations["delete_proxy_api_v1_workspace_proxies__proxy_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sender-grade-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Grade Settings Endpoint
+         * @description Workspace grade ladder — resolves to code-defaults 5/30, 9/30, 13 when no row (D-16).
+         *
+         *     Scoped by `ctx.workspace_id`; a missing row returns the resolved code-default
+         *     ladder — byte-identical to the unconfigured platform default.
+         */
+        get: operations["get_grade_settings_endpoint_api_v1_sender_grade_settings_get"];
+        /**
+         * Update Grade Settings Endpoint
+         * @description Idempotent upsert of the workspace grade ladder (D-16), workspace-scoped.
+         *
+         *     INSERT ... ON CONFLICT (workspace_id) DO UPDATE with bind params only. Returns
+         *     {status, settings: <resolved>, warnings: [...]} — 200 even on soft breaches;
+         *     Pydantic bounds already rejected any hard-cap breach with 422.
+         */
+        put: operations["update_grade_settings_endpoint_api_v1_sender_grade_settings_put"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3003,12 +3064,6 @@ export interface components {
              */
             recontact_min_age_days: number;
             /**
-             * Max New Dialogs Per Day
-             * @description Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=10; soft-warn >10; hard cap 30.
-             * @default 10
-             */
-            max_new_dialogs_per_day: number;
-            /**
              * Follow Up Enabled
              * @default false
              */
@@ -3126,11 +3181,6 @@ export interface components {
              * @default 30
              */
             recontact_min_age_days: number;
-            /**
-             * Max New Dialogs Per Day
-             * @default 10
-             */
-            max_new_dialogs_per_day: number;
             /**
              * Follow Up Enabled
              * @default false
@@ -3318,8 +3368,6 @@ export interface components {
             allow_recontact?: boolean | null;
             /** Recontact Min Age Days */
             recontact_min_age_days?: number | null;
-            /** Max New Dialogs Per Day */
-            max_new_dialogs_per_day?: number | null;
             /** Follow Up Enabled */
             follow_up_enabled?: boolean | null;
             /** Follow Up Interval Hours */
@@ -3734,6 +3782,53 @@ export interface components {
             lead: number;
             /** Handoff */
             handoff: number;
+        };
+        /**
+         * GradeLadderUpdate
+         * @description PUT body — the fixed 3-level ladder (D-16). Level 3 has no step (D-17).
+         *
+         *     Pydantic `ge/le` bounds are the HARD cap (422 on breach); the green-corridor
+         *     soft warnings are computed separately in `_validate_ladder`.
+         */
+        GradeLadderUpdate: {
+            /**
+             * Level1 Chats Per Day
+             * @default 5
+             */
+            level1_chats_per_day: number;
+            /**
+             * Level1 Step Days
+             * @default 30
+             */
+            level1_step_days: number;
+            /**
+             * Level2 Chats Per Day
+             * @default 9
+             */
+            level2_chats_per_day: number;
+            /**
+             * Level2 Step Days
+             * @default 30
+             */
+            level2_step_days: number;
+            /**
+             * Level3 Chats Per Day
+             * @default 13
+             */
+            level3_chats_per_day: number;
+        };
+        /**
+         * GradeOverrideRequest
+         * @description PATCH /senders/{slug}/grade body (Phase 22 D-15).
+         *
+         *     Manual account-grade override. `current_level` must be a valid grade
+         *     (D-16: fixed 3 levels → ge=1, le=3). Writing it sets senders.current_level
+         *     and resets level_updated_at = NOW() (identical to auto-progression; no
+         *     separate frozen flag) so the progression timer restarts from the override.
+         */
+        GradeOverrideRequest: {
+            /** Current Level */
+            current_level: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -4340,7 +4435,10 @@ export interface components {
         };
         /**
          * RateLimits
-         * @description Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20/150.
+         * @description Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20.
+         *
+         *     Phase 22 D-04: the daily field removed — the new-chat budget is now derived
+         *     from the account grade ladder (see grade_ladder.py), not a per-sender field.
          */
         RateLimits: {
             /**
@@ -4353,11 +4451,6 @@ export interface components {
              * @default 20
              */
             per_hour: number;
-            /**
-             * Per Day
-             * @default 150
-             */
-            per_day: number;
         };
         /** RecheckRequest */
         RecheckRequest: {
@@ -4597,8 +4690,6 @@ export interface components {
             rate_per_min?: number | null;
             /** Rate Per Hour */
             rate_per_hour?: number | null;
-            /** Rate Per Day */
-            rate_per_day?: number | null;
         };
         /**
          * SenderCreateResponse
@@ -4664,6 +4755,15 @@ export interface components {
             checker_trip_count: number;
             rate_limits: components["schemas"]["RateLimits"];
             /**
+             * Current Level
+             * @default 1
+             */
+            current_level: number;
+            /** Level Updated At */
+            level_updated_at?: string | null;
+            /** Remaining Daily Budget */
+            remaining_daily_budget?: number | null;
+            /**
              * Role
              * @default sender
              */
@@ -4706,7 +4806,7 @@ export interface components {
         };
         /**
          * SenderUpdate
-         * @description PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50, day<=300.
+         * @description PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50.
          */
         SenderUpdate: {
             /** Name */
@@ -4721,8 +4821,6 @@ export interface components {
             rate_per_min?: number | null;
             /** Rate Per Hour */
             rate_per_hour?: number | null;
-            /** Rate Per Day */
-            rate_per_day?: number | null;
             /** Role */
             role?: ("sender" | "checker") | null;
             proxy?: components["schemas"]["ProxyConfig"] | null;
@@ -5427,6 +5525,44 @@ export interface operations {
             };
         };
     };
+    override_sender_grade_api_v1_senders__slug__grade_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GradeOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SenderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     pause_sender_api_v1_senders__slug__pause_post: {
         parameters: {
             query?: never;
@@ -6051,6 +6187,74 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_grade_settings_endpoint_api_v1_sender_grade_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_grade_settings_endpoint_api_v1_sender_grade_settings_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GradeLadderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {
