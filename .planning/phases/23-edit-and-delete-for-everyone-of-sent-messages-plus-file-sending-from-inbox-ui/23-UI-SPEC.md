@@ -1,10 +1,11 @@
 ---
 phase: 23
 slug: edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui
-status: draft
+status: approved
 shadcn_initialized: true
 preset: "new-york / slate / cssVariables (existing aimly frontend — components.json)"
 created: 2026-07-08
+reviewed_at: 2026-07-08
 ---
 
 # Phase 23 — UI Design Contract
@@ -171,7 +172,7 @@ Inherited from `aimly.css` + the inbox's established inline sizes. **Exactly 4 d
 |------|------|--------|-------------|-----------------|
 | Label (uppercase micro-labels: trace section labels, "(edited)" marker, staged-chip meta, timestamps) | 10–11px | 600 (uppercase labels) / 400 (timestamps, muted) | 1.3 | uppercase micro-labels add letter-spacing `0.04em`; timestamps/"(edited)"/download-size are 11px muted regular. Distinguished by case + color, not a new weight. |
 | Body | 13.5px | 400 | 1.5 | message bubble text, composer textarea, file names, captions — the base content tier (bubbles render at 13.5/1.5 today) |
-| Heading (thread header labels, pane titles, dialog title) | 13–14px | 600 | 1.2 | the header/title tier; distinguished from Body by size + weight |
+| Heading (thread header labels, pane titles, dialog title) | 14px | 600 | 1.2 | the header/title tier; fixed at 14px so it never collides with Body's 13.5px — distinguished from Body by size + weight |
 | Display | 24px | 600 | 1.1 | (not introduced by this phase; reserved for analytics metric values elsewhere) |
 
 **Weight reconciliation (2-weight rule):** the contract declares **only 400 and 600**. Where the inherited inbox renders certain labels/nav at the intermediate **500** (e.g. contact name `fontWeight:500`, filter chips), that is a **component-intrinsic value owned by the shared design system** — it is not a weight this phase introduces. All **new Phase 23 markup uses 400 or 600 only.** Numeric/size values may use `tabular-nums` where alignment matters.
