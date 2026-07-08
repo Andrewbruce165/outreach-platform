@@ -571,7 +571,7 @@ Plans:
 **Goal:** Лимит «новых чатов в сутки» переезжает с кампании (`campaigns.max_new_dialogs_per_day`) на аккаунт (sender) — единый глобальный счётчик, общий для рассылки и warmup-паринга. Грейд растёт автоматически по возрасту аккаунта шагом 30 дней: 0–30д → 5/день, 30–60д → 9/день, 60д+ → 13/день. Отдельно убирается лимит «исходящих сообщений в сутки» (`senders.rate_per_day`/150) из backend и UI целиком — по словам пользователя, ни на что не влияет. Открытые вопросы (pacing внутри бюджета, распределение между несколькими активными кампаниями одного sender'а) — для discuss-phase. Заменяет и переопределяет исходную (более узкую, warmup-pool-only) версию этой фазы — см. `[SUPERSEDED]` секцию в CONTEXT.md.
 **Requirements**: No formal REQUIREMENTS.md IDs — scope tracked via CONTEXT.md decisions D-01..D-17 (see 22-CONTEXT.md); each plan's `requirements` frontmatter cites the D-IDs it delivers.
 **Depends on:** Phase 21
-**Plans:** 7/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 **Wave 1** *(foundation — additive schema, no behavior change)*
