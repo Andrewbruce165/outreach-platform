@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 22-03-PLAN.md
+stopped_at: Completed 22-04-PLAN.md (Wave 2 of 4)
 last_updated: "2026-07-08T17:55:51.589Z"
-last_activity: 2026-07-08
+last_activity: 2026-07-08 -- Phase 22 Wave 2 complete (22-02/22-03/22-04/22-05)
 progress:
   total_phases: 27
   completed_phases: 23
   total_plans: 109
-  completed_plans: 103
-  percent: 94
+  completed_plans: 105
+  percent: 96
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-21)
 
 **Core value:** Клиент подключил аккаунт и через 10 минут первая кампания запущена — без программистов, без DevOps, без настройки серверов.
-**Current focus:** Phase 23 — edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui
+**Current focus:** Phase 22 — account-level-new-chat-limit-grades
 
 ## Current Position
 
 Phase: 22 (account-level-new-chat-limit-grades) — EXECUTING
-Plan: 2 of 7 complete (22-01 schema foundation)
-Status: Ready to execute
-Last activity: 2026-07-08
+Plan: 4 of 7 complete (22-01 schema foundation, 22-02 ladder API+worker, 22-03 per-account queue gate, 22-04 sender API cleanup+override)
+Status: Wave 2 (of 4) in progress — 22-05 pending merge
+Last activity: 2026-07-08 -- Phase 22 Wave 2 merges (22-02/22-03/22-04)
 
-Progress: [█████████░] 94%
+Progress: [█████████░] 96%
 
 ## Performance Metrics
 
@@ -117,7 +117,9 @@ Progress: [█████████░] 94%
 | Phase 23 P04 | 22 | 2 tasks | 1 files |
 | Phase 23 P05 | 30 | 2 tasks | 1 files |
 | Phase 22 P01 | 8min | 3 tasks | 7 files |
+| Phase 22 P02 | 12min | 3 tasks | 4 files |
 | Phase 22 P03 | 20min | 3 tasks | 4 files |
+| Phase 22 P04 | 18min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -212,8 +214,10 @@ See full log: PROJECT.md → Key Decisions
 - [Phase 21]: 21-06: IMPT-09 human-UAT PASSED live — mixed batch preview exact (2 matched/2 unpaired/1 malformed) + real 13/13 import (job da5998a0), IMPT-04 reconnect verified (fingerprints set, 0 auth errors, 0 restriction events)
 - [Phase 23-edit-and-delete-for-everyone-of-sent-messages-plus-file-sending-from-inbox-ui]: 23-06: handoff openapi regenerated from rebuilt api via export-handoff (not hand-edited); D-17 inbox error codes documented in error-codes.md; download endpoint is /messages/{id}/download (23-05 impl), not the plan's /file draft; live-smoke (Task 2) pending human sign-off
 - [Phase ?]: [Phase 22-01]: grade schema foundation — senders.current_level/level_updated_at (D-14, timer backfilled to created_at per D-10); sender_first_contacts canonical LEAST/GREATEST pair registry idempotently backfilled from warmup_sessions+warmup_messages (D-08); sender_grade_settings 3-level ladder, absent row=code-defaults 5/30,9/30,13 (D-16), level 3 permanent no step (D-17); shared grade_ladder.py resolver; rate_per_day/max_new_dialogs_per_day removal deferred to 22-06
+- [Phase ?]: 22-02: GET/PUT /sender-grade-settings ladder API (green-corridor warnings) + grade auto-progression sweep worker advancing senders.current_level once step-days elapse (D-14/D-16/D-17)
 - [Phase ?]: 22-03: new-dialog cap is sender-wide, driven by the account grade budget (grade_ladder), not campaigns.max_new_dialogs_per_day (D-01/D-05/D-06)
 - [Phase ?]: 22-03: daily-message cap (rate_per_day) removed from _check_rate_limits; per-min/hour/interval floors intact (D-04)
+- [Phase ?]: 22-04: rate_per_day removed from sender API; grade (current_level/level_updated_at) + remaining_daily_budget surfaced; PATCH /senders/{slug}/grade resets timer (workspace-scoped via _load_sender_by_slug)
 
 ### Roadmap Evolution
 

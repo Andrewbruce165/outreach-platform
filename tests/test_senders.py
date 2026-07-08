@@ -10,6 +10,7 @@ Integration tests для senders router (Phase 2 — SNDR-01, SNDR-02, SNDR-03).
 """
 
 import uuid
+from datetime import datetime
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -548,7 +549,11 @@ async def test_create_sender_above_soft_cap_returns_warnings(
 async def test_create_sender_defaults_rate_limits(
     async_client, valid_supabase_jwt
 ):
-    """POST /senders без rate_per_* → defaults 4/20/150, без warnings."""
+    """POST /senders без rate_per_* → defaults 4/20, без warnings.
+
+    Phase 22 D-04: rate_limits no longer carries per_day — the daily new-chat
+    budget is grade-driven (grade_ladder.py), not a per-sender field.
+    """
     token, _ws = await _create_workspace_via_jwt(
         async_client, valid_supabase_jwt, sub="create-default"
     )
@@ -565,7 +570,7 @@ async def test_create_sender_defaults_rate_limits(
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["sender"]["rate_limits"] == {
-        "per_minute": 4, "per_hour": 20, "per_day": 150,
+        "per_minute": 4, "per_hour": 20,
     }
     assert body["warnings"] == []
     assert body["sender"]["status"] == "active"
@@ -577,7 +582,12 @@ async def test_create_sender_defaults_rate_limits(
 async def test_patch_rate_limit_just_at_hard_cap_ok(
     async_client, async_db_session, valid_supabase_jwt
 ):
-    """rate_per_min=10 (=hard cap, не >) → 200 + warning (т.к. >soft cap=4)."""
+    """rate_per_min=10 (=hard cap, не >) → 200 + warning (т.к. >soft cap=4).
+
+    Phase 22 D-04: rate_per_day dropped from the API — only per_min/per_hour
+    remain, so an at-hard-cap PATCH yields two warnings (not three). A stray
+    rate_per_day in the body is silently ignored (extra field).
+    """
     token, ws = await _create_workspace_via_jwt(
         async_client, valid_supabase_jwt, sub="rl-edge"
     )
@@ -590,8 +600,8 @@ async def test_patch_rate_limit_just_at_hard_cap_ok(
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    # 10/50/300 — на hard cap, не превышают его → warnings все три (т.к. > soft cap).
-    assert len(body["warnings"]) == 3
+    # 10/50 — на hard cap, не превышают его → два warning (т.к. > soft cap 4/20).
+    assert len(body["warnings"]) == 2
 
 
 # ─── Phase 3 (plan 03-01 Task 7) — senders cleanup tests ─────────────────────
@@ -620,4 +630,177 @@ async def test_response_has_no_ai_context_id(async_db_session, test_sender_facto
     # Sanity: required fields still present
     assert dump["slug"] == "phase3-resp-test"
     assert dump["status"] == "active"
+
+
+# ─── Phase 22 (plan 22-04) — rate_per_day removal (D-04) ─────────────────────
+
+
+async def test_patch_sender_rate_per_day_ignored_no_per_day_in_response(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """D-04: rate_per_day is gone from the API — PATCHing it is silently ignored
+    and SenderResponse.rate_limits carries only per_minute/per_hour (no per_day).
+    per_minute/per_hour are still applied/validated."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="rate-noday"
+    )
+    await _insert_sender_raw(async_db_session, ws, "rate-noday-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/rate-noday-target",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"rate_per_day": 999, "rate_per_min": 3},
+    )
+    assert r.status_code == 200, r.text
+    rl = r.json()["sender"]["rate_limits"]
+    # per_day dropped from the schema entirely.
+    assert "per_day" not in rl, f"per_day leaked into rate_limits: {rl}"
+    # per_minute/per_hour intact and applied.
+    assert rl["per_minute"] == 3
+    assert "per_hour" in rl
+
+
+# ─── Phase 22 (plan 22-04) — grade field exposure (D-12) ─────────────────────
+
+
+async def test_get_sender_exposes_grade_fields(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """D-12: single-sender GET exposes current_level + level_updated_at.
+    Single-sender path reports remaining_daily_budget=None (list-only)."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="grade-get"
+    )
+    await _insert_sender_raw(async_db_session, ws, "grade-get-target")
+
+    r = await async_client.get(
+        "/api/v1/senders/grade-get-target",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["current_level"] == 1  # server_default '1' (mig 056)
+    assert body["level_updated_at"] is not None
+    assert body["remaining_daily_budget"] is None  # single-sender path
+
+
+async def test_list_senders_exposes_grade_and_remaining_budget(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """D-12: the list endpoint surfaces grade + a computed remaining_daily_budget
+    (grade budget minus trailing-24h new dialogs, clamped >=0)."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="grade-list"
+    )
+    await _insert_sender_raw(async_db_session, ws, "grade-list-target")
+
+    r = await async_client.get(
+        "/api/v1/senders", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    sender = next(
+        s for s in r.json()["senders"] if s["slug"] == "grade-list-target"
+    )
+    assert sender["current_level"] == 1
+    assert sender["level_updated_at"] is not None
+    # No dialogs opened → full level-1 budget (code-default ladder → 5).
+    assert sender["remaining_daily_budget"] == 5
+
+
+# ─── Phase 22 (plan 22-04) — grade override PATCH (D-15) ─────────────────────
+
+
+async def test_patch_grade_override_sets_level_and_resets_timer(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """D-15: PATCH /senders/{slug}/grade to level 2 sets current_level=2 and
+    resets level_updated_at=NOW(); a subsequent read reflects it and the timer
+    baseline moved forward (auto-progression restarts from the override)."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="grade-override"
+    )
+    sid = await _insert_sender_raw(async_db_session, ws, "grade-override-target")
+    # Backdate the timer so the reset is observable.
+    await async_db_session.execute(
+        text("UPDATE senders SET level_updated_at = now() - interval '10 days' "
+             "WHERE id = :sid"),
+        {"sid": sid},
+    )
+    await async_db_session.commit()
+
+    before = await async_client.get(
+        "/api/v1/senders/grade-override-target",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    old_ts = datetime.fromisoformat(before.json()["level_updated_at"])
+
+    r = await async_client.patch(
+        "/api/v1/senders/grade-override-target/grade",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_level": 2},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["current_level"] == 2
+    new_ts = datetime.fromisoformat(body["level_updated_at"])
+    assert new_ts > old_ts, "level_updated_at was not reset forward"
+
+    # Subsequent read reflects the override.
+    after = await async_client.get(
+        "/api/v1/senders/grade-override-target",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert after.json()["current_level"] == 2
+
+
+async def test_patch_grade_override_level_4_rejected(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """D-15/V4: an out-of-range level (not 1..3) is rejected with 422."""
+    token, ws = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="grade-oob"
+    )
+    await _insert_sender_raw(async_db_session, ws, "grade-oob-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/grade-oob-target/grade",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_level": 4},
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_patch_grade_override_cross_tenant_rejected(
+    async_client, async_db_session, valid_supabase_jwt
+):
+    """D-15/T-22-10: a sender in another workspace cannot be re-graded.
+    Workspace-scoped lookup 404s (not 403-leak) for a sender A does not own."""
+    token_a, _ws_a = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="grade-xt-a"
+    )
+    _token_b, ws_b = await _create_workspace_via_jwt(
+        async_client, valid_supabase_jwt, sub="grade-xt-b"
+    )
+    await _insert_sender_raw(async_db_session, ws_b, "grade-xt-b-target")
+
+    r = await async_client.patch(
+        "/api/v1/senders/grade-xt-b-target/grade",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"current_level": 2},
+    )
+    assert r.status_code in (403, 404), r.text
+    # The sender in B is untouched (still level 1).
+    check = await _token_b_read_level(
+        async_client, _token_b, "grade-xt-b-target"
+    )
+    assert check == 1
+
+
+async def _token_b_read_level(async_client, token, slug) -> int:
+    r = await async_client.get(
+        f"/api/v1/senders/{slug}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["current_level"]
 

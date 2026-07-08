@@ -73,10 +73,13 @@ class SendFileRequest(BaseModel):
 # === Senders (Phase 2 — D-11/D-13/D-14) ===
 
 class RateLimits(BaseModel):
-    """Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20/150."""
+    """Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20.
+
+    Phase 22 D-04: the daily field removed — the new-chat budget is now derived
+    from the account grade ladder (see grade_ladder.py), not a per-sender field.
+    """
     per_minute: int = 4
     per_hour: int = 20
-    per_day: int = 150
 
 
 class WarningItem(BaseModel):
@@ -101,18 +104,18 @@ class SenderCreate(BaseModel):
     # Optional per-sender rate-limit overrides (with hard cap, D-14).
     rate_per_min: Optional[int] = Field(None, ge=1, le=10)
     rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
-    rate_per_day: Optional[int] = Field(None, ge=1, le=300)
+    # Phase 22 D-04: the daily field removed — new-chat budget comes from grade.
 
 
 class SenderUpdate(BaseModel):
-    """PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50, day<=300."""
+    """PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50."""
     name: Optional[str] = None
     phone: Optional[str] = None
     session_string: Optional[str] = None
     lifecycle_status: Optional[Literal["active", "warmup", "paused"]] = None
     rate_per_min: Optional[int] = Field(None, ge=1, le=10)
     rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
-    rate_per_day: Optional[int] = Field(None, ge=1, le=300)
+    # Phase 22 D-04: the daily field removed — new-chat budget comes from grade.
     # NB: ai_context_id field dropped (Phase 3 C-05).
     role: Optional[Literal["sender", "checker"]] = None
     proxy: Optional[ProxyConfig] = None
@@ -150,6 +153,15 @@ class SenderResponse(BaseModel):
     # cooldown; surfaced so the UI can hint "attempt N, longer rest".
     checker_trip_count: int = 0
     rate_limits: RateLimits
+    # Phase 22 D-12: account grade level (1..3) + the timer's last-reset moment.
+    # level_updated_at is the anchor auto-progression measures step_days from
+    # (and what a manual override resets to NOW()).
+    current_level: int = 1
+    level_updated_at: Optional[datetime] = None
+    # New-chat budget for the current level minus distinct new dialogs opened in
+    # the trailing 24h, clamped at 0. Computed ONLY on the list endpoint;
+    # single-sender paths report None (same convention as sent_today=0).
+    remaining_daily_budget: Optional[int] = None
     role: str = "sender"
     proxy: Optional[ProxyConfig] = None
     # NB: ai_context_id / ai_context_name fields dropped (Phase 3 C-05) —
@@ -184,6 +196,17 @@ class SenderCreateResponse(BaseModel):
     """Возврат create/update sender'а с warnings[] (D-14)."""
     sender: SenderResponse
     warnings: List[WarningItem] = []
+
+
+class GradeOverrideRequest(BaseModel):
+    """PATCH /senders/{slug}/grade body (Phase 22 D-15).
+
+    Manual account-grade override. `current_level` must be a valid grade
+    (D-16: fixed 3 levels → ge=1, le=3). Writing it sets senders.current_level
+    and resets level_updated_at = NOW() (identical to auto-progression; no
+    separate frozen flag) so the progression timer restarts from the override.
+    """
+    current_level: int = Field(..., ge=1, le=3)
 
 
 # === Account Profile Management (Phase 20 — PROF-01..08 + D-08/D-09) ===
