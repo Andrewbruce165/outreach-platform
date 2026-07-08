@@ -20,6 +20,11 @@ import {
   ChevronDown,
   Phone,
   Bot,
+  Pencil,
+  Play,
+  Mic,
+  Image as ImageIcon,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Topbar } from "@/components/Topbar";
@@ -33,14 +38,29 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, apiBaseUrl } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
 
 type Conversation = components["schemas"]["ConversationResponse"];
 type ConversationList = components["schemas"]["ConversationListResponse"];
-type Message = components["schemas"]["MessageResponse"];
-type MessageList = components["schemas"]["MessageListResponse"];
+// Phase 23 extends MessageResponse with typed messages + edit marker + file meta.
+// The generated schema hasn't caught up yet; extend locally without touching
+// the codegen output.
+type BaseMessage = components["schemas"]["MessageResponse"];
+type Message = Omit<BaseMessage, "message_text"> & {
+  message_text?: string | null;
+  message_type?: "text" | "photo" | "video" | "voice" | "document" | string | null;
+  edited_at?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+};
+type MessageList = Omit<components["schemas"]["MessageListResponse"], "messages"> & {
+  messages: Message[];
+};
 type LLMCall = components["schemas"]["LLMCallResponse"];
 type LLMCallList = components["schemas"]["LLMCallListResponse"];
 type CampaignList = components["schemas"]["CampaignListResponse"];
