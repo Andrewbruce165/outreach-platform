@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 22-04-PLAN.md (Wave 2 of 4)
+stopped_at: Completed 22-05-PLAN.md (Wave 2 complete, 4/4)
 last_updated: "2026-07-08T17:55:51.589Z"
 last_activity: 2026-07-08 -- Phase 22 Wave 2 complete (22-02/22-03/22-04/22-05)
 progress:
   total_phases: 27
   completed_phases: 23
   total_plans: 109
-  completed_plans: 105
-  percent: 96
+  completed_plans: 106
+  percent: 97
 ---
 
 # Project State
@@ -120,6 +120,7 @@ Progress: [█████████░] 96%
 | Phase 22 P02 | 12min | 3 tasks | 4 files |
 | Phase 22 P03 | 20min | 3 tasks | 4 files |
 | Phase 22 P04 | 18min | 3 tasks | 3 files |
+| Phase 22 P05 | 15m | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -218,6 +219,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase ?]: 22-03: new-dialog cap is sender-wide, driven by the account grade budget (grade_ladder), not campaigns.max_new_dialogs_per_day (D-01/D-05/D-06)
 - [Phase ?]: 22-03: daily-message cap (rate_per_day) removed from _check_rate_limits; per-min/hour/interval floors intact (D-04)
 - [Phase ?]: 22-04: rate_per_day removed from sender API; grade (current_level/level_updated_at) + remaining_daily_budget surfaced; PATCH /senders/{slug}/grade resets timer (workspace-scoped via _load_sender_by_slug)
+- [Phase ?]: 22-05: warmup spends shared new-chat budget only for NEW pairs (sender_first_contacts registry), initiator = older account writes first, behind an outreach-priority reserve on the trailing-24h window (D-08/D-09/D-03)
 
 ### Roadmap Evolution
 
@@ -320,5 +322,5 @@ Three structural preventatives shipped to make the schema-wipe class of incident
 ## Session Continuity
 
 Last session: 2026-07-08T17:55:37.970Z
-Stopped at: Completed 22-03-PLAN.md
+Stopped at: Completed 22-05-PLAN.md (Wave 2 complete, 4/4)
 Resume file: None

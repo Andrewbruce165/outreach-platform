@@ -571,7 +571,7 @@ Plans:
 **Goal:** Лимит «новых чатов в сутки» переезжает с кампании (`campaigns.max_new_dialogs_per_day`) на аккаунт (sender) — единый глобальный счётчик, общий для рассылки и warmup-паринга. Грейд растёт автоматически по возрасту аккаунта шагом 30 дней: 0–30д → 5/день, 30–60д → 9/день, 60д+ → 13/день. Отдельно убирается лимит «исходящих сообщений в сутки» (`senders.rate_per_day`/150) из backend и UI целиком — по словам пользователя, ни на что не влияет. Открытые вопросы (pacing внутри бюджета, распределение между несколькими активными кампаниями одного sender'а) — для discuss-phase. Заменяет и переопределяет исходную (более узкую, warmup-pool-only) версию этой фазы — см. `[SUPERSEDED]` секцию в CONTEXT.md.
 **Requirements**: No formal REQUIREMENTS.md IDs — scope tracked via CONTEXT.md decisions D-01..D-17 (see 22-CONTEXT.md); each plan's `requirements` frontmatter cites the D-IDs it delivers.
 **Depends on:** Phase 21
-**Plans:** 4/7 plans executed
+**Plans:** 5/7 plans executed
 
 Plans:
 **Wave 1** *(foundation — additive schema, no behavior change)*
@@ -581,7 +581,7 @@ Plans:
 - [x] 22-02-PLAN.md — GET/PUT /sender-grade-settings ladder API + grade auto-progression worker + main.py wiring [Wave 2, depends_on: 22-01] — D-16/D-14/D-17 (completed 2026-07-08)
 - [x] 22-03-PLAN.md — queue account-budget + sender-wide dedup rewrite of _process_next_for_sender + rate_per_day gate removal from _check_rate_limits [Wave 2, depends_on: 22-01] — D-01/D-05/D-06/D-13/D-03/D-04 (completed 2026-07-08)
 - [x] 22-04-PLAN.md — remove rate_per_day from sender schemas/router + SenderResponse grade fields + PATCH /senders/{slug}/grade override [Wave 2, depends_on: 22-01] — D-04/D-12/D-15 (completed 2026-07-08)
-- [ ] 22-05-PLAN.md — warmup new-pair budget via sender_first_contacts + outreach-priority reserve (trailing-24h shared window) [Wave 2, depends_on: 22-01] — D-08/D-09/D-03
+- [x] 22-05-PLAN.md — warmup new-pair budget via sender_first_contacts + outreach-priority reserve (trailing-24h shared window) [Wave 2, depends_on: 22-01] — D-08/D-09/D-03 (completed 2026-07-08)
 
 **Wave 3** *(terminal cleanup — drop dead columns after all readers rewritten)*
 - [ ] 22-06-PLAN.md — migration 059 DROP campaigns.max_new_dialogs_per_day + senders.rate_per_day + ORM/schema/campaign-router cleanup + repo-wide grep gate [Wave 3, depends_on: 22-03, 22-04, 22-05] — D-07/D-04
