@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: 22-07 Tasks 1-2 complete; Task 3 human-verify checkpoint PENDING (blocking)
-last_updated: "2026-07-08T18:38:57.045Z"
-last_activity: 2026-07-08
+stopped_at: Phase 22 complete (7/7 plans) — 22-07 Task 3 human-verify APPROVED
+last_updated: "2026-07-08T23:05:00.000Z"
+last_activity: 2026-07-08 -- Phase 22 complete: grade ladder UI shipped to sibling repo (60f3d3b), checkpoint approved
 progress:
   total_phases: 27
   completed_phases: 24
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-21)
 
 ## Current Position
 
-Phase: 22 (account-level-new-chat-limit-grades) — EXECUTING
-Plan: 5 of 7 complete (22-01 schema foundation, 22-02 ladder API+worker, 22-03 per-account queue gate, 22-04 sender API cleanup+override)
-Status: Ready to execute
-Last activity: 2026-07-08
+Phase: 22 (account-level-new-chat-limit-grades) — COMPLETE
+Plan: 7 of 7 complete (22-01 schema foundation, 22-02 ladder API+worker, 22-03 per-account queue gate, 22-04 sender API cleanup+override, 22-05 warmup budget sharing, 22-06 drop dead columns, 22-07 contract+handoff+UI+checkpoint)
+Status: Awaiting phase-goal verification
+Last activity: 2026-07-08 -- 22-07 checkpoint approved after live DB-verified save round-trip (level1_chats_per_day 5→4→3)
 
-Progress: [██████████] 98%
+Progress: [██████████] 99%
 
 ## Performance Metrics
 
@@ -223,6 +223,7 @@ See full log: PROJECT.md → Key Decisions
 - [Phase ?]: 22-05: warmup spends shared new-chat budget only for NEW pairs (sender_first_contacts registry), initiator = older account writes first, behind an outreach-priority reserve on the trailing-24h window (D-08/D-09/D-03)
 - [Phase ?]: [Phase 22] Plan 22-06: migration 059 drops campaigns.max_new_dialogs_per_day (D-07) + senders.rate_per_day (D-04) from DB+ORM; per-campaign dialog-cap API surface removed; daily throttle is now exclusively the account grade budget. Rule-3 sweep: restriction_audit.py rate_per_day read removed, queue.py comments reworded, ~19 test files purged of raw-insert rate_per_day (create_all mirrors ORM). Zero app/ references (grep gate).
 - [Phase ?]: Phase 22-07: rebuilt prod api from main checkout + export-handoff.sh to regenerate openapi.json/types against live app (worktree volume-conflict-safe); grade contract published, frontend handoff noted (D-11/D-12)
+- [Phase ?]: Phase 22 COMPLETE: sibling repo UI shipped (aimly-tg-outreach 60f3d3b) — Grade Ladder settings tab, per-card grade+override, retired-field cleanup. Sibling's own types-openapi.json was independently stale (missing Phase 16/20/21 schemas already consumed by its own code) — fixed by merging forward from backend's regenerated spec rather than hand-patching, restoring the one frontend-only schema (CampaignAttachmentUploadResponse, backend endpoint returns untyped dict). Checkpoint approved after live DB-verified PUT round-trip on /sender-grade-settings (level1_chats_per_day 5→4→3, confirmed via direct query both times).
 
 ### Roadmap Evolution
 
