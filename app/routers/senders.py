@@ -61,6 +61,7 @@ from app.schemas import (
 )
 from app.services.encryption import encrypt_session
 from app.utils.auth import AuthCtx, auth_dep
+from app.utils.location import phone_location
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,7 @@ def _sender_to_response(
         slug=sender.slug,
         name=sender.name,
         phone=sender.phone,
+        location=phone_location(sender.phone),
         status=_derive_status(sender),
         checker_status=_derive_checker_status(sender),
         checker_trip_count=getattr(sender, "checker_trip_count", 0) or 0,

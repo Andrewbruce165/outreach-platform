@@ -129,6 +129,10 @@ class SenderResponse(BaseModel):
     slug: str
     name: str
     phone: str
+    # Derived (non-stored) country/region computed from the phone dial code
+    # (quick task 260708-ej8). No DB column, no migration — see app/utils/location.py.
+    # "Unknown" for an unmatched code; None for malformed/empty phone.
+    location: Optional[str] = None
     status: Literal["active", "warmup", "paused", "error", "limited", "frozen"]   # derived
     auth_status: str
     lifecycle_status: Literal["active", "warmup", "paused"]
