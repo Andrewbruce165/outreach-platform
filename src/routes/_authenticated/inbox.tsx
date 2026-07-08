@@ -1234,7 +1234,17 @@ function Thread({
           <div style={{ color: "var(--danger)" }}>{errMsg(messagesQ.error)}</div>
         )}
         {messages.map((m) => (
-          <MessageBubble key={m.id} m={m} />
+          <MessageBubble
+            key={m.id}
+            m={m}
+            conversationId={conversationId}
+            contactName={name}
+            editingId={editingId}
+            setEditingId={setEditingId}
+            editPendingId={editMut.isPending ? editMut.variables?.id ?? null : null}
+            onEdit={(id, text) => editMut.mutateAsync({ id, text })}
+            onRequestDelete={(msg) => setPendingMsgDelete(msg)}
+          />
         ))}
       </div>
 
@@ -1242,6 +1252,11 @@ function Thread({
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (sendFileMut.isPending || sendMut.isPending) return;
+          if (stagedFile) {
+            sendFileMut.mutate({ file: stagedFile, caption: draft.trim() });
+            return;
+          }
           const text = draft.trim();
           if (!text) return;
           sendMut.mutate(text);
@@ -1294,19 +1309,75 @@ function Thread({
               Confirm pricing
             </SuggestionChip>
           </div>
+          {stagedFile && (
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 10px",
+                marginBottom: 10,
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                background: "var(--bg-soft)",
+                fontSize: 12,
+                maxWidth: "100%",
+              }}
+            >
+              <FileText size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 320,
+                }}
+              >
+                {stagedFile.name}
+              </span>
+              <span className="muted" style={{ fontSize: 11 }}>
+                · {formatBytes(stagedFile.size)}
+              </span>
+              <button
+                type="button"
+                aria-label="Remove attachment"
+                onClick={() => {
+                  setStagedFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = "";
+                }}
+                disabled={sendFileMut.isPending}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                  display: "inline-flex",
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
           <textarea
             className="textarea"
             placeholder={
               conv?.ai_enabled
                 ? "Disable AI to send manually…"
-                : "Type a message, or click a suggestion above"
+                : stagedFile
+                  ? "Add a caption (optional)…"
+                  : "Type a message, or click a suggestion above"
             }
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            disabled={!conv || conv.ai_enabled || sendMut.isPending}
+            disabled={!conv || conv.ai_enabled || sendMut.isPending || sendFileMut.isPending}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
+                if (stagedFile) {
+                  sendFileMut.mutate({ file: stagedFile, caption: draft.trim() });
+                  return;
+                }
                 const text = draft.trim();
                 if (text) sendMut.mutate(text);
               }
@@ -1331,11 +1402,19 @@ function Thread({
               borderTop: "1px solid var(--border)",
             }}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              style={{ display: "none" }}
+              onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+            />
             <button
               type="button"
               className="tb__icon-btn"
               style={{ width: 32, height: 32 }}
               aria-label="Attach file"
+              disabled={!conv || conv.ai_enabled || sendMut.isPending || sendFileMut.isPending}
+              onClick={() => fileInputRef.current?.click()}
             >
               <Paperclip size={16} />
             </button>
@@ -1354,13 +1433,55 @@ function Thread({
             <button
               type="submit"
               className="btn btn--primary btn--sm"
-              disabled={!conv || conv.ai_enabled || !draft.trim() || sendMut.isPending}
+              disabled={
+                !conv ||
+                conv.ai_enabled ||
+                sendMut.isPending ||
+                sendFileMut.isPending ||
+                (!stagedFile && !draft.trim())
+              }
             >
-              <Send size={12} /> {sendMut.isPending ? "Sending…" : "Send"}
+              <Send size={12} />{" "}
+              {sendFileMut.isPending
+                ? "Uploading…"
+                : sendMut.isPending
+                  ? "Sending…"
+                  : stagedFile
+                    ? "Send file"
+                    : "Send"}
             </button>
           </div>
         </div>
       </form>
+
+      <AlertDialog
+        open={pendingMsgDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingMsgDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this message for everyone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This message will be permanently removed from your chat and from{" "}
+              {conv?.contact_name || "the recipient"}'s Telegram. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingMsgDelete) deleteMsgMut.mutate(pendingMsgDelete.id);
+                setPendingMsgDelete(null);
+              }}
+              style={{ background: "var(--danger)", color: "#fff" }}
+            >
+              Delete for everyone
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
