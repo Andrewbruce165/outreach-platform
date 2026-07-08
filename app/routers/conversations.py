@@ -85,6 +85,92 @@ async def _load_conversation_or_404(
     return dict(row._mapping)
 
 
+# ── Phase 23: inbox message-mutation helpers (D-17 error codes, D-19 gate) ─────
+
+# Structured error codes returned by the TelegramService inbox-mutation methods
+# (plans 23-02 / 23-05) → HTTP status. Any code not listed collapses to 502
+# TELEGRAM_OP_FAILED (see _raise_inbox_message_error).
+_INBOX_ERROR_STATUS: dict[str, int] = {
+    "MESSAGE_EDIT_TOO_OLD": 409,
+    "MESSAGE_NOT_EDITABLE": 422,
+    "DELETE_FAILED": 502,
+    "FILE_TOO_LARGE": 413,
+    "NO_TELEGRAM_ID": 400,
+    "RECIPIENT_NOT_IN_TELEGRAM": 422,
+    "FLOOD_WAIT": 429,
+    "ACCOUNT_FROZEN": 409,
+    "USER_IS_BLOCKED": 409,
+    "MEDIA_UNAVAILABLE": 410,
+    "DOWNLOAD_FAILED": 502,
+}
+
+
+def _raise_inbox_message_error(result: dict) -> None:
+    """Map a failed service-method result dict → HTTPException (D-17).
+
+    Accepts ``{"success": False, "error": {"code", "message", "retry_after"?}}``
+    — the shape returned by telegram_service.edit_message_by_telegram_id /
+    delete_message_by_telegram_id / send_file_by_telegram_id /
+    download_media_by_telegram_id. Unknown codes collapse to 502
+    TELEGRAM_OP_FAILED; FLOOD_WAIT passes ``retry_after`` through when present.
+    """
+    err = (result or {}).get("error") or {}
+    code = err.get("code") or "TELEGRAM_OP_FAILED"
+    message = err.get("message") or "Telegram operation failed"
+    if code in _INBOX_ERROR_STATUS:
+        status = _INBOX_ERROR_STATUS[code]
+        detail: dict = {"code": code, "message": message}
+    else:
+        status = 502
+        detail = {"code": "TELEGRAM_OP_FAILED", "message": message}
+    if err.get("retry_after") is not None:
+        detail["retry_after"] = err["retry_after"]
+    raise HTTPException(status_code=status, detail=detail)
+
+
+async def _load_message_for_mutation(
+    db: AsyncSession,
+    ctx: AuthCtx,
+    conversation_id: UUID,
+    message_id: UUID,
+    *,
+    require_type_text: bool = False,
+):
+    """Load an OUTBOUND message row for edit/delete or raise an opaque 404 (D-19).
+
+    Cross-workspace, inbound, contact-sent, wrong-conversation, or (when
+    ``require_type_text``) non-text messages ALL collapse to the same
+    ``MESSAGE_NOT_FOUND`` 404 — silent tenant isolation, no existence leak.
+    Returns the joined message + conversation-contact + sender-session row
+    needed to drive the Telethon op (INVERTED ordering: caller runs Telethon
+    FIRST, then the DB write — no takeover, D-04/D-08).
+    """
+    type_clause = " AND m.message_type = 'text'" if require_type_text else ""
+    row = (await db.execute(text(f"""
+        SELECT m.id AS message_id, m.telegram_message_id, m.direction, m.sent_by,
+               m.message_type,
+               c.contact_telegram_id, c.contact_phone,
+               s.id AS sender_id, s.slug AS sender_slug, s.session_string,
+               s.proxy, s.client_fingerprint
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        JOIN senders s ON s.id = c.sender_id
+        WHERE m.id = :mid AND m.conversation_id = :cid AND c.workspace_id = :wid
+          AND m.direction = 'outbound' AND m.sent_by IN ('ai', 'human'){type_clause}
+        -- TODO(v2-rls): replaced by RLS policy app.workspace_id
+    """), {
+        "mid": str(message_id),
+        "cid": str(conversation_id),
+        "wid": str(ctx.workspace_id),
+    })).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "MESSAGE_NOT_FOUND", "message": "Message not found"},
+        )
+    return row
+
+
 # ── List / detail endpoints ───────────────────────────────────────────────────
 
 
@@ -256,7 +342,8 @@ async def get_messages(
 
     rows = (await db.execute(text("""
         SELECT m.id, m.conversation_id, m.direction, m.message_text,
-               m.sent_by, m.telegram_message_id, m.created_at
+               m.sent_by, m.telegram_message_id, m.created_at,
+               m.message_type, m.file_name, m.mime_type, m.size_bytes, m.edited_at
         FROM messages m
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.id = :cid AND c.workspace_id = :wid
