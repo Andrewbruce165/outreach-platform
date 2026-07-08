@@ -1097,9 +1097,17 @@ class MessageResponse(BaseModel):
     id: UUID
     conversation_id: UUID
     direction: str
-    message_text: str
+    message_text: Optional[str] = None      # nullable for file bubbles (D-20)
     sent_by: str
     telegram_message_id: Optional[int] = None
+    # Phase 23 media/edit fields — all optional/defaulted so the current
+    # GET /messages SELECT (which does not yet return them) still constructs the
+    # model; plan 23-03 widens the SELECT.
+    message_type: str = "text"              # text|photo|video|voice|document
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    edited_at: Optional[datetime] = None    # (изменено) marker (D-07)
     created_at: datetime
 
 
@@ -1131,6 +1139,36 @@ class SendMessageFromUIResponse(BaseModel):
     success: bool
     message_id: Optional[UUID] = None
     telegram_message_id: Optional[int] = None
+    error: Optional[str] = None
+
+
+class EditMessageRequest(BaseModel):
+    """PATCH /conversations/{id}/messages/{message_id} body (D-06/D-07).
+
+    Tolerates the Lovable field aliases exactly like SendMessageFromUIRequest
+    (D-22): accepts ``message`` (canonical), ``message_text`` or ``text``.
+    """
+
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=4096,
+        validation_alias=AliasChoices("message", "message_text", "text"),
+    )
+
+
+class SendFileFromUIResponse(BaseModel):
+    """POST /conversations/{id}/send-file response (D-12).
+
+    Mirrors SendMessageFromUIResponse. The send-file endpoint uses multipart
+    Form/File params, so caption + file arrive as form fields — no request
+    BODY model is needed.
+    """
+
+    success: bool
+    message_id: Optional[UUID] = None
+    telegram_message_id: Optional[int] = None
+    message_type: Optional[str] = None
     error: Optional[str] = None
 
 
