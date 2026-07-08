@@ -805,6 +805,91 @@
         }
       }
     },
+    "/api/v1/senders/{slug}/grade": {
+      "patch": {
+        "tags": [
+          "senders"
+        ],
+        "summary": "Override Sender Grade",
+        "description": "Manually override a sender's account grade (Phase 22 D-15).\n\nWrites the SAME two fields as auto-progression — current_level and\nlevel_updated_at = NOW() — in one operation, so the progression timer\nrestarts from the override baseline (no separate frozen flag, D-15).\n\nWorkspace-scoped: `_load_sender_by_slug` resolves the sender only within\nctx.workspace_id and 404s otherwise, so a tenant cannot re-grade a sender it\ndoes not own (T-22-10). `current_level` is bounded 1..3 by GradeOverrideRequest\n(T-22-11) and mirrored by the mig 056 CHECK; the UPDATE binds params only\n(T-22-12).",
+        "operationId": "override_sender_grade_api_v1_senders__slug__grade_patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GradeOverrideRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SenderResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/senders/{slug}/pause": {
       "post": {
         "tags": [
@@ -2184,6 +2269,142 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sender-grade-settings": {
+      "get": {
+        "tags": [
+          "grade-settings"
+        ],
+        "summary": "Get Grade Settings Endpoint",
+        "description": "Workspace grade ladder — resolves to code-defaults 5/30, 9/30, 13 when no row (D-16).\n\nScoped by `ctx.workspace_id`; a missing row returns the resolved code-default\nladder — byte-identical to the unconfigured platform default.",
+        "operationId": "get_grade_settings_endpoint_api_v1_sender_grade_settings_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "grade-settings"
+        ],
+        "summary": "Update Grade Settings Endpoint",
+        "description": "Idempotent upsert of the workspace grade ladder (D-16), workspace-scoped.\n\nINSERT ... ON CONFLICT (workspace_id) DO UPDATE with bind params only. Returns\n{status, settings: <resolved>, warnings: [...]} — 200 even on soft breaches;\nPydantic bounds already rejected any hard-cap breach with 422.",
+        "operationId": "update_grade_settings_endpoint_api_v1_sender_grade_settings_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GradeLadderUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -11736,14 +11957,6 @@
             "title": "Recontact Min Age Days",
             "default": 30
           },
-          "max_new_dialogs_per_day": {
-            "type": "integer",
-            "maximum": 30.0,
-            "minimum": 1.0,
-            "title": "Max New Dialogs Per Day",
-            "description": "Daily new-dialog cap per sender within this campaign (D-12). Green corridor <=10; soft-warn >10; hard cap 30.",
-            "default": 10
-          },
           "follow_up_enabled": {
             "type": "boolean",
             "title": "Follow Up Enabled",
@@ -12121,11 +12334,6 @@
             "type": "integer",
             "title": "Recontact Min Age Days",
             "default": 30
-          },
-          "max_new_dialogs_per_day": {
-            "type": "integer",
-            "title": "Max New Dialogs Per Day",
-            "default": 10
           },
           "follow_up_enabled": {
             "type": "boolean",
@@ -12687,19 +12895,6 @@
               }
             ],
             "title": "Recontact Min Age Days"
-          },
-          "max_new_dialogs_per_day": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 30.0,
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max New Dialogs Per Day"
           },
           "follow_up_enabled": {
             "anyOf": [
@@ -13744,6 +13939,64 @@
         ],
         "title": "FunnelResponse",
         "description": "UI-SPEC §5.3 dashboard Sankey funnel — 5 stage counts.\n\nStages are monotonically non-increasing under typical seeded data:\n    sent >= replied >= engaged >= lead >= handoff\n(the API does not enforce monotonicity — pathological data such as manual\nhuman-sends without prior outbound, or stale leads/handoffs from other\nfunnel branches, can break the chain. UI renders the Sankey as-is.)\n\n'engaged' definition is locked per RESEARCH Pitfall 5:\n    COUNT(DISTINCT conversation_id) where >= 2 inbound contact messages AND\n    status NOT IN ('lead','handoff','finished','bot_ignored')."
+      },
+      "GradeLadderUpdate": {
+        "properties": {
+          "level1_chats_per_day": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Level1 Chats Per Day",
+            "default": 5
+          },
+          "level1_step_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Level1 Step Days",
+            "default": 30
+          },
+          "level2_chats_per_day": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Level2 Chats Per Day",
+            "default": 9
+          },
+          "level2_step_days": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Level2 Step Days",
+            "default": 30
+          },
+          "level3_chats_per_day": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Level3 Chats Per Day",
+            "default": 13
+          }
+        },
+        "type": "object",
+        "title": "GradeLadderUpdate",
+        "description": "PUT body — the fixed 3-level ladder (D-16). Level 3 has no step (D-17).\n\nPydantic `ge/le` bounds are the HARD cap (422 on breach); the green-corridor\nsoft warnings are computed separately in `_validate_ladder`."
+      },
+      "GradeOverrideRequest": {
+        "properties": {
+          "current_level": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Current Level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_level"
+        ],
+        "title": "GradeOverrideRequest",
+        "description": "PATCH /senders/{slug}/grade body (Phase 22 D-15).\n\nManual account-grade override. `current_level` must be a valid grade\n(D-16: fixed 3 levels → ge=1, le=3). Writing it sets senders.current_level\nand resets level_updated_at = NOW() (identical to auto-progression; no\nseparate frozen flag) so the progression timer restarts from the override."
       },
       "HTTPValidationError": {
         "properties": {
@@ -15194,16 +15447,11 @@
             "type": "integer",
             "title": "Per Hour",
             "default": 20
-          },
-          "per_day": {
-            "type": "integer",
-            "title": "Per Day",
-            "default": 150
           }
         },
         "type": "object",
         "title": "RateLimits",
-        "description": "Per-sender лимиты (D-13). Defaults = \"зелёный коридор\" 4/20/150."
+        "description": "Per-sender лимиты (D-13). Defaults = \"зелёный коридор\" 4/20.\n\nPhase 22 D-04: the daily field removed — the new-chat budget is now derived\nfrom the account grade ladder (see grade_ladder.py), not a per-sender field."
       },
       "RecheckRequest": {
         "properties": {
@@ -15727,19 +15975,6 @@
               }
             ],
             "title": "Rate Per Hour"
-          },
-          "rate_per_day": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 300.0,
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rate Per Day"
           }
         },
         "type": "object",
@@ -15891,6 +16126,34 @@
           },
           "rate_limits": {
             "$ref": "#/components/schemas/RateLimits"
+          },
+          "current_level": {
+            "type": "integer",
+            "title": "Current Level",
+            "default": 1
+          },
+          "level_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level Updated At"
+          },
+          "remaining_daily_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Daily Budget"
           },
           "role": {
             "type": "string",
@@ -16089,19 +16352,6 @@
             ],
             "title": "Rate Per Hour"
           },
-          "rate_per_day": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 300.0,
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rate Per Day"
-          },
           "role": {
             "anyOf": [
               {
@@ -16135,7 +16385,7 @@
         },
         "type": "object",
         "title": "SenderUpdate",
-        "description": "PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50, day<=300."
+        "description": "PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50."
       },
       "StartRequest": {
         "properties": {
