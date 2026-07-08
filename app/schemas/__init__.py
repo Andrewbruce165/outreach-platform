@@ -73,10 +73,13 @@ class SendFileRequest(BaseModel):
 # === Senders (Phase 2 — D-11/D-13/D-14) ===
 
 class RateLimits(BaseModel):
-    """Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20/150."""
+    """Per-sender лимиты (D-13). Defaults = "зелёный коридор" 4/20.
+
+    Phase 22 D-04: the daily field removed — the new-chat budget is now derived
+    from the account grade ladder (see grade_ladder.py), not a per-sender field.
+    """
     per_minute: int = 4
     per_hour: int = 20
-    per_day: int = 150
 
 
 class WarningItem(BaseModel):
@@ -101,18 +104,18 @@ class SenderCreate(BaseModel):
     # Optional per-sender rate-limit overrides (with hard cap, D-14).
     rate_per_min: Optional[int] = Field(None, ge=1, le=10)
     rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
-    rate_per_day: Optional[int] = Field(None, ge=1, le=300)
+    # Phase 22 D-04: the daily field removed — new-chat budget comes from grade.
 
 
 class SenderUpdate(BaseModel):
-    """PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50, day<=300."""
+    """PATCH /senders/{id}. Hard cap D-14: rate_per_min<=10, hour<=50."""
     name: Optional[str] = None
     phone: Optional[str] = None
     session_string: Optional[str] = None
     lifecycle_status: Optional[Literal["active", "warmup", "paused"]] = None
     rate_per_min: Optional[int] = Field(None, ge=1, le=10)
     rate_per_hour: Optional[int] = Field(None, ge=1, le=50)
-    rate_per_day: Optional[int] = Field(None, ge=1, le=300)
+    # Phase 22 D-04: the daily field removed — new-chat budget comes from grade.
     # NB: ai_context_id field dropped (Phase 3 C-05).
     role: Optional[Literal["sender", "checker"]] = None
     proxy: Optional[ProxyConfig] = None

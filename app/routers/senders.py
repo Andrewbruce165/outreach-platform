@@ -68,9 +68,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["senders"])
 
 # D-14: hard cap = "exceeds maximum safe limit" → 422.
-RATE_HARD_CAP = {"rate_per_min": 10, "rate_per_hour": 50, "rate_per_day": 300}
+# Phase 22 D-04: the daily field dropped — new-chat budget is grade-driven.
+RATE_HARD_CAP = {"rate_per_min": 10, "rate_per_hour": 50}
 # D-14: soft cap = "зелёный коридор" → 200 + warnings[].
-RATE_SOFT_CAP = {"rate_per_min": 4, "rate_per_hour": 20, "rate_per_day": 150}
+RATE_SOFT_CAP = {"rate_per_min": 4, "rate_per_hour": 20}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -127,14 +128,23 @@ def _sender_to_response(
     sent_today: int = 0,
     locked_by_campaign_id: Optional[UUID] = None,
     locked_by_campaign_name: Optional[str] = None,
+    remaining_daily_budget: Optional[int] = None,
 ) -> SenderResponse:
     """Build SenderResponse с derived status + nested RateLimits.
 
     Phase 3 C-05: ai_context_id / ai_context_name fields removed — sender
     больше не «знает» агента, связь через Campaign в Phase 4.
 
+    Phase 22 D-04/D-12: RateLimits no longer carries per_day (the daily new-chat
+    budget is grade-driven); `current_level`/`level_updated_at` surface the
+    account grade and `remaining_daily_budget` its trailing-24h headroom.
+
     `sent_today` — trailing-24h sent count (TODAY column numerator). Computed
     only on the list endpoint; other paths use the default 0.
+
+    `remaining_daily_budget` (D-12) — grade budget minus distinct new dialogs
+    opened in the trailing 24h, clamped at 0. Computed only on the list
+    endpoint; single-sender paths report None (same convention as sent_today=0).
 
     `locked_by_campaign_id` / `locked_by_campaign_name` (POOL-09, 08-04 UAT) —
     the first running campaign in the workspace holding this sender, so the pool
@@ -158,8 +168,11 @@ def _sender_to_response(
         rate_limits=RateLimits(
             per_minute=sender.rate_per_min,
             per_hour=sender.rate_per_hour,
-            per_day=sender.rate_per_day,
         ),
+        # Phase 22 D-12: account grade + trailing-24h remaining new-chat budget.
+        current_level=getattr(sender, "current_level", 1) or 1,
+        level_updated_at=getattr(sender, "level_updated_at", None),
+        remaining_daily_budget=remaining_daily_budget,
         role=sender.role,
         proxy=ProxyConfig(**sender.proxy) if sender.proxy else None,
         last_used_at=sender.last_used_at,
@@ -179,18 +192,19 @@ def _sender_to_response(
 def _validate_rate_limits(
     rate_per_min: Optional[int],
     rate_per_hour: Optional[int],
-    rate_per_day: Optional[int],
 ) -> List[WarningItem]:
     """D-14: hard cap → 422; soft cap → warnings[].
 
     Pydantic уже отрезает hard cap через Field(le=...), но Lovable иногда шлёт
     через сырой JSON — двойная проверка тут не вредна и даёт более ясное сообщение.
+
+    Phase 22 D-04: the daily field dropped — the new-chat budget is now
+    grade-driven (grade_ladder.py), no longer a per-sender validated field.
     """
     warnings: List[WarningItem] = []
     values = {
         "rate_per_min": rate_per_min,
         "rate_per_hour": rate_per_hour,
-        "rate_per_day": rate_per_day,
     }
     for field, val in values.items():
         if val is None:
@@ -462,7 +476,7 @@ async def list_senders(
     # TODAY column numerator: messages sent per sender in the trailing 24h.
     # Single GROUP BY over message_queue (no N+1), scoped to the senders just
     # loaded. Window + status match the rate-limiter daily cap (queue.py:450-466)
-    # so {sent_today}/{rate_per_day} never desyncs (no "151/150").
+    # so {sent_today} never desyncs from the grade budget (no "151/150").
     sent_today_map: dict = {}
     sender_ids = [s.id for s in senders]
     if sender_ids:
@@ -538,7 +552,7 @@ async def create_sender(
         )
 
     warnings = _validate_rate_limits(
-        request.rate_per_min, request.rate_per_hour, request.rate_per_day
+        request.rate_per_min, request.rate_per_hour
     )
 
     encrypted_session = encrypt_session(request.session_string)
@@ -557,8 +571,7 @@ async def create_sender(
         sender.rate_per_min = request.rate_per_min
     if request.rate_per_hour is not None:
         sender.rate_per_hour = request.rate_per_hour
-    if request.rate_per_day is not None:
-        sender.rate_per_day = request.rate_per_day
+    # Phase 22 D-04: the daily field is no longer set via API (grade-driven budget).
 
     db.add(sender)
     await db.commit()
@@ -626,7 +639,7 @@ async def update_sender(
     sender = await _load_sender_by_slug(db, ctx, slug)
 
     warnings = _validate_rate_limits(
-        request.rate_per_min, request.rate_per_hour, request.rate_per_day
+        request.rate_per_min, request.rate_per_hour
     )
 
     if request.name is not None:
@@ -644,8 +657,7 @@ async def update_sender(
         sender.rate_per_min = request.rate_per_min
     if request.rate_per_hour is not None:
         sender.rate_per_hour = request.rate_per_hour
-    if request.rate_per_day is not None:
-        sender.rate_per_day = request.rate_per_day
+    # Phase 22 D-04: the daily field is no longer set via API (grade-driven budget).
     # Phase 3 C-05: ai_context_id setter removed — column dropped.
     # PFH-03: symmetric checker guard. Flipping an in-running-campaign sender to
     # role='checker' would pull it out of sending, so require an explicit override.
