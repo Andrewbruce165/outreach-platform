@@ -198,8 +198,14 @@ async def _spool_upload_with_cap(upload: UploadFile) -> tuple[str, int]:
     running total crosses ``MAX_FILE_BYTES`` (413 FILE_TOO_LARGE). The temp file
     is unlinked on any error so an oversize/aborted upload leaves nothing behind;
     on success the caller owns ``tmp_path`` and MUST unlink it (D-14).
+
+    The temp file keeps the original extension (e.g. ``.png``) because Telethon's
+    photo/mime detection (``utils.is_image`` / ``mimetypes.guess_type``) keys off
+    the file PATH's extension, not any filename passed separately — an
+    extension-less ``mkstemp()`` path always sends as a generic document.
     """
-    fd, tmp_path = tempfile.mkstemp()
+    suffix = os.path.splitext(upload.filename or "")[1]
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
     total = 0
     try:
         with os.fdopen(fd, "wb") as out:

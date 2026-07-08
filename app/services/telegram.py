@@ -18,7 +18,7 @@ from telethon.tl.functions.contacts import (
     GetContactsRequest,
     ResolveUsernameRequest,
 )
-from telethon.tl.types import InputPhoneContact, InputPeerUser
+from telethon.tl.types import InputPhoneContact, InputPeerUser, DocumentAttributeFilename
 from telethon.errors import (
     FloodWaitError,
     PeerFloodError,
@@ -1812,7 +1812,12 @@ class TelegramService:
                 peer,
                 tmp_path,
                 caption=file_caption,
-                file_name=file_name,
+                # Telethon's send_file has no `file_name` kwarg — it silently
+                # swallows unknown kwargs into **kwargs and does nothing with
+                # them. The real filename comes from a DocumentAttributeFilename
+                # attribute, which overrides the default (derived from tmp_path's
+                # basename) only when explicitly passed here.
+                attributes=[DocumentAttributeFilename(file_name)] if file_name else None,
                 force_document=False,   # D-11 auto-media
             )
 
