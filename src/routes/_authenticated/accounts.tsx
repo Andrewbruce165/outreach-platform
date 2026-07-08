@@ -477,6 +477,26 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось снять с паузы"),
   });
 
+  // Phase 22 D-11/D-15: manual grade override. Resets level_updated_at on the
+  // backend (same as auto-progression) — applyFreshSender picks up the new
+  // level_updated_at straight from the response, no extra invalidation needed.
+  const [gradeOverride, setGradeOverride] = useState(sender.current_level ?? 1);
+  useEffect(() => {
+    setGradeOverride(sender.current_level ?? 1);
+  }, [sender.current_level]);
+  const gradeMut = useMutation({
+    mutationFn: (level: number) =>
+      api<Sender>(`/api/v1/senders/${sender.slug}/grade`, {
+        method: "PATCH",
+        body: { current_level: level },
+      }),
+    onSuccess: (fresh) => {
+      applyFreshSender(fresh);
+      toast.success(`Грейд изменён на уровень ${fresh.current_level}`);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Не удалось изменить грейд"),
+  });
+
   const sty = SENDER_STATUS_STYLE[sender.status] ?? SENDER_STATUS_STYLE.paused;
   const isRestricted = sender.status === "limited" || sender.status === "frozen";
   const restrictedUntil =
@@ -491,7 +511,6 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
 
   const lastUsed = sender.last_used_at ? relativeTime(sender.last_used_at) : "—";
   const isChecker = sender.role === "checker";
-  const dailyLimit = sender.rate_limits.per_day;
 
   // Checker status presentation (only when the backend supplied checker_status).
   const checkerStatus = isChecker ? (sender.checker_status ?? null) : null;
@@ -676,32 +695,63 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
         )}
       </div>
 
-      {/* today · ceiling */}
+      {/* Phase 22 D-04: per-account daily-message cap (rate_per_day) retired —
+          plain sent-today counter, no denominator (per frontend handoff). */}
+      <div className="acct-card__meter">
+        <div className="acct-card__meterRow">
+          <span className="muted text-xs">Отправлено сегодня</span>
+          <span className="num text-xs muted">{sender.sent_today ?? 0}</span>
+        </div>
+      </div>
+
+      {/* Phase 22 D-11/D-12: account grade + shared new-chat budget */}
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="acct-card__meter" style={{ cursor: "help" }}>
             <div className="acct-card__meterRow">
-              <span className="muted text-xs">Сегодня · потолок</span>
+              <span className="muted text-xs">Грейд · обновлён</span>
               <span className="num text-xs muted">
-                {sender.sent_today ?? 0} / {dailyLimit}
+                L{sender.current_level ?? 1} ·{" "}
+                {sender.level_updated_at ? relativeTime(sender.level_updated_at) : "—"}
               </span>
             </div>
-            <CorridorBar value={sender.sent_today ?? 0} limit={dailyLimit} />
+            <div className="acct-card__meterRow">
+              <span className="muted text-xs">Новых чатов сегодня осталось</span>
+              <span className="num text-xs muted">{sender.remaining_daily_budget ?? "—"}</span>
+            </div>
           </div>
         </TooltipTrigger>
         <TooltipContent side="top" className="max-w-[260px] text-left leading-relaxed">
-          {isChecker
-            ? `Overall message limit — ${dailyLimit}/day (incl. follow-ups).`
-            : `Overall message limit — ${dailyLimit}/day (incl. follow-ups). New-contact outreach is capped separately at 50 new dialogs/day per account.`}
+          Грейд определяет дневной бюджет новых чатов (растёт автоматически по возрасту
+          аккаунта). Бюджет общий для рассылки и прогрева.
         </TooltipContent>
       </Tooltip>
 
-      {/* limits · proxy · activity */}
+      {/* limits · grade override · proxy · activity */}
       <dl className="acct-card__kv">
         <dt>Лимиты</dt>
         <dd className="num mono">
-          {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour} ·{" "}
-          {sender.rate_limits.per_day}
+          {sender.rate_limits.per_minute} · {sender.rate_limits.per_hour}
+        </dd>
+        <dt>Override грейда</dt>
+        <dd style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+          <select
+            className="select"
+            style={{ width: 56, height: 26, padding: "0 4px" }}
+            value={gradeOverride}
+            onChange={(e) => setGradeOverride(Number(e.target.value))}
+          >
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+          </select>
+          <button
+            className="btn btn--ghost btn--sm"
+            disabled={gradeOverride === (sender.current_level ?? 1) || gradeMut.isPending}
+            onClick={() => gradeMut.mutate(gradeOverride)}
+          >
+            {gradeMut.isPending ? "…" : "Применить"}
+          </button>
         </dd>
         <dt>Прокси</dt>
         <dd>
@@ -1589,7 +1639,7 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
                 <span className="ob__roleTitle">
                   <PhoneIcon size={14} /> Sender
                 </span>
-                <span className="ob__roleHint">Отправляет outreach (4/мин · 20/ч · 150/день)</span>
+                <span className="ob__roleHint">Отправляет outreach (4/мин · 20/ч)</span>
               </button>
               <button
                 type="button"
@@ -1727,23 +1777,6 @@ function ProfileModal({ sender, onClose }: { sender: Sender; onClose: () => void
         </div>
       </div>
     </Modal>
-  );
-}
-
-function CorridorBar({ value, limit }: { value: number; limit: number }) {
-  const pct = limit > 0 ? Math.min(100, (value / limit) * 100) : 0;
-  const color = pct > 90 ? "var(--danger)" : pct > 70 ? "var(--warning)" : "var(--tg-blue)";
-  return (
-    <div
-      style={{
-        height: 4,
-        background: "var(--bg-soft)",
-        borderRadius: 999,
-        overflow: "hidden",
-      }}
-    >
-      <div style={{ width: `${pct}%`, height: "100%", background: color }} />
-    </div>
   );
 }
 

@@ -1016,24 +1016,6 @@ function Donut({
   );
 }
 
-function CorridorBar({ value, limit }: { value: number; limit: number }) {
-  const pct = limit > 0 ? Math.min(100, (value / limit) * 100) : 0;
-  const color =
-    pct > 90 ? "var(--danger)" : pct > 70 ? "var(--warning)" : "var(--success)";
-  return (
-    <div
-      style={{
-        height: 6,
-        borderRadius: 4,
-        background: "var(--bg-soft)",
-        overflow: "hidden",
-      }}
-    >
-      <div style={{ width: `${pct}%`, height: "100%", background: color }} />
-    </div>
-  );
-}
-
 function AccountHealthCard({
   senders,
   loading,
@@ -1123,14 +1105,14 @@ function AccountHealthCard({
                 fontWeight: 500,
               }}
             >
-              Daily rate limit per account
+              Messages sent today
             </div>
             {senders.slice(0, 4).map((s) => (
               <div
                 key={s.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "120px 1fr 60px",
+                  gridTemplateColumns: "1fr 60px",
                   alignItems: "center",
                   gap: 10,
                   padding: "7px 0",
@@ -1172,10 +1154,7 @@ function AccountHealthCard({
                     {s.name || s.phone}
                   </span>
                 </div>
-                <CorridorBar
-                  value={sentBySenderId[s.id] ?? 0}
-                  limit={s.rate_limits?.per_day ?? 300}
-                />
+                {/* Phase 22 D-04: rate_per_day retired — numerator only, no denominator */}
                 <span
                   style={{
                     fontSize: 11.5,
@@ -1184,8 +1163,7 @@ function AccountHealthCard({
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
-                  {(sentBySenderId[s.id] ?? 0).toLocaleString()}/
-                  {s.rate_limits?.per_day ?? 300}
+                  {(sentBySenderId[s.id] ?? 0).toLocaleString()}
                 </span>
               </div>
             ))}

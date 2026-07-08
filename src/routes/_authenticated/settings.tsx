@@ -8,15 +8,17 @@ import { api, ApiError } from "@/lib/api";
 import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { supabase } from "@/lib/supabase";
 import { track } from "@/lib/telemetry";
+import type { components } from "@/types/api";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
 });
 
-type Tab = "workspace" | "ai-llm" | "api-keys" | "members" | "profile" | "appearance";
+type Tab = "workspace" | "grade-ladder" | "ai-llm" | "api-keys" | "members" | "profile" | "appearance";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "workspace", label: "Workspace" },
+  { id: "grade-ladder", label: "Grade Ladder" },
   { id: "ai-llm", label: "AI / LLM" },
   { id: "api-keys", label: "API keys" },
   { id: "members", label: "Members" },
@@ -57,6 +59,7 @@ function SettingsPage() {
       </div>
       <div className="scroll" style={{ padding: 24, flex: 1 }}>
         {tab === "workspace" && <WorkspaceTab />}
+        {tab === "grade-ladder" && <GradeLadderTab />}
         {tab === "ai-llm" && <AiLlmTab />}
         {tab === "api-keys" && <ApiKeysTab />}
         {tab === "members" && <MembersTab />}
@@ -133,6 +136,176 @@ function WorkspaceTab() {
         className="btn btn--primary"
         disabled={save.isPending || !name || name === data?.name}
         onClick={() => save.mutate({ name })}
+      >
+        {save.isPending ? "Saving…" : "Save changes"}
+      </button>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Grade Ladder — Phase 22 D-11/D-16. Workspace-wide account grade ladder: 3
+// fixed levels (no add/remove) controlling new-chat budget (chats_per_day) and
+// auto-progression step-days. Level 3 is the permanent top level — no step
+// (D-17). GET/PUT /api/v1/sender-grade-settings; the response shapes are
+// untyped in the generated openapi client (FastAPI returns a plain dict for
+// this endpoint), so they're hand-typed here per the contract documented in
+// 22-FRONTEND-HANDOFF.md.
+// ---------------------------------------------------------------------------
+
+interface GradeLevel {
+  level: number;
+  chats_per_day: number;
+  step_days: number | null;
+}
+
+interface GradeLadderSettings {
+  levels: GradeLevel[];
+  recommended: { max_chats_per_day: number; min_step_days: number };
+}
+
+interface GradeLadderWarning {
+  field: string;
+  value: number;
+  recommended_max: number;
+  severity: "warning";
+}
+
+interface GradeLadderPutResponse {
+  status: string;
+  settings: GradeLadderSettings;
+  warnings: GradeLadderWarning[];
+}
+
+type GradeLadderUpdate = components["schemas"]["GradeLadderUpdate"];
+
+const GRADE_ROWS: { level: 1 | 2 | 3; chatsKey: keyof GradeLadderUpdate; stepKey?: keyof GradeLadderUpdate }[] = [
+  { level: 1, chatsKey: "level1_chats_per_day", stepKey: "level1_step_days" },
+  { level: 2, chatsKey: "level2_chats_per_day", stepKey: "level2_step_days" },
+  { level: 3, chatsKey: "level3_chats_per_day" }, // top level: no step_days (D-17)
+];
+
+function GradeLadderTab() {
+  const qc = useQueryClient();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["grade-ladder-settings"],
+    queryFn: () => api<GradeLadderSettings>("/api/v1/sender-grade-settings"),
+    retry: false,
+  });
+
+  const [form, setForm] = useState<GradeLadderUpdate | null>(null);
+  const [warnings, setWarnings] = useState<GradeLadderWarning[]>([]);
+
+  useEffect(() => {
+    if (!data) return;
+    const byLevel = (n: number) => data.levels.find((l) => l.level === n);
+    setForm({
+      level1_chats_per_day: byLevel(1)?.chats_per_day ?? 5,
+      level1_step_days: byLevel(1)?.step_days ?? 30,
+      level2_chats_per_day: byLevel(2)?.chats_per_day ?? 9,
+      level2_step_days: byLevel(2)?.step_days ?? 30,
+      level3_chats_per_day: byLevel(3)?.chats_per_day ?? 13,
+    });
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: (payload: GradeLadderUpdate) =>
+      api<GradeLadderPutResponse>("/api/v1/sender-grade-settings", {
+        method: "PUT",
+        body: payload,
+      }),
+    onSuccess: (res) => {
+      track("settings_changed", { tab: "grade-ladder" });
+      toast.success("Grade ladder updated");
+      setWarnings(res.warnings ?? []);
+      qc.setQueryData(["grade-ladder-settings"], res.settings);
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "Could not save");
+    },
+  });
+
+  if (isLoading || !form) return <Skeleton />;
+  if (error) return <ErrorState error={error} />;
+
+  const set = (patch: Partial<GradeLadderUpdate>) =>
+    setForm((f) => (f ? { ...f, ...patch } : f));
+  const warningFor = (field: string) => warnings.find((w) => w.field === field);
+
+  return (
+    <Card
+      title="Grade Ladder"
+      sub="Каждый аккаунт растёт по грейду (1→3). Грейд определяет дневной бюджет новых чатов — общий для рассылки и прогрева."
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {GRADE_ROWS.map(({ level, chatsKey, stepKey }) => {
+          const chatsWarn = warningFor(chatsKey);
+          const stepWarn = stepKey ? warningFor(stepKey) : undefined;
+          return (
+            <div
+              key={level}
+              style={{ display: "grid", gridTemplateColumns: "48px 1fr 1fr", gap: 12 }}
+            >
+              <div style={{ fontWeight: 600, paddingTop: 6 }}>L{level}</div>
+              <div className="field">
+                <label className="field__label">Chats / day</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={form[chatsKey]}
+                  onChange={(e) =>
+                    set({ [chatsKey]: Number(e.target.value) } as Partial<GradeLadderUpdate>)
+                  }
+                />
+                {chatsWarn && (
+                  <span
+                    className="field__hint"
+                    role="alert"
+                    style={{ color: "var(--warning, var(--danger))" }}
+                  >
+                    рекомендуем не больше {chatsWarn.recommended_max} — выше растёт риск спам-бана
+                  </span>
+                )}
+              </div>
+              <div className="field">
+                <label className="field__label">Days to next</label>
+                {stepKey ? (
+                  <>
+                    <input
+                      className="input"
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={form[stepKey]}
+                      onChange={(e) =>
+                        set({ [stepKey]: Number(e.target.value) } as Partial<GradeLadderUpdate>)
+                      }
+                    />
+                    {stepWarn && (
+                      <span
+                        className="field__hint"
+                        role="alert"
+                        style={{ color: "var(--warning, var(--danger))" }}
+                      >
+                        рекомендуем не меньше {stepWarn.recommended_max} дней
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <input className="input" value="—" disabled />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        className="btn btn--primary"
+        style={{ marginTop: 20 }}
+        disabled={save.isPending}
+        onClick={() => save.mutate(form)}
       >
         {save.isPending ? "Saving…" : "Save changes"}
       </button>

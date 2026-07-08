@@ -95,8 +95,6 @@ export function EditCampaignModal({
   const [days, setDays] = useState<string[]>(daysFromMask(campaign.work_days_mask ?? 0));
   const [allowRecontact, setAllowRecontact] = useState(campaign.allow_recontact ?? false);
   const [recontactMinAgeDays, setRecontactMinAgeDays] = useState(campaign.recontact_min_age_days ?? 30);
-  // Phase 12 NDLG-06: per-account daily new-dialog cap
-  const [maxNewDialogsPerDay, setMaxNewDialogsPerDay] = useState(campaign.max_new_dialogs_per_day ?? 10);
   // Phase 19 NORP-13: no-reply follow-up + auto-finish (D-08/D-12).
   const [followUpEnabled, setFollowUpEnabled] = useState(campaign.follow_up_enabled ?? false);
   const [followUpIntervalHours, setFollowUpIntervalHours] = useState(campaign.follow_up_interval_hours ?? 24);
@@ -148,7 +146,6 @@ export function EditCampaignModal({
         work_days_mask: maskFromDays(days),
         allow_recontact: allowRecontact,
         recontact_min_age_days: recontactMinAgeDays,
-        max_new_dialogs_per_day: maxNewDialogsPerDay,
         follow_up_enabled: followUpEnabled,
         follow_up_interval_hours: followUpIntervalHours,
         follow_up_max_pings: followUpMaxPings,
@@ -191,7 +188,6 @@ export function EditCampaignModal({
         work_days_mask: campaign.work_days_mask ?? null,
         allow_recontact: campaign.allow_recontact ?? false,
         recontact_min_age_days: campaign.recontact_min_age_days ?? 30,
-        max_new_dialogs_per_day: campaign.max_new_dialogs_per_day ?? 10,
         follow_up_enabled: campaign.follow_up_enabled ?? false,
         follow_up_interval_hours: campaign.follow_up_interval_hours ?? 24,
         follow_up_max_pings: campaign.follow_up_max_pings ?? 2,
@@ -708,31 +704,6 @@ export function EditCampaignModal({
               />
             </div>
           )}
-
-          {/* Phase 12 NDLG-06: per-account daily new-dialog cap */}
-          <div className="field">
-            <label className="field__label">Новых диалогов в сутки на аккаунт</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={30}
-              value={maxNewDialogsPerDay}
-              onChange={(e) => setMaxNewDialogsPerDay(Number(e.target.value))}
-            />
-            <span className="field__hint">
-              Лимит новых диалогов в сутки для каждого подключённого аккаунта (не на всю кампанию).
-            </span>
-            {maxNewDialogsPerDay > 10 && (
-              <span
-                className="field__hint"
-                role="alert"
-                style={{ color: "var(--warning, var(--danger))", marginTop: 4 }}
-              >
-                рекомендуем не больше 10 новых диалогов в сутки на аккаунт — выше растёт риск спам-бана (максимум 30)
-              </span>
-            )}
-          </div>
 
           {/* Phase 19 NORP-13: no-reply follow-up + auto-finish (D-08/D-12). */}
           <div className="field">
