@@ -566,15 +566,28 @@ Plans:
 **Wave 5** *(frontend + handoff, human-verify, cross-repo)*
 - [x] 21-06-frontend-and-handoff-PLAN.md — openapi/types regen + sibling-repo two-step bulk-import UI (ZIP → preview → role radio → confirm → progress poll) + human UAT [Wave 5, depends_on: 21-05] — IMPT-09
 
-### Phase 22: Warmup new-chat budget ladder with campaign priority reserve
+### Phase 22: Account-level new-chat limit grades
 
-**Goal:** Аккаунты в warmup-пуле получают редактируемую лестницу бюджета «новых чатов в сутки» (скользящие 24ч: недели 1–3 → 3/день, далее 4/6/8, после 42 дней кап 8), единую для рассылки и warmup-пар; рассылка всегда в приоритете (warmup тратит только остаток после резерва под pending cold openers), реестр `sender_first_contacts` — единственный источник правды «этому peer'у уже писали первым».
-**Requirements**: TBD
+**Goal:** Лимит «новых чатов в сутки» переезжает с кампании (`campaigns.max_new_dialogs_per_day`) на аккаунт (sender) — единый глобальный счётчик, общий для рассылки и warmup-паринга. Грейд растёт автоматически по возрасту аккаунта шагом 30 дней: 0–30д → 5/день, 30–60д → 9/день, 60д+ → 13/день. Отдельно убирается лимит «исходящих сообщений в сутки» (`senders.rate_per_day`/150) из backend и UI целиком — по словам пользователя, ни на что не влияет. Открытые вопросы (pacing внутри бюджета, распределение между несколькими активными кампаниями одного sender'а) — для discuss-phase. Заменяет и переопределяет исходную (более узкую, warmup-pool-only) версию этой фазы — см. `[SUPERSEDED]` секцию в CONTEXT.md.
+**Requirements**: No formal REQUIREMENTS.md IDs — scope tracked via CONTEXT.md decisions D-01..D-17 (see 22-CONTEXT.md); each plan's `requirements` frontmatter cites the D-IDs it delivers.
 **Depends on:** Phase 21
-**Plans:** 0 plans
+**Plans:** 7 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 22 to break down)
+**Wave 1** *(foundation — additive schema, no behavior change)*
+- [ ] 22-01-PLAN.md — migrations 056/057/058 (grade columns + backfill, sender_first_contacts + backfill, sender_grade_settings) + additive ORM models + grade_ladder.py helper + conftest [Wave 1, no deps] — D-14/D-16/D-08/D-10
+
+**Wave 2** *(parallel — distinct files: queue vs warmup vs senders/schemas vs new-router/worker)*
+- [ ] 22-02-PLAN.md — GET/PUT /sender-grade-settings ladder API + grade auto-progression worker + main.py wiring [Wave 2, depends_on: 22-01] — D-16/D-14/D-17
+- [ ] 22-03-PLAN.md — queue account-budget + sender-wide dedup rewrite of _process_next_for_sender + rate_per_day gate removal from _check_rate_limits [Wave 2, depends_on: 22-01] — D-01/D-05/D-06/D-13/D-03/D-04
+- [ ] 22-04-PLAN.md — remove rate_per_day from sender schemas/router + SenderResponse grade fields + PATCH /senders/{slug}/grade override [Wave 2, depends_on: 22-01] — D-04/D-12/D-15
+- [ ] 22-05-PLAN.md — warmup new-pair budget via sender_first_contacts + outreach-priority reserve (trailing-24h shared window) [Wave 2, depends_on: 22-01] — D-08/D-09/D-03
+
+**Wave 3** *(terminal cleanup — drop dead columns after all readers rewritten)*
+- [ ] 22-06-PLAN.md — migration 059 DROP campaigns.max_new_dialogs_per_day + senders.rate_per_day + ORM/schema/campaign-router cleanup + repo-wide grep gate [Wave 3, depends_on: 22-03, 22-04, 22-05] — D-07/D-04
+
+**Wave 4** *(handoff + human-verify, cross-repo)*
+- [ ] 22-07-PLAN.md — regen openapi.json + types + frontend handoff note (ladder editor / grade card / override) + human-verify [Wave 4, depends_on: 22-02, 22-04, 22-06] — D-11/D-12
 
 ### Phase 23: Edit and delete-for-everyone of sent messages plus file sending from inbox UI
 
