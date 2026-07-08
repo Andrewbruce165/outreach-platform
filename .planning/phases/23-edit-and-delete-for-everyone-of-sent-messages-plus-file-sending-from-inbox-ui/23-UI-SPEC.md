@@ -74,13 +74,13 @@ Five surfaces, all light-theme, all inside `src/routes/_authenticated/inbox.tsx`
 | `message_type` | Rendering |
 |----------------|-----------|
 | `text` (default) | unchanged — `m.message_text` in the bubble |
-| `photo` | thumbnail/preview area with `Image` placeholder icon + optional caption (`message_text`) below; inbound → lazy download/preview (Surface 4) |
-| `video` | preview area with `Play` overlay + optional caption; inbound → lazy download |
+| `photo` | **actual image**, not a placeholder icon — see Surface 4 for how bytes are obtained; optional caption (`message_text`) below |
+| `video` | native `<video controls>` (poster = blurred/neutral fill until loaded) once bytes are obtained; optional caption; see Surface 4 |
 | `voice` | `Mic` icon + "Voice message" label; if `message_text` carries the transcription (`[🎤 …]`) show it as muted secondary text below the label |
-| `document` | file-row: `FileText` icon + `file_name` (fallback "File") + humanized `size_bytes` (e.g. "2.4 MB") + optional caption; inbound → **Download** button (Surface 4) |
+| `document` | file-row: `FileText` icon + `file_name` (fallback "File") + humanized `size_bytes` (e.g. "2.4 MB") + optional caption; **Download** button (Surface 4) |
 
 - **Edited marker (D-07):** when `m.edited_at != null`, append a muted "(edited)" token next to the timestamp (both inbound and outbound). Do not show version history (none stored).
-- **Outbound file bubbles** render the same file-row/preview, right-aligned, in the outbound bubble style; no download button (it's the manager's own upload).
+- **Outbound photo/video bubbles show the real image/video too** (Surface 4 §Outbound) — a manager should see exactly what they just sent, not a generic file icon.
 - File-size formatting: bytes → `KB`/`MB` with one decimal; null size → omit.
 
 ### Surface 2 — Outbound bubble row-actions: Edit + Delete for everyone (D-01…D-08)
@@ -100,12 +100,52 @@ Clicking **Edit** swaps the bubble body for an inline editor:
 - Optimistic update: swap bubble text immediately, set a transient "(edited)" marker; on error, **roll back** to the prior text and toast (D-17).
 - Empty text is not a valid edit (to clear content, use delete) — Save is disabled when the field is empty/whitespace.
 
-### Surface 4 — Inbound file bubble: lazy download (D-16/C2)
-For inbound `document`/`photo`/`video`/`voice` bubbles, render a **Download** affordance (`Download` icon + "Download"; for documents a full `btn--ghost btn--sm`, for media a small overlay button):
-- Click → `GET /conversations/{id}/messages/{message_id}/download` (authenticated; returns raw bytes + `Content-Disposition`). Fetch as blob, trigger a browser save using `file_name`, then revoke the object URL. **Never** expose a public/raw blob URL and never base64-inline bytes into the messages list JSON (list carries only `file_name`/`mime_type`/`size_bytes`).
+### Surface 4 — Media bytes: inline view for photo/video, download for document (D-16/C2)
+
+**Revised after live-smoke (2026-07-08):** the first version of this contract made inline image
+preview a "nice-to-have" with download-to-disk as the default. Live testing showed that reads as
+broken — a manager cannot tell what a photo *is* without saving it to disk first. Inline viewing
+is now the **required primary behaviour for `photo`/`video`**; `document`/`voice` keep the
+save-to-disk **Download** button (a manager cannot usefully "view" a PDF inline in a chat bubble).
+
+**Photo / video bubbles (inbound AND outbound), D-16 still respected — no auto/background fetch:**
+- Bubble renders a neutral placeholder (blurred fill + `Image`/`Play` icon, "Tap to view") **until
+  the manager interacts with it** — bytes are never fetched automatically on render/scroll-into-view
+  (this is the load-bearing part of D-16: avoid an unbounded Telegram API call per photo in a long
+  thread). One click is required, same as the original download button — only the *result* changes
+  (inline render instead of disk save).
+- Click → `GET /conversations/{id}/messages/{message_id}/download?disposition=inline` (authenticated;
+  raw bytes). Fetch as blob, `URL.createObjectURL`, swap the placeholder for a real `<img>` /
+  `<video controls>`. Cache the blob URL in thread-local state keyed by `message_id` so scrolling
+  away and back does **not** re-fetch. Revoke the object URL only on unmount/thread-close, not on
+  scroll. **Never** expose a public/raw blob URL and never base64-inline bytes into the messages
+  list JSON (list carries only `file_name`/`mime_type`/`size_bytes`).
+- While fetching: keep the placeholder, overlay a spinner (no "Downloading…" label — this is a
+  view action, not a download).
+- A photo/video that has been viewed still offers a small `Download` icon-button (top-right corner
+  overlay, `.tb__icon-btn`-style) to explicitly save the already-fetched blob to disk via
+  `URL.createObjectURL` re-trigger — this is a convenience on the cached blob, **not** a second
+  network fetch.
+- `MEDIA_UNAVAILABLE` (410) → the file is gone from Telegram: replace the placeholder with muted
+  "No longer available in Telegram" (do not toast repeatedly). `DOWNLOAD_FAILED` (502) → toast
+  "Couldn't load the file. Try again." and keep the placeholder tappable for retry.
+
+**Outbound photo/video, freshly sent (Surface 6, send-file flow):** the manager already has the
+bytes client-side (the `File` object they picked) — render the real image/video **immediately**
+via a **local** `URL.createObjectURL(pickedFile)`, with zero network round-trip, the moment the
+optimistic bubble appears. Keep this local blob URL alive for the session; if the thread is
+reloaded from scratch (fresh page load, local blob gone), the bubble falls back to the same
+click-to-view-inline behaviour as any other photo/video bubble above (the backend download
+endpoint works for outbound messages too — it does not require `direction='inbound'`).
+
+**`document`/`voice` bubbles (any direction) — unchanged Download-to-disk affordance:**
+Render a **Download** affordance (`Download` icon + "Download"; `btn--ghost btn--sm`):
+- Click → `GET …/messages/{message_id}/download` (default `disposition=attachment`). Fetch as
+  blob, trigger a browser save using `file_name`, then revoke the object URL immediately (no
+  caching needed — one-shot save).
 - While fetching: swap the button for a spinner + "Downloading…"; disable re-click.
-- `MEDIA_UNAVAILABLE` (410) → the file is gone from Telegram: replace the button with muted "No longer available in Telegram" (do not toast repeatedly). `DOWNLOAD_FAILED` (502) → toast "Couldn't download the file. Try again." and keep the button.
-- Optional image inline-preview is a nice-to-have (`?disposition=inline`); default behaviour is download-to-disk.
+- `MEDIA_UNAVAILABLE` (410) → replace the button with muted "No longer available in Telegram".
+  `DOWNLOAD_FAILED` (502) → toast "Couldn't download the file. Try again." and keep the button.
 
 ### Surface 5 — Delete-for-everyone confirm (D-02/D-03/C3)
 Reuse the `AlertDialog` primitive (as at line 302), with copy that makes the two-sided revoke explicit (Reconciliation §2):
@@ -120,7 +160,7 @@ Wire the existing inert `Paperclip` button (Reconciliation §5):
 - Click → open a hidden `<input type="file">` (no `accept` restriction — **any type**, D-10). On pick, show a **staged-attachment chip** above the textarea: file icon + name + humanized size + a `X` remove button. The textarea caption becomes the file's caption (optional).
 - **Client-side size pre-check:** reject > 50 MB before upload → inline composer error "File is larger than 50 MB." (mirrors server `FILE_TOO_LARGE` 413). Nothing is sent.
 - Submit (Send button, or a dedicated "Send file" state of it) → `POST /conversations/{id}/send-file` as `multipart/form-data`: the file part + a `message`/`caption` text part (alias-tolerant, D-22). Show progress: Send disabled + "Uploading…".
-- On success → clear the staged chip + caption, append the new outbound file bubble, invalidate `["messages", id]` + `["conversations"]`. Because this is a new outbound, the server auto-takes-over (`status='manual'`, `ai_enabled=false`) — the UI should reflect the flipped state on refetch (the header switches to "Hand back to AI", composer stays enabled).
+- On success → clear the staged chip + caption, append the new outbound file bubble, invalidate `["messages", id]` + `["conversations"]`. For `photo`/`video`, render this new bubble with the **local** `URL.createObjectURL(stagedFile)` blob immediately (Surface 4 §Outbound) — no round-trip needed, the manager sees exactly what they sent. Because this is a new outbound, the server auto-takes-over (`status='manual'`, `ai_enabled=false`) — the UI should reflect the flipped state on refetch (the header switches to "Hand back to AI", composer stays enabled).
 - **Gate:** the attach button is disabled whenever the text composer is (no conversation / `conv.ai_enabled` / in-flight). Photos/videos arrive inline; other types as documents (server-side auto-media, D-11) — the UI does not choose.
 - Caption > 1024 chars is allowed (server sends overflow as a follow-up text message, D-13) — do not client-block long captions.
 
@@ -131,8 +171,8 @@ Wire the existing inert `Paperclip` button (Reconciliation §5):
 ### C1 — Edit ordering & error mapping (D-06/D-07/D-17)
 Optimistic swap of bubble text on Save; the network call is `PATCH …/messages/{message_id}`. Roll back to prior text on any error and toast the mapped string. Error codes (from `error-codes.md`): `MESSAGE_EDIT_TOO_OLD` (409) → "This message is too old to edit."; `MESSAGE_NOT_EDITABLE` (422) → "This message can't be edited."; `MESSAGE_NOT_FOUND` (404) → "Message not found"; unmapped Telethon → `TELEGRAM_OP_FAILED` (502) "Telegram operation failed. Try again.". `MessageNotModified` never surfaces as an error (server returns success).
 
-### C2 — Lazy download (D-16)
-`GET …/messages/{message_id}/download` → blob → save-as `file_name`. Per-bubble download state (idle / downloading / unavailable). `MEDIA_UNAVAILABLE` (410) is terminal per bubble (show muted unavailable label); `DOWNLOAD_FAILED` (502) is retryable (toast + keep button).
+### C2 — Lazy media fetch: view-inline for photo/video, download for document (D-16)
+`GET …/messages/{message_id}/download` — no auto-fetch on render (D-16, avoids an unbounded Telegram API call per photo in a thread); fetched only on an explicit tap/click. For `photo`/`video`: `?disposition=inline` → blob → cached `<img>`/`<video>` per `message_id` (tap-to-view is the PRIMARY interaction, not a means to a disk save). For `document`/`voice`: default `disposition=attachment` → blob → save-as `file_name` (one-shot, no caching). Per-bubble fetch state (idle / loading / unavailable). `MEDIA_UNAVAILABLE` (410) is terminal per bubble (show muted unavailable label); `DOWNLOAD_FAILED` (502) is retryable (toast + keep tappable).
 
 ### C3 — Delete-for-everyone ordering (D-02/D-03/D-04)
 Confirm → optimistic bubble removal → `DELETE …/messages/{message_id}`. On success keep it removed (row hard-deleted server-side). On `DELETE_FAILED` restore the bubble + toast. **No** conversation status / `ai_enabled` / queue mutation is expected or shown (D-04). The action is available even when AI is enabled.
