@@ -463,6 +463,183 @@ async def test_cooldown_block(async_client, async_db_session, valid_supabase_jwt
     assert r_name.status_code != 409
 
 
+# ─── D-07 hardening: post-write verification catches Telegram's silent no-op ───
+
+
+class _FakeProfileClient:
+    """Minimal Telethon-client stand-in for update_profile post-write verification.
+
+    ``live_first``/``live_last``/``live_about`` model what Telegram ACTUALLY stores
+    after the (possibly silently rate-limited) UpdateProfileRequest — which may differ
+    from what was requested.
+    """
+
+    def __init__(self, live_first=None, live_last=None, live_about=None):
+        self._first, self._last, self._about = live_first, live_last, live_about
+
+    async def __call__(self, request):
+        name = type(request).__name__
+        if "GetFullUser" in name:
+            class _Full:
+                pass
+            f = _Full()
+            f.full_user = type("U", (), {"about": self._about})()
+            return f
+        return True  # UpdateProfileRequest accepted (no exception)
+
+    async def get_me(self):
+        return type("Me", (), {"first_name": self._first, "last_name": self._last})()
+
+
+async def test_update_profile_applied_returns_success():
+    """Post-write re-read matches the request → {"success": True}, no rejection."""
+    from unittest.mock import AsyncMock, patch
+    from telethon.tl.functions.account import UpdateProfileRequest
+    from app.services.telegram import telegram_service
+
+    fake = _FakeProfileClient(live_first="Полина", live_last="Тарасова", live_about="био")
+    req = UpdateProfileRequest(first_name="Полина", last_name="Тарасова", about="био")
+    with patch.object(type(telegram_service), "get_client", new=AsyncMock(return_value=fake)), \
+         patch.object(type(telegram_service), "disconnect_client", new=AsyncMock()):
+        res = await telegram_service.update_profile("s-1", "u-1", "enc", req, proxy=None)
+    assert res == {"success": True}
+
+
+async def test_update_profile_silent_reject_raises():
+    """Telegram accepts the RPC but keeps the OLD name (silent rate limit) → the
+    post-write diff must raise ProfileChangeRejectedError listing the un-applied
+    field, so the router surfaces a real error instead of a false success."""
+    from unittest.mock import AsyncMock, patch
+    from telethon.tl.functions.account import UpdateProfileRequest
+    from app.services.telegram import telegram_service, ProfileChangeRejectedError
+
+    # User asked for "НовоеИмя" but Telegram still reports the old "Полина".
+    fake = _FakeProfileClient(live_first="Полина", live_last="Тарасова")
+    req = UpdateProfileRequest(first_name="НовоеИмя", last_name="Тарасова", about=None)
+    with patch.object(type(telegram_service), "get_client", new=AsyncMock(return_value=fake)), \
+         patch.object(type(telegram_service), "disconnect_client", new=AsyncMock()):
+        with pytest.raises(ProfileChangeRejectedError) as exc:
+            await telegram_service.update_profile("s-1", "u-1", "enc", req, proxy=None)
+    assert "first_name" in exc.value.fields
+
+
+async def test_update_profile_verify_read_failure_degrades_to_success():
+    """If the post-write READ itself fails, verification must NOT invent a rejection —
+    it degrades to the prior 'assume success' behaviour (safety net, not a new failure)."""
+    from unittest.mock import AsyncMock, patch
+    from telethon.tl.functions.account import UpdateProfileRequest
+    from app.services.telegram import telegram_service
+
+    class _ReadFails(_FakeProfileClient):
+        async def get_me(self):
+            raise RuntimeError("transient read error")
+
+    fake = _ReadFails(live_first="whatever")
+    req = UpdateProfileRequest(first_name="НовоеИмя", last_name=None, about=None)
+    with patch.object(type(telegram_service), "get_client", new=AsyncMock(return_value=fake)), \
+         patch.object(type(telegram_service), "disconnect_client", new=AsyncMock()):
+        res = await telegram_service.update_profile("s-1", "u-1", "enc", req, proxy=None)
+    assert res == {"success": True}
+
+
+# ─── Report #2: clearing a name field ("" not null) — the null-vs-empty-string bug ──
+
+
+async def test_clear_last_name_sends_empty_string(async_client, async_db_session, valid_supabase_jwt):
+    """Report #2 fix: clearing the last name must dispatch an explicit ``last_name=""``
+    (NOT ``None``) so Telegram actually CLEARS it — Telethon treats ``None`` as
+    "leave unchanged". The cached display name must drop the last name. Regression
+    guard for the null-vs-empty-string silent no-op (UI showed no last name, but a
+    refresh brought it back because Telegram never cleared it)."""
+    import app.services.telegram as telegram_module
+
+    token, ws = await _create_workspace_via_jwt(async_client, valid_supabase_jwt, sub="prof-clear-last")
+    sid = await _insert_sender_raw(async_db_session, ws, "prof-clear-last-1")
+    # Seed a two-part display name so clearing the last name is observable.
+    await async_db_session.execute(
+        text("UPDATE senders SET name = :n WHERE id = :id"),
+        {"n": "Полина Тарасова", "id": sid},
+    )
+    await async_db_session.commit()
+
+    with patch.object(
+        telegram_module.telegram_service, "update_profile",
+        new=AsyncMock(return_value={"success": True}), create=True,
+    ) as mock_update:
+        r = await async_client.patch(
+            "/api/v1/senders/prof-clear-last-1/profile",
+            headers=_auth(token),
+            json={"first_name": "Полина", "last_name": ""},
+        )
+    assert r.status_code == 200, r.text
+    # The dispatched UpdateProfileRequest must carry an explicit empty last_name,
+    # NOT None (which Telethon would treat as "leave unchanged" → silent no-op).
+    req = mock_update.await_args.args[-1]
+    assert req.last_name == "", f"expected explicit empty last_name, got {req.last_name!r}"
+    assert req.first_name == "Полина"
+    # Cache: display name recomposed to just the first name.
+    body = r.json()
+    sender = body.get("sender", body)
+    assert sender["name"] == "Полина"
+
+
+async def test_update_profile_clear_last_name_applied_returns_success():
+    """Clearing last_name that Telegram DOES apply (live last_name now empty) → the
+    post-write diff sees a match and returns success (no false rejection)."""
+    from unittest.mock import AsyncMock, patch
+    from telethon.tl.functions.account import UpdateProfileRequest
+    from app.services.telegram import telegram_service
+
+    fake = _FakeProfileClient(live_first="Полина", live_last="")  # Telegram cleared it
+    req = UpdateProfileRequest(first_name="Полина", last_name="", about=None)
+    with patch.object(type(telegram_service), "get_client", new=AsyncMock(return_value=fake)), \
+         patch.object(type(telegram_service), "disconnect_client", new=AsyncMock()):
+        res = await telegram_service.update_profile("s-1", "u-1", "enc", req, proxy=None)
+    assert res == {"success": True}
+
+
+async def test_update_profile_clear_last_name_silent_reject_raises():
+    """Report #2 + D-07: user clears last_name (sends ""), but Telegram silently KEEPS
+    the old value → the post-write diff must raise ProfileChangeRejectedError listing
+    last_name, so the router does NOT cache a false-empty name. This is exactly the
+    case the report #1 verification missed while last_name was sent as None."""
+    from unittest.mock import AsyncMock, patch
+    from telethon.tl.functions.account import UpdateProfileRequest
+    from app.services.telegram import telegram_service, ProfileChangeRejectedError
+
+    # Requested clear (last_name="") but Telegram still reports "Тарасова".
+    fake = _FakeProfileClient(live_first="Полина", live_last="Тарасова")
+    req = UpdateProfileRequest(first_name="Полина", last_name="", about=None)
+    with patch.object(type(telegram_service), "get_client", new=AsyncMock(return_value=fake)), \
+         patch.object(type(telegram_service), "disconnect_client", new=AsyncMock()):
+        with pytest.raises(ProfileChangeRejectedError) as exc:
+            await telegram_service.update_profile("s-1", "u-1", "enc", req, proxy=None)
+    assert "last_name" in exc.value.fields
+
+
+async def test_clear_first_name_rejected(async_client, async_db_session, valid_supabase_jwt):
+    """Report #2 fix: Telegram requires a non-empty first name (FIRSTNAME_INVALID for
+    empty), so an explicit ``first_name=""`` → 400 FIRST_NAME_REQUIRED BEFORE any
+    Telegram call (no silent no-op, no pointless fresh-account RPC round-trip)."""
+    import app.services.telegram as telegram_module
+
+    token, ws = await _create_workspace_via_jwt(async_client, valid_supabase_jwt, sub="prof-clear-first")
+    await _insert_sender_raw(async_db_session, ws, "prof-clear-first-1")
+
+    with patch.object(
+        telegram_module.telegram_service, "update_profile",
+        new=AsyncMock(return_value={"success": True}), create=True,
+    ) as mock_update:
+        r = await async_client.patch(
+            "/api/v1/senders/prof-clear-first-1/profile",
+            headers=_auth(token),
+            json={"first_name": "", "last_name": "Тарасова"},
+        )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "FIRST_NAME_REQUIRED"
+    mock_update.assert_not_awaited()
+
+
 # ─── D-09: warmup/new-account advisory is NON-blocking (RED) ───────────────────
 
 

@@ -1084,7 +1084,11 @@ async def update_sender_profile(
     → cache refresh + stamp → commit → D-09 advisory warnings.
     """
     from telethon.tl.functions.account import UpdateProfileRequest
-    from app.services.telegram import telegram_service, SessionAuthError
+    from app.services.telegram import (
+        telegram_service,
+        SessionAuthError,
+        ProfileChangeRejectedError,
+    )
 
     sender = await _load_sender_by_slug(db, ctx, slug)
 
@@ -1095,6 +1099,21 @@ async def update_sender_profile(
             detail={
                 "code": "BIO_TOO_LONG",
                 "message": f"Описание слишком длинное (максимум {_BIO_MAX_LEN} символов)",
+            },
+        )
+
+    # first_name cannot be cleared: Telegram requires a non-empty first name and
+    # returns FIRSTNAME_INVALID for an empty one. The clear-field fix makes the UI
+    # send an explicit "" for an emptied field (to distinguish "cleared" from "not
+    # touched" = None); reject a blank first_name here with a clear message BEFORE
+    # any Telegram RPC — avoids a pointless round-trip and a fresh-account throttle
+    # hit, and prevents a silent no-op. last_name/about MAY be "" (cleared).
+    if request.first_name is not None and request.first_name.strip() == "":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "FIRST_NAME_REQUIRED",
+                "message": "Имя обязательно — его нельзя оставить пустым.",
             },
         )
 
@@ -1147,6 +1166,24 @@ async def update_sender_profile(
                 "code": "AUTH_ERROR",
                 "message": f"Session auth failed: {e.auth_status}",
                 "auth_status": e.auth_status,
+            },
+        )
+    except ProfileChangeRejectedError as e:
+        # Telegram accepted the RPC but silently did NOT apply the change (anti-abuse
+        # name/bio throttle). NOTHING is stamped/committed — surface a clear retry
+        # message instead of a false "Профиль обновлён" (D-07 hardening).
+        _FIELD_RU = {"first_name": "имя", "last_name": "фамилию", "about": "описание"}
+        fields_ru = ", ".join(_FIELD_RU.get(f, f) for f in e.fields)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROFILE_CHANGE_REJECTED",
+                "message": (
+                    f"Telegram не применил новое значение ({fields_ru}) — вероятно, "
+                    "срабатывает ограничение на слишком частую смену профиля "
+                    "(особенно на новых аккаунтах). Попробуйте позже."
+                ),
+                "fields": e.fields,
             },
         )
     except HTTPException:

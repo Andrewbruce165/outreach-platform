@@ -128,6 +128,25 @@ class SessionAuthError(Exception):
         super().__init__(f"[{slug}] {auth_status}: {detail}")
 
 
+class ProfileChangeRejectedError(Exception):
+    """Telegram accepted ``UpdateProfileRequest`` WITHOUT raising, yet a post-write
+    re-read shows the requested value was NOT applied.
+
+    This is Telegram's undocumented anti-abuse throttle on profile-name/bio churn:
+    the RPC succeeds (no FloodWaitError) but the change is silently no-op'd —
+    especially on freshly-created accounts. Trusting "the RPC returned" as success
+    reports a false success to the user and desyncs the local cache. The router maps
+    this to a clear 409 PROFILE_CHANGE_REJECTED so the UI tells the user to retry
+    later instead of showing "Профиль обновлён".
+    """
+    def __init__(self, fields: list[str]):
+        self.fields = fields
+        super().__init__(
+            "PROFILE_CHANGE_REJECTED: Telegram did not apply "
+            f"{', '.join(fields)} (silent rate limit)"
+        )
+
+
 async def _set_auth_status(sender_id: str, auth_status: str):
     """Update sender auth_status BY PRIMARY KEY.
 
@@ -1210,10 +1229,55 @@ class TelegramService:
         try:
             client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             await client(request)
+            # Post-write verification (D-07 hardening): Telegram can accept
+            # UpdateProfileRequest WITHOUT raising FloodWaitError yet silently NOT
+            # apply a first/last-name or bio change (anti-abuse throttle on profile
+            # churn, most aggressive on fresh accounts). Re-read the live profile and
+            # diff against what was requested; a confirmed mismatch → the change was
+            # rejected. The READ itself is best-effort: if it fails we degrade to the
+            # old "assume success" behaviour rather than falsely reporting rejection.
+            rejected = await self._verify_profile_applied(client, request)
+            if rejected:
+                raise ProfileChangeRejectedError(rejected)
             return {"success": True}
         finally:
             if client:
                 await self.disconnect_client(client)
+
+    @staticmethod
+    async def _verify_profile_applied(client, request) -> list[str]:
+        """Return the list of requested fields Telegram did NOT actually apply.
+
+        Only fields the caller actually set (non-``None`` on the request) are checked.
+        Comparison is whitespace-tolerant. Any failure to READ the live profile
+        returns ``[]`` (no false rejection) — verification is a safety net, never a
+        new failure mode of its own.
+        """
+        req_first = getattr(request, "first_name", None)
+        req_last = getattr(request, "last_name", None)
+        req_about = getattr(request, "about", None)
+
+        def _norm(v) -> str:
+            return (v or "").strip()
+
+        mismatched: list[str] = []
+        try:
+            if req_first is not None or req_last is not None:
+                me = await client.get_me()
+                if req_first is not None and _norm(getattr(me, "first_name", None)) != _norm(req_first):
+                    mismatched.append("first_name")
+                if req_last is not None and _norm(getattr(me, "last_name", None)) != _norm(req_last):
+                    mismatched.append("last_name")
+            if req_about is not None:
+                from telethon.tl.functions.users import GetFullUserRequest
+                full = await client(GetFullUserRequest("me"))
+                live_about = getattr(getattr(full, "full_user", None), "about", None)
+                if _norm(live_about) != _norm(req_about):
+                    mismatched.append("about")
+        except Exception as e:  # noqa: BLE001 — verification read is best-effort
+            logger.info(f"[telegram] profile post-write verify skipped (read failed): {e}")
+            return []
+        return mismatched
 
     async def check_username(
         self,
