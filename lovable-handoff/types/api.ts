@@ -1510,6 +1510,107 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversation_id}/messages/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Message
+         * @description INBM-01 / D-04 — delete-for-everyone (revoke) + hard-delete the row.
+         *
+         *     Inverted vs POST /send: the Telethon revoke runs FIRST, then the DB delete.
+         *     This mutates a PAST message and MUST NOT auto-takeover — it never touches
+         *     conversations.status / ai_enabled / message_queue. The list-preview LATERAL
+         *     subquery auto-recomputes last_message from the next remaining row (D-03).
+         *
+         *     Gate (D-01/D-19): any outbound ai/human-sent message in this workspace+
+         *     conversation is deletable (no text-type requirement); anything else → 404.
+         *     DELETE_FAILED is reserved for real connection/flood/frozen failures — a
+         *     stale/own-message revoke is a silent Telegram no-op = success (Pitfall 4).
+         */
+        delete: operations["delete_message_api_v1_conversations__conversation_id__messages__message_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit Message
+         * @description INBM-02 / D-08 — edit an outbound TEXT message for everyone (NO takeover).
+         *
+         *     Inverted vs POST /send: the Telethon edit runs FIRST, then the DB write.
+         *     This mutates a PAST message and MUST NOT auto-takeover — it never touches
+         *     conversations.status / ai_enabled / paused_reason / message_queue.
+         *
+         *     Gate (D-01/D-05/D-19): only an outbound, ai/human-sent, TEXT message in this
+         *     workspace+conversation is editable; anything else → opaque 404.
+         */
+        patch: operations["edit_message_api_v1_conversations__conversation_id__messages__message_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversation_id}/send-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send File From Ui
+         * @description INBM-03 / D-12 — send a file from inbox WITH auto-takeover (mirrors POST /send).
+         *
+         *     Unlike edit/delete (past-message mutations, no takeover), sending a file is a
+         *     NEW outbound intervention → it flips the conversation to manual and cancels the
+         *     pending queue, exactly like POST /send. Ordering mirrors POST /send: gate → spool
+         *     (413 before any takeover) → takeover UPDATE + queue-cancel → commit → Telethon
+         *     OUTSIDE the txn → INSERT a typed messages row. The temp upload is unlinked in a
+         *     finally and the byte payload is NEVER persisted to the DB (D-14).
+         *
+         *     D-22: ``caption`` is a brand-new multipart field with no legacy/Lovable naming
+         *     precedent (unlike message/message_text), so it needs NO Form alias. The persisted
+         *     ``message_type`` is a BEST-EFFORT label off the browser ``file.content_type``;
+         *     actual Telegram rendering is governed by ``force_document=False`` (Telethon
+         *     auto-detect), so any label/render mismatch is cosmetic only.
+         */
+        post: operations["send_file_from_ui_api_v1_conversations__conversation_id__send_file_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversation_id}/messages/{message_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Message File
+         * @description INBM-05 / D-16 — lazy on-demand download of an incoming file.
+         *
+         *     The listener (23-04) records incoming media as metadata-only rows; the bytes
+         *     are fetched from Telegram only when the manager clicks download. Gate is the
+         *     INBOUND counterpart to _load_message_for_mutation: the message must belong to
+         *     this conversation+workspace and carry media (does NOT require outbound). Bytes
+         *     are streamed straight through — NEVER persisted (D-16). ``?disposition=inline``
+         *     is optional (OQ3); the default is ``attachment``.
+         */
+        get: operations["download_message_file_api_v1_conversations__conversation_id__messages__message_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversation_id}/disable-ai": {
         parameters: {
             query?: never;
@@ -2791,6 +2892,16 @@ export interface components {
              */
             file: string;
         };
+        /** Body_send_file_from_ui_api_v1_conversations__conversation_id__send_file_post */
+        Body_send_file_from_ui_api_v1_conversations__conversation_id__send_file_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+            /** Caption */
+            caption?: string | null;
+        };
         /** Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post */
         Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
             /**
@@ -3480,6 +3591,17 @@ export interface components {
             /** Instruction */
             instruction: string;
         };
+        /**
+         * EditMessageRequest
+         * @description PATCH /conversations/{id}/messages/{message_id} body (D-06/D-07).
+         *
+         *     Tolerates the Lovable field aliases exactly like SendMessageFromUIRequest
+         *     (D-22): accepts ``message`` (canonical), ``message_text`` or ``text``.
+         */
+        EditMessageRequest: {
+            /** Message */
+            message: string;
+        };
         /** EnqueueResponse */
         EnqueueResponse: {
             /** Success */
@@ -3973,11 +4095,24 @@ export interface components {
             /** Direction */
             direction: string;
             /** Message Text */
-            message_text: string;
+            message_text?: string | null;
             /** Sent By */
             sent_by: string;
             /** Telegram Message Id */
             telegram_message_id?: number | null;
+            /**
+             * Message Type
+             * @default text
+             */
+            message_type: string;
+            /** File Name */
+            file_name?: string | null;
+            /** Mime Type */
+            mime_type?: string | null;
+            /** Size Bytes */
+            size_bytes?: number | null;
+            /** Edited At */
+            edited_at?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -4288,6 +4423,26 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * SendFileFromUIResponse
+         * @description POST /conversations/{id}/send-file response (D-12).
+         *
+         *     Mirrors SendMessageFromUIResponse. The send-file endpoint uses multipart
+         *     Form/File params, so caption + file arrive as form fields — no request
+         *     BODY model is needed.
+         */
+        SendFileFromUIResponse: {
+            /** Success */
+            success: boolean;
+            /** Message Id */
+            message_id?: string | null;
+            /** Telegram Message Id */
+            telegram_message_id?: number | null;
+            /** Message Type */
+            message_type?: string | null;
+            /** Error */
+            error?: string | null;
         };
         /**
          * SendMessageFromUIRequest
@@ -7758,6 +7913,153 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MessageListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_message_api_v1_conversations__conversation_id__messages__message_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_message_api_v1_conversations__conversation_id__messages__message_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_file_from_ui_api_v1_conversations__conversation_id__send_file_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_send_file_from_ui_api_v1_conversations__conversation_id__send_file_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SendFileFromUIResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_message_file_api_v1_conversations__conversation_id__messages__message_id__download_get: {
+        parameters: {
+            query?: {
+                disposition?: string;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

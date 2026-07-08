@@ -19,10 +19,37 @@ Backend uses HTTPException with `detail: {code, message}` envelope (Phase 1 D-04
 | `ID_REQUIRED` | 422 | "Missing id parameter" | Used by /analytics/funnel + /analytics/llm |
 | `INVALID_PHONE` | 422 | "Phone number is invalid. Use +1 415 555 2810 format." | Onboarding step 1 |
 | `CHECKER_ROLE_CONFLICT` | 409 | "This account checks contacts. Adding it to a campaign (or switching it to the checker pool while a campaign runs) can get it blocked for both jobs. Add it anyway?" | Two call-sites: **(a)** `POST /campaigns/{id}/senders` — the account is `role='checker'`; **(b)** `PATCH /senders/{slug}` flips an in-running-campaign sender to `role='checker'`. Resolve by pausing/finishing the campaign, or re-send the same request with `force: true`. `detail.sender_id` identifies the account. |
-| `FILE_TOO_LARGE` | 413 | "File is too large (max 50 MB)." | Campaign attachment upload — surface the 50 MB limit before retry |
+| `FILE_TOO_LARGE` | 413 | "File is larger than 50 MB." | 50 MB cap — applies to **both** campaign attachment upload and inbox `POST /conversations/{id}/send-file`. Surface the limit before retry; nothing is sent |
 | (generic 5xx) | 5xx | "Server is unreachable. Retry." | Sonner toast with Retry action |
 
 Reference: when in doubt, fall back to UI-SPEC §8.3 copywriting contract.
+
+## Inbox message operations (Phase 23 / D-17)
+
+The four inbox mutation endpoints — edit (`PATCH /conversations/{id}/messages/{message_id}`),
+delete-for-everyone (`DELETE …/messages/{message_id}`), send-file
+(`POST /conversations/{id}/send-file`), and lazy download
+(`GET …/messages/{message_id}/download`) — return the same `{code, message}` envelope.
+Frontend renders a Sonner toast and rolls back the optimistic UI (D-17). HTTP statuses below
+mirror `_raise_inbox_message_error` / `_INBOX_ERROR_STATUS` in `app/routers/conversations.py`.
+
+| Backend code | HTTP | UI string | Notes |
+|---|---|---|---|
+| `MESSAGE_EDIT_TOO_OLD` | 409 | "This message is too old to edit." | Telegram `MessageEditTimeExpiredError` — the edit window is **server/Telegram-controlled**; the exact window is not client-configurable |
+| `MESSAGE_NOT_EDITABLE` | 422 | "This message can't be edited." | Non-text or otherwise non-editable message (e.g. media without editable text) |
+| `MESSAGE_NOT_FOUND` | 404 | "Message not found" | Cross-workspace / inbound / non-existent message all return this — silent tenant isolation, no existence leak |
+| `DELETE_FAILED` | 502 | "Couldn't delete the message. Try again." | Real connection/flood/frozen failure during revoke (not a validation error) |
+| `MEDIA_UNAVAILABLE` | 410 | "This file is no longer available in Telegram." | Incoming file's bytes are gone from Telegram at download time |
+| `DOWNLOAD_FAILED` | 502 | "Couldn't download the file. Try again." | Transient failure fetching the incoming file's bytes |
+| `TELEGRAM_OP_FAILED` | 502 | "Telegram operation failed. Try again." | Generic fallback — any unmapped Telethon error collapses to this |
+
+**Reused codes** (already documented above) also apply to these endpoints: `NO_TELEGRAM_ID` (400),
+`RECIPIENT_NOT_IN_TELEGRAM` (422), `FLOOD_WAIT` (429, carries `retry_after`), `ACCOUNT_FROZEN` (409),
+`USER_IS_BLOCKED` (409), and `FILE_TOO_LARGE` (413, send-file 50 MB cap).
+
+**Field-alias tolerance (D-22):** the multipart `send-file` form and `EditMessageRequest` body
+accept Lovable field aliases — `message` / `message_text` / `text` all map to the message text —
+so a Lovable-generated form that posts any of those names is accepted without a spec mismatch.
 
 ## Advisory warnings (non-blocking) — `CampaignResponse.attach_warnings[]`
 

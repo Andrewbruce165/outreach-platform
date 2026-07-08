@@ -6406,6 +6406,359 @@
         }
       }
     },
+    "/api/v1/conversations/{conversation_id}/messages/{message_id}": {
+      "patch": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Edit Message",
+        "description": "INBM-02 / D-08 — edit an outbound TEXT message for everyone (NO takeover).\n\nInverted vs POST /send: the Telethon edit runs FIRST, then the DB write.\nThis mutates a PAST message and MUST NOT auto-takeover — it never touches\nconversations.status / ai_enabled / paused_reason / message_queue.\n\nGate (D-01/D-05/D-19): only an outbound, ai/human-sent, TEXT message in this\nworkspace+conversation is editable; anything else → opaque 404.",
+        "operationId": "edit_message_api_v1_conversations__conversation_id__messages__message_id__patch",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Message Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Delete Message",
+        "description": "INBM-01 / D-04 — delete-for-everyone (revoke) + hard-delete the row.\n\nInverted vs POST /send: the Telethon revoke runs FIRST, then the DB delete.\nThis mutates a PAST message and MUST NOT auto-takeover — it never touches\nconversations.status / ai_enabled / message_queue. The list-preview LATERAL\nsubquery auto-recomputes last_message from the next remaining row (D-03).\n\nGate (D-01/D-19): any outbound ai/human-sent message in this workspace+\nconversation is deletable (no text-type requirement); anything else → 404.\nDELETE_FAILED is reserved for real connection/flood/frozen failures — a\nstale/own-message revoke is a silent Telegram no-op = success (Pitfall 4).",
+        "operationId": "delete_message_api_v1_conversations__conversation_id__messages__message_id__delete",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Message Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversation_id}/send-file": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Send File From Ui",
+        "description": "INBM-03 / D-12 — send a file from inbox WITH auto-takeover (mirrors POST /send).\n\nUnlike edit/delete (past-message mutations, no takeover), sending a file is a\nNEW outbound intervention → it flips the conversation to manual and cancels the\npending queue, exactly like POST /send. Ordering mirrors POST /send: gate → spool\n(413 before any takeover) → takeover UPDATE + queue-cancel → commit → Telethon\nOUTSIDE the txn → INSERT a typed messages row. The temp upload is unlinked in a\nfinally and the byte payload is NEVER persisted to the DB (D-14).\n\nD-22: ``caption`` is a brand-new multipart field with no legacy/Lovable naming\nprecedent (unlike message/message_text), so it needs NO Form alias. The persisted\n``message_type`` is a BEST-EFFORT label off the browser ``file.content_type``;\nactual Telegram rendering is governed by ``force_document=False`` (Telethon\nauto-detect), so any label/render mismatch is cosmetic only.",
+        "operationId": "send_file_from_ui_api_v1_conversations__conversation_id__send_file_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_send_file_from_ui_api_v1_conversations__conversation_id__send_file_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendFileFromUIResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversation_id}/messages/{message_id}/download": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Download Message File",
+        "description": "INBM-05 / D-16 — lazy on-demand download of an incoming file.\n\nThe listener (23-04) records incoming media as metadata-only rows; the bytes\nare fetched from Telegram only when the manager clicks download. Gate is the\nINBOUND counterpart to _load_message_for_mutation: the message must belong to\nthis conversation+workspace and carry media (does NOT require outbound). Bytes\nare streamed straight through — NEVER persisted (D-16). ``?disposition=inline``\nis optional (OQ3); the default is ``attachment``.",
+        "operationId": "download_message_file_api_v1_conversations__conversation_id__messages__message_id__download_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Message Id"
+            }
+          },
+          {
+            "name": "disposition",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "attachment",
+              "title": "Disposition"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/conversations/{conversation_id}/disable-ai": {
       "post": {
         "tags": [
@@ -11065,6 +11418,31 @@
         ],
         "title": "Body_import_preview_api_v1_contacts_import_preview_post"
       },
+      "Body_send_file_from_ui_api_v1_conversations__conversation_id__send_file_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "caption": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caption"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_send_file_from_ui_api_v1_conversations__conversation_id__send_file_post"
+      },
       "Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post": {
         "properties": {
           "file": {
@@ -13122,6 +13500,22 @@
         "title": "DialogueStage",
         "description": "One stage in the campaign's dialogue_flow sequence.\n\ntitle is optional (label for the UI); instruction is the stage directive\ninjected into the prompt. Validated: title≤120, instruction 1..2000 chars.\nSecurity: conlist max_length=7 on the containing field guards array-size abuse (T2)."
       },
+      "EditMessageRequest": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "EditMessageRequest",
+        "description": "PATCH /conversations/{id}/messages/{message_id} body (D-06/D-07).\n\nTolerates the Lovable field aliases exactly like SendMessageFromUIRequest\n(D-22): accepts ``message`` (canonical), ``message_text`` or ``text``."
+      },
       "EnqueueResponse": {
         "properties": {
           "success": {
@@ -14192,7 +14586,14 @@
             "title": "Direction"
           },
           "message_text": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Message Text"
           },
           "sent_by": {
@@ -14210,6 +14611,56 @@
             ],
             "title": "Telegram Message Id"
           },
+          "message_type": {
+            "type": "string",
+            "title": "Message Type",
+            "default": "text"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mime Type"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "edited_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited At"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -14221,7 +14672,6 @@
           "id",
           "conversation_id",
           "direction",
-          "message_text",
           "sent_by",
           "created_at"
         ],
@@ -14911,6 +15361,65 @@
         ],
         "title": "RestrictionEventResponse",
         "description": "HLTH-03: one restriction-event row from sender_restriction_events.\n\nRead-only response for GET /senders/{slug}/restriction-events. ORM read via\nfrom_attributes; mirrors the migration-030 columns."
+      },
+      "SendFileFromUIResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "telegram_message_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telegram Message Id"
+          },
+          "message_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Type"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "title": "SendFileFromUIResponse",
+        "description": "POST /conversations/{id}/send-file response (D-12).\n\nMirrors SendMessageFromUIResponse. The send-file endpoint uses multipart\nForm/File params, so caption + file arrive as form fields — no request\nBODY model is needed."
       },
       "SendMessageFromUIRequest": {
         "properties": {
