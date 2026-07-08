@@ -956,13 +956,37 @@ class TelegramListener:
             conversation_id = conv["id"]
             ai_context_id = conv["ai_context_id"]
 
+            # === Phase 23 (INBM-04 / D-15): classify concrete media type + pull
+            # metadata from the telethon File wrapper WITHOUT downloading the bytes.
+            # Lazy download happens later via the 23-05 endpoint. Never read the
+            # deprecated/unreliable file id attribute (Pitfall 6) — only name/mime/size.
+            _msg = event.message
+            if _msg.photo:
+                _mtype = "photo"
+            elif _msg.video:
+                _mtype = "video"
+            elif _msg.voice:
+                _mtype = "voice"
+            elif _msg.document:
+                _mtype = "document"
+            else:
+                _mtype = "text"
+            _f = _msg.file  # telethon File wrapper; None for plain text
+            _file_name = _f.name if _f else None
+            _mime_type = _f.mime_type if _f else None
+            _size_bytes = _f.size if _f else None
+
             # === Сохраняем в БД ===
             message_saved = await self.save_message(
                 conversation_id=conversation_id,
                 direction="inbound",
                 message_text=message_text,
                 sent_by="contact",
-                telegram_message_id=event.id
+                telegram_message_id=event.id,
+                message_type=_mtype,
+                file_name=_file_name,
+                mime_type=_mime_type,
+                size_bytes=_size_bytes,
             )
 
             if not message_saved:
