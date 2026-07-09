@@ -1040,8 +1040,103 @@ function ConvList({
             </div>
           );
         })}
+        {/* Infinite scroll sentinel */}
+        {items.length > 0 && (
+          <div ref={sentinelRef} style={{ height: 1 }} aria-hidden="true" />
+        )}
+        {isFetchingMore && (
+          <div
+            style={{
+              padding: "12px 14px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              color: "var(--text-muted)",
+              fontSize: 12,
+            }}
+          >
+            <Loader2 size={14} className="spin" /> Loading more…
+          </div>
+        )}
+        {!hasMore && !loading && items.length > 0 && (
+          <div
+            style={{
+              padding: "10px 14px 16px",
+              textAlign: "center",
+              color: "var(--text-faint)",
+              fontSize: 11,
+            }}
+          >
+            End of list
+          </div>
+        )}
       </div>
     </aside>
+  );
+}
+
+function SplitHandle({
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (n: number) => void;
+}) {
+  const draggingRef = useRef(false);
+  const startRef = useRef<{ x: number; w: number }>({ x: 0, w: value });
+  const [hover, setHover] = useState(false);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!draggingRef.current) return;
+      const delta = e.clientX - startRef.current.x;
+      const next = Math.min(max, Math.max(min, startRef.current.w + delta));
+      onChange(next);
+    }
+    function onUp() {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      setActive(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [min, max, onChange]);
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onMouseDown={(e) => {
+        draggingRef.current = true;
+        setActive(true);
+        startRef.current = { x: e.clientX, w: value };
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+      }}
+      style={{
+        cursor: "col-resize",
+        background: active || hover ? "var(--tg-blue, #3390ec)" : "var(--border)",
+        opacity: active || hover ? 0.35 : 1,
+        transition: "background 120ms ease",
+      }}
+    />
   );
 }
 
