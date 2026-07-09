@@ -360,12 +360,26 @@ function InboxPage() {
           background: "var(--bg-soft)",
         }}
       >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: showTrace
+            ? `${listWidth}px 6px 1fr 360px`
+            : `${listWidth}px 6px 1fr`,
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          overflow: "hidden",
+          background: "var(--bg-soft)",
+        }}
+      >
         <ConvList
           loading={listQ.isLoading}
           error={listQ.error ? errMsg(listQ.error) : null}
           items={conversations}
           totalCount={allConversations.length}
           campaigns={campaigns}
+          senders={senders}
           activeId={selectedId}
           onSelect={setSelectedId}
           search={search}
@@ -374,10 +388,19 @@ function InboxPage() {
           onStatusFilter={setStatusFilter}
           campaignFilter={campaignFilter}
           onCampaignFilter={setCampaignFilter}
+          senderFilter={senderFilter}
+          onSenderFilter={setSenderFilter}
           selectionMode={selectionMode}
           selectedIds={selectedIds}
           allVisibleSelected={allVisibleSelected}
           bulkPending={deleteBulkMut.isPending}
+          hasMore={Boolean(listQ.hasNextPage)}
+          isFetchingMore={listQ.isFetchingNextPage}
+          onLoadMore={() => {
+            if (listQ.hasNextPage && !listQ.isFetchingNextPage) {
+              void listQ.fetchNextPage();
+            }
+          }}
           onToggleSelectionMode={() =>
             selectionMode ? exitSelectionMode() : setSelectionMode(true)
           }
@@ -387,6 +410,12 @@ function InboxPage() {
             setPendingDelete({ kind: "single", id, name })
           }
           onRequestDeleteBulk={() => setPendingDelete({ kind: "bulk" })}
+        />
+        <SplitHandle
+          value={listWidth}
+          min={LIST_MIN}
+          max={LIST_MAX}
+          onChange={setListWidth}
         />
         {selectedId ? (
           <Thread
