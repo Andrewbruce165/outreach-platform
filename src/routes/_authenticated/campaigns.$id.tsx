@@ -193,6 +193,7 @@ function CampaignDetailPage() {
         leads?: number;
         finishes?: number;
         handoffs?: number;
+        contacts_messaged?: number;
       }>(`/api/v1/analytics/campaigns/${id}`),
     staleTime: 30_000,
     retry: false,
