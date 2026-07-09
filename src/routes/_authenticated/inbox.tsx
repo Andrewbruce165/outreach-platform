@@ -846,7 +846,7 @@ function ConvList({
         )}
       </div>
 
-      <div className="scroll" style={{ flex: 1 }}>
+      <div ref={scrollRef} className="scroll" style={{ flex: 1 }}>
         {loading && <div className="muted" style={{ padding: 16 }}>Loading…</div>}
         {error && (
           <div style={{ padding: 16, color: "var(--danger)", fontSize: 13 }}>{error}</div>
