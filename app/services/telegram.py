@@ -1029,12 +1029,17 @@ class TelegramService:
                 else:
                     overflow_text = caption
 
-            # Send file via Telethon
+            # Send file via Telethon.
+            # Telethon's send_file has no `file_name` kwarg — it silently swallows
+            # unknown kwargs into **kwargs and does nothing with them. The real
+            # filename comes from a DocumentAttributeFilename attribute, which
+            # overrides the default (derived from tmp_path's random basename) only
+            # when explicitly passed here (mirrors send_file_by_telegram_id).
             sent = await client.send_file(
                 peer,
                 tmp_path,
                 caption=file_caption,
-                file_name=file_name,
+                attributes=[DocumentAttributeFilename(file_name)] if file_name else None,
                 force_document=force_document
             )
 
