@@ -5797,7 +5797,7 @@
           "campaigns"
         ],
         "summary": "Upload Attachment",
-        "description": "D-19: attach ONE first-message file to a campaign (multipart upload).\n\nAlias-tolerant to the multipart field name (``file`` or ``attachment``) so the\nLovable frontend works either way. Bytes stream straight to the BYTEA column\n(D-02 — no temp file). D-03: over MAX_ATTACHMENT_BYTES → 413 FILE_TOO_LARGE.\nD-01: exactly one attachment per campaign — delete-then-insert (upsert).\nWorkspace-scoped via _load_campaign (cross-workspace → 404).",
+        "description": "260709-dbl: attach one OR MORE first-message files to a campaign (multipart upload).\n\nSend a `files` (or `attachments`) array for the multi-file album; the legacy single\nfields (`file`/`attachment`) are still accepted for back-compat. Bytes stream straight\nto the BYTEA column (D-02 — no temp file). Validation before any write: per-file over\nMAX_ATTACHMENT_BYTES (50 MB) → 413 FILE_TOO_LARGE; over 10 files → 400 TOO_MANY_ATTACHMENTS.\nReplace-all upsert: every upload REPLACES the campaign's whole attachment set (ordered by\nposition). All attachments are delivered as one grouped Telegram album on the opener.\nResponse: {campaign_id, count, attachments:[{file_name,size_bytes,content_type,position}], \nplus the FIRST file's file_name/size_bytes/content_type echoed at top level for back-compat}.\nWorkspace-scoped via _load_campaign (cross-workspace → 404).",
         "operationId": "upload_attachment_api_v1_campaigns__campaign_id__attachment_post",
         "parameters": [
           {
@@ -5857,7 +5857,40 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "title": "UploadAttachmentResponse",
+                  "properties": {
+                    "campaign_id": { "type": "string", "format": "uuid" },
+                    "count": { "type": "integer" },
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "file_name": { "type": "string" },
+                          "size_bytes": { "type": "integer" },
+                          "content_type": {
+                            "anyOf": [ { "type": "string" }, { "type": "null" } ]
+                          },
+                          "position": { "type": "integer" }
+                        }
+                      }
+                    },
+                    "file_name": {
+                      "type": "string",
+                      "description": "Back-compat: the FIRST attachment's file_name."
+                    },
+                    "size_bytes": {
+                      "type": "integer",
+                      "description": "Back-compat: the FIRST attachment's size_bytes."
+                    },
+                    "content_type": {
+                      "anyOf": [ { "type": "string" }, { "type": "null" } ],
+                      "description": "Back-compat: the FIRST attachment's content_type."
+                    }
+                  }
+                }
               }
             }
           },
@@ -11666,15 +11699,29 @@
       },
       "Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post": {
         "properties": {
+          "files": {
+            "type": "array",
+            "items": { "type": "string", "format": "binary" },
+            "title": "Files",
+            "description": "260709-dbl: multi-file album (preferred). Max 10 files, 50 MB each."
+          },
+          "attachments": {
+            "type": "array",
+            "items": { "type": "string", "format": "binary" },
+            "title": "Attachments",
+            "description": "Alias of `files` (multi-file album)."
+          },
           "file": {
             "type": "string",
             "format": "binary",
-            "title": "File"
+            "title": "File",
+            "description": "Legacy single-file field (back-compat)."
           },
           "attachment": {
             "type": "string",
             "format": "binary",
-            "title": "Attachment"
+            "title": "Attachment",
+            "description": "Legacy single-file alias (back-compat)."
           }
         },
         "type": "object",
@@ -12364,6 +12411,12 @@
             "type": "boolean",
             "title": "Has Attachment",
             "default": false
+          },
+          "attachment_count": {
+            "type": "integer",
+            "title": "Attachment Count",
+            "description": "260709-dbl: number of first-message attachments (album). has_attachment = attachment_count > 0.",
+            "default": 0
           },
           "dialogue_flow": {
             "items": {
