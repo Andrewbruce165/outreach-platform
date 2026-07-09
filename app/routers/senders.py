@@ -1005,6 +1005,34 @@ async def check_spambot(
         elif verdict == "free" and sender.restriction_status != "none":
             sender.restriction_status = "none"
             sender.restricted_until = None
+            # flush so the raw-SQL eligible-pool query below reads this sender as
+            # restriction_status='none' inside the SAME (uncommitted) transaction.
+            await db.flush()
+            # Un-pause this sender's own paused pending rows (ACCOUNT_FROZEN pushed
+            # them +24h; PeerFlood didn't pause but this is a harmless no-op then).
+            await db.execute(
+                text("""
+                    UPDATE message_queue SET scheduled_at = NOW()
+                    WHERE sender_id = :sid AND status = 'pending'
+                      AND scheduled_at > NOW()
+                """),
+                {"sid": str(sender.id)},
+            )
+            # Rebalance-back (inverse of Phase-9 failover): while restricted, the
+            # sender's cold-pending backlog was moved onto the healthy pool by
+            # failover_cold_backlog. Un-pause alone can't bring it back — it only
+            # touches rows still assigned here. Now that the sender is eligible
+            # again, pull a fair ±1-of-total/P share of cold-pending backlog back
+            # onto it per campaign, so it resumes cold outreach within its own
+            # rate limits instead of returning active with an empty queue.
+            # Mirrors listener._restriction_reconcile_tick's automatic recovery.
+            from app.services.rebalance import rebalance_on_attach
+            camp_rows = (await db.execute(
+                text("SELECT campaign_id FROM campaign_senders WHERE sender_id = :sid"),
+                {"sid": str(sender.id)},
+            )).fetchall()
+            for cr in camp_rows:
+                await rebalance_on_attach(cr[0], sender.id, db)
             await db.commit()
             spambot_result["restriction_status_updated"] = "none"
 

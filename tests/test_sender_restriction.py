@@ -155,8 +155,11 @@ _FAKE_SENDER_ROW = SimpleNamespace(
 class _FakeSession:
     """Records every execute() and serves SELECT rows for the restriction query."""
 
-    def __init__(self, select_rows):
+    def __init__(self, select_rows, campaign_rows=None):
         self._select_rows = select_rows
+        # Rows returned for the recovery rebalance-back's campaign lookup
+        # (SELECT campaign_id FROM campaign_senders WHERE sender_id = :sid).
+        self._campaign_rows = campaign_rows or []
         self.executed = []  # list of (sql_str, params)
 
     async def execute(self, stmt, params=None):
@@ -165,6 +168,9 @@ class _FakeSession:
         if "FROM senders" in sql and "restriction_status <> 'none'" in sql:
             # The batch reconcile SELECT (decides which senders to recheck).
             return _FakeResult(self._select_rows)
+        if "FROM campaign_senders" in sql:
+            # Recovery rebalance-back: campaigns the cleared sender belongs to.
+            return _FakeResult(self._campaign_rows)
         if "SELECT restricted_until FROM senders" in sql:
             # Phase 10 B-1: per-sender intra-tx old_until read (D-01 gate).
             return _FakeResult([], scalar=None)
@@ -214,6 +220,55 @@ async def test_restriction_tick_clears_on_free(monkeypatch):
     assert "restriction_status = 'none'" in sqls
     # free also un-pauses the sender's paused queue items.
     assert "UPDATE message_queue" in sqls and "scheduled_at = NOW()" in sqls
+
+
+async def test_restriction_tick_rebalances_back_on_free(monkeypatch):
+    """On SpamBot 'free', the cleared sender must be re-included in work
+    distribution: rebalance_on_attach is called once per campaign it belongs to,
+    inside the SAME transaction as the clear (the inverse of Phase-9 failover)."""
+    from app.services import listener as listener_mod
+    from app.services import rebalance as rebalance_mod
+
+    rows = [("sid-1", "s1", "spam_limited")]
+    session = _FakeSession(rows, campaign_rows=[("camp-1",), ("camp-2",)])
+    monkeypatch.setattr(listener_mod, "AsyncSessionLocal", MagicMock(return_value=session))
+    monkeypatch.setattr(
+        listener_mod.telegram_service, "check_spambot",
+        AsyncMock(return_value={"status": "free"}),
+    )
+    spy = AsyncMock(return_value=3)
+    monkeypatch.setattr(rebalance_mod, "rebalance_on_attach", spy)
+
+    listener = listener_mod.TelegramListener()
+    listener.clients["s1"] = MagicMock()
+
+    summary = await listener._restriction_reconcile_tick()
+
+    assert summary["cleared"] == 1
+    # Called once per campaign the recovered (now-eligible) sender is attached to,
+    # with (campaign_id, sender_id, session).
+    assert spy.await_count == 2
+    called_campaigns = {c.args[0] for c in spy.await_args_list}
+    assert called_campaigns == {"camp-1", "camp-2"}
+    for c in spy.await_args_list:
+        assert c.args[1] == "sid-1"  # the recovered sender id
+        assert c.args[2] is session  # same transaction (caller commits)
+
+
+async def test_restriction_tick_free_no_campaigns_is_noop(monkeypatch):
+    """A cleared sender with no campaigns still clears cleanly (0 rebalance calls)."""
+    from app.services import listener as listener_mod
+    from app.services import rebalance as rebalance_mod
+
+    rows = [("sid-1", "s1", "spam_limited")]
+    listener, session = _setup_listener(monkeypatch, rows, "free")  # campaign_rows=[]
+    spy = AsyncMock(return_value=0)
+    monkeypatch.setattr(rebalance_mod, "rebalance_on_attach", spy)
+
+    summary = await listener._restriction_reconcile_tick()
+
+    assert summary["cleared"] == 1
+    assert spy.await_count == 0
 
 
 async def test_restriction_tick_extends_on_limited(monkeypatch):

@@ -1743,6 +1743,28 @@ class TelegramListener:
                             WHERE sender_id = :sid AND status = 'pending'
                               AND scheduled_at > NOW()
                         """), {"sid": str(r[0])})
+                    # Symmetric rebalance-back (the inverse of Phase-9 failover):
+                    # when this sender got PeerFlood'd / frozen, failover_cold_backlog
+                    # (queue.py) moved its cold-pending backlog onto the healthy pool so
+                    # cold contacts didn't stall. The un-pause above only touches rows
+                    # STILL assigned to this sender — the shed cold backlog never comes
+                    # back on its own, so a cold-outreach sender returns 'active' with an
+                    # empty queue and campaign throughput stays degraded. Now that the
+                    # restriction is cleared to 'none' in THIS same transaction, the
+                    # sender is eligible again: call rebalance_on_attach for each of its
+                    # campaigns to pull a fair ±1-of-total/P share of cold-pending backlog
+                    # back onto it (and evacuate any still-ineligible-donor rows). It is
+                    # idempotent (no-op on an already-even pool) and worker-safe, and it
+                    # does NOT touch rate limits — the recovered sender simply resumes
+                    # sending within its own 4/min·20/h·150/day caps.
+                    from app.services.rebalance import rebalance_on_attach
+                    camp_rows = (await db.execute(
+                        text("SELECT campaign_id FROM campaign_senders WHERE sender_id = :sid"),
+                        {"sid": str(r[0])},
+                    )).fetchall()
+                    rebalanced = 0
+                    for cr in camp_rows:
+                        rebalanced += await rebalance_on_attach(cr[0], r[0], db)
                     # Phase 10 (HLTH-01): durable cleared event, same TX as the lift.
                     await record_restriction_event(
                         r[0], "cleared", "spambot_reconcile",
@@ -1750,7 +1772,10 @@ class TelegramListener:
                     )
                     await db.commit()
                     cleared += 1
-                    logger.info(f"✅ [restriction] {slug} cleared (SpamBot: free) — queue resumed")
+                    logger.info(
+                        f"✅ [restriction] {slug} cleared (SpamBot: free) — queue resumed"
+                        + (f", rebalanced {rebalanced} cold-pending rows back" if rebalanced else "")
+                    )
                 elif verdict == "suspended":
                     await db.execute(
                         text("UPDATE senders SET auth_status = 'banned' WHERE id = :sid"),
