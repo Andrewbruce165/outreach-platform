@@ -1,0 +1,1574 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import {
+  Plus,
+  Folder as FolderIcon,
+  Upload,
+  Search,
+  Trash2,
+  Edit3,
+  RefreshCcw,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  Users,
+  Loader2,
+  Filter,
+  Check,
+  Clock,
+  Shuffle,
+  UserPlus,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
+
+type TgFilter = "all" | "in_tg" | "checking" | "not_found";
+const PAGE_SIZE = 200;
+import { Topbar } from "@/components/Topbar";
+import { api, ApiError } from "@/lib/api";
+import { track } from "@/lib/telemetry";
+import type { components } from "@/types/api";
+
+
+type Folder = components["schemas"]["FolderResponse"];
+type Contact = components["schemas"]["ContactResponse"];
+type ImportPreview = components["schemas"]["ContactImportPreviewResponse"];
+type ImportSummary = components["schemas"]["ContactImportSummary"];
+
+const TARGET_FIELDS = [
+  { key: "phone", label: "Phone" },
+  { key: "username", label: "Telegram username" },
+  { key: "full_name", label: "Full name" },
+  { key: "source", label: "Source" },
+] as const;
+
+export const Route = createFileRoute("/_authenticated/contacts")({
+  component: ContactsPage,
+});
+
+function ContactsPage() {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const qc = useQueryClient();
+
+  const foldersQ = useQuery({
+    queryKey: ["folders"],
+    queryFn: () => api<Folder[]>("/api/v1/folders"),
+  });
+
+  // Auto-select first folder
+  const activeId = selectedId ?? foldersQ.data?.[0]?.id ?? null;
+  const activeFolder = foldersQ.data?.find((f) => f.id === activeId) ?? null;
+
+  return (
+    <>
+      <Topbar
+        title="Contacts"
+        right={
+          <>
+            <button className="btn btn--ghost btn--sm" onClick={() => setImportOpen(true)}>
+              <Upload size={14} /> Import CSV
+            </button>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={() => {
+                // Focus sidebar create form via event flag in URL hash
+                window.dispatchEvent(new CustomEvent("aimly:new-folder"));
+              }}
+            >
+              <Plus size={14} /> New folder
+            </button>
+          </>
+        }
+      />
+      <div
+        style={{
+          flex: 1,
+          display: "grid",
+          gridTemplateColumns: "280px 1fr",
+          minHeight: 0,
+        }}
+      >
+        <FolderSidebar
+          folders={foldersQ.data ?? []}
+          isLoading={foldersQ.isLoading}
+          activeId={activeId}
+          onSelect={setSelectedId}
+        />
+        <FolderDetail
+          folder={activeFolder}
+          folders={foldersQ.data ?? []}
+          onImport={() => setImportOpen(true)}
+        />
+      </div>
+
+      {importOpen && (
+        <ImportModal
+          folders={foldersQ.data ?? []}
+          defaultFolderId={activeId}
+          onClose={() => setImportOpen(false)}
+          onDone={() => {
+            void qc.invalidateQueries({ queryKey: ["folders"] });
+            void qc.invalidateQueries({ queryKey: ["contacts"] });
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/* ---------------- Helpers ---------------- */
+const FOLDER_PALETTE = [
+  "#3b82f6",
+  "#8774e1",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#06b6d4",
+  "#ec4899",
+  "#84cc16",
+];
+
+function folderColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return FOLDER_PALETTE[h % FOLDER_PALETTE.length];
+}
+
+function initials(name: string | null | undefined, fallback = "?"): string {
+  const n = (name ?? "").trim();
+  if (!n) return fallback;
+  const parts = n.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase() ?? "").join("") || fallback;
+}
+
+function ContactAvatar({ name, phone }: { name: string | null; phone: string | null }) {
+  const seed = (name || phone || "?") as string;
+  const color = folderColor(seed);
+  return (
+    <div
+      className="avatar avatar--sm"
+      style={{ background: `${color}1A`, color }}
+    >
+      {initials(name, (phone ?? "?").slice(-2))}
+    </div>
+  );
+}
+
+function normalizeTgStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+function isInTelegram(status: string | null | undefined): boolean {
+  return ["ok", "registered", "found", "in_telegram"].includes(normalizeTgStatus(status));
+}
+
+function isCheckingTelegram(status: string | null | undefined): boolean {
+  return ["pending", "checking", "unknown", ""].includes(normalizeTgStatus(status));
+}
+
+function isNotInTelegram(status: string | null | undefined): boolean {
+  return ["not_registered", "not_found", "privacy", "missing", "error"].includes(
+    normalizeTgStatus(status),
+  );
+}
+
+// Folder-wide Telegram-status breakdown, computed server-side (single GROUP BY).
+// Not yet in the generated openapi types — declared inline to match the backend shape.
+type FolderStats = {
+  total: number;
+  in_telegram: number;
+  checking: number;
+  not_found: number;
+};
+
+/* ---------------- Folder sidebar ---------------- */
+function FolderSidebar({
+  folders,
+  isLoading,
+  activeId,
+  onSelect,
+}: {
+  folders: Folder[];
+  isLoading: boolean;
+  activeId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const qc = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+
+  // Allow the topbar "New folder" button to open the create form
+  if (typeof window !== "undefined") {
+    // Attach once
+    (window as unknown as { __aimlyNewFolderBound?: boolean }).__aimlyNewFolderBound ||
+      window.addEventListener("aimly:new-folder", () => setCreating(true));
+    (window as unknown as { __aimlyNewFolderBound?: boolean }).__aimlyNewFolderBound = true;
+  }
+
+  const createMut = useMutation({
+    mutationFn: (n: string) =>
+      api<Folder>("/api/v1/folders", { method: "POST", body: { name: n } }),
+    onSuccess: (folder) => {
+      void qc.invalidateQueries({ queryKey: ["folders"] });
+      setCreating(false);
+      setName("");
+      onSelect(folder.id);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't create folder"),
+  });
+
+  return (
+    <aside
+      style={{
+        background: "var(--bg)",
+        borderRight: "1px solid var(--border)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          padding: "12px 14px 8px",
+          color: "var(--text-faint)",
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          fontSize: 11,
+          fontWeight: 600,
+        }}
+      >
+        Folders ({folders.length})
+      </div>
+      <div className="scroll" style={{ flex: 1, padding: "0 8px" }}>
+        {creating && (
+          <form
+            style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) createMut.mutate(name.trim());
+            }}
+          >
+            <input
+              className="input"
+              autoFocus
+              placeholder="Folder name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="submit"
+                className="btn btn--primary btn--sm"
+                disabled={createMut.isPending}
+                style={{ flex: 1 }}
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => {
+                  setCreating(false);
+                  setName("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {isLoading && (
+          <div className="muted text-sm" style={{ padding: 12 }}>
+            Loading…
+          </div>
+        )}
+
+        {!isLoading && folders.length === 0 && !creating && (
+          <div style={{ textAlign: "center", padding: "24px 12px" }}>
+            <FolderIcon size={20} style={{ color: "var(--text-faint)" }} />
+            <p className="muted text-sm" style={{ margin: "8px 0 12px" }}>
+              No folders yet
+            </p>
+          </div>
+        )}
+
+        {folders.map((f) => {
+          const sel = f.id === activeId;
+          const color = folderColor(f.id);
+          return (
+            <button
+              key={f.id}
+              onClick={() => onSelect(f.id)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 9,
+                marginBottom: 1,
+                background: sel ? "var(--tg-blue-soft)" : "transparent",
+                color: sel ? "var(--tg-blue)" : "var(--text-soft)",
+                textAlign: "left",
+              }}
+            >
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 7,
+                  background: `${color}1A`,
+                  color,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <FolderIcon size={14} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {f.name}
+                </div>
+                <div className="muted text-xs">
+                  {f.contact_count.toLocaleString()} contacts
+                </div>
+              </div>
+            </button>
+          );
+        })}
+
+        {!creating && (
+          <button
+            onClick={() => setCreating(true)}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "10px 12px",
+              borderRadius: 9,
+              marginTop: 6,
+              border: "1px dashed var(--border-strong)",
+              color: "var(--text-muted)",
+              fontSize: 12.5,
+              background: "transparent",
+            }}
+          >
+            <Plus size={13} /> New folder
+          </button>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+/* ---------------- Folder detail (right pane) ---------------- */
+function FolderDetail({
+  folder,
+  folders,
+  onImport,
+}: {
+  folder: Folder | null;
+  folders: Folder[];
+  onImport: () => void;
+}) {
+  const qc = useQueryClient();
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const [tgFilter, setTgFilter] = useState<TgFilter>("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // Reset selection / pagination whenever folder or filters change
+  useEffect(() => {
+    setSelected(new Set());
+    setMoveOpen(false);
+    setPage(0);
+  }, [folder?.id]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [tgFilter, search]);
+
+  const contactsQ = useQuery({
+    queryKey: ["contacts", folder?.id, page],
+    queryFn: () =>
+      api<Contact[]>("/api/v1/contacts", {
+        query: { folder_id: folder!.id, limit: PAGE_SIZE, offset: page * PAGE_SIZE },
+      }),
+    enabled: !!folder,
+  });
+
+  const contactsStatsQ = useQuery({
+    queryKey: ["contacts-stats", folder?.id],
+    queryFn: () => api<FolderStats>(`/api/v1/folders/${folder!.id}/stats`),
+    enabled: !!folder,
+  });
+
+  const renameMut = useMutation({
+    mutationFn: (name: string) =>
+      api<Folder>(`/api/v1/folders/${folder!.id}`, { method: "PATCH", body: { name } }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["folders"] });
+      setRenaming(false);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Rename failed"),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () => api(`/api/v1/folders/${folder!.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["folders"] });
+      toast.success("Folder deleted");
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed"),
+  });
+
+  const recheckMut = useMutation({
+    mutationFn: () =>
+      api("/api/v1/contacts/recheck", { method: "POST", body: { folder_id: folder!.id } }),
+    onSuccess: () => {
+      toast.success("Recheck queued");
+      void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+      void qc.invalidateQueries({ queryKey: ["contacts-stats", folder?.id] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Recheck failed"),
+  });
+
+  const afterBulk = () => {
+    setSelected(new Set());
+    setMoveOpen(false);
+    void qc.invalidateQueries({ queryKey: ["contacts", folder?.id] });
+    void qc.invalidateQueries({ queryKey: ["contacts-stats", folder?.id] });
+    void qc.invalidateQueries({ queryKey: ["folders"] });
+  };
+
+  const moveMut = useMutation({
+    mutationFn: (vars: { ids: string[]; folderId: string }) =>
+      api<{ moved: number }>("/api/v1/contacts/move", {
+        method: "POST",
+        body: { contact_ids: vars.ids, folder_id: vars.folderId },
+      }),
+    onSuccess: (res) => {
+      toast.success(`Moved ${res.moved} contact${res.moved === 1 ? "" : "s"}`);
+      afterBulk();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Move failed"),
+  });
+
+  const deleteContactsMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      api<{ deleted: number }>("/api/v1/contacts/delete", {
+        method: "POST",
+        body: { contact_ids: ids },
+      }),
+    onSuccess: (res) => {
+      toast.success(`Deleted ${res.deleted} contact${res.deleted === 1 ? "" : "s"}`);
+      afterBulk();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed"),
+  });
+
+  const contacts = contactsQ.data ?? [];
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return contacts.filter((c) => {
+      if (tgFilter === "in_tg" && !isInTelegram(c.tg_status)) return false;
+      if (tgFilter === "checking" && !isCheckingTelegram(c.tg_status)) return false;
+      if (tgFilter === "not_found" && !isNotInTelegram(c.tg_status)) return false;
+      if (!q) return true;
+      return (
+        (c.username ?? "").toLowerCase().includes(q) ||
+        (c.phone ?? "").toLowerCase().includes(q) ||
+        (c.full_name ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [contacts, search, tgFilter]);
+
+  // Stats come from a server-side folder aggregate (single GROUP BY), not from the
+  // paginated `contacts` list. `null` until loaded → cards show a placeholder instead
+  // of briefly rendering page-1-only counts (the flash-then-correct bug).
+  const stats = contactsStatsQ.data
+    ? {
+        inTg: contactsStatsQ.data.in_telegram,
+        checking: contactsStatsQ.data.checking,
+        notFound: contactsStatsQ.data.not_found,
+      }
+    : null;
+
+  // ── Selection ──────────────────────────────────────────────────────────────
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every((c) => selected.has(c.id));
+  const toggleAllVisible = () =>
+    setSelected((prev) => {
+      if (filtered.length > 0 && filtered.every((c) => prev.has(c.id))) {
+        // deselect the currently-visible set, keep any off-screen selections
+        const next = new Set(prev);
+        filtered.forEach((c) => next.delete(c.id));
+        return next;
+      }
+      const next = new Set(prev);
+      filtered.forEach((c) => next.add(c.id));
+      return next;
+    });
+  const selectedIds = [...selected];
+  const bulkPending = moveMut.isPending || deleteContactsMut.isPending;
+  const otherFolders = folders.filter((f) => f.id !== folder?.id);
+
+  if (!folder) {
+    return (
+      <section className="scroll" style={{ background: "var(--bg-soft)", padding: 24 }}>
+        <EmptyState
+          onImport={onImport}
+          title="No folder selected"
+          body="Pick a folder on the left or import a CSV to get started."
+        />
+      </section>
+    );
+  }
+
+  const color = folderColor(folder.id);
+  const total = folder.contact_count;
+
+  return (
+    <section className="scroll" style={{ background: "var(--bg-soft)", padding: 24 }}>
+      {/* Folder header */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 14 }}>
+        <div
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: 11,
+            background: `${color}1A`,
+            color,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <FolderIcon size={22} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {renaming ? (
+            <form
+              style={{ display: "flex", gap: 8 }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (renameValue.trim()) renameMut.mutate(renameValue.trim());
+              }}
+            >
+              <input
+                className="input"
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => setRenaming(false)}
+              />
+              <button type="submit" className="btn btn--primary btn--sm">
+                Save
+              </button>
+            </form>
+          ) : (
+            <>
+              <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>
+                {folder.name}
+              </div>
+              <div className="muted text-sm">
+                {total.toLocaleString()} contacts · updated {relativeDate(folder.updated_at)}
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          className="btn btn--primary btn--sm"
+          onClick={() => setAddOpen(true)}
+        >
+          <UserPlus size={13} /> Add contact
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={() => recheckMut.mutate()}
+          disabled={recheckMut.isPending}
+        >
+          <RefreshCcw size={13} /> Recheck
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={() => {
+            setRenameValue(folder.name);
+            setRenaming(true);
+          }}
+        >
+          <Edit3 size={13} /> Rename
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          style={{ color: "var(--danger)" }}
+          onClick={() => {
+            if (confirm(`Delete folder "${folder.name}"? Contacts will be removed.`)) {
+              deleteMut.mutate();
+            }
+          }}
+          aria-label="Delete folder"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {/* Stats */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <MiniMetric label="Total" value={total} sub="All sources" color="var(--tg-blue)" />
+        <MiniMetric
+          label="In Telegram"
+          value={stats?.inTg ?? null}
+          sub={
+            stats && total > 0 ? `${Math.round((stats.inTg / total) * 100)}% match` : "—"
+          }
+          color="var(--success)"
+        />
+        <MiniMetric
+          label="Checking"
+          value={stats?.checking ?? null}
+          sub="Awaiting resolve"
+          color="var(--ai-purple)"
+        />
+        <MiniMetric
+          label="Not found"
+          value={stats?.notFound ?? null}
+          sub="Privacy or missing"
+          color="var(--warning)"
+        />
+      </div>
+
+      {/* Contacts table */}
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div
+          className="card__header"
+          style={{ gap: 10, display: "flex", alignItems: "center", padding: "12px 14px" }}
+        >
+          <div style={{ position: "relative" }}>
+            <Search
+              size={14}
+              style={{ position: "absolute", left: 10, top: 9, color: "var(--text-faint)" }}
+            />
+            <input
+              className="input"
+              style={{ paddingLeft: 30, height: 32, fontSize: 12.5, width: 240 }}
+              placeholder="Search by phone or @username…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div style={{ position: "relative" }}>
+            <button
+              className="btn btn--ghost btn--sm"
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              style={tgFilter !== "all" ? { color: "var(--tg-blue)" } : undefined}
+            >
+              <Filter size={12} /> Filters
+              {tgFilter !== "all" && (
+                <span
+                  style={{
+                    marginLeft: 4,
+                    background: "var(--tg-blue)",
+                    color: "white",
+                    borderRadius: 999,
+                    padding: "0 6px",
+                    fontSize: 10,
+                    fontWeight: 600,
+                  }}
+                >
+                  1
+                </span>
+              )}
+            </button>
+            {filtersOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  left: 0,
+                  zIndex: 20,
+                  minWidth: 200,
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                  padding: 6,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-faint)",
+                    padding: "6px 8px 4px",
+                  }}
+                >
+                  Telegram status
+                </div>
+                {(
+                  [
+                    ["all", "All"],
+                    ["in_tg", "In Telegram"],
+                    ["checking", "Checking"],
+                    ["not_found", "Not found"],
+                  ] as [TgFilter, string][]
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    className="btn btn--ghost btn--sm"
+                    style={{
+                      width: "100%",
+                      justifyContent: "flex-start",
+                      color: tgFilter === key ? "var(--tg-blue)" : undefined,
+                      fontWeight: tgFilter === key ? 600 : 500,
+                    }}
+                    onClick={() => {
+                      setTgFilter(key);
+                      setFiltersOpen(false);
+                    }}
+                  >
+                    {tgFilter === key ? <Check size={12} /> : <span style={{ width: 12 }} />}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <span style={{ flex: 1 }} />
+          <span className="muted text-xs">
+            {(() => {
+              const start = page * PAGE_SIZE + 1;
+              const end = page * PAGE_SIZE + contacts.length;
+              return total > 0
+                ? `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`
+                : "0 contacts";
+            })()}
+          </span>
+        </div>
+
+        {selected.size > 0 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "8px 14px",
+              background: "var(--bg-soft)",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <span style={{ fontSize: 12.5, fontWeight: 600 }}>{selected.size} selected</span>
+            <span style={{ flex: 1 }} />
+
+            {/* Move to… dropdown */}
+            <div style={{ position: "relative" }}>
+              <button
+                className="btn btn--ghost btn--sm"
+                disabled={bulkPending || otherFolders.length === 0}
+                title={otherFolders.length === 0 ? "No other folders to move to" : undefined}
+                onClick={() => setMoveOpen((v) => !v)}
+              >
+                <Shuffle size={13} /> Move to…
+              </button>
+              {moveOpen && otherFolders.length > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 4px)",
+                    right: 0,
+                    zIndex: 20,
+                    minWidth: 200,
+                    maxHeight: 280,
+                    overflowY: "auto",
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 10,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                    padding: 4,
+                  }}
+                >
+                  {otherFolders.map((f) => (
+                    <button
+                      key={f.id}
+                      className="btn btn--ghost btn--sm"
+                      style={{ width: "100%", justifyContent: "flex-start" }}
+                      onClick={() => moveMut.mutate({ ids: selectedIds, folderId: f.id })}
+                    >
+                      <FolderIcon size={13} /> {f.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              className="btn btn--ghost btn--sm"
+              style={{ color: "var(--danger)" }}
+              disabled={bulkPending}
+              onClick={() => {
+                if (
+                  confirm(
+                    `Delete ${selected.size} contact${selected.size === 1 ? "" : "s"}? This cannot be undone.`,
+                  )
+                ) {
+                  deleteContactsMut.mutate(selectedIds);
+                }
+              }}
+            >
+              <Trash2 size={13} /> Delete
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={bulkPending}
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
+        {contactsQ.isLoading && (
+          <div className="muted" style={{ padding: 24 }}>
+            Loading contacts…
+          </div>
+        )}
+
+        {!contactsQ.isLoading && contacts.length === 0 && (
+          <EmptyState
+            onImport={onImport}
+            title="No contacts in this folder"
+            body="Import a CSV to add people."
+          />
+        )}
+
+        {!contactsQ.isLoading && contacts.length > 0 && (
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible contacts"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                  />
+                </th>
+                <th>Contact</th>
+                <th>Company · Role</th>
+                <th>Username</th>
+                <th>Phone</th>
+                <th>Source</th>
+                <th>In TG</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((c) => {
+                const company =
+                  typeof c.custom?.company === "string" ? (c.custom.company as string) : "";
+                const role =
+                  typeof c.custom?.role === "string" ? (c.custom.role as string) : "";
+                return (
+                  <tr key={c.id} className={selected.has(c.id) ? "is-selected" : undefined}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${c.full_name || c.phone || c.username || "contact"}`}
+                        checked={selected.has(c.id)}
+                        onChange={() => toggleOne(c.id)}
+                      />
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <ContactAvatar name={c.full_name} phone={c.phone} />
+                        <span style={{ fontWeight: 500, fontSize: 13 }}>
+                          {c.full_name || <span className="faint">—</span>}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      {company || role ? (
+                        <>
+                          <div style={{ fontSize: 12.5 }}>{company || "—"}</div>
+                          <div className="muted text-xs">{role || ""}</div>
+                        </>
+                      ) : (
+                        <span className="faint">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {c.username ? (
+                        <span className="mono text-sm" style={{ color: "var(--tg-blue)" }}>
+                          {c.username.startsWith("@") ? c.username : `@${c.username}`}
+                        </span>
+                      ) : (
+                        <span className="muted text-xs">— phone only</span>
+                      )}
+                    </td>
+                    <td className="muted text-xs mono">{c.phone || "—"}</td>
+                    <td>
+                      {c.source ? (
+                        <span className="pill">{c.source}</span>
+                      ) : (
+                        <span className="faint">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <TgInline status={c.tg_status} />
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="muted" style={{ textAlign: "center", padding: 24 }}>
+                    No matches for &quot;{search}&quot;
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {total > PAGE_SIZE && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderTop: "1px solid var(--border)",
+              background: "var(--bg)",
+            }}
+          >
+            <span className="muted text-xs">
+              Page {page + 1} of {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={page === 0 || contactsQ.isFetching}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              <ChevronLeft size={13} /> Prev
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              disabled={
+                contactsQ.isFetching ||
+                contacts.length < PAGE_SIZE ||
+                (page + 1) * PAGE_SIZE >= total
+              }
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next <ChevronRight size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+      {addOpen && (
+        <AddContactModal
+          folderId={folder.id}
+          onClose={() => setAddOpen(false)}
+          onDone={() => {
+            void qc.invalidateQueries({ queryKey: ["contacts", folder.id] });
+            void qc.invalidateQueries({ queryKey: ["contacts-stats", folder.id] });
+            void qc.invalidateQueries({ queryKey: ["folders"] });
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string;
+  // null → stats still loading; render a placeholder instead of a wrong number.
+  value: number | null;
+  sub: string;
+  color: string;
+}) {
+  return (
+    <div
+      className="card"
+      style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4 }}
+    >
+      <span className="muted text-xs" style={{ fontWeight: 500, letterSpacing: 0.2 }}>
+        {label}
+      </span>
+      <span
+        className="num"
+        style={{ fontSize: 24, fontWeight: 600, color, lineHeight: 1.1 }}
+      >
+        {value === null ? (
+          <span style={{ color: "var(--text-faint)" }}>…</span>
+        ) : (
+          value.toLocaleString()
+        )}
+      </span>
+      <span className="muted text-xs">{sub}</span>
+    </div>
+  );
+}
+
+function TgInline({ status }: { status: string }) {
+  if (isInTelegram(status)) {
+    return (
+      <span
+        style={{
+          color: "var(--success)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          fontSize: 12,
+        }}
+      >
+        <Check size={12} /> Yes
+      </span>
+    );
+  }
+  if (isCheckingTelegram(status)) {
+    return (
+      <span
+        style={{
+          color: "var(--text-faint)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          fontSize: 12,
+        }}
+      >
+        <Clock size={12} /> Checking…
+      </span>
+    );
+  }
+  if (normalizeTgStatus(status) === "not_registered" || normalizeTgStatus(status) === "not_found") {
+    return (
+      <span className="pill pill--red">
+        <span className="pill__dot" /> Not found
+      </span>
+    );
+  }
+  if (normalizeTgStatus(status) === "privacy") {
+    return (
+      <span className="pill pill--orange">
+        <span className="pill__dot" /> Privacy
+      </span>
+    );
+  }
+  return (
+    <span className="pill pill--ghost">
+      <span className="pill__dot" /> {status}
+    </span>
+  );
+}
+
+function relativeDate(iso: string): string {
+  const d = new Date(iso).getTime();
+  if (Number.isNaN(d)) return "—";
+  const diff = (Date.now() - d) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function EmptyState({
+  title,
+  body,
+  onImport,
+}: {
+  title: string;
+  body: string;
+  onImport: () => void;
+}) {
+  return (
+    <div style={{ padding: 48, textAlign: "center" }}>
+      <div
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          margin: "0 auto 16px",
+          background: "var(--tg-blue-soft)",
+          color: "var(--tg-blue)",
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        <Users size={24} />
+      </div>
+      <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>{title}</h3>
+      <p className="muted text-sm" style={{ maxWidth: 320, margin: "0 auto 16px" }}>
+        {body}
+      </p>
+      <button className="btn btn--primary" onClick={onImport}>
+        <Upload size={14} /> Import CSV
+      </button>
+    </div>
+  );
+}
+
+
+/* ---------------- 4-stage import modal ---------------- */
+type ImportStage = "upload" | "mapping" | "importing" | "done";
+
+function ImportModal({
+  folders,
+  defaultFolderId,
+  onClose,
+  onDone,
+}: {
+  folders: Folder[];
+  defaultFolderId: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [stage, setStage] = useState<ImportStage>("upload");
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [folderMode, setFolderMode] = useState<"existing" | "new">(
+    defaultFolderId ? "existing" : "new",
+  );
+  const [folderId, setFolderId] = useState<string | null>(defaultFolderId);
+  const [folderName, setFolderName] = useState("");
+  const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function handleFile(file: File) {
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await api<ImportPreview>("/api/v1/contacts/import/preview", {
+        method: "POST",
+        body: form,
+      });
+      setPreview(res);
+      setMapping(res.suggested_mapping ?? {});
+      setStage("mapping");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function runImport() {
+    if (!preview) return;
+    setStage("importing");
+    try {
+      const res = await api<ImportSummary>("/api/v1/contacts/import", {
+        method: "POST",
+        body: {
+          import_id: preview.import_id,
+          mapping,
+          on_duplicate: "skip",
+          folder_id: folderMode === "existing" ? folderId : null,
+          folder_name: folderMode === "new" ? folderName.trim() : null,
+        },
+      });
+      setSummary(res);
+      track("contacts_imported", {
+        folder_id: folderId ?? "new",
+        created: res.imported,
+        updated: 0,
+        skipped: res.skipped_duplicates + res.skipped_invalid,
+      });
+      track("csv_import_completed", {
+        folder_id: folderId ?? "new",
+        created: res.imported,
+        updated: 0,
+        skipped: res.skipped_duplicates + res.skipped_invalid,
+      });
+      setStage("done");
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Import failed");
+      setStage("mapping");
+    }
+  }
+
+  const phoneOrUsernameMapped =
+    Object.values(mapping).includes("phone") || Object.values(mapping).includes("username");
+
+  return (
+    <div className="modal__scrim" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+        <header className="modal__head">
+          <h3>Import contacts</h3>
+          <button className="tb__icon-btn" aria-label="Close" onClick={onClose}><X size={16} /></button>
+        </header>
+        <ImportStepper stage={stage} />
+        <div className="modal__body">
+          {stage === "upload" && (
+            <div className="ct__upload">
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleFile(f);
+                }}
+              />
+              <div
+                className="ct__dropzone"
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files[0];
+                  if (f) void handleFile(f);
+                }}
+              >
+                {uploading ? (
+                  <><Loader2 size={20} className="ob__spin" /><span>Parsing…</span></>
+                ) : (
+                  <>
+                    <Upload size={24} />
+                    <span className="fw5">Drop a CSV here, or click to choose</span>
+                    <span className="muted text-sm">phone, username, full_name, source columns are auto-detected</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {stage === "mapping" && preview && (
+            <div className="ct__mapping">
+              <p className="muted text-sm">
+                Map your CSV columns to aimly fields. We&apos;ll skip any unmapped columns.
+              </p>
+              <div className="ct__mapGrid">
+                <div className="text-xs muted fw5">CSV column</div>
+                <div className="text-xs muted fw5">aimly field</div>
+                <div className="text-xs muted fw5">Sample</div>
+                {preview.columns.map((col) => (
+                  <RowMap
+                    key={col}
+                    col={col}
+                    sample={String(preview.sample_rows[0]?.[col] ?? "")}
+                    value={mapping[col] ?? ""}
+                    onChange={(v) =>
+                      setMapping((prev) => {
+                        const next = { ...prev };
+                        if (v) next[col] = v;
+                        else delete next[col];
+                        return next;
+                      })
+                    }
+                  />
+                ))}
+              </div>
+
+              <div className="divider-h" />
+
+              <div className="col" style={{ gap: 12 }}>
+                <div className="ct__folderChoice">
+                  <label className={`ct__choice ${folderMode === "existing" ? "is-active" : ""}`}>
+                    <input
+                      type="radio"
+                      checked={folderMode === "existing"}
+                      onChange={() => setFolderMode("existing")}
+                    />
+                    Existing folder
+                  </label>
+                  <label className={`ct__choice ${folderMode === "new" ? "is-active" : ""}`}>
+                    <input
+                      type="radio"
+                      checked={folderMode === "new"}
+                      onChange={() => setFolderMode("new")}
+                    />
+                    New folder
+                  </label>
+                </div>
+                {folderMode === "existing" ? (
+                  <select
+                    className="select"
+                    value={folderId ?? ""}
+                    onChange={(e) => setFolderId(e.target.value || null)}
+                  >
+                    <option value="" disabled>Choose a folder…</option>
+                    {folders.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name} ({f.contact_count})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="input"
+                    placeholder="e.g. Q2 leads"
+                    value={folderName}
+                    onChange={(e) => setFolderName(e.target.value)}
+                  />
+                )}
+              </div>
+
+              {!phoneOrUsernameMapped && (
+                <div className="ct__warn"><AlertCircle size={14} /> Map at least <b>Phone</b> or <b>Telegram username</b> to import.</div>
+              )}
+
+              <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+                <button className="btn btn--ghost" onClick={() => setStage("upload")}>Back</button>
+                <button
+                  className="btn btn--primary"
+                  disabled={
+                    !phoneOrUsernameMapped ||
+                    (folderMode === "existing" && !folderId) ||
+                    (folderMode === "new" && !folderName.trim())
+                  }
+                  onClick={runImport}
+                >
+                  Import contacts
+                </button>
+              </div>
+            </div>
+          )}
+
+          {stage === "importing" && (
+            <div className="ct__importing">
+              <Loader2 size={32} className="ob__spin" />
+              <h3>Importing contacts…</h3>
+              <p className="muted text-sm">This usually takes a few seconds.</p>
+            </div>
+          )}
+
+          {stage === "done" && summary && (
+            <div className="ob__success">
+              <div className="ob__successIcon"><CheckCircle2 size={36} /></div>
+              <h3 className="ob__successTitle">Import complete</h3>
+              <div className="ct__summary">
+                <div><b className="num">{summary.imported}</b><span className="muted text-sm">Imported</span></div>
+                <div><b className="num">{summary.skipped_duplicates}</b><span className="muted text-sm">Duplicates</span></div>
+                <div><b className="num">{summary.skipped_invalid}</b><span className="muted text-sm">Invalid</span></div>
+                <div><b className="num">{summary.total}</b><span className="muted text-sm">Total rows</span></div>
+              </div>
+              <button className="btn btn--primary" onClick={onClose}>Done</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RowMap({
+  col,
+  sample,
+  value,
+  onChange,
+}: {
+  col: string;
+  sample: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <>
+      <div className="ct__mapCol mono text-sm">{col}</div>
+      <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">— skip —</option>
+        {TARGET_FIELDS.map((f) => (
+          <option key={f.key} value={f.key}>{f.label}</option>
+        ))}
+      </select>
+      <div className="muted text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {sample || <span className="faint">empty</span>}
+      </div>
+    </>
+  );
+}
+
+function ImportStepper({ stage }: { stage: ImportStage }) {
+  const order: ImportStage[] = ["upload", "mapping", "importing", "done"];
+  const labels: Record<ImportStage, string> = {
+    upload: "Upload",
+    mapping: "Map columns",
+    importing: "Importing",
+    done: "Done",
+  };
+  const idx = order.indexOf(stage);
+  return (
+    <ol className="ob__stepper" style={{ padding: "12px 18px", borderBottom: "1px solid var(--border)", margin: 0 }}>
+      {order.map((s, i) => {
+        const state = i < idx ? "done" : i === idx ? "active" : "todo";
+        return (
+          <li key={s} className={`ob__step is-${state}`}>
+            <span className="ob__stepDot">{i + 1}</span>
+            <span className="ob__stepLabel">{labels[s]}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/* ---------------- Add single contact modal ---------------- */
+function AddContactModal({
+  folderId,
+  onClose,
+  onDone,
+}: {
+  folderId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [phone, setPhone] = useState("");
+  const [username, setUsername] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [source, setSource] = useState("");
+
+  const createMut = useMutation({
+    mutationFn: () => {
+      const body: Record<string, unknown> = { folder_id: folderId };
+      const p = phone.trim();
+      const u = username.trim().replace(/^@/, "");
+      const n = fullName.trim();
+      const s = source.trim();
+      if (p) body.phone = p;
+      if (u) body.username = u;
+      if (n) body.full_name = n;
+      if (s) body.source = s;
+      return api<ImportSummary>("/api/v1/contacts", { method: "POST", body });
+    },
+    onSuccess: (res) => {
+      if (res.imported > 0) {
+        toast.success("Contact added");
+      } else if (res.skipped_duplicates > 0) {
+        toast.info("Contact already exists in this folder");
+      } else {
+        toast.error("Contact was not added (invalid data)");
+      }
+      onDone();
+      onClose();
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't add contact"),
+  });
+
+  const canSubmit = phone.trim().length > 0 || username.trim().length > 0;
+
+  return (
+    <div className="modal__scrim" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <header className="modal__head">
+          <h3>Add contact</h3>
+          <button className="tb__icon-btn" aria-label="Close" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+        <form
+          className="modal__body"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (canSubmit && !createMut.isPending) createMut.mutate();
+          }}
+          style={{ display: "flex", flexDirection: "column", gap: 12 }}
+        >
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Phone</label>
+            <input
+              className="input"
+              placeholder="+1 555 123 4567"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Telegram username</label>
+            <input
+              className="input"
+              placeholder="@durov"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </div>
+          <div className="muted text-xs" style={{ marginTop: -4 }}>
+            At least one of <b>Phone</b> or <b>Username</b> is required.
+          </div>
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Full name</label>
+            <input
+              className="input"
+              placeholder="Pavel Durov"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+            />
+          </div>
+          <div className="col" style={{ gap: 4 }}>
+            <label className="text-xs muted fw5">Source</label>
+            <input
+              className="input"
+              placeholder="manual, website, event…"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+            <button type="button" className="btn btn--ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={!canSubmit || createMut.isPending}
+            >
+              {createMut.isPending ? (
+                <>
+                  <Loader2 size={14} className="ob__spin" /> Adding…
+                </>
+              ) : (
+                "Add contact"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
