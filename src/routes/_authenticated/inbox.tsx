@@ -352,17 +352,6 @@ function InboxPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: showTrace ? "340px 1fr 360px" : "340px 1fr",
-          flex: 1,
-          minHeight: 0,
-          minWidth: 0,
-          overflow: "hidden",
-          background: "var(--bg-soft)",
-        }}
-      >
-      <div
-        style={{
-          display: "grid",
           gridTemplateColumns: showTrace
             ? `${listWidth}px 6px 1fr 360px`
             : `${listWidth}px 6px 1fr`,
