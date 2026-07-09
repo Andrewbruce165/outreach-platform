@@ -168,9 +168,10 @@ def test_dialogue_stage_validation():
     with pytest.raises(ValidationError):
         DialogueStage(instruction="")
 
-    # Instruction too long (> 2000)
+    # Instruction too long (> 3000, raised from 2000 on 2026-07-09 —
+    # debug/campaign-draft-save-validation-failed.md)
     with pytest.raises(ValidationError):
-        DialogueStage(instruction="x" * 2001)
+        DialogueStage(instruction="x" * 3001)
 
     # Title too long (> 120)
     with pytest.raises(ValidationError):

@@ -568,11 +568,12 @@ class DialogueStage(BaseModel):
     """One stage in the campaign's dialogue_flow sequence.
 
     title is optional (label for the UI); instruction is the stage directive
-    injected into the prompt. Validated: title≤120, instruction 1..2000 chars.
+    injected into the prompt. Validated: title≤120, instruction 1..3000 chars
+    (raised from 2000 on 2026-07-09 — debug/campaign-draft-save-validation-failed).
     Security: conlist max_length=7 on the containing field guards array-size abuse (T2).
     """
     title: Optional[constr(max_length=120)] = None
-    instruction: constr(min_length=1, max_length=2000)
+    instruction: constr(min_length=1, max_length=3000)
 
 
 class AgentCreate(BaseModel):
