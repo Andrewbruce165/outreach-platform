@@ -238,16 +238,28 @@ function InboxPage() {
   useEffect(() => {
     if (!selectedId) return;
     viewedRef.current.add(selectedId);
-    queryClient.setQueriesData<ConversationList>({ queryKey: ["conversations"] }, (old) => {
-      if (!old) return old;
-      return {
-        ...old,
-        conversations: old.conversations.map((c) =>
-          c.id === selectedId ? { ...c, unread_count: 0 } : c,
-        ),
-      };
-    });
+    queryClient.setQueriesData<{ pages: ConversationList[]; pageParams: unknown[] }>(
+      { queryKey: ["conversations"] },
+      (old) => {
+        if (!old?.pages) return old;
+        return {
+          ...old,
+          pages: old.pages.map((p) => ({
+            ...p,
+            conversations: p.conversations.map((c) =>
+              c.id === selectedId ? { ...c, unread_count: 0 } : c,
+            ),
+          })),
+        };
+      },
+    );
   }, [selectedId, queryClient]);
+
+  // Persist splitter width to localStorage.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
+  }, [listWidth]);
 
   // ── Deletion (single + bulk) ──────────────────────────────────────────────
   const deleteOneMut = useMutation({
