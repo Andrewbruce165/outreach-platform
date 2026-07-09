@@ -129,6 +129,26 @@ class BufferedMessage:
     document_info: Optional[str] = None  # "📎 Документ: file.pdf"
 
 
+# Typing-hold: имитация человеческой скорости набора после генерации LLM.
+# Скорость рандомизируется per-message; floor — даже короткий ответ
+# показывает пару секунд «печатает», ceiling — длинный ответ не стопорит
+# conversation-task дольше ~40с.
+TYPING_CPS_MIN = 3.0    # chars/sec, ≈180 chars/min
+TYPING_CPS_MAX = 5.0    # chars/sec, ≈300 chars/min
+TYPING_HOLD_MIN = 4.0   # сек — минимальная суммарная длительность typing
+TYPING_HOLD_MAX = 40.0  # сек — потолок (600-char ответ не ждёт 2+ мин)
+
+
+def compute_typing_hold(reply_len: int, elapsed: float, cps: float) -> float:
+    """Сколько ещё держать «печатает…» после генерации ответа.
+
+    target = clamp(reply_len / cps, TYPING_HOLD_MIN, TYPING_HOLD_MAX);
+    время генерации LLM засчитывается в бюджет.
+    """
+    target = min(max(reply_len / cps, TYPING_HOLD_MIN), TYPING_HOLD_MAX)
+    return max(0.0, target - elapsed)
+
+
 class TelegramListener:
     # Debounce настройки
     DEBOUNCE_MIN = 40.0    # минимум секунд ожидания после последнего сообщения
@@ -332,6 +352,7 @@ class TelegramListener:
                 "ai_context_id": ai_context_id,
             }
 
+            gen_start = time.monotonic()
             async with safe_typing(client, recipient_id):
                 reply = await ai_engine.generate_response(
                     session=session,
@@ -343,6 +364,17 @@ class TelegramListener:
                 )
 
         if reply and client:
+            # Human-like typing: держим «печатает…» пропорционально длине ответа.
+            # Сессия БД уже закрыта — sleep не удерживает соединение.
+            cps = random.uniform(TYPING_CPS_MIN, TYPING_CPS_MAX)
+            hold = compute_typing_hold(len(reply), time.monotonic() - gen_start, cps)
+            if hold > 0:
+                logger.info(
+                    f"⌨️ Typing hold {hold:.1f}с для {conversation_id[:8]} "
+                    f"({len(reply)} chars, cps={cps:.1f})"
+                )
+                async with safe_typing(client, recipient_id):
+                    await asyncio.sleep(hold)
             try:
                 sent_message = await client.send_message(recipient_id, reply)
                 await self.save_message(
