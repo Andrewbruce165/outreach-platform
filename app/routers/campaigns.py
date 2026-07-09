@@ -1033,14 +1033,15 @@ async def duplicate_campaign(
     # IntegrityError into 409 (was surfacing as a raw 500).
     try:
         await db.flush()
-        # Phase 24 D-20: copy the first-message attachment blob into a NEW row for the
-        # duplicate (own campaign_attachments row) so the copy is send-ready. Done in
-        # the SAME transaction as new_c — either both land or neither.
-        att = (await db.execute(text(
-            "SELECT file_data, file_name, content_type, size_bytes "
-            "FROM campaign_attachments WHERE campaign_id = :cid"
-        ), {"cid": str(src.id)})).first()
-        if att is not None:
+        # Phase 24 D-20 + 260709-dbl: copy ALL first-message attachment rows into NEW
+        # rows for the duplicate (own campaign_attachments rows, order preserved) so the
+        # copy is send-ready. Done in the SAME transaction as new_c — either all land or
+        # none.
+        atts = (await db.execute(text(
+            "SELECT file_data, file_name, content_type, size_bytes, position "
+            "FROM campaign_attachments WHERE campaign_id = :cid ORDER BY position, created_at"
+        ), {"cid": str(src.id)})).all()
+        for att in atts:
             db.add(CampaignAttachment(
                 campaign_id=new_c.id,
                 workspace_id=ctx.workspace_id,
@@ -1048,6 +1049,7 @@ async def duplicate_campaign(
                 file_name=att.file_name,
                 content_type=att.content_type,
                 size_bytes=att.size_bytes,
+                position=att.position,
             ))
         # Sender pool is NOT copied: the duplicate starts empty so accounts held by
         # the source's running campaign don't appear locked/undeletable in the copy.

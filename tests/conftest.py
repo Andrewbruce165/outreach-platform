@@ -294,6 +294,18 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         # (RESEARCH Pitfall 1: create_all mirrors the ORM). Applying the SQL here
         # would be a redundant no-op.
 
+        # 060 (260709-dbl): campaign_attachments 1-1 → 1-N. The `position` column and
+        # the absence of the campaign_id UNIQUE constraint come from ORM create_all
+        # (position is declared, unique=True was removed), but the composite
+        # (campaign_id, position) index is SQL-only — apply the migration so the test
+        # DB exercises the same index path as prod. The DROP CONSTRAINT IF EXISTS is a
+        # harmless no-op here (create_all never built the unique constraint once the
+        # ORM dropped unique=True). Hardcoded filename (RESEARCH Pitfall 1 — conftest
+        # does NOT glob). Exists-guard keeps this green until migrations/060 lands.
+        _mig_060 = PROJECT_ROOT / "migrations" / "060_campaign_attachments_multiple.sql"
+        if _mig_060.exists():
+            await asyncpg_conn.execute(_mig_060.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.
