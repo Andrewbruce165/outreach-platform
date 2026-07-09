@@ -1,236 +1,99 @@
 # Technology Stack
 
-**Analysis Date:** 2026-06-30
+**Analysis Date:** 2026-07-09
 
-## Overview
-
-Two-repo system: backend at `/root/apps/aimly/tg-outreach` and frontend at `/root/apps/aimly/aimly-tg-outreach`. They are independent git repos but form a unified product.
-
----
-
-## Backend
-
-### Language
+## Languages
 
 **Primary:**
-- Python 3.11 — all backend code (enforced in `Dockerfile`: `FROM python:3.11-slim`)
+- Python 3.11 - Backend (FastAPI app + Telethon listener), pinned via `Dockerfile` (`FROM python:3.11-slim`) and `Dockerfile.listener`. (Host dev shell reports Python 3.13.7 — irrelevant, containers are the real runtime.)
+- SQL (raw, PostgreSQL dialect) - All schema migrations in `migrations/*.sql` — no ORM migration tool. Numbered `NNN_short_name.sql`, auto-applied at API startup.
 
-### Runtime
+**Secondary:**
+- TypeScript/React - Frontend SPA vendored into this repo at `frontend/` (see note below) — out of primary scope for this backend map, covered briefly here because it now lives inside this git history.
+
+## Runtime
 
 **Environment:**
-- Python 3.11 inside Docker containers (3 services)
+- Python 3.11-slim (Docker) for both `api` and `listener` services.
+- PostgreSQL 16 via `pgvector/pgvector:pg16` image (Postgres 16 + `vector` extension precompiled) — `docker-compose.yml::services.db`.
 
 **Package Manager:**
-- pip (no lockfile — `requirements.txt` pinned to exact versions)
-- Lockfile: present as exact version pins in `requirements.txt`
+- pip, dependencies pinned in `requirements.txt` (exact `==` versions for most packages — acts as the lockfile; no `pip-compile`/Poetry/`uv` lock file present).
+- Frontend (`frontend/`): `bun` (`bun.lock`, `bunfig.toml`) — built inside a `oven/bun:1` Docker stage since the host has no bun installed (see `deploy-frontend.sh`).
 
-### Frameworks
+## Frameworks
 
 **Core:**
-- FastAPI 0.109.0 — HTTP API (`app/main.py`)
-- Uvicorn 0.27.0 (standard) — ASGI server, launched via `CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]`
-- Pydantic v2 (>=2.8,<3.0) — request/response validation, settings
-- pydantic-settings >=2.3 — `Settings` class in `app/config.py` reads from `.env`
-
-**ORM & Database:**
-- SQLAlchemy 2.0.25 async — all DB operations (`AsyncSession`, `async_sessionmaker`)
-- asyncpg 0.29.0 — async PostgreSQL driver
-- pgvector 0.4.2 — `pgvector.sqlalchemy.Vector(1536)` for KB chunk embeddings (`app/models/__init__.py`)
-- Migrations: raw SQL files in `migrations/`, auto-applied by `app/database.py::_apply_migrations` on startup. Tracking table: `schema_migrations`. NO Alembic.
-
-**Telegram:**
-- Telethon 1.42.0 — Telegram MTProto client (sending, listening, onboarding)
-- PySocks 1.7.1 — SOCKS5/4/HTTP proxy support for TelegramClient
-
-**AI:**
-- openai >=1.40.0,<2.0.0 — `AsyncOpenAI` client in `app/services/ai_engine.py`; also used in `app/services/kb_ingest.py` for embeddings
-
-**Security:**
-- cryptography 42.0.0 — Fernet symmetric encryption for Telegram session strings (`app/services/encryption.py`)
-- python-jose[cryptography] 3.3.0 — JWT verification (Supabase ES256 via JWKS + HS256 fallback, `app/utils/auth.py`)
-- bcrypt >=4.1.0,<5.0 — workspace API key hashing
-
-**RAG / Document Processing:**
-- tiktoken 0.13.0 — token-accurate chunking (`cl100k_base` encoding for `text-embedding-3` family)
-- pypdf 6.14.2 — PDF text extraction
-- python-docx 1.2.0 — DOCX text extraction
-
-**HTTP Client:**
-- httpx 0.26.0 — outgoing webhook calls (`app/services/webhook_notify.py`, `app/services/listener.py`)
-
-**Utilities:**
-- python-dotenv 1.0.0 — `.env` loading
-- python-multipart 0.0.6 — multipart form data (file uploads)
-- email-validator 2.1.0 — Pydantic email validation
-- qrcode[pil] 7.4.2 — QR code generation for Telegram QR onboarding
+- FastAPI `0.109.0` - Main HTTP API (`app/main.py`), 20 routers under `app/routers/`.
+- Uvicorn `0.27.0` (`[standard]` extras) - ASGI server, `CMD ["uvicorn", "app.main:app", ...]` in `Dockerfile`.
+- SQLAlchemy `2.0.25` (async) - ORM models in `app/models/__init__.py`, all access via `AsyncSession`.
+- asyncpg `0.29.0` - Async Postgres driver, DSN scheme `postgresql+asyncpg://`.
+- Telethon `1.42.0` - Telegram MTProto client library, core of `app/services/telegram.py`, `app/services/checker.py`, `app/services/listener.py`.
+- Pydantic `>=2.8,<3.0` / pydantic-settings `>=2.3,<3.0` - Request/response schemas + `app/config.py::Settings` (env-driven config).
 
 **Testing:**
-- pytest >=8.0 — test runner (config in `pyproject.toml`)
-- pytest-asyncio >=0.23 — async test support (`asyncio_mode = "auto"`, session-scoped loop)
+- pytest `>=8.0` + pytest-asyncio `>=0.23` - `tests/` directory, config in `pyproject.toml` (`asyncio_mode = "auto"`, session-scoped event loop).
+- Runs only via Docker test-overlay: `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest` — never bare `docker compose run --rm api pytest` (would target prod DATABASE_URL). Enforced by a conftest guard (`tests/conftest.py`).
 
-### Key Dependencies File
+**Build/Dev:**
+- Docker Compose - 3 services in prod (`db`, `api`, `listener`), see `docker-compose.yml`; ephemeral 4th (`db-test`) in `docker-compose.test.yml`.
+- Vite - Frontend build tool (`frontend/vite.config.ts`), TanStack Start SPA.
 
-`/root/apps/aimly/tg-outreach/requirements.txt` — all pinned exact versions.
+## Key Dependencies
 
-### Docker Services
+**Critical:**
+- `telethon==1.42.0` + `PySocks==1.7.1` - All Telegram account automation (sending, listening, onboarding, phone-checking). PySocks backs proxy support for per-sender SOCKS5/proxy assignment.
+- `cryptography==42.0.0` (Fernet) - Encrypts Telegram session strings and BYO LLM API keys at rest (`app/services/encryption.py`). One shared `ENCRYPTION_KEY` for both use cases.
+- `python-jose[cryptography]==3.3.0` - Supabase JWT verification (ES256 via JWKS + legacy HS256 fallback) in `app/utils/auth.py`. Marked `TODO(v2)` to migrate to PyJWT (jose is in maintenance mode).
+- `bcrypt>=4.1.0,<5.0` - Hashing workspace API keys (`wsk_...`) for the `X-Workspace-Key` auth path.
+- `openai>=1.40.0,<2.0.0` - Default LLM provider (chat completions via `gpt-5-mini-2025-08-07`, a reasoning model) + embeddings (`text-embedding-3-small`, 1536-dim) for RAG knowledge bases.
+- `anthropic>=0.69,<1.0` - Alternate/BYO LLM provider (Phase 18 switchable-provider architecture), `app/services/llm/anthropic_provider.py`.
+- `pgvector==0.4.2` - Python client for the Postgres `vector` type; paired with `pgvector/pgvector:pg16` DB image for RAG chunk embeddings (`kb_chunks.embedding Vector(1536)`).
+- `tiktoken==0.13.0` - Token counting for KB chunking (`cl100k_base` encoding, `text-embedding-3` family).
+- `pypdf==6.14.2`, `python-docx==1.2.0` - Document parsing for knowledge-base ingest (`app/services/kb_ingest.py`).
+- `qrcode[pil]==7.4.2` - QR-code generation for Telegram QR-login onboarding flow.
 
-Defined in `/root/apps/aimly/tg-outreach/docker-compose.yml`:
+**Infrastructure:**
+- `httpx==0.26.0` - Async HTTP client used for: Supabase JWKS fetch, webhook fire-and-forget notifications (`app/services/webhook_notify.py`).
+- `python-multipart==0.0.6` - Multipart form parsing (CSV import, bulk account-import ZIP upload, KB document upload).
+- `email-validator==2.1.0` - Pydantic email field validation.
+- `python-dotenv==1.0.0` - Loads `.env` in local/dev (in Docker, env vars come from compose `environment:` blocks).
+- `alembic==1.13.1` - Present in `requirements.txt` but **not used** — project explicitly forbids Alembic; all migrations are raw numbered SQL files auto-applied by `app/database.py::_apply_migrations`. Treat this dependency as vestigial.
 
-| Service | Container | Image | Port |
-|---------|-----------|-------|------|
-| db | `outreach-platform-db` | `pgvector/pgvector:pg16` | internal only |
-| api | `outreach-platform-api` | built from `Dockerfile` | `127.0.0.1:8005:8000` |
-| listener | `outreach-platform-listener` | built from `Dockerfile.listener` | none |
-
-**Important:** `pgvector/pgvector:pg16` (not stock `postgres:16`) — provides pre-compiled `vector` extension required by Phase 16 KB.
-
-DB runs with `log_statement=ddl` and `log_min_duration_statement=1000` — all DDL + slow queries logged to `docker logs outreach-platform-db`.
-
-### Configuration
-
-**Settings class:** `app/config.py::Settings` (pydantic-settings `BaseSettings`, reads `.env`)
-
-**Required env vars (backend):**
-- `DATABASE_URL` — `postgresql+asyncpg://outreach_user:...@db:5432/outreach_platform`
-- `TELEGRAM_API_ID` — Telegram app credentials (from my.telegram.org)
-- `TELEGRAM_API_HASH` — Telegram app credentials
-- `ENCRYPTION_KEY` — Fernet key for encrypting session strings
-- `OPENAI_API_KEY` — OpenAI API key
-- `SUPABASE_URL` — Supabase project URL (used for JWKS endpoint)
-- `SUPABASE_JWT_SECRET` — Optional, HS256 fallback only
-- `CORS_ALLOWED_ORIGINS` — comma-separated allowed origins
-
-**Optional env vars (backend):**
-- `OPENAI_MODEL` — default `gpt-5-mini-2025-08-07`
-- `OPENAI_EMBEDDING_MODEL` — default `text-embedding-3-small`
-- `DECODO_HOST`, `DECODO_USERNAME`, `DECODO_PASSWORD`, `DECODO_PORTS` — Decodo proxy pool
-- `KB_CHUNK_MAX_TOKENS` — default 300
-- `KB_SEARCH_MAX_DISTANCE` — default 0.8
-- `CONTACT_CHECK_BURST_CAP` — default 30
-- `RESTRICTION_RECHECK_INTERVAL` — default 21600 (6h)
-- `CAMPAIGN_ENQUEUE_TICK_SECONDS` — default 30
-
-**Env file:** `/root/apps/aimly/tg-outreach/.env` (present; never read contents)
-
-### Build
-
-**API Dockerfile:** `/root/apps/aimly/tg-outreach/Dockerfile`
-- Base: `python:3.11-slim`
-- System deps: `gcc`, `libpq-dev`, `docker.io`
-- Copies `app/` + `migrations/` into image
-- Runs as non-root `appuser` (uid 1000)
-
-**Listener Dockerfile:** `/root/apps/aimly/tg-outreach/Dockerfile.listener`
-- Same base, no `docker.io` dep
-- Entrypoint: `python -m app.services.listener`
-
-**Test overlay:** `/root/apps/aimly/tg-outreach/docker-compose.test.yml`
-- Ephemeral `pgvector/pgvector:pg16` in tmpfs (`db-test`)
-- Overrides DATABASE_URL to `outreach_test`
-- Bind-mounts `app/`, `tests/`, `migrations/`, `pyproject.toml`, `lovable-handoff/`
-
-### Background Workers (all asyncio tasks inside API process)
-
-All started in `app/main.py::lifespan`:
-- `queue_worker` — rate-limited message send queue (`app/services/queue.py`)
-- `warmup_worker` — inter-account AI warmup dialogs (`app/services/warmup.py`)
-- `onboarding_cleanup_worker` — expire stale onboarding sessions (`app/services/onboarding_state.py`)
-- `contact_check_worker` — checker pool phone resolution (`app/services/contact_check_worker.py`)
-- `campaign_enqueue_worker` — campaign→queue generator (`app/services/campaign_enqueue.py`)
-- `kb_ingest_worker` — RAG document ingest pipeline (`app/services/kb_ingest_worker.py`)
-
-Listener runs as a **separate container** (`app/services/listener.py`) — not inside the API process.
-
----
-
-## Frontend
-
-### Language
-
-**Primary:**
-- TypeScript 5.8.3 — all frontend code
-
-### Runtime
+## Configuration
 
 **Environment:**
-- Node.js (via bun)
+- Config resolved once via `app/config.py::Settings` (pydantic-settings `BaseSettings`), cached with `@lru_cache()` in `get_settings()`. Reads `.env` locally; in Docker, values come from `docker-compose.yml` `environment:` blocks per service.
+- Required (no default) vars: `DATABASE_URL`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `ENCRYPTION_KEY`, `SUPABASE_URL`.
+- Optional/defaulted knobs (all overridable without redeploy): `OPENAI_MODEL` (default `gpt-5-mini-2025-08-07`), `OPENAI_EMBEDDING_MODEL`, `SUPABASE_JWT_SECRET` (legacy HS256 fallback only), `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_ORIGIN_REGEX` (Lovable preview subdomains), `DECODO_HOST`/`DECODO_USERNAME`/`DECODO_PASSWORD`/`DECODO_PORTS` (proxy pool), plus ~15 worker-tuning knobs (campaign enqueue tick/batch, follow-up tick, contact-check burst/cooldown/daily-cap/rest/probe-interval/max-backoff, KB ingest poll interval, account-import poll interval, import ZIP size/count caps).
+- `.env` file is present on the server (`/root/apps/aimly/tg-outreach/.env`, mode 660) — contents intentionally not read/quoted per operational security policy. Two timestamped backups exist alongside it (`.env.bak.*`).
+- `app/config.py::Settings` does **not** set `extra="forbid"` explicitly in the visible model_config, but the test-overlay comments note prod `.env` carries keys that would be rejected by a stricter config — mounting `.env` into test runs is deliberately avoided.
 
-**Package Manager:**
-- bun (lockfile: `/root/apps/aimly/aimly-tg-outreach/bun.lock`)
-
-### Frameworks
-
-**Core:**
-- React 19.2.0 — UI framework
-- TanStack Start 1.168.26 (`@tanstack/react-start`) — SSR meta-framework
-- TanStack Router 1.170.16 (`@tanstack/react-router`) — file-based routing
-- TanStack Query 5.83.0 (`@tanstack/react-query`) — server state
-- Vite 7.3.1 — build tool
-- Tailwind CSS 4.2.1 — utility-first CSS
-- shadcn/ui via Radix UI — component library (full Radix primitive set)
-
-**Auth:**
-- `@supabase/supabase-js` 2.106.1 — Supabase auth client (OTP email login, PKCE flow; `app/lib/supabase.ts`)
-
-**Forms:**
-- react-hook-form 7.71.2 + `@hookform/resolvers` 5.4.0 — forms
-- zod 3.24.2 — schema validation
-
-**Charts / UI extras:**
-- recharts 2.15.4 — analytics charts
-- lucide-react 0.575.0 — icons
-- date-fns 4.1.0 — date formatting
-- sonner 2.0.7 — toasts
-- cmdk 1.1.1 — command palette
-- embla-carousel-react 8.6.0 — carousels
-- input-otp 1.4.2 — OTP input
-- vaul 1.1.2 — drawer
-
-**Deployment / Build:**
-- `@cloudflare/vite-plugin` 1.42.2 — Cloudflare Workers build target
-- `nitro` 3.0.x — server runtime (Cloudflare edge)
-- `wrangler.jsonc` — Cloudflare Workers config (`/root/apps/aimly/aimly-tg-outreach/wrangler.jsonc`)
-  - `compatibility_date: "2025-09-24"`, `nodejs_compat` flag
-  - `main: "src/server.ts"`
-
-**Dev tooling (Lovable-generated):**
-- `@lovable.dev/vite-tanstack-config` 2.6.2 — wraps Vite config; includes TanStack Start, Tailwind, tsConfigPaths, Cloudflare plugin automatically
-- eslint 9.x + prettier 3.7.3 — linting/formatting
-- `openapi-typescript` 7.13.0 — type generation from `lovable-handoff/openapi.json`
-
-### Frontend Configuration
-
-**Vite config:** `/root/apps/aimly/aimly-tg-outreach/vite.config.ts`
-- Uses `@lovable.dev/vite-tanstack-config`; minimal custom config
-
-**Required env vars (frontend, all `VITE_*`):**
-- `VITE_SUPABASE_URL` — Supabase project URL
-- `VITE_SUPABASE_ANON_KEY` — Supabase anonymous key (public)
-- `VITE_BACKEND_URL` — Backend API base URL (e.g. `https://aimly.agsventurelab.com`)
-
-**Env file:** `/root/apps/aimly/aimly-tg-outreach/.env` (present; never read contents)
-
-### Frontend API Communication
-
-`/root/apps/aimly/aimly-tg-outreach/src/lib/api.ts` — central `api()` function:
-- Reads Supabase JWT from session via `supabase.auth.getSession()`
-- Sends `Authorization: Bearer <jwt>` to backend
-- `VITE_BACKEND_URL` sets base URL
-
----
+**Build:**
+- `Dockerfile` (api) - installs `gcc`, `libpq-dev`, and `docker.io` (the last one is a holdover; a 2026 comment in `docker-compose.yml` notes the host-socket-mount pattern for restarting the listener was removed — `docker.io` in the image may now be vestigial).
+- `Dockerfile.listener` - lighter image, no `docker.io`, runs `python -m app.services.listener`.
+- `pyproject.toml` - pytest/pytest-asyncio config only (no build-system/packaging metadata — this is not an installable package).
+- Frontend: `frontend/vite.config.ts`, `frontend/tsconfig.json`, `frontend/wrangler.jsonc` (Cloudflare Workers config — **currently unused**; see INTEGRATIONS.md note on deploy path).
 
 ## Platform Requirements
 
 **Development:**
-- Docker + Docker Compose for backend
-- bun for frontend
+- Docker + Docker Compose (all services containerized; no documented bare-metal Python dev workflow).
+- For frontend work: `bun` (or the Docker `oven/bun:1` image, since the host has no bun installed).
 
 **Production:**
-- VPS: DigitalOcean (134.209.239.97)
-- Backend: Docker Compose stack
-- Frontend: Cloudflare Workers (edge deploy via `wrangler`)
-- Domain: `https://aimly.agsventurelab.com` (backend API via nginx)
+- Single VPS (DigitalOcean, `134.209.239.97`), Docker Compose stack under `/root/apps/aimly/tg-outreach/`.
+- API container binds `127.0.0.1:8005:8000` (loopback only — port 8000 is occupied by the legacy, now-stopped `telegram-api` project).
+- Public HTTPS via a shared nginx SNI-dispatcher on host `:443` → `nginx:8444 ssl proxy_protocol` → `127.0.0.1:8005`. TLS via `certbot certonly --webroot` only (not `--nginx`, to avoid breaking the SNI stream scheme).
+- Frontend static SPA served directly by nginx from `/var/www/aimly` (rsynced by `deploy-frontend.sh`) — no dedicated frontend container in prod despite `wrangler.jsonc` implying a Cloudflare Workers target.
+- Postgres data persisted in named Docker volume `postgres_data` — **never** `docker compose down -v` (wipes prod data; recover from `/root/backups/tg-outreach/`).
 
 ---
 
-*Stack analysis: 2026-06-30*
+## Note on `frontend/` directory (important — supersedes stale CLAUDE.md text)
+
+As of 2026-07-09, `frontend/` is **vendored directly into this repo's git history** (commit `c176901 Add 'frontend/' from commit '456515f...'`), not merely a sibling checkout. `git remote -v` confirms a second remote `aimly-frontend` → `https://github.com/AGS-Venture-Lab/aimly-tg-outreach.git` alongside `origin` (this backend's repo, `Andrewbruce165/outreach-platform`). Two same-day follow-up commits (`3e42fa6`, `6abac9f`) converted the build to static-SPA mode and added `deploy-frontend.sh` (Docker-bun build → `rsync` to nginx webroot `/var/www/aimly`). The CLAUDE.md description of frontend as a purely separate sibling repo deployed via Cloudflare Workers (`wrangler.jsonc`) reflects the **prior** setup; the current deploy path is host-nginx-served static files, built via Docker (no bun on host). Treat `frontend/` as present-and-current in this checkout, but recognize its own package ecosystem (bun/Vite/React/TanStack Start/shadcn) is independent of the Python backend stack described above.
+
+---
+
+*Stack analysis: 2026-07-09*

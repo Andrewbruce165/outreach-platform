@@ -1,250 +1,185 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-06-30
+**Analysis Date:** 2026-07-09
 
----
+## Tech Debt
 
-## CRITICAL — Blocking for External Customers
+**Multi-tenancy is app-level filtering only, no DB-level enforcement (RLS):**
+- Issue: every query that must be workspace-scoped relies on a manually-added `WHERE workspace_id = :workspace_id` clause. There is no Postgres Row-Level Security policy backing this. 54 `# TODO(v2-rls)` markers are scattered across the codebase, each one a place where a missed/forgotten filter would leak one workspace's data (senders, contacts, conversations, campaigns...) into another's response.
+- Files: `app/utils/auth.py:32,315,452`, `app/routers/workspace.py:115,137,166,203,287,322`, `app/routers/senders.py:448,473,904,1671,1732`, `app/routers/campaigns.py:92,130,148,169,589`, `app/routers/contacts.py:80,192,386,463,518,551,579`, `app/routers/conversations.py:92,175,564,702,911,1013,1072`, `app/routers/onboarding.py:147,219,346,826,867`, `app/routers/agents.py:123,174,198`, `app/routers/folders.py:93,150,184,231,284`, `app/routers/analytics.py:58,74,90`, `app/routers/account_import.py:246,335`, `app/services/onboarding_state.py:118`, `app/services/rotation.py:72`, `app/routers/send.py:85`
+- Impact: this is a brownfield SaaS multi-tenancy project (`v1` goal is the first paying external customer) — a single missed filter on a new endpoint is a cross-tenant data leak, not just a bug. The blast radius grows with every new router added before RLS lands.
+- Fix approach: implement Postgres RLS policies keyed on `app.workspace_id` session variable (already scoped/planned as "v2-rls" per the TODO convention) so the DB enforces isolation even if an app-level filter is forgotten; then the TODO comments can be deleted as each query proves redundant-but-safe under RLS.
 
-### No Authentication / Authorization Beyond Single-Workspace Prototype
+**JWT library slated for deprecation (`python-jose`):**
+- Issue: `app/utils/auth.py` uses `python-jose` for both ES256 (Supabase JWKS) and HS256 verification paths. Marked `TODO(v2): migrate from python-jose to PyJWT (deprecation — RESEARCH Pitfall 2)`.
+- Files: `app/utils/auth.py:31-32,43` (`from jose import jwt`)
+- Impact: `python-jose` is effectively unmaintained upstream; staying on it risks unpatched CVEs in a module that gates every authenticated request.
+- Fix approach: swap to `PyJWT` preserving the dual ES256(JWKS)/HS256 branch and the 1h JWKS cache behavior; add regression tests for both algorithms before cutover (auth is the highest-blast-radius module to break).
 
-- Issue: The system authenticates users via Supabase JWT and maps them to a `workspace_id`, but there is **no ownership enforcement at the DB layer** (no Postgres RLS). Every endpoint manually appends `WHERE workspace_id = :wid` to every query. All 20+ `TODO(v2-rls)` comments across the codebase mark locations where these app-level filters will be replaced by RLS policies.
-- Files: `app/utils/auth.py:32`, `app/routers/campaigns.py:119,157,175,196,566`, `app/routers/conversations.py:77,413,514,573`, `app/routers/folders.py:93,150,184,231,284`, `app/routers/contacts.py:80,192,386,463,518`, `app/routers/agents.py:123,174,198`, `app/routers/send.py:84`, `app/routers/onboarding.py:146,218,736,777`, `app/routers/workspace.py:115,137,166,203,287,322`, `app/services/rotation.py:67`, `app/services/onboarding_state.py:118`
-- Impact: A single code bug (missing `workspace_id` filter in any query) silently exposes another tenant's data. The surface area is large — every SELECT in every router. Current state is safe for a single-tenant deploy but is a hard blocker for multi-tenant external customers.
-- Fix approach: Implement Postgres RLS policies on all tenant-scoped tables (`ALTER TABLE … ENABLE ROW LEVEL SECURITY; CREATE POLICY …`) gated on a session variable set at connection time. After RLS is in place, remove the manual `WHERE workspace_id = :wid` clauses and delete the `TODO(v2-rls)` markers.
+**Hardcoded external alerting gap in the queue worker:**
+- Issue: a detected failure condition in the send queue has no outbound notification — only a code comment.
+- Files: `app/services/queue.py:1169` (`# TODO: add external alert (webhook/email) when monitoring infrastructure is available`)
+- Impact: certain queue-level failures are silent until someone notices symptoms downstream (e.g. stalled sends) rather than being paged.
+- Fix approach: wire into the existing Telegram alert bot pattern already used at the infra level (`/root/apps/monitoring/tg-notify.sh` equivalent) or a workspace-level webhook once workspace notification settings exist.
 
----
+**CLAUDE.md documentation drift on working-hours/rate-limit hardcoding:**
+- Issue: the root `CLAUDE.md` states rate limits and the 09:00–20:00 MSK working-hour window are "захардкожено в queue.py" — but `app/services/queue.py` now reads `work_hour_start`/`work_hour_end` and `campaign_tz` per-campaign from the `campaigns` table (`queue.py:91-101,124,177-186,261-262,412-413,500-501`), and per-sender `rate_per_min`/`rate_per_hour` from the `senders` table (`queue.py:610,646,674`). This is more configurable than the doc claims.
+- Files: `app/services/queue.py`, root `CLAUDE.md` ("Чего нет — нужно построить" section)
+- Impact: low risk technically, but stale docs can misdirect future planning/agent sessions into re-building something that already exists (or skipping verification of how configurable it actually is, e.g. is it exposed in the UI yet).
+- Fix approach: verify current UI exposure of per-campaign work hours/per-sender rate limits, then update CLAUDE.md's "Чего нет" section to reflect actual state.
 
-### API Key Revocation Has Up to 5-Minute Cache Lag
+**Generic "too-frequent name change" advisory is not signal-driven:**
+- Issue: the frontend profile-edit warning ("Слишком частая смена имени…") fires on every name/bio edit unconditionally — it is not driven by `profile_field_changed_at` or any real cooldown/rate-limit state.
+- Files: `accounts.tsx:1263-1272` (frontend repo, `/root/apps/aimly/aimly-tg-outreach`)
+- Impact: users get warned even when there's no real risk, and get no *extra* warning when risk is actually elevated (e.g. account <7 days old, per D-09) beyond the separate age-based advisory. Discovered as a contributing red herring during `.planning/debug/telegram-profile-update-not-applying.md`.
+- Fix approach: drive the warning off `profile_field_changed_at` recency and/or account age, matching the same signal the backend eventually needs for real throttling decisions.
 
-- Issue: Workspace API keys are cached in an in-process LRU dict (`_TOKEN_CACHE`) for 5 minutes (`_TOKEN_CACHE_TTL_SECONDS = 300`). A revoked key (`revoked_at` set in DB) continues to authenticate for up to 5 minutes per api container process. The cache is not shared between containers, so a multi-container deploy has independent caches.
-- Files: `app/utils/auth.py:61-98`
-- Impact: Immediately revoked API keys remain active for up to 5 minutes. Acceptable for v1 single-container, unacceptable for revoke-on-breach scenarios with multi-container scale.
-- Fix approach: Add a `revoked_at` check on cache hit (cheap DB lookup or pubsub invalidation), or reduce TTL to ~30s and accept the CPU cost at current scale.
+## Known Bugs
 
----
+**No-reply / follow-up marking never fired for any conversation until 2026-07-08 (RESOLVED, but re-verify blast radius):**
+- Symptoms: conversations waiting on a reply were never marked `no_reply`; 0 pings ever sent across the entire conversation history despite the FollowUpWorker running correctly since Phase 19.
+- Files: `app/services/follow_up.py` (`_mark_no_reply_pass`, tick step 0)
+- Trigger: root cause was `campaigns.follow_up_enabled` (server_default `false`) gating BOTH the no_reply status marking AND the ping/auto-finish sweep behind one flag; the flag was `false` on all 6 campaigns at investigation time, so marking never ran.
+- Workaround: fixed and deployed in commit `65302c9` (2026-07-08) — marking is now decoupled from `follow_up_enabled` and widened to running+paused+no-campaign conversations (done excluded). Live deploy flipped 316 conversations to `no_reply` on first tick. Ping/auto-finish sweep is UNCHANGED and still gated by `follow_up_enabled`, which remains `false` on all but 1 of 6 campaigns — pinging is still essentially dormant platform-wide. See `.planning/debug/no-reply-followup-not-marked.md`.
 
-### JWT Library (`python-jose`) Is Deprecated
+**Telegram profile edits silently rejected or silently cleared the wrong field (AWAITING FINAL HUMAN VERIFICATION):**
+- Symptoms: editing First/Last name via the UI either (a) appears to save successfully but Telegram silently rejects the change (server-side anti-abuse throttle on fresh accounts, no exception raised), or (b) clearing a name field sends `null` instead of `""`, which Telethon/Telegram interprets as "leave unchanged" — so the field is never actually cleared on Telegram, yet the local DB cache is wrongly overwritten to the empty value.
+- Files: backend `app/routers/senders.py` (`update_sender_profile`, guard added), `app/services/telegram.py` (`update_profile`, `_verify_profile_applied`); frontend `accounts.tsx:1226-1227` (repo `aimly-tg-outreach`)
+- Trigger: reproduced live on senders `polina_onoworksai` and `polinaworksai`.
+- Workaround: both root causes have code fixes committed/deployed (backend commit `6705ac9`, frontend commit `fa8366e`) — post-write verification (`ProfileChangeRejectedError` → 409) and explicit `""` vs `null` handling — but the debug session status is still `awaiting_human_verify`. See `.planning/debug/telegram-profile-update-not-applying.md`.
+- **Separate, larger, deferred issue found while investigating this:** a one-off bulk resync (2026-07-08) revealed that ~30+ of 63 sender accounts have garbled real Telegram last names (e.g. "Polina K Gudiyqnonx") because earlier rename attempts on fresh accounts were silently swallowed by Telegram's rate limit for a long time, and the local DB previously displayed the never-applied intended name as if it had succeeded. Retroactive bulk-rename-on-Telegram remediation is explicitly deferred/out of scope — tracked as separate follow-up work (`scripts/bulk_resync_profiles.py`, `scripts/bulk_clear_polina_lastnames.py` exist as untracked helper scripts for this).
 
-- Issue: `python-jose==3.3.0` is used for JWT verification. The library is unmaintained and has known CVEs. The codebase has a `TODO(v2)` comment to migrate to `PyJWT`.
-- Files: `requirements.txt:17`, `app/utils/auth.py:31`
-- Impact: Potential security vulnerabilities in JWT parsing. No immediate known exploits, but the library is not patched.
-- Fix approach: Replace `from jose import jwt` with `PyJWT` (`pip install PyJWT[crypto]`). The ES256/JWKS path and HS256 fallback both have PyJWT equivalents.
+**Checker (`is_registered` phone-resolve) false-negatives — multiple compounding failure modes, partially fixed:**
+- Symptoms: `contacts_cache.is_registered=false` does not mean "no Telegram account" — it means "not resolvable by phone by this checker account right now." Historically this bucket has been polluted by (a) recipient privacy settings hiding phone-lookup (genuine, permanent), (b) checker-account throttle/shadow-ban (transient, was previously misdiagnosed as "checker healthy"), and (c) cache cross-contamination (a poisoned `contacts_cache` row is workspace-wide and consulted before ever calling Telegram again, so even a healthy checker inherits a prior checker's false negative).
+- Files: `app/services/checker.py` (`_lookup_cache`, `checker.py:175,344`), `app/services/contact_check_worker.py` (health-probe, burst-cap, `checker_rest_until`, `checker_trip_count` escalation)
+- Trigger: bulk resolve of purchased/bartered phone bases (e.g. "Barter_база Игоря" folder — see `.planning/debug/checker-fn-igor-base.md`, parked `parked_awaiting_healthy_pool` as of 2026-06-30) or any burst of >~45-50 resolves in a row on one checker.
+- Workaround: Phase 14/17 landed a resolve ladder with confidence tracking (`tg_confidence`/`tg_resolved_by`/`tg_probe_state`), inline throttle-aware finalization, per-checker rest windows, and an escalating trip-count cooldown (fix deployed as quick task 260629-b7j, migration 036). Country-based gating was considered and explicitly rejected (D-10, `.planning/phases/17-.../17-CONTEXT.md`) after warmth/health, not country, was shown to be the real axis. **Open/parked:** the Igor-base folder itself remains parked with 176 contacts reset to `pending` because no verified-healthy RU checker pool existed at last check — re-verify pool health before resuming. See `.planning/notes/checker-false-negatives.md`, `.planning/notes/checker-pool-throttle-spike.md`, `.planning/notes/checker-strategy.md` for full history.
 
----
+**Warmup head-of-line blocking (fixed) + separate open re-auth gap:**
+- Symptoms: one ineligible warmup session at the front of the queue stalled the entire warmup pipeline because skipping it didn't advance `next_message_at`.
+- Files: `app/services/warmup.py`
+- Fix: deployed 2026-07-02 (quick 260702-c5k, commit `6dc751e`).
+- **Still open:** Phase 17 removed the sender-side `ResolvePhone` capability, so warmup can no longer resolve its own-account peers when they aren't already in the Telethon entity cache — this degrades warmup throughput over time as cache entries age out. Additionally, as of the last check, 4 senders (including both working Canada-based checkers `ca-account-1`/`ca-account-2`) were in `session_expired` state, stalling checking as well as warmup for those accounts. A re-auth 500 bug (plain-flow INSERT vs. upsert conflict) was fixed (commit `3261529`, deployed 2026-07-02) so users can now re-authenticate expired senders through the UI — but the sessions still need to actually be re-authed by a human.
 
-## HIGH — Operational Risks
+## Security Considerations
 
-### `docker compose down -v` Wipes Production Data Volume
+**Auth relies on unmaintained JWT library:**
+- Risk: `python-jose` (see Tech Debt above) has known historical CVEs in the JWT ecosystem generally; an unmaintained crypto-adjacent dependency in the auth path is a standing risk even without a currently-known exploit.
+- Files: `app/utils/auth.py`
+- Current mitigation: none beyond pinning; ES256/JWKS path is the primary route (Supabase-issued tokens), HS256 is a legacy fallback.
+- Recommendations: migrate to `PyJWT` (already tracked as `TODO(v2)`); audit whether the HS256 fallback path can be removed entirely if no legacy Supabase project still needs it.
 
-- Issue: The production PostgreSQL data lives in a named Docker volume (`outreach_platform_db_data`). Running `docker compose down -v` (or `docker compose down` followed by volume pruning) on the production host **permanently deletes the database**. There is no guard preventing this.
-- Files: `docker-compose.yml` (volume definition), `/root/apps/aimly/tg-outreach/backup.sh`
-- Impact: Total data loss. Recovery requires latest backup from `/root/backups/tg-outreach/` which has 14-day retention. Any data since the last backup (cron runs at 03:05 daily) is lost permanently.
-- Fix approach: Daily backups are in place (cron `5 3 * * *`). Document the danger prominently. Consider renaming the volume to something that does not look like a test volume. Add a pre-hook or runbook note to **never** use `-v` on the production host.
+**No DB-level tenant isolation (RLS) yet:**
+- Risk: see Tech Debt — a single missing/incorrect `workspace_id` filter on any of dozens of endpoints is a full cross-tenant data read, which is a severe issue for a SaaS product onboarding external paying customers.
+- Files: see the 54 `TODO(v2-rls)` sites listed above.
+- Current mitigation: app-level `WHERE workspace_id = :workspace_id` on each query, code-reviewed by convention only.
+- Recommendations: prioritize RLS before onboarding any customer whose data must not be visible to another tenant even in a worst-case app bug.
 
----
+**Session strings for 13 shared Telegram accounts existed in two independent databases simultaneously (historical, now stopped but not cleaned up):**
+- Risk: `/root/apps/telegram-api/` and `/root/apps/outreach-platform/` (old AGS internal tool + its predecessor) hold session strings for the exact same 13 physical Telegram accounts now live in this project's `outreach_platform` DB. Both are marked `restart: "no"` and are supposed to stay stopped, but they still exist on disk with live credentials and were confirmed (2026-06-24) to have been running concurrently with this project's listener at one point, causing message/AI cross-talk.
+- Files: `/root/apps/telegram-api/`, `/root/apps/outreach-platform/` (outside this repo, on the same host)
+- Current mitigation: both stopped; root `CLAUDE.md` documents the danger and forbids starting them.
+- Recommendations: the deletion task documented in this repo's own `CLAUDE.md` ("Задача: удалить старые проекты") is still open — until the directories are actually deleted (or at minimum have credentials scrubbed), an accidental `docker compose up` on either old stack re-creates the session conflict. See `.planning/debug/service-conflict-investigation.md` for the full incident writeup.
 
-### Old Projects (`telegram-api`, `outreach-platform`) Still Running Risk
+**Secrets/tokens in shell scripts:**
+- Risk: `backup.sh` and various one-off `scripts/*.py` (e.g. `scripts/bulk_resync_profiles.py`, `scripts/bulk_clear_polina_lastnames.py`) run with production DB/Telegram credentials via container exec; not inherently a vulnerability but worth confirming these scripts are never committed with inline secrets and are reviewed before ad-hoc production runs (per project convention, they already require explicit user confirmation).
+- Files: `scripts/bulk_clear_polina_lastnames.py`, `scripts/bulk_resync_profiles.py` (both currently untracked in git per repo status)
+- Recommendations: once verified safe, either commit with a clear "one-off/manual" header comment or delete after use — untracked scripts with prod access sitting in the working tree indefinitely is easy to lose track of.
 
-- Issue: `/root/apps/telegram-api/` and `/root/apps/outreach-platform/` are stopped (`restart: "no"` in their docker-compose), but they still exist on disk and share the same 13 Telegram account session files. If either is accidentally restarted (e.g. `docker compose up` in the wrong directory), their listeners will conflict with `tg-outreach` listener, causing double AI replies and session conflicts.
-- Files: `/root/apps/telegram-api/docker-compose.yml`, `/root/apps/outreach-platform/docker-compose.yml`
-- Impact: Telegram session conflicts → account bans; duplicate AI responses to users. `/root/apps/outreach-platform` still has `restart: unless-stopped` (NOT `restart: no`), making it a live risk.
-- Fix approach: Per CLAUDE.md task list — verify sessions migrated, optionally backup DB history, then delete both directories. Until deleted, add a `restart: "no"` override to `/root/apps/outreach-platform/docker-compose.yml` immediately.
+## Performance Bottlenecks
 
----
+**Checker pool throughput is fundamentally rate-limited by Telegram's own anti-abuse detection, not by code:**
+- Problem: bulk phone-registration checking (`ImportContacts`/`ResolvePhone`) throughput is capped at roughly one checker's burst budget (~30 resolves) per rest window (default 300s, `CONTACT_CHECK_REST_SECONDS`), and adding more checkers only scales linearly (2 checkers ≈ 2x one checker) — there is no way to check faster without more warmed, healthy accounts.
+- Files: `app/services/contact_check_worker.py` (`burst_cap`, `checker_rest_until`, `CONTACT_CHECK_BATCH_SIZE`)
+- Cause: Telegram's own server-side throttling of phone-contact-resolution APIs; confirmed empirically in `.planning/notes/checker-pool-throttle-spike.md` — one batch ≤30 is safe, sequential batches without adequate rest collapse the whole pool.
+- Improvement path: this is close to its practical ceiling given Telegram's constraints; the only lever is horizontal (more warmed checker accounts), not algorithmic. Do not attempt to "optimize" batch size/interval without re-reading the throttle-spike note first — several prior fixes were specifically to STOP over-eager batching.
 
-### ORM `default=` vs `server_default=` Drift — Recurring Pattern
+**Large purchased/bartered contact bases (thousands of rows) drive full-folder background pagination on the frontend:**
+- Problem: `/contacts` page stats briefly flash wrong numbers (e.g. `41/0/159` before settling to `126/4135/931`) while the frontend paginates through ~26 pages to fetch a 5192-contact folder before computing aggregate stats client-side.
+- Files: `accounts.tsx`/`contacts.tsx` equivalent in the frontend repo (`contactsForStats = contactsStatsQ.data ?? contacts`, fallback to first-page-only `contacts`)
+- Cause: stats were computed client-side over a full-folder fetch instead of server-side aggregation.
+- Improvement path: already fixed for this specific case by moving the aggregate to a server-computed endpoint (see `.planning/debug/resolved/contacts-stats-flash-wrong.md`) — flag as a pattern to watch for: any other "client aggregates over all pages" UI component will hit the same flash-then-correct behavior at this data scale.
 
-- Issue: SQLAlchemy `default=` (Python-side) does NOT add a `DEFAULT` clause to the physical column when `create_all` is called. If a raw SQL `INSERT` omits that column, it hits `NotNullViolation`. This has caused production incidents twice: `warmup_sessions.status`/`messages_sent` (migration 040) and `kb_chunks.id`, `kb_documents.id`, `knowledge_bases.id` (migration 042). The `sender_restriction_events.id` column was also affected (fixed earlier).
-- Files: `app/models/__init__.py` (all models with `default=` instead of `server_default=`), `migrations/040_warmup_sessions_defaults_drift.sql`, `migrations/042_kb_id_server_defaults.sql`
-- Impact: Raw SQL inserts in background workers crash with `IntegrityError` on newly-built tables. Pattern will recur with every new table that uses `default=` on a NOT NULL column and has a background worker inserting via raw `text()`.
-- Fix approach: Audit every `Column(..., nullable=False, default=X)` in `app/models/__init__.py` and ensure it also has `server_default=X` (or the equivalent cast). New models must use `server_default` on all NOT NULL columns. Failing that, always pass explicit values in raw SQL inserts.
+## Fragile Areas
 
----
+**Restriction/recovery symmetry is easy to get wrong (PeerFlood ↔ SpamBot-clear):**
+- Files: `app/services/listener.py` (`failover_cold_backlog`, `_restriction_reconcile_tick`)
+- Why fragile: restricting a sender (PeerFlood) actively moves its cold-pending backlog to healthy senders (`failover_cold_backlog`), but until recently, clearing that restriction did NOT pull a fair share of backlog back — the recovered sender returned to `active` with zero assigned work, silently degrading campaign throughput. This is a case where "restrict" and "un-restrict" are not simple opposites — every future change to the restriction/recovery pipeline needs to be checked for this same one-way-door asymmetry.
+- Safe modification: any change to sender restriction handling must be checked against BOTH directions (restrict → does it evacuate correctly; recover → does it re-balance work back) and against `rebalance_on_attach` needing ≥2 eligible senders to be a no-op-free operation (see memory note "rebalance_on_attach needs ≥2 eligible senders").
+- Test coverage: `tests/test_sender_restriction.py`, `tests/test_rebalance.py`, `tests/test_failover.py`, `tests/test_spambot_selfcheck.py`, `tests/test_restriction_audit.py` — good coverage exists post-fix (see `.planning/debug/resolved/peerflood-return-no-queue.md`), but this class of bug (asymmetric state machine transitions) is exactly the kind that regresses silently when a new restriction category is added.
 
-### Prod DB Can Be Wiped by Tests If Overlay Is Not Used
+**AI reasoning-model token budget is a recurring source of silent empty responses:**
+- Files: `app/services/ai_engine.py` (`_supports_reasoning_effort`-style gating around lines 64-130, retry-with-minimal-effort logic ~1559-1563)
+- Why fragile: `gpt-5-mini` is a reasoning model that splits `max_completion_tokens` between hidden reasoning tokens and visible output. A tight cap causes the model to spend its entire budget on invisible reasoning and return `content=''` with `finish_reason='length'` — this already happened once in production (fixed 2026-07-02, see `.planning/debug/resolved/ai-empty-llm-response.md` and memory note "AI answerer runs gpt-5-mini"). Any future model swap or prompt-length increase (e.g. longer knowledge-base context, longer dialogue-stage instructions — already raised to a 3000-char cap per commit `2589585`) risks re-tripping this failure mode if the token budget isn't re-validated.
+- Safe modification: never change `max_completion_tokens`/`reasoning_effort` constants without checking the retry-on-empty-content path still has headroom; add tests asserting non-empty content for near-budget-limit prompts when changing prompt-length caps elsewhere.
+- Test coverage: retry-on-empty behavior is tested, but there's no automated guard tying "max allowed instruction/context length" to "token budget still sufficient" — that relationship is currently only verified by manual reasoning in comments.
 
-- Issue: `tests/conftest.py` contains `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` at line 100 and 262. A guard at lines 40-62 checks DSN markers, but this requires discipline: running `docker compose run --rm api pytest` (without the test overlay) routes to the prod DB and has historically wiped it (2026-05-26 incident, all 22 relations recreated at 13:18:21 UTC with identical `file_mtime`).
-- Files: `tests/conftest.py:36-100`, `docker-compose.test.yml`
-- Impact: Complete prod data loss. The guard exists but relies on the developer always using the overlay.
-- Fix approach: Guard is present and documents the risk. Strictly enforce that all test runs go through `docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest`. Consider adding a hostname check as a second guard (e.g. refuse to run if `$HOSTNAME` matches the production container name).
+**ORM `default=` vs `server_default=` drift causes NotNullViolation on raw-SQL inserts after fresh-DB recovery:**
+- Files: `app/models/__init__.py` (multiple columns use Python-side `default=` without a matching `server_default=`), migrations `019`, `040`, `042`
+- Why fragile: `Base.metadata.create_all()` (run at every API startup, `app/database.py::init_db`) recreates tables using ONLY the DB-level `server_default`, ignoring Python-side `default=`. On a fresh DB or disaster-recovery rebuild, any raw-SQL `INSERT` (in migrations or ad-hoc scripts) that omits a column relying on Python-side `default=` will hit `NotNullViolation`. This has already bitten `warmup_sessions.status/messages_sent`, `contacts`, and `kb_chunks`/`kb_documents`/`knowledge_bases.id` (pgvector Phase 16) — see memory note "ORM default= vs server_default= drift".
+- Safe modification: whenever adding a new raw-SQL migration that inserts rows, explicitly provide every column's value in the `INSERT` rather than relying on either kind of default; when adding a new ORM column, add BOTH `default=` (Python-side convenience) AND `server_default=` (DB-level safety net) plus an explicit `ALTER COLUMN ... SET DEFAULT`.
+- Test coverage: no automated check currently catches this class of drift — it has only ever been caught by live fresh-DB/recovery incidents.
 
----
+**Full test suite is order-dependent and reports RED on a clean `main`:**
+- Files: `tests/` (all), `tests/conftest.py`
+- Why fragile: per project memory ("Test baseline RED again 2026-07-07"), running the FULL suite on a clean `main` produced 88 failed / 115 errors, but the same files pass when run in isolation or via targeted `-k` selection — meaning there is shared/leaking state between test modules (likely DB fixture teardown ordering or module-level singletons like `warmup_worker`/`FollowUpWorker`) rather than genuine regressions.
+- Safe modification: do NOT trust a full-suite run's exit code as a correctness signal. Before merging a change, run the specific test file(s) touched plus a `git stash`-based clean-tree diff comparison, not `pytest` with no `-k` filter.
+- Test coverage gap: the test suite needs an isolation audit (likely fixture scope/teardown in `tests/conftest.py`) before a full-suite green run can be trusted as a CI gate.
 
-### Message Queue Templates Snapshot at Enqueue Time
+## Scaling Limits
 
-- Issue: `campaign_enqueue.py` renders `message_template` into `message_queue.message_text` at enqueue time. Editing the campaign template after items are already enqueued does **not** update pending queue rows. The opener is never re-rendered unless a manual re-render call is made (a utility exists in `campaign_enqueue.py:348` but is not exposed as a UI action).
-- Files: `app/services/campaign_enqueue.py:14`, `app/routers/campaigns.py:656`
-- Impact: Template edits during an active campaign silently have no effect on already-pending sends. No error, no warning. Users believe they changed the message but the old text still goes out.
-- Fix approach: Expose a `POST /campaigns/{id}/re-render-pending` endpoint or automatically re-render on PATCH to `message_template`. At minimum, display a UI warning when the template is edited while the campaign has pending queue items.
+**Checker/phone-resolve pool size is the hard ceiling on lead-list processing speed:**
+- Current capacity: ~1 checker resolves ~30 numbers per ~5-minute rest window; 2 healthy checkers ≈ 2x throughput (verified empirically, not assumed).
+- Limit: adding more RU-mobile-warmed accounts is the only lever; the two Canada-based accounts (`ca-account-1`/`ca-account-2`) are also viable checkers (country is not the gating factor — warmth/health is, per D-10) but both were `session_expired` as of the last check.
+- Scaling path: re-authenticate expired checker accounts, warm additional accounts specifically for the checker role (not sender role — mixing roles caused the Igor-base false-negative incident when smoke-test checkers reverted to `role='sender'` mid-run without being removed from active resolve paths).
 
----
+**Rate limits (4/min, 20/hour, 150/day per sender) are empirically tuned, not workspace-configurable yet:**
+- Current capacity: fixed per-sender ceiling read from `senders.rate_per_min`/`rate_per_hour` (already per-sender, contra the stale CLAUDE.md claim — see Tech Debt), but there is no UI/API for a workspace to set its own "safe corridor" policy distinctly per workspace or campaign beyond what already exists on `campaigns.work_hour_start/work_hour_end`.
+- Limit: this is explicitly listed in the project's own roadmap as unbuilt ("Зелёный коридор" — recommended safe values + warning on deviation) — not yet a bug, but a known gap for the multi-tenant v1 goal (an external customer cannot yet self-configure their own risk tolerance).
+- Scaling path: tracked as planned future work in root `CLAUDE.md` ("Чего нет — нужно построить" → "Политика рассылки на уровне workspace").
 
-## HIGH — Checker Pool Fragility
+## Dependencies at Risk
 
-### Checker Pool Shadow-Ban / False-Negative Saga
+**`python-jose`:**
+- Risk: deprecated/low-maintenance JWT library used for the primary auth verification path (both ES256/JWKS and HS256).
+- Impact: security patches may lag; already flagged internally as a "RESEARCH Pitfall" in code comments.
+- Migration plan: swap to `PyJWT`, preserving the dual-algorithm branch logic in `app/utils/auth.py` and the 1-hour JWKS cache; add regression tests for both ES256 and HS256 paths before cutover given how central this module is.
 
-- Issue: Checker accounts that perform bulk `ResolvePhoneRequest` receive a Telegram-side shadow-ban on the contacts API. Two throttle modes exist: soft burst (~45-50 resolves → rare false-negatives, recovers in minutes) and hard shadow-ban (thousands/day → ~0.07% hit-rate, recovers in days). `is_registered=False` conflates four distinct causes: (1) genuinely unregistered, (2) privacy-hidden account, (3) throttled checker, (4) US/cold-account resolver (always returns false for `+79…` numbers). Phase 14 mitigations are deployed but the pool is fragile.
-- Files: `app/services/checker.py` (full file), `app/services/contact_check_worker.py`, `app/data/control_set_known_live.txt`, `.planning/notes/checker-false-negatives.md`, `.planning/notes/checker-problem-and-history.md`
-- Impact: False-negatives silently discard real leads. The single historic checker `sender-8428118140` reported 2.5% registered vs the true ~26% — projecting ~3,600+ discarded live leads from a 14k contact base. All current checkers are parked as of 2026-06-30 (see memory); no new contacts can be resolved until fresh warmed RU checkers are added.
-- Current mitigations: burst cap (30), post-batch rest (`checker_rest_until`), probe-burn escalating backoff (`checker_trip_count`, migration 036), inline throttle detector, restriction-gated selection (Phase 14 RESV-05).
-- Remaining risks: (a) Fresh checkers must be RU-registered accounts (`+79…`); US/cold accounts return 100% false-negative. (b) `contacts_cache` is workspace-isolated but **not** sender-isolated — a poisoned checker's false `not_registered` rows persist in the workspace cache even after the checker is retired; rollback to `pending` is partially ineffective because the stale cache row can be served to the next checker on cache hit. Purge false cache rows explicitly when retiring a checker.
-- Fix approach: Add a cache-poisoning cleanup path: when a checker transitions to `spam_limited`, DELETE its `contacts_cache` rows where `is_registered=false` within the workspace (matching the manual fix done 2026-06-26). Document the "only warmed RU accounts" constraint prominently in onboarding UI.
+**Vendor-supplied residential proxies bundled with purchased Telegram account archives:**
+- Risk: vendor proxies shipped inside account-import archives have repeatedly been dead/subscription-exhausted (`402: user reached limit`), causing import failures that looked randomly distributed across accounts.
+- Impact: already worked around — `resolve_import_proxy` now ignores vendor-supplied proxies entirely and always assigns from the workspace's own `ProxyPool` (Decodo). See `.planning/debug/resolved/tg-import-vendor-proxy-dead.md`.
+- Migration plan: none needed going forward — vendor proxy JSON is still parsed/normalized (for record-keeping/tests) but never selected for actual use.
 
----
+## Missing Critical Features
 
-### `is_registered` Field Name Is Misleading
+**Workspace-level "green corridor" sending policy:**
+- Problem: there is no UI/API yet for a workspace to see recommended safe rate-limit/schedule values with a warning when they deviate, despite this being called out as core to the v1 differentiator (self-service external customers configuring their own outreach risk tolerance).
+- Blocks: external customers cannot yet safely self-tune their own sending policy without staff guidance; a customer could misconfigure rates and trigger account restrictions with no in-product guardrail.
 
-- Issue: `ContactCache.is_registered` and `Contact.tg_status='not_registered'` mean "not resolvable by this checker via phone" — NOT "definitely no Telegram account". Privacy-hidden accounts score `false`. The field name implies definitiveness that it cannot provide.
-- Files: `app/models/__init__.py:197` (`ContactCache.is_registered`), `app/models/__init__.py:489` (`Contact.tg_status`), `app/services/checker.py:15-42`
-- Impact: Any analytics, dedup, or "dead number" logic built on `is_registered=false` ≡ "no TG account" will discard real users. Currently no analytics dashboard uses it directly, but the naming will mislead future developers.
-- Fix approach: Rename `is_registered` to `phone_resolvable` or add a prominent DB comment. For `tg_status`, rename `not_registered` to `not_resolvable` in a future migration (requires updating all callers).
+**No workspace-level notification/alerting channel:**
+- Problem: `app/services/queue.py:1169` explicitly stubs an alert as future work; more broadly, there's no generalized "notify workspace admin" mechanism (email/webhook) for account restrictions, campaign stalls, or checker pool exhaustion — all of this is currently surfaced only via direct DB/log inspection by the operator.
+- Blocks: external customers (not just the internal operator) need to be told when their senders get restricted or their campaign stalls, without requiring a support ticket.
 
----
+## Test Coverage Gaps
 
-## MEDIUM — Technical Debt
+**Cross-module test isolation (see Fragile Areas above):**
+- What's not tested: the full-suite run itself is not a trustworthy signal; there's no test verifying that running the whole suite together doesn't leak state between modules.
+- Files: `tests/conftest.py`, all of `tests/`
+- Risk: a genuine regression could be masked by "the whole suite is red anyway" fatigue, or conversely a real fix could look like it broke things due to unrelated cross-test pollution.
+- Priority: High — this undermines confidence in every other test-coverage claim in this document.
 
-### `MAX_NEW_CONTACTS_PER_HOUR = 15` Still Hardcoded in Queue Worker
-
-- Issue: The per-sender maximum new contacts per hour (`MAX_NEW_CONTACTS_PER_HOUR = 15`) is hardcoded as a module-level constant in `queue.py`. The per-sender send rates (`rate_per_min`, `rate_per_hour`, `rate_per_day`) were moved to DB columns in Phase 2, but this contact-contact limit was not.
-- Files: `app/services/queue.py:52`, `app/services/queue.py:634`
-- Impact: Cannot configure different contact-rate limits per workspace or per sender without a code change and redeploy. Blocks workspace-level policy configuration needed for v1 external customers.
-- Fix approach: Add a `max_new_contacts_per_hour` column to `senders` (or `campaigns`) with a `server_default='15'`. Read it alongside `rate_per_min/hour/day` in `_check_rate_limits`.
-
----
-
-### `listener.py` Is a 1,773-Line Monolith
-
-- Issue: `app/services/listener.py` is the largest file at 1,773 lines. It handles Telegram event registration, AI response dispatch, conversation upsert, warmup traffic filtering, restriction reconcile sweep, and restriction detection — all in one file.
-- Files: `app/services/listener.py`
-- Impact: High cognitive load when modifying any one concern. The warmup/internal-filtering logic at lines 610-700 and the restriction reconcile sweep at ~1,036-1,600 are particularly entangled with unrelated message-routing code.
-- Fix approach: Extract the restriction reconcile sweep into `app/services/restriction_audit.py` or a new `reconcile.py`. Extract warmup/internal filtering into `app/services/internal_filter.py`.
-
----
-
-### `ai_engine.py` Is 1,574 Lines
-
-- Issue: `app/services/ai_engine.py` is 1,574 lines handling prompt construction, KB search, tool dispatch, LLM call logging, and response parsing.
+**No automated guard linking AI prompt/context length to reasoning-model token budget:**
+- What's not tested: whether raising a character cap elsewhere (dialogue-stage instructions, knowledge-base injected context, per-agent character budget) can still fit within `max_completion_tokens` for the configured `reasoning_effort` without tripping the empty-response failure mode.
 - Files: `app/services/ai_engine.py`
-- Impact: Changes to prompt templates require navigating the full file. KB search logic is coupled to response generation.
-- Fix approach: Extract KB search into `app/services/kb_search.py`, prompt-building into `app/services/prompt_builder.py`.
+- Risk: silent empty AI responses recur every time someone increases a length cap without manually re-deriving the token math.
+- Priority: Medium — has already caused one production incident; retry-on-empty mitigates but does not eliminate wasted LLM calls/latency.
+
+**Checker false-negative detection lacks an end-to-end regression test simulating gradual pool-wide throttle onset:**
+- What's not tested: the exact multi-batch, multi-checker collapse scenario from the Igor-base incident (mixed role reassignment + cache cross-contamination + inline anomaly gate defeated by cache-served results) doesn't appear to have a single integration test reproducing all three compounding factors together — the fixes (14-05/14-07/b7j) each have targeted unit tests, but the full incident scenario was diagnosed live in production, not first caught by a test.
+- Files: `app/services/contact_check_worker.py`, `app/services/checker.py`
+- Risk: a future change to any one of the three subsystems (role gating, cache lookup, rest/cooldown escalation) could reintroduce the combined failure without any single unit test catching it.
+- Priority: Medium — the individual mechanisms are well-tested in isolation; the integration gap is the risk.
 
 ---
 
-### `queue.py` Has Two Separate Transaction Contexts for FloodWait
-
-- Issue: When a HARD FloodWait or PEER_FLOOD error fires, the worker opens a second `AsyncSessionLocal` context (`db2`) to update `message_queue` / `senders` while the original `db` session is still open. This is done to avoid the main TX holding locks, but creates a pattern where the audit event (written to `db`) and the sender status update (written to `db2`) are in different transactions — a crash between the two leaves inconsistent state. WR-04 mitigates this for the audit event on flood_wait by using the same `db`, but PEER_FLOOD and ACCOUNT_FROZEN still use separate `db2`.
-- Files: `app/services/queue.py:930-974` (PEER_FLOOD), `app/services/queue.py:977-1023` (ACCOUNT_FROZEN)
-- Impact: If the api process crashes between the two commits, the sender status update (spam_limited/frozen) might be missing while the restriction event row exists — or vice versa. Low probability, but leads to inconsistent audit logs and a sender that can keep sending despite a restriction.
-- Fix approach: Combine the sender UPDATE and restriction event INSERT into a single transaction. The `record_restriction_event` helper accepts a `db` parameter — pass the existing `db2` session to it.
-
----
-
-### Database Connection Pool May Be Undersized
-
-- Issue: The SQLAlchemy async engine is configured with `pool_size=5, max_overflow=10` (15 total connections). The API process runs 6 background workers simultaneously (queue, warmup, onboarding cleanup, contact check, campaign enqueue, KB ingest) plus the FastAPI request handlers. Each worker opens new sessions per tick. Under load, all 15 connections can be exhausted.
-- Files: `app/database.py:56-61`
-- Impact: `asyncpg.exceptions.TooManyConnectionsError` under moderate load. Not currently observed but may surface as the user base grows or if the KB ingest worker processes large documents.
-- Fix approach: Increase `pool_size` to 10-15 and `max_overflow` to 20. Monitor via `pg_stat_activity` in prod.
-
----
-
-### Supabase JWT `kid` Cache Is Per-Process
-
-- Issue: The JWKS cache (`_JWKS_CACHE`) is a module-level dict, per-process. Each API container warms its own cache. A cache miss triggers one HTTP refetch (handles key rotation), but on a cold start with multiple concurrent requests, all N requests may simultaneously refetch JWKS.
-- Files: `app/utils/auth.py:110-170`
-- Impact: N simultaneous HTTP calls to Supabase JWKS endpoint on cold start or after key rotation. Minor — Supabase JWKS endpoint is fast and the race is bounded by process startup — but worth noting.
-- Fix approach: Add a simple asyncio lock around the JWKS fetch to prevent thundering herd.
-
----
-
-## MEDIUM — Frontend Drift
-
-### Lovable Frontend Can Drift from OpenAPI Spec
-
-- Issue: The frontend is generated through Lovable from `lovable-handoff/openapi.json`. The frontend sometimes diverges from the spec. Known drift: `POST /conversations/{id}/send` receives `{"message_text": "..."}` instead of the canonical `{"message": "..."}` — worked around via `AliasChoices` in the Pydantic schema. The `GET /telemetry/events` endpoint has a whitelist of 17 events; new events added by Lovable produce 400 errors until the whitelist is updated.
-- Files: `app/routers/conversations.py` (`SendMessageFromUIRequest` with `AliasChoices`), `app/routers/telemetry.py` (`_EVENT_WHITELIST`)
-- Impact: Frontend changes silently break API calls with no type-level enforcement. Debugging requires correlating API logs with Lovable deployments.
-- Fix approach: Keep `lovable-handoff/openapi.json` in sync with the actual FastAPI-generated spec (compare against `/openapi.json` after each phase). Consider adding a CI step to diff the two.
-
----
-
-### Telethon Entity-Cache Cold Start
-
-- Issue: On first message send via `/conversations/{id}/send`, Telethon may throw `ValueError: Could not find the input entity for PeerUser(user_id=...)` if the peer's `access_hash` is not in the Telethon SQLite session cache. Mitigated by a `get_dialogs(limit=200)` fallback on `ValueError`, but this adds ~500ms latency on first send to any new peer.
-- Files: `app/services/telegram.py` (`send_message_by_telegram_id`)
-- Impact: Occasional 500ms delay on first send to a peer; gracefully recovered. No data loss.
-- Fix approach: Pre-warm entity cache on sender startup by calling `get_dialogs` once. Or maintain `access_hash` in `contacts_cache` and construct `InputPeerUser` directly without a cache lookup.
-
----
-
-## LOW — Future Issues
-
-### Missing Monitoring / Alerting on Critical Events
-
-- Issue: PEER_FLOOD and ACCOUNT_FROZEN events log at `CRITICAL` level but there is no external alerting (webhook, email, Telegram notification). The queue worker has a comment: `# TODO: add external alert (webhook/email) when monitoring infrastructure is available` (line 955).
-- Files: `app/services/queue.py:955`
-- Impact: A frozen account is invisible to the operator until they check logs. A spam wave can silence multiple accounts before anyone notices.
-- Fix approach: Implement a `notifications.py` service that sends a Telegram message or webhook on `PEER_FLOOD`/`ACCOUNT_FROZEN` events. The `lead_webhook_url` pattern already exists at campaign level — use the same pattern at platform level.
-
----
-
-### `contacts_cache` Lacks a Unique Constraint on `(workspace_id, phone)`
-
-- Issue: `contacts_cache` has `ON CONFLICT (sender_id, phone) DO UPDATE`. This means workspace-scoped cache reads (`_lookup_cache` filters by `workspace_id`) could theoretically hit rows from a different sender within the same workspace. The workspace-level cache read is correct, but write dedup is keyed to `(sender_id, phone)`, not `(workspace_id, phone)`. Multiple checker rows for the same phone within a workspace are possible.
-- Files: `app/services/checker.py:213`, `migrations/020_contacts_cache_unique.sql`
-- Impact: Slightly stale cache (the latest-updated row wins due to `ORDER BY updated_at DESC`), but a poisoned checker's `not_registered` row can coexist with a healthy checker's `registered` row for the same `(workspace_id, phone)`. The lookup returns whatever is newest.
-- Fix approach: Add a unique constraint on `(workspace_id, phone)` with an `ON CONFLICT DO UPDATE` that only overwrites with `high`-confidence results. Alternatively, query specifically for `tg_confidence='high'` rows on cache lookup.
-
----
-
-### `CsvImport` Stores Raw File Bytes in PostgreSQL
-
-- Issue: `CsvImport.file_data` is a `LargeBinary` column (i.e. bytea in Postgres) that stores the entire uploaded CSV in the database. Large CSVs (tens of MB) bloat the DB and slow down autovacuum.
-- Files: `app/models/__init__.py:543`
-- Impact: DB storage growth with each import. The records have an `expires_at` column so expired records should be cleaned up, but there is no background cleanup worker for expired CSV imports.
-- Fix approach: Add a scheduled cleanup for expired `csv_imports` rows. Long-term: move file storage to S3/object storage and store only a reference.
-
----
-
-### No Alerting on Migration Failure at Startup
-
-- Issue: If a migration fails, `init_db()` raises and the API container exits. Docker restarts the container (policy `restart: unless-stopped`), which retries the failing migration infinitely, creating a restart loop. The error is only visible in `docker logs outreach-platform-api`.
-- Files: `app/database.py:144-147`, `docker-compose.yml`
-- Impact: Silent crash loop. No notification sent. An operator who is not actively watching logs will not know the API is down.
-- Fix approach: Add a startup health check endpoint that surfaces migration status. Or send a Telegram message on startup failure (see monitoring concern above).
-
----
-
-## Operational Runbook Notes
-
-**Safe recovery pattern after prod incident (DROP/fresh DB):**
-```bash
-docker compose up -d --build api  # applier re-runs all migrations from scratch
-```
-
-**Run tests ONLY via:**
-```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
-```
-Never `docker compose run --rm api pytest` — wipes prod DB.
-
-**Manual backup:**
-```bash
-/root/apps/aimly/tg-outreach/backup.sh
-```
-
-**Check migration state:**
-```sql
-SELECT version, created_at FROM schema_migrations ORDER BY created_at DESC LIMIT 10;
-```
-
-**Checker pool health:**
-```sql
-SELECT slug, lifecycle_status, restriction_status, restricted_until, checker_rest_until, checker_trip_count
-FROM senders WHERE role = 'checker';
-```
-
----
-
-*Concerns audit: 2026-06-30*
+*Concerns audit: 2026-07-09*

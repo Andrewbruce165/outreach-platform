@@ -1,254 +1,105 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-06-30
+**Analysis Date:** 2026-07-09
 
-## Language and Communication
+## Scope note
 
-**Code:** English only (variables, functions, classes, comments, docstrings, commit messages).
-**Developer communication:** Russian (per `CLAUDE.md`).
-**Docstrings:** English prose; module-level docstrings describe purpose and endpoints.
+This document covers the Python backend at the repo root (`app/`, `migrations/`, `tests/`). A vendored `frontend/` directory (TanStack Start / React / TypeScript, imported into this repo's history via `Add 'frontend/' from commit ...`) also exists, but the actively-developed, Lovable-generated frontend lives in the separate sibling repo `/root/apps/aimly/aimly-tg-outreach` — see root `CLAUDE.md`. Frontend conventions are out of scope here.
 
 ## Naming Patterns
 
 **Files:**
-- Routers: `snake_case.py` under `app/routers/` — one file per resource domain (`campaigns.py`, `senders.py`, `warmup.py`)
-- Services: `snake_case.py` under `app/services/` — one file per concern (`queue.py`, `ai_engine.py`, `contact_check_worker.py`)
-- Tests: `test_{feature_or_phase_or_migration}.py` under `tests/` — prefixed by phase when feature-tied (`test_phase5_inbox.py`, `test_migration_013.py`)
-- Migrations: `NNN_short_name.sql` (3-digit zero-padded prefix, lexical sort determines run order, e.g. `012_workspace.sql`)
+- `app/routers/<domain>.py` — one router module per resource (`senders.py`, `campaigns.py`, `contacts.py`, `warmup.py`, ...). Router-internal helpers are private (`_leading_underscore`) and colocated in the same file, grouped under a `# ─── Section ─── ` comment banner rather than split into separate helper modules.
+- `app/services/<domain>.py` — one service module per subsystem (`queue.py`, `checker.py`, `rebalance.py`, `warmup.py`, `ai_engine.py`). Workers that run as background loops are suffixed `_worker.py` (`contact_check_worker.py`, `kb_ingest_worker.py`, `account_import_worker.py`).
+- `app/models/__init__.py` — **all ORM models live in one file** (single `Base` module), not split per-model. Do not create `app/models/sender.py` etc. — add new models to this file, in the same style as existing ones (grouped under `# ─── Phase N — FEATURE ─── ` banners).
+- `app/schemas/__init__.py` — likewise, **all Pydantic request/response schemas live in one file** (1359 lines), grouped by resource under `# === Resource ===` banners. `app/schemas/knowledge_bases.py` is the one exception (Phase 16 KB schemas split out) — new large feature areas MAY get their own schema file, but the default is the shared `__init__.py`.
+- Migrations: `migrations/NNN_short_name.sql`, zero-padded 3-digit sequence (`012_workspace.sql` ... `060_campaign_attachments_multiple.sql`). Never reuse a number; always the next integer even across phases.
+- Tests: `tests/test_<feature>.py`, often prefixed with the phase name for phase-scoped test suites (`test_phase5_1_agents_v2.py`, `test_phase5_analytics.py`). Debug/one-off investigation docs go in `.planning/debug/`, not test files.
 
 **Functions:**
-- `snake_case` everywhere: `enqueue_message`, `get_active_senders`, `_build_outreach_schema`
-- Private helpers prefixed `_`: `_assert_test_dsn`, `_allowed_origin`, `_cors_headers`, `_validate_max_new_dialogs`
-- Async background workers suffixed `_worker`: `queue_worker`, `warmup_worker`, `contact_check_worker`
+- `snake_case` throughout, always `async def` for anything touching DB/network/Telegram/OpenAI (see Architectural rule "Async everywhere" in root CLAUDE.md).
+- Private/internal helpers prefixed `_` (`_derive_status`, `_load_sender_by_slug`, `_check_profile_cooldown`). Router files freely define several `_`-prefixed helpers above the route handlers.
+- Route handler function names mirror the REST verb + resource: `list_senders`, `create_sender`, `get_sender`, `update_sender`, `delete_sender`, `pause_sender`, `resume_sender`.
 
 **Variables:**
-- `snake_case`: `sender_id`, `workspace_id`, `recipient_phone`
-- Constants: `UPPER_SNAKE_CASE` — `MIN_SEND_INTERVAL`, `QUEUE_TICK_BATCH`, `FLOOD_HARD_THRESHOLD`
+- `snake_case`. Short DB-row aliases (`s`, `cr`, `wid`, `cid`, `sid`) are common inside SQL-building helpers where the field is obvious from a nearby `text("""...""")` block, but any variable that crosses a function boundary or appears in a docstring reference uses a full name (`sender_id`, `workspace_id`).
+- IDs are consistently `UUID` (Python `uuid.UUID`) at the ORM/schema layer, stringified (`str(x)`) only when binding into raw SQL params (`{"sid": str(sender.id)}`) — asyncpg/SQLAlchemy `text()` params need strings, not UUID objects, when the query isn't going through the ORM.
 
-**Classes:**
-- ORM models: `PascalCase` matching table concept (`Workspace`, `CampaignSender`, `WorkspaceApiKey`)
-- Pydantic schemas: `PascalCase` with `Request`/`Response`/`Create`/`Update` suffixes (`CampaignCreate`, `SenderUpdate`, `PoolHealth`)
-- Enums: `PascalCase` (`QueueItemStatus`, `MessageType`)
+**Types / Classes:**
+- `PascalCase` for ORM models (`Sender`, `Workspace`, `AIContext`, `SenderRestrictionEvent`) and Pydantic schemas (`SenderCreate`, `SenderResponse`, `SenderCreateResponse`). Response/request pairs follow `<Resource><Verb>` or `<Resource><Verb>Response` (`ProfileUpdate` / `ProfileUpdateResponse`, `GradeOverrideRequest`).
+- Enums: Python `enum.Enum` classes for a handful of DB-backed enums (`MessageType`, `QueueItemStatus`, `QueueItemType` in `app/models/__init__.py`), but **most status/lifecycle fields are plain `String` columns with a Postgres `CHECK` constraint** (e.g. `restriction_status IN ('none','spam_limited','frozen')`), not a mapped Python enum. When adding a new status field, check whether the existing pattern for that table is enum-backed or CHECK-constrained and follow it — don't introduce a third style.
+- `AuthCtx` (in `app/utils/auth.py`) is the canonical `pydantic.BaseModel` used as a FastAPI dependency return type — follow this pattern (a typed `BaseModel`, not a bare dict/tuple) for any new cross-cutting request context.
 
-**Routes:**
-- All under `/api/v1/` prefix
-- Resource groups: `router = APIRouter(prefix="/api/v1/{resource}", tags=["{resource}"])`
+## Code Style
 
-## Async Everywhere
+**Formatting:**
+- No `black`/`ruff`/`flake8` config exists in the repo (`pyproject.toml` only has `[tool.pytest.ini_options]`). There is no enforced auto-formatter — match the surrounding file's line width (~88-100 cols observed) and spacing by hand.
+- No `.eslintrc`/`.prettierrc` in the backend (those apply only inside the separate frontend repo).
 
-**Rule:** Every DB operation, HTTP call, and Telegram interaction uses `async/await`. No `time.sleep()`, no `requests`, no blocking I/O.
-
-```python
-# Correct
-async def enqueue_message(db: AsyncSession, ...) -> dict:
-    result = await db.execute(select(Sender).where(...))
-    ...
-
-# Forbidden
-import requests  # never — use httpx
-import time; time.sleep(5)  # never — use asyncio.sleep
-print("debug")  # never — use logger.info/logger.warning
-```
-
-**DB sessions:** Always `AsyncSession` from `app.database.AsyncSessionLocal` or `get_db()`.
-```python
-from app.database import AsyncSessionLocal
-
-async with AsyncSessionLocal() as session:
-    result = await session.execute(...)
-```
-
-**HTTP client:** Always `httpx.AsyncClient` for outbound HTTP (used in `app/services/webhook_notify.py` and `app/services/ai_engine.py`).
-
-## Logging
-
-**Framework:** Python `logging` module only. Never `print()`.
-
-**Setup (module level):**
-```python
-import logging
-logger = logging.getLogger(__name__)
-```
-
-**Root config** (in `app/main.py`):
-```python
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-```
-
-**Patterns:**
-- `logger.info("Starting %s...", name)` — startup/normal events, use `%s` format args (not f-strings)
-- `logger.warning("Validation error on %s %s: %s", method, path, errors)` — expected-but-notable
-- `logger.error("[migrate] FAIL %s: %s", version, exc)` — recoverable errors
-- `logger.exception("Unhandled exception on %s %s", method, path)` — unhandled exceptions (includes traceback)
-- Never log API keys, session strings, or JWT payloads
-
-## Error Handling
-
-**HTTP errors:** Raise `fastapi.HTTPException` with a structured `detail` dict:
-```python
-raise HTTPException(
-    status_code=422,
-    detail={
-        "code": "NEW_DIALOG_LIMIT_EXCEEDS_HARD_CAP",
-        "field": "max_new_dialogs_per_day",
-        "value": value,
-        "hard_cap": DIALOG_LIMIT_HARD_CAP,
-    },
-)
-```
-
-**Global handlers** in `app/main.py`:
-- `RequestValidationError` → 422 with `{"detail": {"code": "VALIDATION_ERROR", "errors": [...]}}`
-- `StarletteHTTPException` → preserves status with CORS headers
-- `Exception` (fallback) → 500 with `{"detail": "Internal Server Error", "code": "INTERNAL_ERROR"}`
-
-**FloodWait retry** (Telethon, in `app/services/queue.py`):
-```python
-from telethon.errors import FloodWaitError
-
-try:
-    await client.send_message(...)
-except FloodWaitError as exc:
-    retry_after = exc.seconds
-    if retry_after >= FLOOD_HARD_THRESHOLD:
-        # reschedule ALL pending tasks for this sender
-        ...
-    else:
-        # reschedule only this item
-        item.scheduled_at = now + timedelta(seconds=retry_after)
-```
-**Rule:** Never break FloodWait retry logic without explicit discussion. Intervals are empirically tuned.
-
-**SpamBan pattern:** After FloodWait/spam event, write to `sender_restriction_events` via `app/services/restriction_audit.py::record_restriction_event`.
-
-## Pydantic Schemas
-
-**Location:** `app/schemas/__init__.py` (all schemas in one file).
-
-**Base pattern:**
-```python
-from pydantic import BaseModel, Field
-from typing import Optional, List
-from uuid import UUID
-
-class CampaignCreate(BaseModel):
-    name: str = Field(..., max_length=100)
-    agent_id: UUID
-    folder_id: Optional[UUID] = None
-```
-
-**AliasChoices for Lovable frontend quirks:**
-When the Lovable-generated client sends a field under a different name than the canonical spec, use `AliasChoices` — do not change the canonical field name:
-```python
-from pydantic import AliasChoices
-
-class SendMessageFromUIRequest(BaseModel):
-    message: str = Field(
-        ...,
-        validation_alias=AliasChoices("message", "message_text"),
-        # Lovable sends "message_text"; canonical is "message"
-    )
-```
-Current instance: `app/schemas/__init__.py::SendMessageFromUIRequest` — accepts both `message` and `message_text`.
-
-**Config settings** in `app/config.py`:
-```python
-class Settings(BaseSettings):
-    model_config = ConfigDict(env_file=".env", case_sensitive=False)
-    some_knob: int = Field(
-        default=300,
-        validation_alias="SOME_KNOB_ENV_VAR",
-        description="...",
-    )
-```
-`validation_alias` maps the env var name (UPPER_CASE) to the Python attribute name (snake_case).
-
-## ORM Models
-
-**Location:** `app/models/__init__.py` (all models in one file).
-
-**Pattern:**
-```python
-from sqlalchemy import Column, String, UUID
-from app.database import Base
-import uuid
-
-class Workspace(Base):
-    __tablename__ = "workspaces"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Use server_default=func.now() for timestamps (NOT default=datetime.now)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-```
-
-**Critical:** `default=uuid.uuid4` is Python-side only — raw SQL INSERTs omitting `id` will fail unless the column also has `server_default=text("gen_random_uuid()")`. See `ORM default= vs server_default= drift` in project memory.
-
-**Relationships:** Use SQLAlchemy `relationship()` sparingly. Workspace-scoped queries always add `.where(Model.workspace_id == ctx.workspace_id)`.
-
-## Migrations
-
-**Convention:**
-- File: `migrations/NNN_short_name.sql` (3-digit prefix, lexical order = run order)
-- Every statement **must be idempotent**: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ON CONFLICT DO NOTHING`
-- CHECK constraints: use `DO $$ BEGIN ALTER TABLE ... ADD CONSTRAINT ...; EXCEPTION WHEN duplicate_object THEN NULL; END $$;` if PostgreSQL version doesn't support `IF NOT EXISTS` on constraints
-- Wrap logically-atomic migrations in `BEGIN; ... COMMIT;`
-- Bootstrap: `migrations/_schema_migrations.sql` (underscore prefix sorts first, never tracked)
-
-**Auto-applier** runs at every API startup via `app/database.py::_apply_migrations()`:
-- Uses `pg_advisory_lock` to prevent race on parallel container startup
-- Failing migration = API does not start (fail-fast, not half-applied)
-- Applied versions tracked in `schema_migrations` table
-
-**Adding a migration:** drop `NNN_short_name.sql` in `migrations/`, then `docker compose up -d --build api`.
+**Docstrings:**
+- Every router, service module, non-trivial function, and most fixtures carry a `"""triple-quoted docstring"""` — this codebase leans heavily on docstrings-as-decision-log. A typical docstring documents:
+  1. What the function/endpoint does (one line).
+  2. **Why** — cross-references to phase/decision IDs (`D-14`, `RESV-01`, `POOL-09`), dates, or a named bug/incident (`2026-05-26 hotfix`, `Phase 22 D-04`).
+  3. Edge cases / gotchas a future reader would otherwise rediscover the hard way.
+- New code MUST follow this pattern: **when a piece of logic exists because of a specific bug, incident, or design decision, say so in the docstring/comment with a dated or D-NN reference**, not just "handles edge case X". This repo's docstrings are effectively inline ADRs — the codebase depends on them for context since there's no ticket tracker.
+- Comments are bilingual: prose docstrings often mix Russian explanation with English code-identifiers; inline `# comment` lines are freely either language depending on the author's original PR. Follow whichever language dominates the file you're editing — don't force-translate existing comments.
 
 ## Import Organization
 
-**Order in source files:**
-1. Standard library (`os`, `logging`, `asyncio`, `uuid`, `datetime`)
-2. Third-party (`fastapi`, `sqlalchemy`, `pydantic`, `telethon`, `httpx`)
-3. Internal app (`from app.config import get_settings`, `from app.models import Sender`)
+**Order (observed, not enforced by tooling):**
+1. stdlib (`import logging`, `from datetime import ...`, `from uuid import UUID`)
+2. third-party (`from fastapi import ...`, `from sqlalchemy import ...`)
+3. `app.*` absolute imports (`from app.database import get_db`, `from app.models import Sender`, `from app.schemas import ...`, `from app.services...`, `from app.utils.auth import AuthCtx, auth_dep`)
 
-**In-body imports:** Used selectively in tests and services to defer costly imports until needed (avoids paying collection-time costs for Phase-1 tests that don't need Phase-4 models).
+**Deferred/local imports are a deliberate, common pattern** — many routers do `from app.services.telegram import telegram_service, SessionAuthError` *inside* the route function body rather than at module top. Reasons observed in comments: avoid heavy/optional dependency cost at collection time, avoid circular imports between `services` and `routers`, or keep a not-yet-existing helper out of `--collect-only` during red/TDD scaffolding (see `tests/test_checker_probe.py`). When adding a router endpoint that needs a service with heavy import cost or a circular-import risk, prefer a local import inside the function over a top-level one — this matches the existing style and is not considered a smell here.
 
-## Auth Pattern
+**Path aliases:** none — always absolute `app.` imports, never relative (`from .models import ...`). No `tsconfig`-style path aliases apply to the Python side.
 
-Every router endpoint that touches workspace data depends on `auth_dep`:
+## Error Handling
+
+**HTTP layer (routers):** every error path raises `fastapi.HTTPException` with a **structured `detail` dict**, never a bare string:
 ```python
-from app.utils.auth import AuthCtx, auth_dep
-from fastapi import Depends
-
-@router.get("/{id}")
-async def get_campaign(id: UUID, ctx: AuthCtx = Depends(auth_dep), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Campaign).where(Campaign.id == id, Campaign.workspace_id == ctx.workspace_id)
-    )
+raise HTTPException(
+    status_code=404,
+    detail={"code": "SENDER_NOT_FOUND", "message": f"Sender '{slug}' not found"},
+)
 ```
+- `detail["code"]` is a SCREAMING_SNAKE_CASE machine-readable error code (`RATE_LIMIT_EXCEEDS_HARD_CAP`, `TOO_FREQUENT`, `SLUG_EXISTS`, `AUTH_REQUIRED`, `TOKEN_EXPIRED`) — this is the frontend's contract for branching UI behavior, not just a human message.
+- `detail["message"]` is a human-readable string, frequently **in Russian** when it's user-facing UI copy (error toasts), and English when it's an internal/API-consumer-facing message (n8n integration errors).
+- Extra structured fields are added ad hoc when useful to the caller (`retry_after`, `campaigns: [...]`, `field`, `value`, `hard_cap`).
+- 404 is used deliberately over 403 to avoid leaking cross-tenant existence ("не раскрываем cross-tenant существование" — see `_load_sender_by_slug`, `assign_proxy`). Follow this: a workspace-scoped lookup that misses (wrong tenant OR truly absent) always 404s, never 403.
+- Third-party (Telethon/Telegram) exceptions are translated into the app's structured-error vocabulary at the boundary, not leaked raw. See `app/routers/senders.py::_raise_profile_telegram_error` — a lookup table matching on `f"{type(e).__name__} {e}".upper()` substrings maps Telegram error names (`USERNAME_OCCUPIED`, `FLOOD_WAIT`, `PASSWORD_HASH_INVALID`, ...) to `(status_code, code, ru_message)` tuples. When integrating a new Telethon RPC, extend this kind of table rather than letting the raw Telethon exception surface to the HTTP client.
+- Known custom exceptions (`SessionAuthError`, `ProfileChangeRejectedError`) are defined in `app/services/telegram.py` and caught explicitly before the generic `except Exception` catch-all. Always re-raise `HTTPException` as-is if caught inside a broader `except Exception` (`except HTTPException: raise` then `except Exception as e: ...`) — never let a generic handler swallow/rewrap an already-structured HTTPException.
 
-`AuthCtx` carries `workspace_id`, `user_id`, `source` (`jwt` or `api_key`), `role`.
+**Service layer:** services mostly let exceptions propagate to the caller (router) or to the worker loop's own try/except, rather than raising HTTPException themselves (HTTPException is an HTTP-layer concept). Domain-specific exceptions are custom classes (`SessionAuthError`, `ProfileChangeRejectedError`) raised from `app/services/telegram.py`.
 
-Two auth paths (see `app/utils/auth.py`):
-- `Authorization: Bearer <Supabase JWT>` — ES256 via JWKS (primary) or HS256 legacy
-- `X-Workspace-Key: wsk_<token>` — bcrypt-verified API key with 5-minute in-process cache
+**Logging:** `logging.getLogger(__name__)` at module top in every service/router that logs. Log messages use a `[module-tag]` prefix convention for grep-ability: `logger.info(f"[senders] created workspace={ctx.workspace_id} slug={sender.slug} ...")`, `logger.info(f"[proxy-pool] auto-assigned port ...")`, `logger.info(f"[auth] resolved existing workspace=...")`. Follow this `[tag] key=value key=value` style for new log lines — it's how logs are grepped in production (`docker logs`).
+- Never `print()` — logging only (root CLAUDE.md rule, consistently followed in the code read).
+- Never `time.sleep()` — worker loops use `await asyncio.sleep(...)`.
 
-## Rate Limits (DO NOT CHANGE without discussion)
+## Function Design
 
-Constants in `app/services/queue.py` — empirically tuned, protected by CLAUDE.md:
-- `MIN_SEND_INTERVAL = 20` / `MAX_SEND_INTERVAL = 55` (seconds)
-- `MAX_NEW_CONTACTS_PER_HOUR = 15`
-- `LONG_PAUSE_EVERY_MIN/MAX = 12/25` messages → `LONG_PAUSE_MIN/MAX_SECS = 180/600`
-- `FLOOD_HARD_THRESHOLD = 300` seconds
-- DB defaults: `rate_per_min=4`, `rate_per_hour=20`, `rate_per_day=150`
+**Size:** router handlers and service functions are often long (50-150 lines) because business rules/edge cases are inlined with heavy commenting rather than split into many tiny private functions — the codebase favors "one function you can read top-to-bottom with its full context" over deep decomposition. Helper functions (`_derive_status`, `_check_profile_cooldown`, `_validate_rate_limits`) are extracted only when the same logic is reused across multiple endpoints, not purely for line-count reasons.
 
-## Comments
+**Parameters:** FastAPI dependency injection is idiomatic and pervasive — every DB-backed route takes `ctx: AuthCtx = Depends(auth_dep)` (workspace/auth context) and `db: AsyncSession = Depends(get_db)` as the last two parameters, in that order. Never construct a session or resolve auth manually inside a handler.
 
-**Module-level docstrings:** All routers and services have a docstring listing endpoints, phase/decision IDs, and key design notes.
+**Return values:** route handlers return typed Pydantic response models (`response_model=SenderResponse` on the decorator + a matching return type), not raw dicts, except for a handful of legacy/simple endpoints (`spambot-check` returns a plain dict). Prefer a typed schema for anything new.
 
-**Inline comments:** Used for non-obvious decisions, citing phase plan IDs (e.g. `# Phase 10 D-13`), and recording tradeoffs ("empirically tuned — not to be changed").
+## Module Design
 
-**Warning annotations:** `# NB:`, `# IMPORTANT:`, `# CRITICAL:` for constraints callers must respect.
+**Workspace scoping is load-bearing, not optional.** Every new query/table touching tenant data must filter by `workspace_id` (usually `ctx.workspace_id` from `AuthCtx`). Grep for `# TODO(v2-rls): replaced by RLS policy` comments — this marks every spot the codebase acknowledges app-level tenant isolation as a temporary stand-in for Postgres RLS; don't remove the app-level filter to "simplify" until RLS actually lands.
+
+**Config:** all settings live in `app/config.py::Settings(BaseSettings)` (pydantic-settings, reads `.env`). New env-driven knobs are added as a new `Field(default=..., validation_alias="ENV_VAR_NAME", description="...")` with an explanatory `description` — every existing field has one, follow suit; the description is effectively the only place these knobs are documented.
+
+**Barrel files:** `app/models/__init__.py` and `app/schemas/__init__.py` act as barrel modules — `from app.models import Sender, Workspace, ...` and `from app.schemas import SenderCreate, ...` are the standard import shape; do not import from a private submodule path.
+
+## Migration Conventions (raw SQL, not ORM-managed)
+
+- File name: `NNN_short_name.sql`, sequential 3-digit, referenced by exact filename in `tests/conftest.py::_build_outreach_schema` (recent migrations 038+ use an `if _mig_0NN.exists(): ...` exists-guard so conftest changes land ahead of the actual migration file and stay green).
+- **Idempotency is mandatory**: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `DO $$ ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;` for constraints, `ON CONFLICT DO NOTHING` for seed rows. The auto-applier (`app/database.py::_apply_migrations`) reruns any migration not yet recorded in `schema_migrations`, so a non-idempotent file breaks fresh-DB bootstrap.
+- A migration that only DROPs a column/constraint needs **no corresponding conftest block** — `Base.metadata.create_all` simply mirrors whatever the ORM currently declares (see migration `059` comment in conftest.py:290-296 as the canonical example of this reasoning).
+- Never use Alembic (explicitly forbidden by root CLAUDE.md).
 
 ---
 
-*Convention analysis: 2026-06-30*
+*Convention analysis: 2026-07-09*
