@@ -144,29 +144,55 @@ function InboxPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [campaignFilter, setCampaignFilter] = useState<string>("all");
+  const [senderFilter, setSenderFilter] = useState<string>("all");
   const [showTrace, setShowTrace] = useState(true);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<
     { kind: "single"; id: string; name: string } | { kind: "bulk" } | null
   >(null);
+  const [listWidth, setListWidth] = useState<number>(() => loadListWidth());
   const queryClient = useQueryClient();
   // Conversations viewed in this session — used to suppress the unread badge
   // since the backend has no mark-as-read endpoint in v1.
   const viewedRef = useRef<Set<string>>(new Set());
 
   const isTelegramTab = statusFilter === "telegram";
+  const serverStatus = SERVER_STATUS[statusFilter] ?? null;
+  // Campaign filter is not meaningful for Telegram service messages (they
+  // aren't tied to a campaign) — the UI disables the selector in that case.
+  const effectiveCampaign = isTelegramTab ? "all" : campaignFilter;
+  const effectiveSender = isTelegramTab ? "all" : senderFilter;
 
-  const listQ = useQuery({
-    queryKey: ["conversations", { search, status: isTelegramTab ? "telegram_service" : null }],
-    queryFn: () =>
+  const listQ = useInfiniteQuery({
+    queryKey: [
+      "conversations",
+      {
+        search,
+        status: serverStatus,
+        campaign_id: effectiveCampaign === "all" ? null : effectiveCampaign,
+        sender_id: effectiveSender === "all" ? null : effectiveSender,
+      },
+    ],
+    queryFn: ({ pageParam = 0, signal }) =>
       api<ConversationList>("/api/v1/conversations", {
+        signal,
         query: {
-          limit: 100,
+          limit: PAGE_SIZE,
+          offset: pageParam,
           ...(search ? { search } : {}),
-          ...(isTelegramTab ? { status: "telegram_service" } : {}),
+          ...(serverStatus ? { status: serverStatus } : {}),
+          ...(effectiveCampaign !== "all" ? { campaign_id: effectiveCampaign } : {}),
+          ...(effectiveSender !== "all" ? { sender_id: effectiveSender } : {}),
         },
       }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.conversations.length, 0);
+      if (lastPage.conversations.length < PAGE_SIZE) return undefined;
+      if (typeof lastPage.total === "number" && loaded >= lastPage.total) return undefined;
+      return loaded;
+    },
     refetchInterval: 10_000,
   });
 
@@ -175,21 +201,32 @@ function InboxPage() {
     queryFn: () => api<CampaignList>("/api/v1/campaigns"),
   });
 
-  const allConversations = useMemo(
-    () =>
-      (listQ.data?.conversations ?? []).map((c) =>
-        viewedRef.current.has(c.id) ? { ...c, unread_count: 0 } : c,
-      ),
-    [listQ.data],
-  );
-  const campaigns = campaignsQ.data?.items ?? [];
+  const sendersQ = useQuery({
+    queryKey: ["senders"],
+    queryFn: () => api<SenderList>("/api/v1/senders"),
+  });
 
+  const allConversations = useMemo(() => {
+    const pages = listQ.data?.pages ?? [];
+    const seen = new Set<string>();
+    const rows: Conversation[] = [];
+    for (const p of pages) {
+      for (const c of p.conversations) {
+        if (seen.has(c.id)) continue; // dedupe if a new inbound bumps ordering
+        seen.add(c.id);
+        rows.push(viewedRef.current.has(c.id) ? { ...c, unread_count: 0 } : c);
+      }
+    }
+    return rows;
+  }, [listQ.data]);
+  const campaigns = campaignsQ.data?.items ?? [];
+  const senders = sendersQ.data?.senders ?? [];
+
+  // Client-side filter only handles the tabs that don't map to a single
+  // backend status (all / active / no-reply).
   const conversations = useMemo(
-    () =>
-      allConversations
-        .filter((c) => isTelegramTab || campaignFilter === "all" || c.campaign_id === campaignFilter)
-        .filter((c) => matchesStatus(c, statusFilter)),
-    [allConversations, campaignFilter, statusFilter, isTelegramTab],
+    () => allConversations.filter((c) => matchesStatus(c, statusFilter)),
+    [allConversations, statusFilter],
   );
 
   useEffect(() => {
