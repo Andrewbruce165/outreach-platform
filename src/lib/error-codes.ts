@@ -58,6 +58,7 @@ const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
   SERVER_ERROR: () => "Server is unreachable. Retry.",
   // ── File uploads (Phase 21 account import, Phase 24 campaign attachment) ─
   FILE_TOO_LARGE: () => "That file is too large. Use a smaller one and try again.",
+  TOO_MANY_ATTACHMENTS: () => "Too many files — you can attach up to 10 per campaign.",
   ZIP_TOO_LARGE: () =>
     "The archive expands to more than we allow. Split it into smaller batches and try again.",
   TOO_MANY_ACCOUNTS: () =>

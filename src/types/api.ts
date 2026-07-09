@@ -2966,13 +2966,25 @@ export interface components {
         /** Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post */
         Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
             /**
+             * Files
+             * @description 260709-dbl: multi-file album (preferred). Max 10 files, 50 MB each.
+             */
+            files?: string[];
+            /**
+             * Attachments
+             * @description Alias of `files` (multi-file album).
+             */
+            attachments?: string[];
+            /**
              * File
              * Format: binary
+             * @description Legacy single-file field (back-compat).
              */
             file?: string;
             /**
              * Attachment
              * Format: binary
+             * @description Legacy single-file alias (back-compat).
              */
             attachment?: string;
         };
@@ -3211,6 +3223,12 @@ export interface components {
              * @default false
              */
             has_attachment: boolean;
+            /**
+             * Attachment Count
+             * @description 260709-dbl: number of first-message attachments (album). has_attachment = attachment_count > 0.
+             * @default 0
+             */
+            attachment_count: number;
             /** Dialogue Flow */
             dialogue_flow?: {
                 [key: string]: unknown;
@@ -5125,17 +5143,44 @@ export interface components {
             rerendered: number;
         };
         /**
-         * CampaignAttachmentUploadResponse
-         * @description POST /campaigns/{id}/attachment response (Phase 24 D-19).
+         * CampaignAttachmentItem
+         * @description One attachment row in the upload response (260709-dbl).
          */
-        CampaignAttachmentUploadResponse: {
-            /** Campaign Id */
-            campaign_id: string;
+        CampaignAttachmentItem: {
             /** File Name */
             file_name: string;
             /** Size Bytes */
             size_bytes: number;
             /** Content Type */
+            content_type?: string | null;
+            /** Position */
+            position: number;
+        };
+        /**
+         * CampaignAttachmentUploadResponse
+         * @description POST /campaigns/{id}/attachment response (Phase 24 D-19 + 260709-dbl multi-file).
+         */
+        CampaignAttachmentUploadResponse: {
+            /** Campaign Id */
+            campaign_id: string;
+            /** Count */
+            count: number;
+            /** Attachments (ordered by position) */
+            attachments: components["schemas"]["CampaignAttachmentItem"][];
+            /**
+             * File Name
+             * @description Back-compat: the FIRST attachment's file_name.
+             */
+            file_name: string;
+            /**
+             * Size Bytes
+             * @description Back-compat: the FIRST attachment's size_bytes.
+             */
+            size_bytes: number;
+            /**
+             * Content Type
+             * @description Back-compat: the FIRST attachment's content_type.
+             */
             content_type?: string | null;
         };
     };

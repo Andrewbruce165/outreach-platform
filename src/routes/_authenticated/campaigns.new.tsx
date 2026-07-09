@@ -44,6 +44,8 @@ type ToolParamSpec = components["schemas"]["ToolParamSpec"];
 
 // Phase 24 D-03: hard ceiling mirrored from the backend MAX_ATTACHMENT_BYTES check.
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+// 260709-dbl: mirrored from the backend MAX_ATTACHMENTS cap (400 TOO_MANY_ATTACHMENTS).
+const MAX_ATTACHMENTS = 10;
 type PrimaryGoal = "book_meeting" | "qualify" | "click" | "engage";
 
 // Phase 11 D-04: dialogue stage local type (matches DialogueStage schema)
@@ -142,9 +144,10 @@ function CampaignBuilder() {
   const [autoFinishHours, setAutoFinishHours] = useState(72);
   // Phase 24 D-13: invisible anti-spam text variation on the campaign opener. On by default.
   const [variationEnabled, setVariationEnabled] = useState(true);
-  // Phase 24 D-01/D-03/D-19: first-message file attachment.
-  const [hasAttachment, setHasAttachment] = useState(false);
-  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  // Phase 24 D-01/D-03/D-19 + 260709-dbl: first-message attachments (multi-file album).
+  // The backend upload is replace-all, so this local File[] list is the source of
+  // truth for the wizard session and every add/remove re-uploads the whole set.
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [tools, setTools] = useState<ToolSpec[]>([]);
@@ -279,18 +282,18 @@ function CampaignBuilder() {
   }
 
   const uploadAttachmentMut = useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async (files: File[]) => {
       const id = await ensureDraftId();
       const fd = new FormData();
-      fd.append("file", file);
-      return api<CampaignAttachmentUploadResponse>(`/api/v1/campaigns/${id}/attachment`, {
-        method: "POST",
-        body: fd,
-      });
+      for (const f of files) fd.append("files", f);
+      const res = await api<CampaignAttachmentUploadResponse>(
+        `/api/v1/campaigns/${id}/attachment`,
+        { method: "POST", body: fd },
+      );
+      return { res, files };
     },
-    onSuccess: (res) => {
-      setHasAttachment(true);
-      setAttachmentName(res.file_name);
+    onSuccess: ({ files }) => {
+      setAttachmentFiles(files);
       setAttachmentError(null);
     },
     onError: (e) => setAttachmentError(errMsg(e)),
@@ -302,21 +305,33 @@ function CampaignBuilder() {
       await api(`/api/v1/campaigns/${draftId}/attachment`, { method: "DELETE" });
     },
     onSuccess: () => {
-      setHasAttachment(false);
-      setAttachmentName(null);
+      setAttachmentFiles([]);
       setAttachmentError(null);
     },
     onError: (e) => setAttachmentError(errMsg(e)),
   });
 
-  function handleAttachmentFile(file: File) {
-    if (uploadAttachmentMut.isPending) return;
-    if (file.size > MAX_ATTACHMENT_BYTES) {
-      setAttachmentError("File is too large (max 50 MB).");
+  function handleAddAttachmentFiles(picked: File[]) {
+    if (uploadAttachmentMut.isPending || deleteAttachmentMut.isPending) return;
+    const merged = [...attachmentFiles, ...picked];
+    if (merged.length > MAX_ATTACHMENTS) {
+      setAttachmentError(`Too many files — max ${MAX_ATTACHMENTS} per campaign.`);
+      return;
+    }
+    const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig) {
+      setAttachmentError(`"${tooBig.name}" is too large (max 50 MB per file).`);
       return;
     }
     setAttachmentError(null);
-    uploadAttachmentMut.mutate(file);
+    uploadAttachmentMut.mutate(merged);
+  }
+
+  function handleRemoveAttachmentFile(index: number) {
+    if (uploadAttachmentMut.isPending || deleteAttachmentMut.isPending) return;
+    const remaining = attachmentFiles.filter((_, i) => i !== index);
+    if (remaining.length === 0) deleteAttachmentMut.mutate();
+    else uploadAttachmentMut.mutate(remaining);
   }
 
   const goNext = async () => {
@@ -651,13 +666,12 @@ function CampaignBuilder() {
                   setAutoFinishHours={setAutoFinishHours}
                   variationEnabled={variationEnabled}
                   setVariationEnabled={setVariationEnabled}
-                  hasAttachment={hasAttachment}
-                  attachmentName={attachmentName}
+                  attachmentFiles={attachmentFiles}
                   attachmentError={attachmentError}
                   attaching={uploadAttachmentMut.isPending}
                   deletingAttachment={deleteAttachmentMut.isPending}
-                  onAttachFile={handleAttachmentFile}
-                  onDeleteAttachment={() => deleteAttachmentMut.mutate()}
+                  onAddFiles={handleAddAttachmentFiles}
+                  onRemoveFile={handleRemoveAttachmentFile}
                 />
               )}
               {cur.id === "integrations" && (
@@ -1334,13 +1348,12 @@ function ScheduleStep({
   setAutoFinishHours,
   variationEnabled,
   setVariationEnabled,
-  hasAttachment,
-  attachmentName,
+  attachmentFiles,
   attachmentError,
   attaching,
   deletingAttachment,
-  onAttachFile,
-  onDeleteAttachment,
+  onAddFiles,
+  onRemoveFile,
 }: {
   days: string[];
   setDays: (v: string[]) => void;
@@ -1366,13 +1379,12 @@ function ScheduleStep({
   setAutoFinishHours: (v: number) => void;
   variationEnabled: boolean;
   setVariationEnabled: (v: boolean) => void;
-  hasAttachment: boolean;
-  attachmentName: string | null;
+  attachmentFiles: File[];
   attachmentError: string | null;
   attaching: boolean;
   deletingAttachment: boolean;
-  onAttachFile: (file: File) => void;
-  onDeleteAttachment: () => void;
+  onAddFiles: (files: File[]) => void;
+  onRemoveFile: (index: number) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   return (
@@ -1453,70 +1465,86 @@ function ScheduleStep({
         </span>
       </div>
 
-      {/* Phase 24 D-01/D-03/D-19: first-message file attachment (photo/document). */}
+      {/* Phase 24 D-01/D-03/D-19 + 260709-dbl: first-message attachments (album). */}
       <div className="field">
-        <label className="field__label">First message attachment</label>
+        <label className="field__label">First message attachments</label>
         <input
           ref={fileRef}
           type="file"
+          multiple
           style={{ display: "none" }}
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onAttachFile(f);
+            const picked = Array.from(e.target.files ?? []);
+            if (picked.length) onAddFiles(picked);
             e.target.value = "";
           }}
         />
-        {hasAttachment ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {attachmentFiles.map((f, i) => (
+            <div key={`${f.name}-${i}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  background: "var(--bg-soft)",
+                  fontSize: 13,
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                <Paperclip size={13} />
+                <span
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  {f.name}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={attaching || deletingAttachment}
+                onClick={() => onRemoveFile(i)}
+                aria-label={`Remove ${f.name}`}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+          {attachmentFiles.length < MAX_ATTACHMENTS && (
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={attaching || deletingAttachment}
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
-                padding: "6px 10px",
-                borderRadius: 8,
-                background: "var(--bg-soft)",
+                gap: 8,
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 10,
+                border: "1.5px dashed var(--border-strong)",
+                background: "var(--bg)",
+                color: "var(--text-soft)",
                 fontSize: 13,
+                cursor: "pointer",
               }}
             >
-              <Paperclip size={13} />
-              {attachmentName ?? "File attached"}
-            </div>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              disabled={deletingAttachment}
-              onClick={onDeleteAttachment}
-            >
-              <Trash2 size={13} />
+              <Paperclip size={14} />
+              {attaching
+                ? "Uploading…"
+                : attachmentFiles.length > 0
+                  ? "Add more files"
+                  : "Attach photos or files"}
             </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={attaching}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              width: "100%",
-              padding: "12px 14px",
-              borderRadius: 10,
-              border: "1.5px dashed var(--border-strong)",
-              background: "var(--bg)",
-              color: "var(--text-soft)",
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            <Paperclip size={14} />
-            {attaching ? "Uploading…" : "Attach a photo or file"}
-          </button>
-        )}
+          )}
+        </div>
         <span className="field__hint">
-          One photo/file per campaign (max 50 MB). It arrives to the recipient as media with the
-          opener as its caption. Saved automatically as a draft if you haven&apos;t saved one yet.
+          Up to {MAX_ATTACHMENTS} photos/files (max 50 MB each). Several files arrive as one album
+          with the opener as its caption. Saved automatically as a draft if you haven&apos;t saved
+          one yet.
         </span>
         {attachmentError && (
           <span className="field__hint" role="alert" style={{ color: "var(--danger)" }}>

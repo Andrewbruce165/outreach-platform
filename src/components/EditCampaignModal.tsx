@@ -15,6 +15,8 @@ type Folder = components["schemas"]["FolderResponse"];
 
 // Phase 24 D-03: hard ceiling mirrored from the backend MAX_ATTACHMENT_BYTES check.
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+// 260709-dbl: mirrored from the backend MAX_ATTACHMENTS cap (400 TOO_MANY_ATTACHMENTS).
+const MAX_ATTACHMENTS = 10;
 
 const DAYS: Array<{ id: string; label: string; bit: number }> = [
   { id: "mon", label: "M", bit: 1 },
@@ -228,24 +230,31 @@ export function EditCampaignModal({
     onError: (e) => setError(errMsg(e)),
   });
 
-  // Phase 24 D-01/D-03/D-19: campaign first-message file attachment.
+  // Phase 24 D-01/D-03/D-19 + 260709-dbl: campaign first-message attachments (album).
+  // The backend upload is replace-all. Files already stored on the server are only
+  // known by count (blobs stay server-side), so: until the user picks files locally
+  // we show the server count; once local files are picked, the local File[] list is
+  // the source of truth and every add/remove re-uploads the whole set.
   const fileRef = useRef<HTMLInputElement>(null);
-  const [hasAttachment, setHasAttachment] = useState(campaign.has_attachment ?? false);
-  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  const [serverAttachmentCount, setServerAttachmentCount] = useState(
+    campaign.attachment_count ?? (campaign.has_attachment ? 1 : 0),
+  );
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
   const uploadAttachmentMut = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: async (files: File[]) => {
       const fd = new FormData();
-      fd.append("file", file);
-      return api<CampaignAttachmentUploadResponse>(`/api/v1/campaigns/${campaign.id}/attachment`, {
-        method: "POST",
-        body: fd,
-      });
+      for (const f of files) fd.append("files", f);
+      const res = await api<CampaignAttachmentUploadResponse>(
+        `/api/v1/campaigns/${campaign.id}/attachment`,
+        { method: "POST", body: fd },
+      );
+      return { res, files };
     },
-    onSuccess: (res) => {
-      setHasAttachment(true);
-      setAttachmentName(res.file_name);
+    onSuccess: ({ res, files }) => {
+      setAttachmentFiles(files);
+      setServerAttachmentCount(res.count);
       setAttachmentError(null);
       void qc.invalidateQueries({ queryKey: ["campaigns"] });
       void qc.invalidateQueries({ queryKey: ["campaign", campaign.id] });
@@ -255,8 +264,8 @@ export function EditCampaignModal({
   const deleteAttachmentMut = useMutation({
     mutationFn: () => api(`/api/v1/campaigns/${campaign.id}/attachment`, { method: "DELETE" }),
     onSuccess: () => {
-      setHasAttachment(false);
-      setAttachmentName(null);
+      setAttachmentFiles([]);
+      setServerAttachmentCount(0);
       setAttachmentError(null);
       void qc.invalidateQueries({ queryKey: ["campaigns"] });
       void qc.invalidateQueries({ queryKey: ["campaign", campaign.id] });
@@ -264,13 +273,38 @@ export function EditCampaignModal({
     onError: (e) => setAttachmentError(errMsg(e)),
   });
 
-  function handleAttachmentFile(file: File) {
-    if (uploadAttachmentMut.isPending) return;
-    if (file.size > MAX_ATTACHMENT_BYTES) {
-      setAttachmentError("File is too large (max 50 MB).");
+  function handleAddAttachmentFiles(picked: File[]) {
+    if (uploadAttachmentMut.isPending || deleteAttachmentMut.isPending) return;
+    // Replace-all semantics: picking files while server-only attachments exist
+    // replaces them (we can't merge — their bytes never leave the server).
+    if (
+      attachmentFiles.length === 0 &&
+      serverAttachmentCount > 0 &&
+      !window.confirm(
+        `Uploading will replace the ${serverAttachmentCount} file(s) currently attached. Continue?`,
+      )
+    ) {
       return;
     }
-    uploadAttachmentMut.mutate(file);
+    const merged = [...attachmentFiles, ...picked];
+    if (merged.length > MAX_ATTACHMENTS) {
+      setAttachmentError(`Too many files — max ${MAX_ATTACHMENTS} per campaign.`);
+      return;
+    }
+    const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig) {
+      setAttachmentError(`"${tooBig.name}" is too large (max 50 MB per file).`);
+      return;
+    }
+    setAttachmentError(null);
+    uploadAttachmentMut.mutate(merged);
+  }
+
+  function handleRemoveAttachmentFile(index: number) {
+    if (uploadAttachmentMut.isPending || deleteAttachmentMut.isPending) return;
+    const remaining = attachmentFiles.filter((_, i) => i !== index);
+    if (remaining.length === 0) deleteAttachmentMut.mutate();
+    else uploadAttachmentMut.mutate(remaining);
   }
 
   const agents = agentsQ.data?.agents ?? [];
@@ -507,72 +541,134 @@ export function EditCampaignModal({
             />
           </div>
 
-          {/* Phase 24 D-01/D-03/D-19: first-message file attachment (photo/document). */}
+          {/* Phase 24 D-01/D-03/D-19 + 260709-dbl: first-message attachments (album). */}
           <div className="field">
-            <label className="field__label">First message attachment</label>
+            <label className="field__label">First message attachments</label>
             <input
               ref={fileRef}
               type="file"
+              multiple
               style={{ display: "none" }}
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleAttachmentFile(f);
+                const picked = Array.from(e.target.files ?? []);
+                if (picked.length) handleAddAttachmentFiles(picked);
                 e.target.value = "";
               }}
             />
-            {hasAttachment ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "6px 10px",
-                    borderRadius: 8,
-                    background: "var(--bg-soft)",
-                    fontSize: 13,
-                  }}
-                >
-                  <Paperclip size={13} />
-                  {attachmentName ?? "File attached"}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {attachmentFiles.length > 0 ? (
+                attachmentFiles.map((f, i) => (
+                  <div
+                    key={`${f.name}-${i}`}
+                    style={{ display: "flex", alignItems: "center", gap: 10 }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "6px 10px",
+                        borderRadius: 8,
+                        background: "var(--bg-soft)",
+                        fontSize: 13,
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      <Paperclip size={13} />
+                      <span
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {f.name}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      disabled={uploadAttachmentMut.isPending || deleteAttachmentMut.isPending}
+                      onClick={() => handleRemoveAttachmentFile(i)}
+                      aria-label={`Remove ${f.name}`}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))
+              ) : serverAttachmentCount > 0 ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      background: "var(--bg-soft)",
+                      fontSize: 13,
+                    }}
+                  >
+                    <Paperclip size={13} />
+                    {serverAttachmentCount === 1
+                      ? "1 file attached"
+                      : `${serverAttachmentCount} files attached`}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    disabled={uploadAttachmentMut.isPending}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    disabled={deleteAttachmentMut.isPending}
+                    onClick={() => {
+                      if (window.confirm("Remove all attachments?")) deleteAttachmentMut.mutate();
+                    }}
+                    aria-label="Remove all attachments"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  disabled={deleteAttachmentMut.isPending}
-                  onClick={() => {
-                    if (window.confirm("Remove attachment?")) deleteAttachmentMut.mutate();
-                  }}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                disabled={uploadAttachmentMut.isPending}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  width: "100%",
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  border: "1.5px dashed var(--border-strong)",
-                  background: "var(--bg)",
-                  color: "var(--text-soft)",
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                <Paperclip size={14} />
-                {uploadAttachmentMut.isPending ? "Uploading…" : "Attach a photo or file"}
-              </button>
-            )}
+              ) : null}
+              {(attachmentFiles.length > 0 || serverAttachmentCount === 0) &&
+                attachmentFiles.length < MAX_ATTACHMENTS && (
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploadAttachmentMut.isPending || deleteAttachmentMut.isPending}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      width: "100%",
+                      padding: "12px 14px",
+                      borderRadius: 10,
+                      border: "1.5px dashed var(--border-strong)",
+                      background: "var(--bg)",
+                      color: "var(--text-soft)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Paperclip size={14} />
+                    {uploadAttachmentMut.isPending
+                      ? "Uploading…"
+                      : attachmentFiles.length > 0
+                        ? "Add more files"
+                        : "Attach photos or files"}
+                  </button>
+                )}
+            </div>
             <span className="field__hint">
-              One photo/file per campaign (max 50 MB). It arrives to the recipient as media with
-              the opener as its caption. The caption is varied invisibly when variation is on.
+              Up to {MAX_ATTACHMENTS} photos/files (max 50 MB each). Several files arrive as one
+              album with the opener as its caption. The caption is varied invisibly when variation
+              is on. Uploading replaces the current set.
             </span>
             {attachmentError && (
               <span className="field__hint" role="alert" style={{ color: "var(--danger)" }}>
