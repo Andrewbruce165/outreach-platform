@@ -720,15 +720,20 @@ class AccountImportItem(Base):
 
 
 class CampaignAttachment(Base):
-    """Phase 24 (D-01/D-02/D-04): 1-1 campaign first-message file attachment.
+    """Phase 24 (D-01/D-02/D-04) + 260709-dbl: 1-to-N campaign first-message file
+    attachments (ordered).
 
     BYTEA-blob mirror of CsvImport — the 50 MB blob is kept OUT of every plain
     SELECT campaigns (worker/endpoint query it by campaign_id directly, no
     Campaign.relationship — Pitfall 7); the blob rides pg_dump backups.
-    campaign_id is UNIQUE + ON DELETE CASCADE → exactly one attachment/campaign.
 
-    server_default on id + size_bytes duplicates the migration-054 DB defaults
-    for the create_all rebuild path: create_all wins over the migration in
+    260709-dbl: campaign_id is NO LONGER UNIQUE (migration 060 dropped the 1-1
+    constraint) — a campaign holds N attachments ordered by `position`, delivered
+    as one grouped Telegram album on the opener. ON DELETE CASCADE still cleans up
+    every row when the campaign is deleted.
+
+    server_default on id + size_bytes + position duplicates the migration DB
+    defaults for the create_all rebuild path: create_all wins over the migration in
     init_db, so without server_default a raw text() INSERT omitting those columns
     would hit NotNullViolation (same drift rule as knowledge_bases / warmup_sessions).
     """
@@ -738,7 +743,7 @@ class CampaignAttachment(Base):
                 server_default=text("gen_random_uuid()"))
     campaign_id = Column(UUID(as_uuid=True),
                          ForeignKey("campaigns.id", ondelete="CASCADE"),
-                         nullable=False, unique=True)
+                         nullable=False)
     workspace_id = Column(UUID(as_uuid=True),
                           ForeignKey("workspaces.id", ondelete="CASCADE"),
                           nullable=False)
@@ -746,6 +751,8 @@ class CampaignAttachment(Base):
     file_name = Column(String(255), nullable=False)
     content_type = Column(String(100), nullable=True)
     size_bytes = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # 260709-dbl: ordering within a campaign's attachment set (album order).
+    position = Column(Integer, nullable=False, default=0, server_default=text("0"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

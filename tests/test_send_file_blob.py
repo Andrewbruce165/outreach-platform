@@ -94,6 +94,46 @@ async def test_blob_source_auto_media():
     client.send_message.assert_not_awaited()
 
 
+async def test_album_multiple_files_sent():
+    """260709-dbl: send_file with an `attachments` list of 2 → client.send_file is
+    awaited ONCE with a LIST of 2 temp paths whose basenames equal the ORIGINAL
+    filenames (filenames preserved), force_document passthrough, caption on album."""
+    svc = _svc()
+    client = _mock_client()
+    # An album returns a list of messages; the first carries the id.
+    m0 = MagicMock(); m0.id = 555
+    m1 = MagicMock(); m1.id = 556
+    client.send_file = AsyncMock(return_value=[m0, m1])
+
+    with patch.object(TelegramService, "check_contact", new=AsyncMock(return_value=_REGISTERED)), \
+         patch.object(TelegramService, "resolve_contact", new=AsyncMock(return_value=_REGISTERED)), \
+         patch("app.services.telegram.httpx.AsyncClient", new=_httpx_guard()):
+        result = await svc.send_file(
+            client,
+            "+79991234567",
+            "Тест",
+            caption="Смотрите",
+            force_document=False,
+            attachments=[
+                {"file_bytes": b"deckbytes", "file_name": "deck.pdf",
+                 "content_type": "application/pdf"},
+                {"file_bytes": b"jpgbytes", "file_name": "photo.jpg",
+                 "content_type": "image/jpeg"},
+            ],
+        )
+
+    assert result["success"] is True
+    assert result["message_id"] == "555"   # first album message id
+    client.send_file.assert_awaited_once()
+    args, kwargs = client.send_file.call_args
+    media = args[1]
+    assert isinstance(media, list) and len(media) == 2, "album must pass a list of 2 paths"
+    assert [os.path.basename(p) for p in media] == ["deck.pdf", "photo.jpg"]
+    assert kwargs.get("force_document") is False
+    assert kwargs.get("caption") == "Смотрите"
+    client.send_message.assert_not_awaited()   # short caption → no overflow follow-up
+
+
 async def test_url_default_force_document_true():
     """Backwards-compat: file_url with NO force_document arg → force_document=True
     (today's behaviour) AND the httpx download path is used."""

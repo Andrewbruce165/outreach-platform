@@ -967,6 +967,10 @@ class CampaignResponse(BaseModel):
     # every SELECT campaigns (Pitfall 7).
     variation_enabled: bool = True
     has_attachment: bool = False
+    # ── 260709-dbl: number of first-message attachments (album). has_attachment
+    # stays = attachment_count > 0. Computed by the router (COUNT on
+    # campaign_attachments), NOT a campaigns column. ──
+    attachment_count: int = 0
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     dialogue_flow: List[dict] = Field(default_factory=list)
     arguments_facts: Optional[str] = None

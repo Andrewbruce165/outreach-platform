@@ -49,18 +49,25 @@ def _ok_file_result(message_id: str = "2001") -> dict:
 
 async def _insert_attachment(
     db, *, workspace_id, campaign_id, file_name, content_type, size_bytes,
-    file_data: bytes = b"\xff\xd8\xffblobbytes",
+    file_data: bytes = b"\xff\xd8\xffblobbytes", position: int = 0,
+    replace: bool = True,
 ):
+    # 260709-dbl: campaign_attachments is 1-to-N now (no UNIQUE(campaign_id)), so the
+    # old ON CONFLICT (campaign_id) upsert no longer has a matching constraint.
+    # `replace=True` clears the set first (single-file semantics); pass replace=False
+    # + distinct positions to build a multi-file album.
+    if replace:
+        await db.execute(
+            text("DELETE FROM campaign_attachments WHERE campaign_id = :cid"),
+            {"cid": str(campaign_id)},
+        )
     await db.execute(text("""
         INSERT INTO campaign_attachments
-            (campaign_id, workspace_id, file_data, file_name, content_type, size_bytes)
-        VALUES (:cid, :wid, :data, :fn, :ct, :sz)
-        ON CONFLICT (campaign_id) DO UPDATE
-            SET file_data = EXCLUDED.file_data, file_name = EXCLUDED.file_name,
-                content_type = EXCLUDED.content_type, size_bytes = EXCLUDED.size_bytes
+            (campaign_id, workspace_id, file_data, file_name, content_type, size_bytes, position)
+        VALUES (:cid, :wid, :data, :fn, :ct, :sz, :pos)
     """), {
         "cid": str(campaign_id), "wid": str(workspace_id), "data": file_data,
-        "fn": file_name, "ct": content_type, "sz": size_bytes,
+        "fn": file_name, "ct": content_type, "sz": size_bytes, "pos": position,
     })
     await db.commit()
 
@@ -188,6 +195,53 @@ async def test_file_opener_blob_automedia_photo(
     assert row["mime_type"] == "image/jpeg"
     assert row["size_bytes"] == 1234
     assert row["message_text"] == _CLEAN_CAPTION, "inbox text must be the CLEAN caption (D-14)"
+
+
+async def test_file_opener_multiple_attachments_album(
+    async_db_session, test_running_campaign_factory
+):
+    """260709-dbl: 2 attachment rows (ORDER BY position) → the worker delivers an
+    album: send_file receives an `attachments` list of len 2 (ordered), the single
+    file_bytes path is NOT used, and the inbox row records the FIRST file."""
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    await _insert_attachment(
+        async_db_session, workspace_id=camp["workspace_id"], campaign_id=camp["id"],
+        file_name="deck.pdf", content_type="application/pdf", size_bytes=11,
+        file_data=b"deckbytes01", position=0, replace=True,
+    )
+    await _insert_attachment(
+        async_db_session, workspace_id=camp["workspace_id"], campaign_id=camp["id"],
+        file_name="photo.jpg", content_type="image/jpeg", size_bytes=9,
+        file_data=b"jpgbytes1", position=1, replace=False,
+    )
+    phone = "+79997773344"
+    qid = await _insert_file_item(
+        async_db_session, workspace_id=camp["workspace_id"],
+        sender_id=senders[0].id, campaign_id=camp["id"], recipient_phone=phone,
+    )
+
+    cap: dict = {}
+    cm_c, cm_f, cm_m = _patch_file_send(cap)
+    with cm_c, cm_f, cm_m:
+        await QueueWorker()._send_item(qid)
+
+    assert len(cap["calls"]) == 1
+    kw = cap["calls"][0]
+    atts = kw.get("attachments")
+    assert isinstance(atts, list) and len(atts) == 2, "album must pass a 2-item attachments list"
+    assert [a["file_name"] for a in atts] == ["deck.pdf", "photo.jpg"]
+    assert [a["file_bytes"] for a in atts] == [b"deckbytes01", b"jpgbytes1"]
+    assert kw.get("force_document") is False
+    # The single-blob path must NOT be used for an album.
+    assert kw.get("file_bytes") is None
+    sent_caption = kw.get("caption")
+    assert strip_invisible(sent_caption) == _CLEAN_CAPTION
+
+    # Inbox records the primary (first) file (v1 limitation — all ARE delivered).
+    row = await _inbox_row(async_db_session, phone)
+    assert row["message_type"] == "document"   # deck.pdf → document
+    assert row["file_name"] == "deck.pdf"
+    assert row["message_text"] == _CLEAN_CAPTION
 
 
 async def test_file_opener_video_and_document_classification(

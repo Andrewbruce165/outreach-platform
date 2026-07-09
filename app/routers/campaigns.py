@@ -60,6 +60,8 @@ router = APIRouter(prefix="/api/v1/campaigns", tags=["campaigns"])
 # Phase 24 D-03: hard ceiling for the campaign first-message attachment blob.
 # Bytes go straight to the BYTEA column (D-02) — no temp file. Over this → 413.
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024   # 50 MB
+# 260709-dbl: cap the number of attachments per campaign (album). Over → 400.
+MAX_ATTACHMENTS = 10
 
 # Phase 22 (D-07): the per-campaign daily new-dialog cap and its validation helper
 # were removed — the daily throttle is now the account-level grade budget resolved
@@ -300,11 +302,13 @@ async def _campaign_to_response(
     failed_count = (await db.execute(text(
         "SELECT COUNT(*) FROM message_queue WHERE campaign_id = :cid AND status = 'failed'"
     ), {"cid": str(campaign.id)})).scalar() or 0
-    # Phase 24 D-13/D-19: EXISTS probe on campaign_attachments — the 50MB blob stays
-    # off every SELECT campaigns (Pitfall 7). has_attachment is computed, not a column.
-    has_attachment = (await db.execute(text(
-        "SELECT 1 FROM campaign_attachments WHERE campaign_id = :cid"
-    ), {"cid": str(campaign.id)})).first() is not None
+    # Phase 24 D-13/D-19 + 260709-dbl: COUNT on campaign_attachments — the 50MB blobs
+    # stay off every SELECT campaigns (Pitfall 7). attachment_count/has_attachment are
+    # computed, not columns. has_attachment = attachment_count > 0.
+    attachment_count = (await db.execute(text(
+        "SELECT COUNT(*) FROM campaign_attachments WHERE campaign_id = :cid"
+    ), {"cid": str(campaign.id)})).scalar() or 0
+    has_attachment = attachment_count > 0
     return CampaignResponse(
         id=campaign.id,
         workspace_id=campaign.workspace_id,
@@ -356,9 +360,11 @@ async def _campaign_to_response(
         is_exhausted=is_exhausted,
         failed_count=failed_count,
         pool_health=pool_health,
-        # Phase 24 D-13/D-19: variation toggle + computed attachment presence.
+        # Phase 24 D-13/D-19 + 260709-dbl: variation toggle + computed attachment
+        # presence/count.
         variation_enabled=campaign.variation_enabled,
         has_attachment=has_attachment,
+        attachment_count=attachment_count,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,
     )
@@ -1033,14 +1039,15 @@ async def duplicate_campaign(
     # IntegrityError into 409 (was surfacing as a raw 500).
     try:
         await db.flush()
-        # Phase 24 D-20: copy the first-message attachment blob into a NEW row for the
-        # duplicate (own campaign_attachments row) so the copy is send-ready. Done in
-        # the SAME transaction as new_c — either both land or neither.
-        att = (await db.execute(text(
-            "SELECT file_data, file_name, content_type, size_bytes "
-            "FROM campaign_attachments WHERE campaign_id = :cid"
-        ), {"cid": str(src.id)})).first()
-        if att is not None:
+        # Phase 24 D-20 + 260709-dbl: copy ALL first-message attachment rows into NEW
+        # rows for the duplicate (own campaign_attachments rows, order preserved) so the
+        # copy is send-ready. Done in the SAME transaction as new_c — either all land or
+        # none.
+        atts = (await db.execute(text(
+            "SELECT file_data, file_name, content_type, size_bytes, position "
+            "FROM campaign_attachments WHERE campaign_id = :cid ORDER BY position, created_at"
+        ), {"cid": str(src.id)})).all()
+        for att in atts:
             db.add(CampaignAttachment(
                 campaign_id=new_c.id,
                 workspace_id=ctx.workspace_id,
@@ -1048,6 +1055,7 @@ async def duplicate_campaign(
                 file_name=att.file_name,
                 content_type=att.content_type,
                 size_bytes=att.size_bytes,
+                position=att.position,
             ))
         # Sender pool is NOT copied: the duplicate starts empty so accounts held by
         # the source's running campaign don't appear locked/undeletable in the copy.
@@ -1076,58 +1084,106 @@ async def duplicate_campaign(
 @router.post("/{campaign_id}/attachment")
 async def upload_attachment(
     campaign_id: UUID,
+    files: list[UploadFile] = File(default=None),
+    attachments: list[UploadFile] = File(default=None),
     file: UploadFile = File(default=None),
     attachment: UploadFile = File(default=None),
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """D-19: attach ONE first-message file to a campaign (multipart upload).
+    """D-19 + 260709-dbl: attach one OR MORE first-message files to a campaign.
 
-    Alias-tolerant to the multipart field name (``file`` or ``attachment``) so the
-    Lovable frontend works either way. Bytes stream straight to the BYTEA column
-    (D-02 — no temp file). D-03: over MAX_ATTACHMENT_BYTES → 413 FILE_TOO_LARGE.
-    D-01: exactly one attachment per campaign — delete-then-insert (upsert).
-    Workspace-scoped via _load_campaign (cross-workspace → 404).
+    Accepts a `files` (or `attachments`) list for the multi-file album, and stays
+    alias-tolerant to the legacy single-field callers (`file`/`attachment`) so the
+    current Lovable frontend keeps working unchanged. Bytes stream straight to the
+    BYTEA column (D-02 — no temp file).
+
+    Validation (before any write): D-03 per-file MAX_ATTACHMENT_BYTES → 413
+    FILE_TOO_LARGE; over MAX_ATTACHMENTS files → 400 TOO_MANY_ATTACHMENTS.
+
+    Replace-all upsert: every upload REPLACES the campaign's whole attachment set
+    (delete-then-insert all, ordered by position). Workspace-scoped via
+    _load_campaign (cross-workspace → 404).
     """
-    upload = file or attachment
-    if upload is None:
+    # Build one ordered upload list. Prefer the list fields; fall back to the legacy
+    # single fields only if the lists are empty (avoid double-counting the same file).
+    uploads: list[UploadFile] = [u for u in (files or []) if u is not None]
+    uploads += [u for u in (attachments or []) if u is not None]
+    if not uploads:
+        single = file or attachment
+        if single is not None:
+            uploads = [single]
+
+    if not uploads:
         raise HTTPException(
             status_code=422,
-            detail={"code": "FILE_REQUIRED", "message": "no file field (file|attachment)"},
+            detail={"code": "FILE_REQUIRED",
+                    "message": "no file field (files|attachments|file|attachment)"},
         )
 
-    raw = await upload.read()
-    if len(raw) > MAX_ATTACHMENT_BYTES:
+    if len(uploads) > MAX_ATTACHMENTS:
         raise HTTPException(
-            status_code=413,
-            detail={"code": "FILE_TOO_LARGE",
-                    "message": f"Max {MAX_ATTACHMENT_BYTES} bytes"},
+            status_code=400,
+            detail={"code": "TOO_MANY_ATTACHMENTS",
+                    "message": f"Max {MAX_ATTACHMENTS} files"},
         )
+
+    # Read every blob and enforce the per-file size ceiling BEFORE writing any row.
+    prepared: list[dict] = []
+    for upload in uploads:
+        raw = await upload.read()
+        if len(raw) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "FILE_TOO_LARGE",
+                        "message": f"Max {MAX_ATTACHMENT_BYTES} bytes"},
+            )
+        prepared.append({
+            "file_data": raw,
+            "file_name": upload.filename or "file",
+            "content_type": upload.content_type,
+            "size_bytes": len(raw),
+        })
 
     c = await _load_campaign(db, ctx, campaign_id)
 
-    # D-01 upsert: one row per campaign — clear any existing blob first, then insert.
+    # Replace-all upsert: clear the existing set, then insert all uploads with position.
     await db.execute(
         delete(CampaignAttachment).where(CampaignAttachment.campaign_id == c.id)
     )
-    db.add(CampaignAttachment(
-        campaign_id=c.id,
-        workspace_id=ctx.workspace_id,
-        file_data=raw,
-        file_name=(upload.filename or "file"),
-        content_type=upload.content_type,
-        size_bytes=len(raw),
-    ))
+    for idx, p in enumerate(prepared):
+        db.add(CampaignAttachment(
+            campaign_id=c.id,
+            workspace_id=ctx.workspace_id,
+            file_data=p["file_data"],
+            file_name=p["file_name"],
+            content_type=p["content_type"],
+            size_bytes=p["size_bytes"],
+            position=idx,
+        ))
     await db.commit()
     logger.info(
-        "[campaigns] attachment stored workspace=%s campaign=%s name='%s' bytes=%d",
-        ctx.workspace_id, c.id, upload.filename or "file", len(raw),
+        "[campaigns] attachments stored workspace=%s campaign=%s count=%d bytes=%d",
+        ctx.workspace_id, c.id, len(prepared), sum(p["size_bytes"] for p in prepared),
     )
+    first = prepared[0]
     return {
         "campaign_id": str(c.id),
-        "file_name": upload.filename or "file",
-        "size_bytes": len(raw),
-        "content_type": upload.content_type,
+        "count": len(prepared),
+        "attachments": [
+            {
+                "file_name": p["file_name"],
+                "size_bytes": p["size_bytes"],
+                "content_type": p["content_type"],
+                "position": idx,
+            }
+            for idx, p in enumerate(prepared)
+        ],
+        # Back-compat: echo the FIRST file at top level so existing single-file
+        # assertions and the current Lovable client keep reading the old shape.
+        "file_name": first["file_name"],
+        "size_bytes": first["size_bytes"],
+        "content_type": first["content_type"],
     }
 
 

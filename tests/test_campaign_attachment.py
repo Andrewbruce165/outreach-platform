@@ -25,6 +25,14 @@ _MIG_054 = (
     / "054_campaign_attachment_and_variation.sql"
 )
 
+# 260709-dbl: 1-1 → 1-N — migration 060 drops the UNIQUE(campaign_id) and adds
+# an ordering `position` column so a campaign can hold several attachments.
+_MIG_060 = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "migrations"
+    / "060_campaign_attachments_multiple.sql"
+)
+
 
 async def test_variation_default_true(async_db_session, test_campaign_factory):
     """campaigns.variation_enabled defaults true — the factory INSERT omits it,
@@ -66,7 +74,7 @@ async def test_attachment_raw_insert_omitting_defaults(
     row = (
         await async_db_session.execute(
             text(
-                "SELECT id, size_bytes, created_at FROM campaign_attachments "
+                "SELECT id, size_bytes, created_at, position FROM campaign_attachments "
                 "WHERE campaign_id = :cid"
             ),
             {"cid": str(camp["id"])},
@@ -76,32 +84,36 @@ async def test_attachment_raw_insert_omitting_defaults(
     assert row[0] is not None            # id default (gen_random_uuid) fired
     assert row[1] == 0                   # size_bytes default 0 fired
     assert row[2] is not None            # created_at default now() fired
+    assert row[3] == 0                   # position default 0 fired (mig 060 drift guard)
 
 
-async def test_attachment_campaign_id_unique(
+async def test_attachment_allows_multiple_rows(
     async_db_session, test_workspace, test_campaign_factory
 ):
-    """campaign_id is UNIQUE — a second attachment for the same campaign must
-    raise (D-01 exactly-one-attachment-per-campaign)."""
+    """260709-dbl: campaign_id is NO LONGER UNIQUE — a SECOND attachment for the
+    same campaign now SUCCEEDS (1-1 → 1-N). Both rows persist, ordered by position."""
     camp = await test_campaign_factory()
-    params = {
-        "cid": str(camp["id"]),
-        "wid": str(test_workspace.id),
-        "blob": b"first",
-        "fname": "a.pdf",
-    }
     stmt = text(
-        "INSERT INTO campaign_attachments (campaign_id, workspace_id, file_data, file_name) "
-        "VALUES (:cid, :wid, :blob, :fname)"
+        "INSERT INTO campaign_attachments "
+        "(campaign_id, workspace_id, file_data, file_name, position) "
+        "VALUES (:cid, :wid, :blob, :fname, :pos)"
     )
-    await async_db_session.execute(stmt, params)
+    await async_db_session.execute(stmt, {
+        "cid": str(camp["id"]), "wid": str(test_workspace.id),
+        "blob": b"first", "fname": "a.pdf", "pos": 0,
+    })
+    await async_db_session.execute(stmt, {
+        "cid": str(camp["id"]), "wid": str(test_workspace.id),
+        "blob": b"second", "fname": "b.pdf", "pos": 1,
+    })
     await async_db_session.commit()
 
-    with pytest.raises(Exception):
-        params["blob"] = b"second"
-        await async_db_session.execute(stmt, params)
-        await async_db_session.commit()
-    await async_db_session.rollback()
+    rows = (await async_db_session.execute(
+        text("SELECT file_name, position FROM campaign_attachments "
+             "WHERE campaign_id = :cid ORDER BY position"),
+        {"cid": str(camp["id"])},
+    )).all()
+    assert [(r[0], r[1]) for r in rows] == [("a.pdf", 0), ("b.pdf", 1)]
 
 
 async def test_migration_054_idempotent(async_db_session):
@@ -124,6 +136,23 @@ async def test_migration_054_idempotent(async_db_session):
         await async_db_session.commit()
 
 
+async def test_migration_060_idempotent(async_db_session):
+    """260709-dbl: migration 060 (drop UNIQUE + add position + index) is idempotent —
+    applying its DDL twice raises nothing (DROP CONSTRAINT IF EXISTS / ADD COLUMN
+    IF NOT EXISTS / ALTER SET DEFAULT / CREATE INDEX IF NOT EXISTS)."""
+    assert _MIG_060.exists(), f"migration missing: {_MIG_060}"
+    sql = _MIG_060.read_text()
+    code_only = "\n".join(
+        ln for ln in sql.splitlines() if not ln.strip().startswith("--")
+    )
+    statements = [s.strip() for s in code_only.split(";") if s.strip()]
+    assert statements, "no executable statements parsed from migration 060"
+    for _ in range(2):
+        for stmt in statements:
+            await async_db_session.execute(text(stmt))
+        await async_db_session.commit()
+
+
 # ─── 24-04: attachment-endpoint + wiring tests ──────────────────────────────
 #
 # Covers D-03/D-13/D-19/D-20:
@@ -134,7 +163,7 @@ async def test_migration_054_idempotent(async_db_session):
 #   - has_attachment surfaces the blob; variation_enabled round-trips through PATCH.
 #   - duplicate_campaign copies BOTH the flag AND the blob (own row for the copy).
 
-from app.routers.campaigns import MAX_ATTACHMENT_BYTES
+from app.routers.campaigns import MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS
 
 
 async def _bind(db, ws_id, uid):
@@ -204,6 +233,148 @@ async def test_upload_replaces_existing_blob(
     )).first()
     assert row[0] == "b.png"
     assert bytes(row[1]) == b"second-bytes"
+
+
+async def test_upload_multiple_files_stores_all(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """260709-dbl: POST with a `files` list of 3 → 3 ordered rows (positions 0/1/2);
+    the response lists all 3 (count == 3) and echoes the FIRST file at top level."""
+    await _bind(async_db_session, test_workspace.id, "u-multi")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-multi')}"}
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files=[
+            ("files", ("a.pdf", b"aaa", "application/pdf")),
+            ("files", ("b.png", b"bbbb", "image/png")),
+            ("files", ("c.txt", b"ccccc", "text/plain")),
+        ],
+        headers=hdr,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 3
+    assert [a["file_name"] for a in body["attachments"]] == ["a.pdf", "b.png", "c.txt"]
+    assert [a["position"] for a in body["attachments"]] == [0, 1, 2]
+    # Back-compat top-level echo of the first file.
+    assert body["file_name"] == "a.pdf"
+    assert body["size_bytes"] == 3
+    rows = (await async_db_session.execute(
+        text("SELECT file_name, position FROM campaign_attachments "
+             "WHERE campaign_id = :cid ORDER BY position"),
+        {"cid": str(camp["id"])},
+    )).all()
+    assert [(r[0], r[1]) for r in rows] == [("a.pdf", 0), ("b.png", 1), ("c.txt", 2)]
+
+
+async def test_upload_replaces_whole_set(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """260709-dbl: a second upload REPLACES the whole set (delete-then-insert all).
+    Upload 2 files, then upload 1 → exactly 1 row remains."""
+    await _bind(async_db_session, test_workspace.id, "u-replset")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-replset')}"}
+    r1 = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files=[
+            ("files", ("a.pdf", b"aaa", "application/pdf")),
+            ("files", ("b.png", b"bbbb", "image/png")),
+        ],
+        headers=hdr,
+    )
+    assert r1.status_code == 200, r1.text
+    assert await _count_attachments(async_db_session, camp["id"]) == 2
+    r2 = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files=[("files", ("solo.pdf", b"solo", "application/pdf"))],
+        headers=hdr,
+    )
+    assert r2.status_code == 200, r2.text
+    assert await _count_attachments(async_db_session, camp["id"]) == 1
+    row = (await async_db_session.execute(
+        text("SELECT file_name, position FROM campaign_attachments WHERE campaign_id = :cid"),
+        {"cid": str(camp["id"])},
+    )).first()
+    assert row[0] == "solo.pdf"
+    assert row[1] == 0
+
+
+async def test_upload_too_many_attachments_400(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """260709-dbl: uploading MAX_ATTACHMENTS+1 files → 400 TOO_MANY_ATTACHMENTS,
+    0 rows written."""
+    await _bind(async_db_session, test_workspace.id, "u-toomany")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-toomany')}"}
+    files = [
+        ("files", (f"f{i}.pdf", b"x", "application/pdf"))
+        for i in range(MAX_ATTACHMENTS + 1)
+    ]
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment", files=files, headers=hdr,
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "TOO_MANY_ATTACHMENTS"
+    assert await _count_attachments(async_db_session, camp["id"]) == 0
+
+
+async def test_upload_multi_over_size_413_writes_nothing(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """260709-dbl: if ANY file in a multi-upload exceeds MAX_ATTACHMENT_BYTES →
+    413 FILE_TOO_LARGE and 0 rows written (validated before any insert)."""
+    await _bind(async_db_session, test_workspace.id, "u-multibig")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-multibig')}"}
+    oversized = b"0" * (MAX_ATTACHMENT_BYTES + 1)
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files=[
+            ("files", ("ok.pdf", b"ok", "application/pdf")),
+            ("files", ("big.bin", oversized, "application/octet-stream")),
+        ],
+        headers=hdr,
+    )
+    assert r.status_code == 413, r.status_code
+    assert r.json()["detail"]["code"] == "FILE_TOO_LARGE"
+    assert await _count_attachments(async_db_session, camp["id"]) == 0
+
+
+async def test_attachment_count_reflects_number(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """260709-dbl: GET campaign → attachment_count reflects N (0 before, 2 after)."""
+    await _bind(async_db_session, test_workspace.id, "u-count")
+    camp = await test_campaign_factory()
+    hdr = {"Authorization": f"Bearer {valid_supabase_jwt(sub='u-count')}"}
+
+    before = await async_client.get(f"/api/v1/campaigns/{camp['id']}", headers=hdr)
+    assert before.status_code == 200, before.text
+    assert before.json()["attachment_count"] == 0
+    assert before.json()["has_attachment"] is False
+
+    up = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/attachment",
+        files=[
+            ("files", ("a.pdf", b"aaa", "application/pdf")),
+            ("files", ("b.png", b"bbbb", "image/png")),
+        ],
+        headers=hdr,
+    )
+    assert up.status_code == 200, up.text
+
+    after = await async_client.get(f"/api/v1/campaigns/{camp['id']}", headers=hdr)
+    assert after.status_code == 200, after.text
+    assert after.json()["attachment_count"] == 2
+    assert after.json()["has_attachment"] is True
 
 
 async def test_upload_alias_attachment_field(
@@ -385,6 +556,19 @@ async def test_duplicate_copies_flag_and_blob(
         files={"file": ("dup.pdf", blob, "application/pdf")}, headers=hdr,
     )
     assert up.status_code == 200, up.text
+    # 260709-dbl: add a SECOND attachment row directly (multi-file upload lands in
+    # Task 2) so duplicate must copy ALL rows, not just the first.
+    blob2 = b"duplicate-me-second-file-bytes"
+    await async_db_session.execute(text(
+        "INSERT INTO campaign_attachments "
+        "(campaign_id, workspace_id, file_data, file_name, content_type, size_bytes, position) "
+        "VALUES (:cid, :wid, :blob, :fname, :ct, :sz, :pos)"
+    ), {
+        "cid": str(camp["id"]), "wid": str(test_workspace.id),
+        "blob": blob2, "fname": "dup2.png", "ct": "image/png",
+        "sz": len(blob2), "pos": 1,
+    })
+    await async_db_session.commit()
 
     dup = await async_client.post(
         f"/api/v1/campaigns/{camp['id']}/duplicate", headers=hdr,
@@ -395,13 +579,16 @@ async def test_duplicate_copies_flag_and_blob(
     assert copy["variation_enabled"] is False        # flag copied (D-20)
     assert copy["has_attachment"] is True            # blob copied (D-20)
 
-    # The copy owns its OWN campaign_attachments row with the same bytes.
-    assert await _count_attachments(async_db_session, copy["id"]) == 1
-    row = (await async_db_session.execute(
-        text("SELECT file_data, file_name FROM campaign_attachments WHERE campaign_id = :cid"),
+    # The copy owns its OWN campaign_attachments rows — BOTH files copied (260709-dbl).
+    assert await _count_attachments(async_db_session, copy["id"]) == 2
+    rows = (await async_db_session.execute(
+        text("SELECT file_data, file_name, position FROM campaign_attachments "
+             "WHERE campaign_id = :cid ORDER BY position"),
         {"cid": copy["id"]},
-    )).first()
-    assert bytes(row[0]) == blob
-    assert row[1] == "dup.pdf"
-    # Source blob still intact (copy is independent).
-    assert await _count_attachments(async_db_session, camp["id"]) == 1
+    )).all()
+    assert [(bytes(r[0]), r[1], r[2]) for r in rows] == [
+        (blob, "dup.pdf", 0),
+        (blob2, "dup2.png", 1),
+    ]
+    # Source rows still intact (copy is independent).
+    assert await _count_attachments(async_db_session, camp["id"]) == 2
