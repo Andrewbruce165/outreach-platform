@@ -6,10 +6,13 @@
 // You can pass additional config via defineConfig({ vite: { ... } }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
-// Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-// @cloudflare/vite-plugin builds from this — wrangler.jsonc main alone is insufficient.
+// Static SPA build (served from the monorepo VPS nginx at aimly.agsventurelab.com,
+// mirroring the vitrina pattern). SSR here is inert — zero server functions, all data
+// fetching is client-side — so we drop the Cloudflare Workers deploy plugin (nitro:false)
+// and emit a static shell + client-only routing (spa mode).
 export default defineConfig({
+  nitro: false, // drop the Cloudflare Workers deploy plugin
   tanstackStart: {
-    server: { entry: "server" },
+    spa: { enabled: true }, // static shell + client-only routing
   },
 });
