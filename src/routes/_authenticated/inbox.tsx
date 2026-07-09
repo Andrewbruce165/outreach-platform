@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
@@ -92,6 +92,7 @@ function errMsg(e: unknown): string {
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "active", label: "Active" },
+  { id: "manual", label: "Manual" },
   { id: "lead", label: "Leads" },
   { id: "handoff", label: "Handoff" },
   { id: "no-reply", label: "No reply" },
@@ -100,9 +101,20 @@ const STATUS_FILTERS = [
 ] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number]["id"];
 
+// Filters mapped 1:1 to a backend status value are sent server-side; the
+// remaining ones (all / active / no-reply) stay client-side over the fetched
+// page.
+const SERVER_STATUS: Partial<Record<StatusFilter, string>> = {
+  telegram: "telegram_service",
+  manual: "manual",
+  lead: "lead",
+  handoff: "handoff",
+  finished: "finished",
+};
+
 function matchesStatus(c: Conversation, f: StatusFilter): boolean {
   if (f === "all") return true;
-  if (f === "telegram") return true; // fetched via server-side status param
+  if (SERVER_STATUS[f]) return true; // server already filtered
   const s = (c.status || "").toLowerCase();
   if (f === "active") {
     return !["finished", "handoff", "stopped", "closed"].includes(s);
@@ -113,34 +125,74 @@ function matchesStatus(c: Conversation, f: StatusFilter): boolean {
   return s === f;
 }
 
+const PAGE_SIZE = 50;
+const LIST_WIDTH_KEY = "inbox.listWidth";
+const LIST_MIN = 280;
+const LIST_MAX = 600;
+const LIST_DEFAULT = 340;
+
+function loadListWidth(): number {
+  if (typeof window === "undefined") return LIST_DEFAULT;
+  const raw = window.localStorage.getItem(LIST_WIDTH_KEY);
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return LIST_DEFAULT;
+  return Math.min(LIST_MAX, Math.max(LIST_MIN, n));
+}
+
 function InboxPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [campaignFilter, setCampaignFilter] = useState<string>("all");
+  const [senderFilter, setSenderFilter] = useState<string>("all");
   const [showTrace, setShowTrace] = useState(true);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<
     { kind: "single"; id: string; name: string } | { kind: "bulk" } | null
   >(null);
+  const [listWidth, setListWidth] = useState<number>(() => loadListWidth());
   const queryClient = useQueryClient();
   // Conversations viewed in this session — used to suppress the unread badge
   // since the backend has no mark-as-read endpoint in v1.
   const viewedRef = useRef<Set<string>>(new Set());
 
   const isTelegramTab = statusFilter === "telegram";
+  const serverStatus = SERVER_STATUS[statusFilter] ?? null;
+  // Campaign filter is not meaningful for Telegram service messages (they
+  // aren't tied to a campaign) — the UI disables the selector in that case.
+  const effectiveCampaign = isTelegramTab ? "all" : campaignFilter;
+  const effectiveSender = isTelegramTab ? "all" : senderFilter;
 
-  const listQ = useQuery({
-    queryKey: ["conversations", { search, status: isTelegramTab ? "telegram_service" : null }],
-    queryFn: () =>
+  const listQ = useInfiniteQuery({
+    queryKey: [
+      "conversations",
+      {
+        search,
+        status: serverStatus,
+        campaign_id: effectiveCampaign === "all" ? null : effectiveCampaign,
+        sender_id: effectiveSender === "all" ? null : effectiveSender,
+      },
+    ],
+    queryFn: ({ pageParam = 0, signal }) =>
       api<ConversationList>("/api/v1/conversations", {
+        signal,
         query: {
-          limit: 100,
+          limit: PAGE_SIZE,
+          offset: pageParam,
           ...(search ? { search } : {}),
-          ...(isTelegramTab ? { status: "telegram_service" } : {}),
+          ...(serverStatus ? { status: serverStatus } : {}),
+          ...(effectiveCampaign !== "all" ? { campaign_id: effectiveCampaign } : {}),
+          ...(effectiveSender !== "all" ? { sender_id: effectiveSender } : {}),
         },
       }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.conversations.length, 0);
+      if (lastPage.conversations.length < PAGE_SIZE) return undefined;
+      if (typeof lastPage.total === "number" && loaded >= lastPage.total) return undefined;
+      return loaded;
+    },
     refetchInterval: 10_000,
   });
 
@@ -149,21 +201,32 @@ function InboxPage() {
     queryFn: () => api<CampaignList>("/api/v1/campaigns"),
   });
 
-  const allConversations = useMemo(
-    () =>
-      (listQ.data?.conversations ?? []).map((c) =>
-        viewedRef.current.has(c.id) ? { ...c, unread_count: 0 } : c,
-      ),
-    [listQ.data],
-  );
-  const campaigns = campaignsQ.data?.items ?? [];
+  const sendersQ = useQuery({
+    queryKey: ["senders"],
+    queryFn: () => api<SenderList>("/api/v1/senders"),
+  });
 
+  const allConversations = useMemo(() => {
+    const pages = listQ.data?.pages ?? [];
+    const seen = new Set<string>();
+    const rows: Conversation[] = [];
+    for (const p of pages) {
+      for (const c of p.conversations) {
+        if (seen.has(c.id)) continue; // dedupe if a new inbound bumps ordering
+        seen.add(c.id);
+        rows.push(viewedRef.current.has(c.id) ? { ...c, unread_count: 0 } : c);
+      }
+    }
+    return rows;
+  }, [listQ.data]);
+  const campaigns = campaignsQ.data?.items ?? [];
+  const senders = sendersQ.data?.senders ?? [];
+
+  // Client-side filter only handles the tabs that don't map to a single
+  // backend status (all / active / no-reply).
   const conversations = useMemo(
-    () =>
-      allConversations
-        .filter((c) => isTelegramTab || campaignFilter === "all" || c.campaign_id === campaignFilter)
-        .filter((c) => matchesStatus(c, statusFilter)),
-    [allConversations, campaignFilter, statusFilter, isTelegramTab],
+    () => allConversations.filter((c) => matchesStatus(c, statusFilter)),
+    [allConversations, statusFilter],
   );
 
   useEffect(() => {
@@ -175,16 +238,28 @@ function InboxPage() {
   useEffect(() => {
     if (!selectedId) return;
     viewedRef.current.add(selectedId);
-    queryClient.setQueriesData<ConversationList>({ queryKey: ["conversations"] }, (old) => {
-      if (!old) return old;
-      return {
-        ...old,
-        conversations: old.conversations.map((c) =>
-          c.id === selectedId ? { ...c, unread_count: 0 } : c,
-        ),
-      };
-    });
+    queryClient.setQueriesData<{ pages: ConversationList[]; pageParams: unknown[] }>(
+      { queryKey: ["conversations"] },
+      (old) => {
+        if (!old?.pages) return old;
+        return {
+          ...old,
+          pages: old.pages.map((p) => ({
+            ...p,
+            conversations: p.conversations.map((c) =>
+              c.id === selectedId ? { ...c, unread_count: 0 } : c,
+            ),
+          })),
+        };
+      },
+    );
   }, [selectedId, queryClient]);
+
+  // Persist splitter width to localStorage.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
+  }, [listWidth]);
 
   // ── Deletion (single + bulk) ──────────────────────────────────────────────
   const deleteOneMut = useMutation({
@@ -277,7 +352,9 @@ function InboxPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: showTrace ? "340px 1fr 360px" : "340px 1fr",
+          gridTemplateColumns: showTrace
+            ? `${listWidth}px 6px 1fr 360px`
+            : `${listWidth}px 6px 1fr`,
           flex: 1,
           minHeight: 0,
           minWidth: 0,
@@ -291,6 +368,7 @@ function InboxPage() {
           items={conversations}
           totalCount={allConversations.length}
           campaigns={campaigns}
+          senders={senders}
           activeId={selectedId}
           onSelect={setSelectedId}
           search={search}
@@ -299,10 +377,19 @@ function InboxPage() {
           onStatusFilter={setStatusFilter}
           campaignFilter={campaignFilter}
           onCampaignFilter={setCampaignFilter}
+          senderFilter={senderFilter}
+          onSenderFilter={setSenderFilter}
           selectionMode={selectionMode}
           selectedIds={selectedIds}
           allVisibleSelected={allVisibleSelected}
           bulkPending={deleteBulkMut.isPending}
+          hasMore={Boolean(listQ.hasNextPage)}
+          isFetchingMore={listQ.isFetchingNextPage}
+          onLoadMore={() => {
+            if (listQ.hasNextPage && !listQ.isFetchingNextPage) {
+              void listQ.fetchNextPage();
+            }
+          }}
           onToggleSelectionMode={() =>
             selectionMode ? exitSelectionMode() : setSelectionMode(true)
           }
@@ -312,6 +399,12 @@ function InboxPage() {
             setPendingDelete({ kind: "single", id, name })
           }
           onRequestDeleteBulk={() => setPendingDelete({ kind: "bulk" })}
+        />
+        <SplitHandle
+          value={listWidth}
+          min={LIST_MIN}
+          max={LIST_MAX}
+          onChange={setListWidth}
         />
         {selectedId ? (
           <Thread
@@ -442,6 +535,7 @@ function ConvList({
   items,
   totalCount,
   campaigns,
+  senders,
   activeId,
   onSelect,
   search,
@@ -450,10 +544,15 @@ function ConvList({
   onStatusFilter,
   campaignFilter,
   onCampaignFilter,
+  senderFilter,
+  onSenderFilter,
   selectionMode,
   selectedIds,
   allVisibleSelected,
   bulkPending,
+  hasMore,
+  isFetchingMore,
+  onLoadMore,
   onToggleSelectionMode,
   onToggleSelect,
   onToggleSelectAll,
@@ -465,6 +564,7 @@ function ConvList({
   items: Conversation[];
   totalCount: number;
   campaigns: Campaign[];
+  senders: Sender[];
   activeId: string | null;
   onSelect: (id: string) => void;
   search: string;
@@ -473,10 +573,15 @@ function ConvList({
   onStatusFilter: (s: StatusFilter) => void;
   campaignFilter: string;
   onCampaignFilter: (c: string) => void;
+  senderFilter: string;
+  onSenderFilter: (s: string) => void;
   selectionMode: boolean;
   selectedIds: Set<string>;
   allVisibleSelected: boolean;
   bulkPending: boolean;
+  hasMore: boolean;
+  isFetchingMore: boolean;
+  onLoadMore: () => void;
   onToggleSelectionMode: () => void;
   onToggleSelect: (id: string) => void;
   onToggleSelectAll: () => void;
@@ -484,6 +589,35 @@ function ConvList({
   onRequestDeleteBulk: () => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset scroll to top whenever the filter set changes.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [statusFilter, campaignFilter, senderFilter, search]);
+
+  // IntersectionObserver: when sentinel is ~300px from bottom of the scroll
+  // container, request the next page.
+  useEffect(() => {
+    const node = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!node || !root) return;
+    if (!hasMore) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            onLoadMore();
+            break;
+          }
+        }
+      },
+      { root, rootMargin: "300px 0px 300px 0px", threshold: 0 },
+    );
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [hasMore, onLoadMore, items.length]);
   return (
     <aside
       style={{
@@ -543,6 +677,48 @@ function ConvList({
             {campaigns.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={14}
+            style={{
+              position: "absolute",
+              right: 8,
+              top: 9,
+              color: "var(--text-faint)",
+              pointerEvents: "none",
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Sender filter */}
+      <div style={{ padding: "0 14px 10px" }}>
+        <div style={{ position: "relative" }}>
+          <select
+            value={statusFilter === "telegram" ? "all" : senderFilter}
+            onChange={(e) => onSenderFilter(e.target.value)}
+            disabled={statusFilter === "telegram"}
+            title={statusFilter === "telegram" ? "Not applicable to Telegram service messages" : "Filter by sender account"}
+            style={{
+              width: "100%",
+              height: 32,
+              padding: "0 28px 0 10px",
+              fontSize: 12,
+              borderRadius: 7,
+              border: "1px solid var(--border)",
+              background: "var(--bg)",
+              color: statusFilter === "telegram" ? "var(--text-faint)" : "var(--text)",
+              appearance: "none",
+              cursor: statusFilter === "telegram" ? "not-allowed" : "pointer",
+              opacity: statusFilter === "telegram" ? 0.6 : 1,
+            }}
+          >
+            <option value="all">All senders</option>
+            {senders.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} (@{s.slug})
               </option>
             ))}
           </select>
@@ -670,7 +846,7 @@ function ConvList({
         )}
       </div>
 
-      <div className="scroll" style={{ flex: 1 }}>
+      <div ref={scrollRef} className="scroll" style={{ flex: 1 }}>
         {loading && <div className="muted" style={{ padding: 16 }}>Loading…</div>}
         {error && (
           <div style={{ padding: 16, color: "var(--danger)", fontSize: 13 }}>{error}</div>
@@ -864,8 +1040,103 @@ function ConvList({
             </div>
           );
         })}
+        {/* Infinite scroll sentinel */}
+        {items.length > 0 && (
+          <div ref={sentinelRef} style={{ height: 1 }} aria-hidden="true" />
+        )}
+        {isFetchingMore && (
+          <div
+            style={{
+              padding: "12px 14px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              color: "var(--text-muted)",
+              fontSize: 12,
+            }}
+          >
+            <Loader2 size={14} className="ob__spin" /> Loading more…
+          </div>
+        )}
+        {!hasMore && !loading && items.length > 0 && (
+          <div
+            style={{
+              padding: "10px 14px 16px",
+              textAlign: "center",
+              color: "var(--text-faint)",
+              fontSize: 11,
+            }}
+          >
+            End of list
+          </div>
+        )}
       </div>
     </aside>
+  );
+}
+
+function SplitHandle({
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (n: number) => void;
+}) {
+  const draggingRef = useRef(false);
+  const startRef = useRef<{ x: number; w: number }>({ x: 0, w: value });
+  const [hover, setHover] = useState(false);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!draggingRef.current) return;
+      const delta = e.clientX - startRef.current.x;
+      const next = Math.min(max, Math.max(min, startRef.current.w + delta));
+      onChange(next);
+    }
+    function onUp() {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      setActive(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [min, max, onChange]);
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onMouseDown={(e) => {
+        draggingRef.current = true;
+        setActive(true);
+        startRef.current = { x: e.clientX, w: value };
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+      }}
+      style={{
+        cursor: "col-resize",
+        background: active || hover ? "var(--tg-blue, #3390ec)" : "var(--border)",
+        opacity: active || hover ? 0.35 : 1,
+        transition: "background 120ms ease",
+      }}
+    />
   );
 }
 
