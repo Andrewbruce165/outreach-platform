@@ -5,6 +5,8 @@ export interface DialogueStage {
   instruction: string;
 }
 
+const INSTRUCTION_MAX_LENGTH = 3000;
+
 export function StageEditor({
   stages,
   onChange,
@@ -97,8 +99,21 @@ export function StageEditor({
                   rows={2}
                   placeholder="Что должен делать ИИ на этой стадии?"
                   value={stage.instruction}
+                  maxLength={INSTRUCTION_MAX_LENGTH}
                   onChange={(e) => updateStage(idx, { instruction: e.target.value })}
                 />
+                <span
+                  className="field__hint"
+                  style={{
+                    alignSelf: "flex-end",
+                    color:
+                      stage.instruction.length >= INSTRUCTION_MAX_LENGTH
+                        ? "var(--danger)"
+                        : undefined,
+                  }}
+                >
+                  {stage.instruction.length}/{INSTRUCTION_MAX_LENGTH}
+                </span>
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>

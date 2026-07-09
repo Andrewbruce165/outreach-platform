@@ -1,7 +1,25 @@
 // Backend `{code, message}` envelope → friendly UI strings (en-US).
 // Source: docs/error-codes.md.
 
+// FastAPI/Pydantic validation errors (422). detail.errors[] mirrors
+// RequestValidationError.errors(): [{ loc: ["body","dialogue_flow",0,"instruction"], msg, type, ... }].
+// Surfacing loc+msg turns the previously-opaque "Request validation failed" toast
+// into something actionable (see debug/campaign-draft-save-validation-failed.md).
+function formatValidationErrors(detail: Record<string, unknown>): string {
+  const errors = detail.errors as Array<{ loc?: unknown[]; msg?: string }> | undefined;
+  if (!errors || !errors.length) return "Request validation failed.";
+  const parts = errors.slice(0, 3).map((e) => {
+    const loc = Array.isArray(e.loc)
+      ? e.loc.filter((p) => p !== "body").join(".")
+      : "field";
+    return `${loc}: ${e.msg ?? "invalid"}`;
+  });
+  const suffix = errors.length > 3 ? ` (+${errors.length - 3} more)` : "";
+  return `${parts.join("; ")}${suffix}`;
+}
+
 const CODE_MAP: Record<string, (d: Record<string, unknown>) => string> = {
+  VALIDATION_ERROR: (d) => formatValidationErrors(d),
   TOKEN_EXPIRED: () => "Your session expired. Sign in again.",
   TOKEN_INVALID: () => "Sign-in could not be validated. Open the latest email link or sign in again.",
   AUTH_REQUIRED: () => "Sign-in is still syncing. Refresh the page in a moment.",
