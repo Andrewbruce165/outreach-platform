@@ -535,6 +535,7 @@ function ConvList({
   items,
   totalCount,
   campaigns,
+  senders,
   activeId,
   onSelect,
   search,
@@ -543,10 +544,15 @@ function ConvList({
   onStatusFilter,
   campaignFilter,
   onCampaignFilter,
+  senderFilter,
+  onSenderFilter,
   selectionMode,
   selectedIds,
   allVisibleSelected,
   bulkPending,
+  hasMore,
+  isFetchingMore,
+  onLoadMore,
   onToggleSelectionMode,
   onToggleSelect,
   onToggleSelectAll,
@@ -558,6 +564,7 @@ function ConvList({
   items: Conversation[];
   totalCount: number;
   campaigns: Campaign[];
+  senders: Sender[];
   activeId: string | null;
   onSelect: (id: string) => void;
   search: string;
@@ -566,10 +573,15 @@ function ConvList({
   onStatusFilter: (s: StatusFilter) => void;
   campaignFilter: string;
   onCampaignFilter: (c: string) => void;
+  senderFilter: string;
+  onSenderFilter: (s: string) => void;
   selectionMode: boolean;
   selectedIds: Set<string>;
   allVisibleSelected: boolean;
   bulkPending: boolean;
+  hasMore: boolean;
+  isFetchingMore: boolean;
+  onLoadMore: () => void;
   onToggleSelectionMode: () => void;
   onToggleSelect: (id: string) => void;
   onToggleSelectAll: () => void;
@@ -577,6 +589,35 @@ function ConvList({
   onRequestDeleteBulk: () => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset scroll to top whenever the filter set changes.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [statusFilter, campaignFilter, senderFilter, search]);
+
+  // IntersectionObserver: when sentinel is ~300px from bottom of the scroll
+  // container, request the next page.
+  useEffect(() => {
+    const node = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!node || !root) return;
+    if (!hasMore) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            onLoadMore();
+            break;
+          }
+        }
+      },
+      { root, rootMargin: "300px 0px 300px 0px", threshold: 0 },
+    );
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [hasMore, onLoadMore, items.length]);
   return (
     <aside
       style={{
