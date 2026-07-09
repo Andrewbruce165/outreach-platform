@@ -40,7 +40,7 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 - Python 3.11+, FastAPI, SQLAlchemy 2.0 async, PostgreSQL 16
 - Telethon (Telegram MTProto), OpenAI (gpt-5-mini — reasoning-модель; env `OPENAI_MODEL`)
 - Docker Compose: 3 сервиса — db, api, listener
-- Фронт: TanStack Start (React, TypeScript, Vite, bun, shadcn), генерится через Lovable. Отдельный репо `AGS-Venture-Lab/aimly-tg-outreach`, локально склонирован сиблингом в `/root/apps/aimly/aimly-tg-outreach`. Деплой — Cloudflare (`wrangler.jsonc`)
+- Фронт: TanStack Start (React, TypeScript, Vite, bun, shadcn), первоначально сгенерён через Lovable. **Живёт в этом монорепо под `frontend/`** (влит `git subtree` с сохранённой историей 2026-07-09). Собирается в **статический SPA** через `@lovable.dev/vite-tanstack-config` (`nitro:false` + `tanstackStart.spa.enabled` → shell `dist/client/_shell.html` + hashed `assets/`). SSR **инертен** (0 server-функций, все данные тянутся client-side), поэтому Cloudflare Workers deploy-плагин выключен. Деплой — VPS nginx (`./deploy-frontend.sh`), НЕ Cloudflare. Lovable больше не источник правды — правим код напрямую
 - Хостинг: VPS DigitalOcean
 
 ---
@@ -109,16 +109,21 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 # Клонировать локально
 git clone git@github.com:Andrewbruce165/outreach-platform.git
 
-# Деплой на сервер
+# Деплой бэкенда на сервер
 cd /root/apps/aimly/tg-outreach && git pull && docker compose up -d --build api
 docker compose up -d --build listener
+
+# Деплой фронтенда (статический SPA): собирает в Docker bun-стейдже и rsync-ит в /var/www/aimly
+cd /root/apps/aimly/tg-outreach && ./deploy-frontend.sh
 ```
 
 **Сервер:** /root/apps/aimly/tg-outreach/ (VPS DigitalOcean, 134.209.239.97)
 **Старый продакшн:** /root/apps/telegram-api/ — не трогаем, работает независимо
 **GitHub (бэкенд):** git@github.com:Andrewbruce165/outreach-platform.git
 
-**Фронтенд (отдельный репо):** `/root/apps/aimly/aimly-tg-outreach` — origin `https://github.com/AGS-Venture-Lab/aimly-tg-outreach.git`. Это **независимый** репо: коммиты внутри этой папки летят в `AGS-Venture-Lab/aimly-tg-outreach`, коммиты в `tg-outreach` (включая `.planning/`) — в `Andrewbruce165/outreach-platform`. Карта кода `.planning/codebase/` описывает оба репо как единую систему.
+**Фронтенд (в монорепо, с 2026-07-09):** живёт под `frontend/` в `Andrewbruce165/outreach-platform` — один репо, один `git log`, один деплой на back+front. Влит `git subtree` с сохранённой историей (remote `aimly-frontend` оставлен для будущих subtree-pull / отката). Деплой — `./deploy-frontend.sh` (Docker bun `bun install --frozen-lockfile && bun run build` → `rsync -a --delete dist/client/ /var/www/aimly/`). Всегда-включённого контейнера нет — nginx отдаёт статику напрямую.
+
+Апстрим `AGS-Venture-Lab/aimly-tg-outreach` + его Cloudflare-деплой **сохранены как архив/точка отката**, но больше НЕ источник правки/деплоя. (Прежняя запись «независимый сиблинг-репо» устарела.)
 
 ### Сетевая топология (важно)
 
@@ -128,8 +133,11 @@ docker compose up -d --build listener
 
 - API-контейнер биндится на `127.0.0.1:8005:8000` (порт 8000 занят старым telegram-api)
 - nginx vhost для домена слушает `127.0.0.1:8444 ssl proxy_protocol` (за SNI-диспетчером, шаблон funnel-api)
-- Цепочка: `:443 → SNI stream → nginx:8444 ssl proxy_protocol → 127.0.0.1:8005 → api:8000`
+- Цепочка: `:443 → SNI stream → nginx:8444 ssl proxy_protocol → nginx vhost aimly`
+- **Роутинг vhost'а (с 2026-07-09):** `root /var/www/aimly;` — статический SPA отдаётся на `/` с fallback `try_files $uri /_shell.html` (deep-link survives hard refresh); `location /api/ { proxy_pass http://127.0.0.1:8005; ... }` — API same-origin. Backend, SNI stream и TLS при cutover'е НЕ трогались.
 - TLS выпускается **только** через `certbot certonly --webroot` (НЕ `--nginx`, иначе сломает SNI stream-схему). Автопродление — `certbot.timer`.
+
+**Откат vhost'а:** перед любой правкой `/etc/nginx/sites-available/aimly.agsventurelab.com` снимай `.bak` с таймстампом (`cp … .bak.$(date +%Y%m%d-%H%M%S)`); откат = восстановить `.bak` + `nginx -t && systemctl reload nginx`.
 
 При добавлении новых доменов/сервисов: брать конфиг по шаблону `funnel-api` и согласовывать с devops.
 
@@ -192,7 +200,8 @@ SELECT c.relname,
 
 ### Lovable-фронт quirks
 
-- **Frontend в отдельном репо**, генерится через Lovable из openapi.json (`lovable-handoff/openapi.json`). Иногда расходится со спецификацией.
+- **Frontend теперь в монорепо под `frontend/`** (влит 2026-07-09, см. «Git & Deploy»). Изначально генерился Lovable из openapi.json (`lovable-handoff/openapi.json`) и иногда расходился со спецификацией — теперь правим код напрямую.
+- **Supabase Auth Redirect URLs** (project ref `qhxkyzmwnehnrfndpxxo`): allow-list в Supabase-дашборде обязан содержать `https://aimly.agsventurelab.com/**`, иначе magic-link редиректит на старый lovable.app origin и логин на новом домене ломается. Обнаружено вживую при cutover'е 2026-07-09 (не было в плане). **При смене домена — обновить этот allow-list первым делом**, иначе укусит снова.
 - **`/conversations/{id}/send`** — Lovable шлёт `{"message_text": "..."}` вместо канонического `{"message": "..."}`. Pydantic-schema `SendMessageFromUIRequest` принимает оба варианта через `validation_alias=AliasChoices("message", "message_text")`.
 - **`/telemetry/events`** — UI событие может прийти с unknown event-name → 400 `UNKNOWN_EVENT`. Whitelist в `app/routers/telemetry.py::_EVENT_WHITELIST` (17 событий). Если фронт добавляет новое событие — обновить whitelist + UI-SPEC §9.
 
