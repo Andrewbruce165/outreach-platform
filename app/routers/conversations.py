@@ -19,8 +19,9 @@ Endpoints (all under Depends(auth_dep) + workspace-scope):
 D-17: list endpoint hides status='bot_ignored' by default; explicit
 ?status=bot_ignored returns them.
 
-D-03: enable-ai НЕ трогает status — preserves lead/handoff/finished/manual
-historic markers.
+D-03: enable-ai resets manager-takeover states 'manual' and 'handoff' → 'active'
+(so the listener resumes AI and the handoff badge clears); genuine conversation
+outcomes 'lead'/'finished'/'bot_ignored' are preserved as historic markers.
 
 D-04 auto-takeover: POST /send updates conversation (ai_enabled=false,
 status='manual', paused_reason='Manager sent message via UI'), cancels
@@ -846,25 +847,28 @@ async def enable_ai(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ) -> ConversationResponse:
-    """INBX-04 / D-03 — reverse switch: turn AI back on and undo a manual takeover.
+    """INBX-04 / D-03 — reverse switch: turn AI back on and undo a takeover.
 
     The listener only auto-replies when `ai_enabled=true AND status='active'`
     (services/listener.py). So flipping `ai_enabled=true` alone left a dialog
-    that was 'manual' (from disable-ai) mute — the bot stayed silent despite the
-    UI toggle being on. Reverse the disable-ai takeover by moving
-    'manual' → 'active' as well.
+    that was 'manual' (from disable-ai) OR 'handoff' (from the AI's
+    transfer_to_manager auto-pause) mute — the bot stayed silent despite the UI
+    toggle being on, and the 'handoff' badge never cleared. Both 'manual' and
+    'handoff' are manager-takeover states (AI paused, human handling); an
+    explicit "switch back to AI" must reset either → 'active' so the listener
+    resumes and the badge clears.
 
-    Legacy bug guard preserved: only 'manual' is reset. Historic markers
-    'lead'/'handoff'/'finished'/'bot_ignored' are left intact (a previous
-    version set status='active' unconditionally and destroyed them) — UI may
-    PATCH /{id} explicitly if a different status change is desired.
+    Legacy bug guard preserved for genuine conversation outcomes: 'lead',
+    'finished' and 'bot_ignored' are left intact (a previous version set
+    status='active' unconditionally and destroyed them) — UI may PATCH /{id}
+    explicitly if a different status change is desired.
     """
     await _load_conversation_or_404(db, ctx, conversation_id)
 
     await db.execute(text("""
         UPDATE conversations
         SET ai_enabled = true,
-            status = CASE WHEN status = 'manual' THEN 'active' ELSE status END,
+            status = CASE WHEN status IN ('manual', 'handoff') THEN 'active' ELSE status END,
             paused_at = NULL,
             paused_reason = NULL,
             updated_at = NOW()

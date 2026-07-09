@@ -3,7 +3,8 @@
 POST /disable-ai → status='manual', ai_enabled=false, paused_reason set,
                    cancels pending queue items (D-01 + D-02).
 POST /enable-ai  → ai_enabled=true, paused_at=NULL, paused_reason=NULL,
-                   status PRESERVED (D-03 fix relative to legacy router).
+                   'manual'/'handoff' → 'active' (manager-takeover states
+                   reversed); lead/finished/bot_ignored preserved (D-03).
 """
 
 import uuid as _uuid
@@ -89,12 +90,14 @@ async def test_disable_ai_cancels_pending_queue(
 # ── Test 10: enable-ai preserves historic status (D-03) ──────────────────────
 
 
-# enable-ai reverses a 'manual' takeover (→ 'active') but preserves every other
-# historic marker. 'manual' is the ONLY status that maps to 'active'; the rest
-# stay put so lead/handoff/finished/bot_ignored are never destroyed.
+# enable-ai reverses manager-takeover states ('manual' AND 'handoff' → 'active')
+# but preserves genuine conversation outcomes. 'manual' and 'handoff' both mean
+# "AI paused, human handling" — an explicit switch-back-to-AI must resume the
+# listener (gated on status=='active') and clear the handoff badge. lead/
+# finished/bot_ignored are outcomes and stay put so they are never destroyed.
 @pytest.mark.parametrize("initial_status,expected_status", [
     ("lead", "lead"),
-    ("handoff", "handoff"),
+    ("handoff", "active"),  # AI auto-transfer reversed — else bot stays mute + badge sticks
     ("finished", "finished"),
     ("bot_ignored", "bot_ignored"),
     ("manual", "active"),  # takeover reversed — else the bot stays mute (listener gate)
@@ -103,8 +106,9 @@ async def test_enable_ai_reverses_manual_preserves_others(
     async_client, valid_supabase_jwt, async_db_session, test_workspace,
     test_conversation_factory, initial_status, expected_status,
 ):
-    """enable-ai: 'manual' → 'active' (undo takeover so the listener resumes AI),
-    all other statuses preserved; ai_enabled=true and paused fields cleared."""
+    """enable-ai: 'manual'/'handoff' → 'active' (undo takeover so the listener
+    resumes AI and the badge clears), outcome statuses preserved; ai_enabled=true
+    and paused fields cleared."""
     conv = await test_conversation_factory(
         contact_phone=f"+7999{abs(hash(initial_status)) % 10_000_000:07d}",
         status=initial_status, ai_enabled=False,
