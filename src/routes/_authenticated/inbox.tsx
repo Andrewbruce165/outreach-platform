@@ -693,6 +693,48 @@ function ConvList({
         </div>
       </div>
 
+      {/* Sender filter */}
+      <div style={{ padding: "0 14px 10px" }}>
+        <div style={{ position: "relative" }}>
+          <select
+            value={statusFilter === "telegram" ? "all" : senderFilter}
+            onChange={(e) => onSenderFilter(e.target.value)}
+            disabled={statusFilter === "telegram"}
+            title={statusFilter === "telegram" ? "Not applicable to Telegram service messages" : "Filter by sender account"}
+            style={{
+              width: "100%",
+              height: 32,
+              padding: "0 28px 0 10px",
+              fontSize: 12,
+              borderRadius: 7,
+              border: "1px solid var(--border)",
+              background: "var(--bg)",
+              color: statusFilter === "telegram" ? "var(--text-faint)" : "var(--text)",
+              appearance: "none",
+              cursor: statusFilter === "telegram" ? "not-allowed" : "pointer",
+              opacity: statusFilter === "telegram" ? 0.6 : 1,
+            }}
+          >
+            <option value="all">All senders</option>
+            {senders.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} (@{s.slug})
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={14}
+            style={{
+              position: "absolute",
+              right: 8,
+              top: 9,
+              color: "var(--text-faint)",
+              pointerEvents: "none",
+            }}
+          />
+        </div>
+      </div>
+
       {/* Status filter chips */}
       <div
         style={{
