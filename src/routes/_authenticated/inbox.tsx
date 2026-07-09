@@ -1056,7 +1056,7 @@ function ConvList({
               fontSize: 12,
             }}
           >
-            <Loader2 size={14} className="spin" /> Loading more…
+            <Loader2 size={14} className="ob__spin" /> Loading more…
           </div>
         )}
         {!hasMore && !loading && items.length > 0 && (
