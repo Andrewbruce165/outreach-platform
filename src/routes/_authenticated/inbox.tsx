@@ -92,6 +92,7 @@ function errMsg(e: unknown): string {
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "active", label: "Active" },
+  { id: "manual", label: "Manual" },
   { id: "lead", label: "Leads" },
   { id: "handoff", label: "Handoff" },
   { id: "no-reply", label: "No reply" },
@@ -100,9 +101,20 @@ const STATUS_FILTERS = [
 ] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number]["id"];
 
+// Filters mapped 1:1 to a backend status value are sent server-side; the
+// remaining ones (all / active / no-reply) stay client-side over the fetched
+// page.
+const SERVER_STATUS: Partial<Record<StatusFilter, string>> = {
+  telegram: "telegram_service",
+  manual: "manual",
+  lead: "lead",
+  handoff: "handoff",
+  finished: "finished",
+};
+
 function matchesStatus(c: Conversation, f: StatusFilter): boolean {
   if (f === "all") return true;
-  if (f === "telegram") return true; // fetched via server-side status param
+  if (SERVER_STATUS[f]) return true; // server already filtered
   const s = (c.status || "").toLowerCase();
   if (f === "active") {
     return !["finished", "handoff", "stopped", "closed"].includes(s);
@@ -111,6 +123,20 @@ function matchesStatus(c: Conversation, f: StatusFilter): boolean {
     return s === "no-reply" || s === "no_reply" || s === "awaiting" || s === "pending";
   }
   return s === f;
+}
+
+const PAGE_SIZE = 50;
+const LIST_WIDTH_KEY = "inbox.listWidth";
+const LIST_MIN = 280;
+const LIST_MAX = 600;
+const LIST_DEFAULT = 340;
+
+function loadListWidth(): number {
+  if (typeof window === "undefined") return LIST_DEFAULT;
+  const raw = window.localStorage.getItem(LIST_WIDTH_KEY);
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return LIST_DEFAULT;
+  return Math.min(LIST_MAX, Math.max(LIST_MIN, n));
 }
 
 function InboxPage() {
