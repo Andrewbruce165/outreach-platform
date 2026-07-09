@@ -3,6 +3,7 @@ import asyncio
 import re
 import tempfile
 import os
+import shutil
 import time
 import socks
 from contextlib import asynccontextmanager
@@ -942,12 +943,23 @@ class TelegramService:
         workspace_id: Optional[str] = None,
         file_bytes: Optional[bytes] = None,
         force_document: bool = True,
+        attachments: Optional[list[dict]] = None,
     ) -> dict:
         """Send a file to a recipient. Client is disconnected after the operation.
 
         Source (D-08): pass ``file_bytes`` for a DB-blob source (written straight to
         a temp file, no network) OR ``file_url`` to download the file first. Exactly
         one is expected; ``file_bytes`` wins when both are given.
+
+        Album (260709-dbl): pass ``attachments`` — a list of dicts
+        ``{"file_bytes": bytes, "file_name": str, "content_type": Optional[str]}`` —
+        to deliver SEVERAL files as one grouped Telegram album (caption on the first).
+        Each file is written into its own temp subdir so Telethon derives the EXACT
+        original filename from the basename (no DocumentAttributeFilename needed, no
+        cross-file name collisions). Telegram may split mixed media types (photo+doc)
+        into more than one grouped message; Telethon handles that internally —
+        acceptable for v1. When ``attachments`` is falsy the single-file path below is
+        byte-for-byte unchanged.
 
         Media type (D-06): ``force_document=True`` (default) preserves today's
         behaviour — every file arrives as a document. ``force_document=False`` lets
@@ -958,9 +970,10 @@ class TelegramService:
         separate follow-up text message so nothing is lost.
         """
         tmp_path = None
+        album_dir = None
         try:
-            # D-08 guard: need at least one source (blob or URL) before touching Telegram.
-            if file_bytes is None and not file_url:
+            # D-08 guard: need at least one source (blob, URL or album) before touching Telegram.
+            if not attachments and file_bytes is None and not file_url:
                 return {
                     "success": False,
                     "error": {
@@ -993,33 +1006,9 @@ class TelegramService:
             else:
                 peer = telegram_id  # fallback for cached contacts without access_hash
 
-            # Obtain the file bytes: blob source (D-08) skips the network entirely;
-            # otherwise fall back to the existing URL download.
-            if file_bytes is not None:
-                # The attachment always supplies a file_name; default defensively.
-                if not file_name:
-                    file_name = "file"
-                file_data = file_bytes
-            else:
-                if not file_name:
-                    parsed = urlparse(file_url)
-                    file_name = os.path.basename(parsed.path) or "file"
-
-                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-                    resp = await http.get(file_url)
-                    resp.raise_for_status()
-                    file_data = resp.content
-
-            # Save to temp file. The suffix is load-bearing: Telethon uses the file
-            # extension to decide auto-media type when force_document=False (D-06).
-            suffix = os.path.splitext(file_name)[1] or ""
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
-                f.write(file_data)
-                tmp_path = f.name
-
-            # Telegram caption limit for media is 1024 chars.
-            # If caption exceeds the limit, send file without caption and follow up
-            # with a separate text message so the full text is delivered.
+            # Telegram caption limit for media is 1024 chars. If the caption exceeds
+            # the limit, send the file(s) without caption and follow up with a separate
+            # text message so the full text is delivered (D-07). Shared by both paths.
             CAPTION_LIMIT = 1024
             file_caption = None
             overflow_text = None
@@ -1029,19 +1018,73 @@ class TelegramService:
                 else:
                     overflow_text = caption
 
-            # Send file via Telethon.
-            # Telethon's send_file has no `file_name` kwarg — it silently swallows
-            # unknown kwargs into **kwargs and does nothing with them. The real
-            # filename comes from a DocumentAttributeFilename attribute, which
-            # overrides the default (derived from tmp_path's random basename) only
-            # when explicitly passed here (mirrors send_file_by_telegram_id).
-            sent = await client.send_file(
-                peer,
-                tmp_path,
-                caption=file_caption,
-                attributes=[DocumentAttributeFilename(file_name)] if file_name else None,
-                force_document=force_document
-            )
+            if attachments:
+                # 260709-dbl album path: write each file into its OWN temp subdir so
+                # Telethon derives the EXACT original filename from the basename (no
+                # DocumentAttributeFilename needed, no cross-file name collisions), then
+                # send the whole list as one grouped message (caption lands on the first).
+                # Telegram may split mixed media types (photo+doc) into >1 grouped
+                # message; Telethon handles that internally — acceptable for v1.
+                album_dir = tempfile.mkdtemp()
+                media_paths = []
+                for i, att in enumerate(attachments):
+                    att_name = os.path.basename(att.get("file_name") or "") or "file"
+                    sub = os.path.join(album_dir, str(i))
+                    os.makedirs(sub, exist_ok=True)
+                    path = os.path.join(sub, att_name)
+                    with open(path, "wb") as f:
+                        f.write(att["file_bytes"])
+                    media_paths.append(path)
+                sent = await client.send_file(
+                    peer,
+                    media_paths,
+                    caption=file_caption,
+                    force_document=force_document,
+                )
+            else:
+                # Obtain the file bytes: blob source (D-08) skips the network entirely;
+                # otherwise fall back to the existing URL download.
+                if file_bytes is not None:
+                    # The attachment always supplies a file_name; default defensively.
+                    if not file_name:
+                        file_name = "file"
+                    file_data = file_bytes
+                else:
+                    if not file_name:
+                        parsed = urlparse(file_url)
+                        file_name = os.path.basename(parsed.path) or "file"
+
+                    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
+                        resp = await http.get(file_url)
+                        resp.raise_for_status()
+                        file_data = resp.content
+
+                # Save to temp file. The suffix is load-bearing: Telethon uses the file
+                # extension to decide auto-media type when force_document=False (D-06).
+                suffix = os.path.splitext(file_name)[1] or ""
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
+                    f.write(file_data)
+                    tmp_path = f.name
+
+                # Send file via Telethon.
+                # Telethon's send_file has no `file_name` kwarg — it silently swallows
+                # unknown kwargs into **kwargs and does nothing with them. The real
+                # filename comes from a DocumentAttributeFilename attribute, which
+                # overrides the default (derived from tmp_path's random basename) only
+                # when explicitly passed here (mirrors send_file_by_telegram_id).
+                sent = await client.send_file(
+                    peer,
+                    tmp_path,
+                    caption=file_caption,
+                    attributes=[DocumentAttributeFilename(file_name)] if file_name else None,
+                    force_document=force_document
+                )
+
+            # An album returns a LIST of messages; take the first message's id.
+            if isinstance(sent, (list, tuple)):
+                message_id = str(sent[0].id) if sent else None
+            else:
+                message_id = str(sent.id)
 
             # Send overflow caption as a follow-up text message
             if overflow_text:
@@ -1054,7 +1097,7 @@ class TelegramService:
             return {
                 "success": True,
                 "action": "file_sent",
-                "message_id": str(sent.id),
+                "message_id": message_id,
                 "recipient": {
                     "telegram_id": telegram_id,
                     "name": contact_info.get("first_name"),
@@ -1143,6 +1186,9 @@ class TelegramService:
             await self.disconnect_client(client)
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+            # 260709-dbl: remove the album's parent temp dir (and its per-file subdirs).
+            if album_dir:
+                shutil.rmtree(album_dir, ignore_errors=True)
 
     async def send_message_by_telegram_id(
         self,

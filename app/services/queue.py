@@ -935,34 +935,60 @@ class QueueWorker:
                 client = await telegram_service.get_client(sender.slug, str(sender.id), sender.session_string, proxy=sender.proxy, fingerprint=sender.client_fingerprint)
 
                 if item.item_type == QueueItemType.file:
-                    # Phase 24 D-05/D-06/D-08: a campaign file-opener stores its blob
-                    # in campaign_attachments (file_url NULL). Load it by campaign_id
-                    # and deliver as auto-media (force_document=False) with the varied
-                    # caption. Defensive fallback: no attachment row (legacy/edge) →
-                    # the existing URL path, so nothing crashes.
-                    att = None
+                    # Phase 24 D-05/D-06/D-08 + 260709-dbl: a campaign file-opener stores
+                    # its blob(s) in campaign_attachments (file_url NULL). Load ALL rows
+                    # ordered by position and deliver as auto-media (force_document=False)
+                    # with the varied caption. 1 row → the existing single-blob send
+                    # (unchanged, lowest risk); >1 rows → a grouped album. Defensive
+                    # fallback: no attachment row (legacy/edge) → the existing URL path.
+                    atts = []
                     if item.campaign_id is not None and not item.file_url:
-                        att = (await db.execute(text(
+                        atts = (await db.execute(text(
                             "SELECT file_data, file_name, content_type, size_bytes "
-                            "FROM campaign_attachments WHERE campaign_id = :cid"),
-                            {"cid": str(item.campaign_id)})).first()
+                            "FROM campaign_attachments WHERE campaign_id = :cid "
+                            "ORDER BY position, created_at"),
+                            {"cid": str(item.campaign_id)})).all()
 
-                    if att is not None:
-                        result = await telegram_service.send_file(
-                            client=client,
-                            phone=item.recipient_phone,
-                            recipient_name=item.recipient_name,
-                            file_bytes=att.file_data,
-                            file_name=att.file_name,
-                            caption=caption_to_send,
-                            force_document=False,
-                            sender_id=str(sender.id),
-                            workspace_id=str(item.workspace_id),
-                        )
-                        # Classify message_type from the extension (mirrors
-                        # telegram.py send_file force_document=False auto-media) and
-                        # stash media metadata on result so _upsert_conversation can
-                        # enrich the inbox row into a media bubble (Phase 23 mig 053).
+                    if atts:
+                        if len(atts) == 1:
+                            att = atts[0]
+                            result = await telegram_service.send_file(
+                                client=client,
+                                phone=item.recipient_phone,
+                                recipient_name=item.recipient_name,
+                                file_bytes=att.file_data,
+                                file_name=att.file_name,
+                                caption=caption_to_send,
+                                force_document=False,
+                                sender_id=str(sender.id),
+                                workspace_id=str(item.workspace_id),
+                            )
+                        else:
+                            # 260709-dbl: deliver every attachment as one grouped album.
+                            result = await telegram_service.send_file(
+                                client=client,
+                                phone=item.recipient_phone,
+                                recipient_name=item.recipient_name,
+                                attachments=[
+                                    {
+                                        "file_bytes": a.file_data,
+                                        "file_name": a.file_name,
+                                        "content_type": a.content_type,
+                                    }
+                                    for a in atts
+                                ],
+                                caption=caption_to_send,
+                                force_document=False,
+                                sender_id=str(sender.id),
+                                workspace_id=str(item.workspace_id),
+                            )
+                        # Classify message_type from the FIRST attachment's extension
+                        # (mirrors telegram.py send_file force_document=False auto-media)
+                        # and stash media metadata on result so _upsert_conversation can
+                        # enrich the inbox row into a media bubble (Phase 23 mig 053). v1
+                        # limitation: the inbox records the PRIMARY (first) file; all
+                        # files ARE delivered to the recipient.
+                        att = atts[0]
                         _ext = os.path.splitext(att.file_name or "")[1].lower()
                         if _ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
                             _mtype = "photo"
