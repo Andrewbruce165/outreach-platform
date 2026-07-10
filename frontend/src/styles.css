@@ -30,14 +30,6 @@
   --color-border: var(--border-shadcn);
   --color-input: var(--input-shadcn);
   --color-ring: var(--ring);
-  --color-invert-foreground: var(--invert-foreground);
-  --color-invert: var(--invert);
-  --color-warning-foreground: var(--warning-foreground);
-  --color-warning: var(--warning);
-  --color-info-foreground: var(--info-foreground);
-  --color-info: var(--info);
-  --color-success-foreground: var(--success-foreground);
-  --color-success: var(--success);
 }
 
 :root {
@@ -61,17 +53,6 @@
   --border-shadcn: oklch(0.929 0.013 255.508);
   --input-shadcn: oklch(0.929 0.013 255.508);
   --ring: oklch(0.704 0.04 256.788);
-  /* reui state tokens. --success / --warning / --info / --danger come from
-     styles/aimly.css (brand palette) — do NOT redefine them here: this :root
-     block cascades AFTER the @import and would silently recolor every existing
-     var(--success|--warning|--info) usage across the app. Only the
-     *-foreground pairs (missing in aimly.css) are added, tuned to the aimly
-     palette (readable text on the corresponding *-soft backgrounds). */
-  --success-foreground: #1e8a3c;
-  --info-foreground: #1c6fc4;
-  --warning-foreground: #9a6700;
-  --invert: var(--color-zinc-900);
-  --invert-foreground: var(--color-zinc-50);
 }
 
 @layer base {
@@ -88,6 +69,3 @@
     animation: none !important;
   }
 }
-
-/* The app has no dark mode (aimly.css is a light-only palette); the .dark
-   block the reui installer emitted was removed on purpose. */

@@ -1227,104 +1227,6 @@ export interface paths {
         patch: operations["patch_campaign_api_v1_campaigns__campaign_id__patch"];
         trace?: never;
     };
-    "/api/v1/campaigns/{campaign_id}/logs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Campaign Logs
-         * @description Chronological event feed of a campaign (redesign brief — Logs tab MVP).
-         *
-         *     No new tables: a UNION of the two sources that already carry campaign_id:
-         *       * message_queue — one event per queue row: sent / failed(+error_message) /
-         *         cancelled at finished_at, still-pending/processing at created_at;
-         *       * llm_calls.tool_calls — built-in trigger calls mark_as_lead /
-         *         transfer_to_manager / finish_conversation (more reliable than
-         *         conversations.status, which later transitions overwrite).
-         *
-         *     Newest-first, cursor pagination via ?before=<ts of last event> (strict `<`;
-         *     microsecond timestamps make ties practically impossible for MVP).
-         *     Workspace-scoped through _load_campaign (cross-workspace → 404).
-         */
-        get: operations["campaign_logs_api_v1_campaigns__campaign_id__logs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/campaigns/{campaign_id}/attachment": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Attachments
-         * @description Attachment metadata for the detail-page preview (redesign brief item 4).
-         *
-         *     Metadata only — the BYTEA blob stays out of this SELECT (Pitfall 7 mirror);
-         *     bytes are served per-file by GET /{campaign_id}/attachment/{attachment_id}.
-         */
-        get: operations["list_attachments_api_v1_campaigns__campaign_id__attachment_get"];
-        put?: never;
-        /**
-         * Upload Attachment
-         * @description D-19 + 260709-dbl: attach one OR MORE first-message files to a campaign.
-         *
-         *     Accepts a `files` (or `attachments`) list for the multi-file album, and stays
-         *     alias-tolerant to the legacy single-field callers (`file`/`attachment`) so the
-         *     current Lovable frontend keeps working unchanged. Bytes stream straight to the
-         *     BYTEA column (D-02 — no temp file).
-         *
-         *     Validation (before any write): D-03 per-file MAX_ATTACHMENT_BYTES → 413
-         *     FILE_TOO_LARGE; over MAX_ATTACHMENTS files → 400 TOO_MANY_ATTACHMENTS.
-         *
-         *     Replace-all upsert: every upload REPLACES the campaign's whole attachment set
-         *     (delete-then-insert all, ordered by position). Workspace-scoped via
-         *     _load_campaign (cross-workspace → 404).
-         */
-        post: operations["upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
-        /**
-         * Delete Attachment
-         * @description D-19: remove the campaign's first-message attachment (idempotent → 204).
-         */
-        delete: operations["delete_attachment_api_v1_campaigns__campaign_id__attachment_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/campaigns/{campaign_id}/attachment/{attachment_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Attachment Content
-         * @description Raw bytes of one attachment (image preview / download on the detail page).
-         *
-         *     Frontend fetches with the Bearer header and renders via an object URL —
-         *     a plain <img src> cannot carry Authorization, so no unauthenticated path
-         *     is offered here.
-         */
-        get: operations["get_attachment_content_api_v1_campaigns__campaign_id__attachment__attachment_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/campaigns/{campaign_id}/requeue-failed": {
         parameters: {
             query?: never;
@@ -1501,6 +1403,36 @@ export interface paths {
          */
         post: operations["duplicate_campaign_api_v1_campaigns__campaign_id__duplicate_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/campaigns/{campaign_id}/attachment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Attachment
+         * @description D-19: attach ONE first-message file to a campaign (multipart upload).
+         *
+         *     Alias-tolerant to the multipart field name (``file`` or ``attachment``) so the
+         *     Lovable frontend works either way. Bytes stream straight to the BYTEA column
+         *     (D-02 — no temp file). D-03: over MAX_ATTACHMENT_BYTES → 413 FILE_TOO_LARGE.
+         *     D-01: exactly one attachment per campaign — delete-then-insert (upsert).
+         *     Workspace-scoped via _load_campaign (cross-workspace → 404).
+         */
+        post: operations["upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
+        /**
+         * Delete Attachment
+         * @description D-19: remove the campaign's first-message attachment (idempotent → 204).
+         */
+        delete: operations["delete_attachment_api_v1_campaigns__campaign_id__attachment_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1771,77 +1703,20 @@ export interface paths {
         put?: never;
         /**
          * Enable Ai
-         * @description INBX-04 / D-03 — reverse switch: turn AI back on and undo a takeover.
+         * @description INBX-04 / D-03 — reverse switch: turn AI back on and undo a manual takeover.
          *
          *     The listener only auto-replies when `ai_enabled=true AND status='active'`
          *     (services/listener.py). So flipping `ai_enabled=true` alone left a dialog
-         *     that was 'manual' (from disable-ai) OR 'handoff' (from the AI's
-         *     transfer_to_manager auto-pause) mute — the bot stayed silent despite the UI
-         *     toggle being on, and the 'handoff' badge never cleared. Both 'manual' and
-         *     'handoff' are manager-takeover states (AI paused, human handling); an
-         *     explicit "switch back to AI" must reset either → 'active' so the listener
-         *     resumes and the badge clears.
+         *     that was 'manual' (from disable-ai) mute — the bot stayed silent despite the
+         *     UI toggle being on. Reverse the disable-ai takeover by moving
+         *     'manual' → 'active' as well.
          *
-         *     Legacy bug guard preserved for genuine conversation outcomes: 'lead',
-         *     'finished' and 'bot_ignored' are left intact (a previous version set
-         *     status='active' unconditionally and destroyed them) — UI may PATCH /{id}
-         *     explicitly if a different status change is desired.
+         *     Legacy bug guard preserved: only 'manual' is reset. Historic markers
+         *     'lead'/'handoff'/'finished'/'bot_ignored' are left intact (a previous
+         *     version set status='active' unconditionally and destroyed them) — UI may
+         *     PATCH /{id} explicitly if a different status change is desired.
          */
         post: operations["enable_ai_api_v1_conversations__conversation_id__enable_ai_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/conversations/{conversation_id}/mark-lead": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Mark Lead
-         * @description Manual 'mark as lead' from the inbox UI.
-         *
-         *     Mirrors ai_engine._handle_builtin_signal(mark_as_lead): set status='lead'
-         *     (ai_enabled UNCHANGED — lead is a marker, the conversation continues) and
-         *     fire the campaign lead webhook (fire-and-forget). 404 if not in this
-         *     workspace. The existing PATCH /{id} only sets status and does NOT fire the
-         *     webhook, so downstream (n8n) consumers need this dedicated endpoint to see
-         *     the same 'lead' event the AI's mark_as_lead signal produces.
-         */
-        post: operations["mark_lead_api_v1_conversations__conversation_id__mark_lead_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/conversations/{conversation_id}/finish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Finish Conversation
-         * @description Manual 'finish conversation' from the inbox UI.
-         *
-         *     Mirrors ai_engine._handle_builtin_signal(finish_conversation): set
-         *     status='finished', ai_enabled=false and pause (paused_at/paused_reason) —
-         *     finishing ENDS the conversation, so the AI is turned off (unlike mark-lead,
-         *     which leaves the AI running). Then fire the campaign finish webhook
-         *     (fire-and-forget). 404 if not in this workspace. Downstream (n8n) consumers
-         *     see the same 'finish' event the AI's finish_conversation signal produces.
-         */
-        post: operations["finish_conversation_api_v1_conversations__conversation_id__finish_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3090,18 +2965,26 @@ export interface components {
         };
         /** Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post */
         Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
-            /** Files */
+            /**
+             * Files
+             * @description 260709-dbl: multi-file album (preferred). Max 10 files, 50 MB each.
+             */
             files?: string[];
-            /** Attachments */
+            /**
+             * Attachments
+             * @description Alias of `files` (multi-file album).
+             */
             attachments?: string[];
             /**
              * File
              * Format: binary
+             * @description Legacy single-file field (back-compat).
              */
             file?: string;
             /**
              * Attachment
              * Format: binary
+             * @description Legacy single-file alias (back-compat).
              */
             attachment?: string;
         };
@@ -3120,67 +3003,6 @@ export interface components {
              * Format: binary
              */
             file: string;
-        };
-        /**
-         * CampaignAttachmentItem
-         * @description One stored attachment echoed by POST /campaigns/{id}/attachment.
-         */
-        CampaignAttachmentItem: {
-            /** File Name */
-            file_name: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Content Type */
-            content_type?: string | null;
-            /** Position */
-            position: number;
-        };
-        /**
-         * CampaignAttachmentMeta
-         * @description One first-message attachment (metadata only — bytes served separately
-         *     by GET /campaigns/{id}/attachment/{attachment_id}).
-         */
-        CampaignAttachmentMeta: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** File Name */
-            file_name: string;
-            /** Content Type */
-            content_type?: string | null;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Position */
-            position: number;
-        };
-        /**
-         * CampaignAttachmentUploadResponse
-         * @description POST /campaigns/{id}/attachment response (260709-dbl album upload).
-         *
-         *     Top-level file_name/size_bytes/content_type echo the FIRST file — back-compat
-         *     for single-file callers (the shape the frontend's generated types already
-         *     relied on before this model was formalised).
-         */
-        CampaignAttachmentUploadResponse: {
-            /** Campaign Id */
-            campaign_id: string;
-            /** Count */
-            count: number;
-            /** Attachments */
-            attachments: components["schemas"]["CampaignAttachmentItem"][];
-            /** File Name */
-            file_name: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Content Type */
-            content_type?: string | null;
-        };
-        /** CampaignAttachmentsResponse */
-        CampaignAttachmentsResponse: {
-            /** Attachments */
-            attachments: components["schemas"]["CampaignAttachmentMeta"][];
         };
         /**
          * CampaignCreate
@@ -3301,40 +3123,6 @@ export interface components {
             total: number;
         };
         /**
-         * CampaignLogEvent
-         * @description One chronological event of a campaign (newest-first in the response).
-         */
-        CampaignLogEvent: {
-            /**
-             * Ts
-             * Format: date-time
-             */
-            ts: string;
-            /** Type */
-            type: string;
-            /** Contact Name */
-            contact_name?: string | null;
-            /** Contact Phone */
-            contact_phone?: string | null;
-            /** Conversation Id */
-            conversation_id?: string | null;
-            /** Detail */
-            detail?: string | null;
-        };
-        /**
-         * CampaignLogsResponse
-         * @description GET /campaigns/{id}/logs — cursor-paginated union of queue + llm events.
-         *
-         *     next_before: pass back as ?before= to fetch the next (older) page;
-         *     None when this page exhausted the history.
-         */
-        CampaignLogsResponse: {
-            /** Events */
-            events: components["schemas"]["CampaignLogEvent"][];
-            /** Next Before */
-            next_before?: string | null;
-        };
-        /**
          * CampaignResponse
          * @description GET/POST/PATCH response body. Computed fields: is_exhausted, attached_senders.
          */
@@ -3437,6 +3225,7 @@ export interface components {
             has_attachment: boolean;
             /**
              * Attachment Count
+             * @description 260709-dbl: number of first-message attachments (album). has_attachment = attachment_count > 0.
              * @default 0
              */
             attachment_count: number;
@@ -3859,8 +3648,7 @@ export interface components {
          * @description One stage in the campaign's dialogue_flow sequence.
          *
          *     title is optional (label for the UI); instruction is the stage directive
-         *     injected into the prompt. Validated: title≤120, instruction 1..3000 chars
-         *     (raised from 2000 on 2026-07-09 — debug/campaign-draft-save-validation-failed).
+         *     injected into the prompt. Validated: title≤120, instruction 1..2000 chars.
          *     Security: conlist max_length=7 on the containing field guards array-size abuse (T2).
          */
         DialogueStage: {
@@ -5353,6 +5141,47 @@ export interface components {
         _RerenderResponse: {
             /** Rerendered */
             rerendered: number;
+        };
+        /**
+         * CampaignAttachmentItem
+         * @description One attachment row in the upload response (260709-dbl).
+         */
+        CampaignAttachmentItem: {
+            /** File Name */
+            file_name: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Content Type */
+            content_type?: string | null;
+            /** Position */
+            position: number;
+        };
+        /**
+         * CampaignAttachmentUploadResponse
+         * @description POST /campaigns/{id}/attachment response (Phase 24 D-19 + 260709-dbl multi-file).
+         */
+        CampaignAttachmentUploadResponse: {
+            /** Campaign Id */
+            campaign_id: string;
+            /** Count */
+            count: number;
+            /** Attachments (ordered by position) */
+            attachments: components["schemas"]["CampaignAttachmentItem"][];
+            /**
+             * File Name
+             * @description Back-compat: the FIRST attachment's file_name.
+             */
+            file_name: string;
+            /**
+             * Size Bytes
+             * @description Back-compat: the FIRST attachment's size_bytes.
+             */
+            size_bytes: number;
+            /**
+             * Content Type
+             * @description Back-compat: the FIRST attachment's content_type.
+             */
+            content_type?: string | null;
         };
     };
     responses: never;
@@ -7765,182 +7594,6 @@ export interface operations {
             };
         };
     };
-    campaign_logs_api_v1_campaigns__campaign_id__logs_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                before?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                campaign_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignLogsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_attachments_api_v1_campaigns__campaign_id__attachment_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                campaign_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignAttachmentsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                campaign_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignAttachmentUploadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_attachment_api_v1_campaigns__campaign_id__attachment_delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                campaign_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_attachment_content_api_v1_campaigns__campaign_id__attachment__attachment_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                campaign_id: string;
-                attachment_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     requeue_failed_api_v1_campaigns__campaign_id__requeue_failed_post: {
         parameters: {
             query?: never;
@@ -8201,6 +7854,76 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CampaignResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_attachment_api_v1_campaigns__campaign_id__attachment_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_attachment_api_v1_campaigns__campaign_id__attachment_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-workspace-key"?: string | null;
+            };
+            path: {
+                campaign_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -8650,74 +8373,6 @@ export interface operations {
         };
     };
     enable_ai_api_v1_conversations__conversation_id__enable_ai_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                conversation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_lead_api_v1_conversations__conversation_id__mark_lead_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-                "x-workspace-key"?: string | null;
-            };
-            path: {
-                conversation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    finish_conversation_api_v1_conversations__conversation_id__finish_post: {
         parameters: {
             query?: never;
             header?: {
