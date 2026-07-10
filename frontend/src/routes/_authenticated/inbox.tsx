@@ -992,7 +992,7 @@ function ConvList({
                         textOverflow: "ellipsis",
                       }}
                     >
-                      via @{c.sender_slug}
+                      via @{s?.tg_username || c.sender_slug}
                       {s?.phone ? ` — ${s.phone}` : ""}
                     </div>
                   );
@@ -1805,7 +1805,7 @@ function Thread({
             </button>
             <span style={{ flex: 1 }} />
             <span className="muted" style={{ fontSize: 11 }}>
-              {conv?.sender_slug && <>Sending via <b>@{conv.sender_slug}</b></>} · ⌘+Enter
+              {conv?.sender_slug && <>Sending via <b>@{sender?.tg_username || conv.sender_slug}</b></>} · ⌘+Enter
             </span>
             <button
               type="submit"
