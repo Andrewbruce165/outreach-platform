@@ -5183,6 +5183,421 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/logs": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Campaign Logs",
+        "description": "Chronological event feed of a campaign (redesign brief — Logs tab MVP).\n\nNo new tables: a UNION of the two sources that already carry campaign_id:\n  * message_queue — one event per queue row: sent / failed(+error_message) /\n    cancelled at finished_at, still-pending/processing at created_at;\n  * llm_calls.tool_calls — built-in trigger calls mark_as_lead /\n    transfer_to_manager / finish_conversation (more reliable than\n    conversations.status, which later transitions overwrite).\n\nNewest-first, cursor pagination via ?before=<ts of last event> (strict `<`;\nmicrosecond timestamps make ties practically impossible for MVP).\nWorkspace-scoped through _load_campaign (cross-workspace → 404).",
+        "operationId": "campaign_logs_api_v1_campaigns__campaign_id__logs_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignLogsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/attachment": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "List Attachments",
+        "description": "Attachment metadata for the detail-page preview (redesign brief item 4).\n\nMetadata only — the BYTEA blob stays out of this SELECT (Pitfall 7 mirror);\nbytes are served per-file by GET /{campaign_id}/attachment/{attachment_id}.",
+        "operationId": "list_attachments_api_v1_campaigns__campaign_id__attachment_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignAttachmentsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Upload Attachment",
+        "description": "D-19 + 260709-dbl: attach one OR MORE first-message files to a campaign.\n\nAccepts a `files` (or `attachments`) list for the multi-file album, and stays\nalias-tolerant to the legacy single-field callers (`file`/`attachment`) so the\ncurrent Lovable frontend keeps working unchanged. Bytes stream straight to the\nBYTEA column (D-02 — no temp file).\n\nValidation (before any write): D-03 per-file MAX_ATTACHMENT_BYTES → 413\nFILE_TOO_LARGE; over MAX_ATTACHMENTS files → 400 TOO_MANY_ATTACHMENTS.\n\nReplace-all upsert: every upload REPLACES the campaign's whole attachment set\n(delete-then-insert all, ordered by position). Workspace-scoped via\n_load_campaign (cross-workspace → 404).",
+        "operationId": "upload_attachment_api_v1_campaigns__campaign_id__attachment_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignAttachmentUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Delete Attachment",
+        "description": "D-19: remove the campaign's first-message attachment (idempotent → 204).",
+        "operationId": "delete_attachment_api_v1_campaigns__campaign_id__attachment_delete",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/attachment/{attachment_id}": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Get Attachment Content",
+        "description": "Raw bytes of one attachment (image preview / download on the detail page).\n\nFrontend fetches with the Bearer header and renders via an object URL —\na plain <img src> cannot carry Authorization, so no unauthenticated path\nis offered here.",
+        "operationId": "get_attachment_content_api_v1_campaigns__campaign_id__attachment__attachment_id__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Attachment Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{campaign_id}/requeue-failed": {
       "post": {
         "tags": [
@@ -5777,189 +6192,6 @@
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/campaigns/{campaign_id}/attachment": {
-      "post": {
-        "tags": [
-          "campaigns"
-        ],
-        "summary": "Upload Attachment",
-        "description": "260709-dbl: attach one OR MORE first-message files to a campaign (multipart upload).\n\nSend a `files` (or `attachments`) array for the multi-file album; the legacy single\nfields (`file`/`attachment`) are still accepted for back-compat. Bytes stream straight\nto the BYTEA column (D-02 — no temp file). Validation before any write: per-file over\nMAX_ATTACHMENT_BYTES (50 MB) → 413 FILE_TOO_LARGE; over 10 files → 400 TOO_MANY_ATTACHMENTS.\nReplace-all upsert: every upload REPLACES the campaign's whole attachment set (ordered by\nposition). All attachments are delivered as one grouped Telegram album on the opener.\nResponse: {campaign_id, count, attachments:[{file_name,size_bytes,content_type,position}], \nplus the FIRST file's file_name/size_bytes/content_type echoed at top level for back-compat}.\nWorkspace-scoped via _load_campaign (cross-workspace → 404).",
-        "operationId": "upload_attachment_api_v1_campaigns__campaign_id__attachment_post",
-        "parameters": [
-          {
-            "name": "campaign_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Campaign Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "name": "x-workspace-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Workspace-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "title": "UploadAttachmentResponse",
-                  "properties": {
-                    "campaign_id": { "type": "string", "format": "uuid" },
-                    "count": { "type": "integer" },
-                    "attachments": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "file_name": { "type": "string" },
-                          "size_bytes": { "type": "integer" },
-                          "content_type": {
-                            "anyOf": [ { "type": "string" }, { "type": "null" } ]
-                          },
-                          "position": { "type": "integer" }
-                        }
-                      }
-                    },
-                    "file_name": {
-                      "type": "string",
-                      "description": "Back-compat: the FIRST attachment's file_name."
-                    },
-                    "size_bytes": {
-                      "type": "integer",
-                      "description": "Back-compat: the FIRST attachment's size_bytes."
-                    },
-                    "content_type": {
-                      "anyOf": [ { "type": "string" }, { "type": "null" } ],
-                      "description": "Back-compat: the FIRST attachment's content_type."
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "campaigns"
-        ],
-        "summary": "Delete Attachment",
-        "description": "D-19: remove the campaign's first-message attachment (idempotent → 204).",
-        "operationId": "delete_attachment_api_v1_campaigns__campaign_id__attachment_delete",
-        "parameters": [
-          {
-            "name": "campaign_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Campaign Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "name": "x-workspace-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Workspace-Key"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -7095,8 +7327,160 @@
           "conversations"
         ],
         "summary": "Enable Ai",
-        "description": "INBX-04 / D-03 — reverse switch: turn AI back on and undo a manual takeover.\n\nThe listener only auto-replies when `ai_enabled=true AND status='active'`\n(services/listener.py). So flipping `ai_enabled=true` alone left a dialog\nthat was 'manual' (from disable-ai) mute — the bot stayed silent despite the\nUI toggle being on. Reverse the disable-ai takeover by moving\n'manual' → 'active' as well.\n\nLegacy bug guard preserved: only 'manual' is reset. Historic markers\n'lead'/'handoff'/'finished'/'bot_ignored' are left intact (a previous\nversion set status='active' unconditionally and destroyed them) — UI may\nPATCH /{id} explicitly if a different status change is desired.",
+        "description": "INBX-04 / D-03 — reverse switch: turn AI back on and undo a takeover.\n\nThe listener only auto-replies when `ai_enabled=true AND status='active'`\n(services/listener.py). So flipping `ai_enabled=true` alone left a dialog\nthat was 'manual' (from disable-ai) OR 'handoff' (from the AI's\ntransfer_to_manager auto-pause) mute — the bot stayed silent despite the UI\ntoggle being on, and the 'handoff' badge never cleared. Both 'manual' and\n'handoff' are manager-takeover states (AI paused, human handling); an\nexplicit \"switch back to AI\" must reset either → 'active' so the listener\nresumes and the badge clears.\n\nLegacy bug guard preserved for genuine conversation outcomes: 'lead',\n'finished' and 'bot_ignored' are left intact (a previous version set\nstatus='active' unconditionally and destroyed them) — UI may PATCH /{id}\nexplicitly if a different status change is desired.",
         "operationId": "enable_ai_api_v1_conversations__conversation_id__enable_ai_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversation_id}/mark-lead": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Mark Lead",
+        "description": "Manual 'mark as lead' from the inbox UI.\n\nMirrors ai_engine._handle_builtin_signal(mark_as_lead): set status='lead'\n(ai_enabled UNCHANGED — lead is a marker, the conversation continues) and\nfire the campaign lead webhook (fire-and-forget). 404 if not in this\nworkspace. The existing PATCH /{id} only sets status and does NOT fire the\nwebhook, so downstream (n8n) consumers need this dedicated endpoint to see\nthe same 'lead' event the AI's mark_as_lead signal produces.",
+        "operationId": "mark_lead_api_v1_conversations__conversation_id__mark_lead_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-workspace-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Workspace-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversation_id}/finish": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Finish Conversation",
+        "description": "Manual 'finish conversation' from the inbox UI.\n\nMirrors ai_engine._handle_builtin_signal(finish_conversation): set\nstatus='finished', ai_enabled=false and pause (paused_at/paused_reason) —\nfinishing ENDS the conversation, so the AI is turned off (unlike mark-lead,\nwhich leaves the AI running). Then fire the campaign finish webhook\n(fire-and-forget). 404 if not in this workspace. Downstream (n8n) consumers\nsee the same 'finish' event the AI's finish_conversation signal produces.",
+        "operationId": "finish_conversation_api_v1_conversations__conversation_id__finish_post",
         "parameters": [
           {
             "name": "conversation_id",
@@ -11700,28 +12084,30 @@
       "Body_upload_attachment_api_v1_campaigns__campaign_id__attachment_post": {
         "properties": {
           "files": {
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
             "type": "array",
-            "items": { "type": "string", "format": "binary" },
-            "title": "Files",
-            "description": "260709-dbl: multi-file album (preferred). Max 10 files, 50 MB each."
+            "title": "Files"
           },
           "attachments": {
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
             "type": "array",
-            "items": { "type": "string", "format": "binary" },
-            "title": "Attachments",
-            "description": "Alias of `files` (multi-file album)."
+            "title": "Attachments"
           },
           "file": {
             "type": "string",
             "format": "binary",
-            "title": "File",
-            "description": "Legacy single-file field (back-compat)."
+            "title": "File"
           },
           "attachment": {
             "type": "string",
             "format": "binary",
-            "title": "Attachment",
-            "description": "Legacy single-file alias (back-compat)."
+            "title": "Attachment"
           }
         },
         "type": "object",
@@ -11754,6 +12140,146 @@
           "file"
         ],
         "title": "Body_upload_sender_photo_api_v1_senders__slug__photo_post"
+      },
+      "CampaignAttachmentItem": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_name",
+          "size_bytes",
+          "position"
+        ],
+        "title": "CampaignAttachmentItem",
+        "description": "One stored attachment echoed by POST /campaigns/{id}/attachment."
+      },
+      "CampaignAttachmentMeta": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "file_name",
+          "size_bytes",
+          "position"
+        ],
+        "title": "CampaignAttachmentMeta",
+        "description": "One first-message attachment (metadata only — bytes served separately\nby GET /campaigns/{id}/attachment/{attachment_id})."
+      },
+      "CampaignAttachmentUploadResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignAttachmentItem"
+            },
+            "type": "array",
+            "title": "Attachments"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "count",
+          "attachments",
+          "file_name",
+          "size_bytes"
+        ],
+        "title": "CampaignAttachmentUploadResponse",
+        "description": "POST /campaigns/{id}/attachment response (260709-dbl album upload).\n\nTop-level file_name/size_bytes/content_type echo the FIRST file — back-compat\nfor single-file callers (the shape the frontend's generated types already\nrelied on before this model was formalised)."
+      },
+      "CampaignAttachmentsResponse": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignAttachmentMeta"
+            },
+            "type": "array",
+            "title": "Attachments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attachments"
+        ],
+        "title": "CampaignAttachmentsResponse"
       },
       "CampaignCreate": {
         "properties": {
@@ -12166,6 +12692,100 @@
         ],
         "title": "CampaignListResponse"
       },
+      "CampaignLogEvent": {
+        "properties": {
+          "ts": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ts"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ts",
+          "type"
+        ],
+        "title": "CampaignLogEvent",
+        "description": "One chronological event of a campaign (newest-first in the response)."
+      },
+      "CampaignLogsResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignLogEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          }
+        },
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "CampaignLogsResponse",
+        "description": "GET /campaigns/{id}/logs — cursor-paginated union of queue + llm events.\n\nnext_before: pass back as ?before= to fetch the next (older) page;\nNone when this page exhausted the history."
+      },
       "CampaignResponse": {
         "properties": {
           "id": {
@@ -12415,7 +13035,6 @@
           "attachment_count": {
             "type": "integer",
             "title": "Attachment Count",
-            "description": "260709-dbl: number of first-message attachments (album). has_attachment = attachment_count > 0.",
             "default": 0
           },
           "dialogue_flow": {
@@ -13736,7 +14355,7 @@
           },
           "instruction": {
             "type": "string",
-            "maxLength": 2000,
+            "maxLength": 3000,
             "minLength": 1,
             "title": "Instruction"
           }
@@ -13746,7 +14365,7 @@
           "instruction"
         ],
         "title": "DialogueStage",
-        "description": "One stage in the campaign's dialogue_flow sequence.\n\ntitle is optional (label for the UI); instruction is the stage directive\ninjected into the prompt. Validated: title≤120, instruction 1..2000 chars.\nSecurity: conlist max_length=7 on the containing field guards array-size abuse (T2)."
+        "description": "One stage in the campaign's dialogue_flow sequence.\n\ntitle is optional (label for the UI); instruction is the stage directive\ninjected into the prompt. Validated: title≤120, instruction 1..3000 chars\n(raised from 2000 on 2026-07-09 — debug/campaign-draft-save-validation-failed).\nSecurity: conlist max_length=7 on the containing field guards array-size abuse (T2)."
       },
       "EditMessageRequest": {
         "properties": {
