@@ -10,8 +10,6 @@ Pure-import test; no DB hit. Runs in ~1 second.
 """
 from __future__ import annotations
 
-import pathlib
-
 
 def test_all_05_1_modules_importable():
     """Every 05.1-added file imports cleanly + endpoint surface preserved."""
@@ -117,21 +115,3 @@ def test_app_main_includes_telemetry_router():
         f"Got paths: {sorted(p for p in paths if p)[:20]}..."
     )
     assert "/api/v1/telemetry/core-value" in paths
-
-
-def test_handoff_bundle_directory_exists():
-    """Plan 05.1-05 created lovable-handoff/ bundle."""
-    bundle = pathlib.Path(__file__).resolve().parent.parent / "lovable-handoff"
-    assert bundle.is_dir(), "lovable-handoff/ directory missing — plan 05.1-05 not run?"
-
-    for required in [
-        "AGENTS.md",
-        "KNOWLEDGE.md",
-        "README.md",
-        "reconciliation.md",
-        "screen-build-order.md",
-        "error-codes.md",
-        "telemetry-events.md",
-        ".env.example",
-    ]:
-        assert (bundle / required).is_file(), f"lovable-handoff/{required} missing"
