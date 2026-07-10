@@ -6,7 +6,6 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import logging
-import re
 
 from app.config import get_settings
 from app.database import init_db, engine
@@ -102,14 +101,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware — Phase 1 D-14 lockdown preserved (explicit allowlist) +
-# Phase 05.1 widening: allow_origin_regex for Lovable preview deployments
-# (Pitfall 7 — Starlette allow_origins does NOT honor wildcards; regex is
-# the only safe path for auto-generated subdomains).
+# CORS middleware — Phase 1 D-14 lockdown: explicit allowlist only.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
-    allow_origin_regex=settings.cors_allowed_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # W-2: HEAD для healthcheck preflight; PUT — warmup/settings (единственный PUT-роут)
     allow_headers=["Authorization", "X-Workspace-Key", "Content-Type"],
@@ -122,8 +117,8 @@ app.add_middleware(
 # CORSMiddleware surfaces on the frontend as a misleading "blocked by CORS"
 # error and the real failure (e.g. multipart parse error, raw-SQL crash) is
 # invisible. We explicitly echo the request Origin on every error path here,
-# matching settings.cors_origins_list / cors_allowed_origin_regex so we don't
-# widen the policy beyond what CORSMiddleware itself would allow.
+# matching settings.cors_origins_list so we don't widen the policy beyond
+# what CORSMiddleware itself would allow.
 
 
 def _allowed_origin(request: Request) -> str | None:
@@ -131,9 +126,6 @@ def _allowed_origin(request: Request) -> str | None:
     if not origin:
         return None
     if origin in settings.cors_origins_list:
-        return origin
-    pattern = settings.cors_allowed_origin_regex
-    if pattern and re.fullmatch(pattern, origin):
         return origin
     return None
 

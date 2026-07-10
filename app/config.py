@@ -36,16 +36,6 @@ class Settings(BaseSettings):
     # CORS (Phase 1)
     cors_allowed_origins: str = "http://localhost:5173"
 
-    # CORS (Phase 05.1): regex for Lovable preview deployments.
-    # Pitfall 7 — Starlette CORSMiddleware does NOT honor wildcards in
-    # allow_origins; allow_origin_regex is the only safe way to accept
-    # auto-generated Lovable subdomains (lowercase + digits + hyphens).
-    cors_allowed_origin_regex: str = Field(
-        default=r"^https://[a-z0-9-]+\.(lovableproject\.com|lovable\.app)$",
-        validation_alias="CORS_ALLOWED_ORIGIN_REGEX",
-        description="Regex (single string) for allow_origin_regex on CORSMiddleware — Lovable preview + prod subdomains (both .lovableproject.com legacy and .lovable.app current).",
-    )
-
     # App settings
     log_level: str = "INFO"
     max_pool_size: int = 10
