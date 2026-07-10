@@ -181,3 +181,52 @@ async def test_mark_lead_cross_workspace_404(
     )
     assert r.status_code == 404, r.text
     assert r.json()["detail"]["code"] == "CONVERSATION_NOT_FOUND"
+
+
+# ── Test 12: finish sets status='finished' AND turns AI off ───────────────────
+
+
+async def test_finish_sets_status_and_disables_ai(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_sender_factory, test_conversation_factory, test_campaign_factory,
+):
+    """POST /finish on an active conversation:
+       - returns 200 with body.status == 'finished'
+       - body.ai_enabled is False (finishing ENDS the conversation — AI off,
+         mirroring the auto finish_conversation flow, unlike mark-lead)
+       - body.paused_reason == 'Finished manually via UI'
+       - no httpx mock needed: the factory campaign has no webhook URL so
+         notify_signal short-circuits before any HTTP call.
+    """
+    camp = await test_campaign_factory()
+    sender = await test_sender_factory()
+    conv = await test_conversation_factory(
+        sender=sender, contact_phone="+79991902003", campaign_id=camp["id"],
+        status="active", ai_enabled=True,
+    )
+
+    await _bind(async_db_session, test_workspace.id, "u-finish")
+
+    r = await async_client.post(
+        f"/api/v1/conversations/{conv['id']}/finish",
+        headers=_auth_headers(valid_supabase_jwt, "u-finish"),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "finished"
+    assert body["ai_enabled"] is False
+    assert body["paused_reason"] == "Finished manually via UI"
+
+
+async def test_finish_cross_workspace_404(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_conversation_factory,
+):
+    """POST /finish on an unknown/cross-workspace id → 404 CONVERSATION_NOT_FOUND."""
+    await _bind(async_db_session, test_workspace.id, "u-finish-404")
+    r = await async_client.post(
+        f"/api/v1/conversations/{_uuid.uuid4()}/finish",
+        headers=_auth_headers(valid_supabase_jwt, "u-finish-404"),
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "CONVERSATION_NOT_FOUND"
