@@ -1046,6 +1046,30 @@ class CampaignListResponse(BaseModel):
     total: int
 
 
+class CampaignEvent(BaseModel):
+    """Quick 260710-cge: one entry of the campaign event log ("Лог кампании").
+
+    Read-only merge of two existing sources — no dedicated events table:
+    - message_queue rows (status sent/failed) → message_sent / message_failed
+    - llm_calls.tool_calls built-in tool invocations → lead / handoff /
+      dialog_finished (audit log survives conversation.status overwrites)
+    """
+    type: Literal["message_sent", "message_failed", "lead", "handoff", "dialog_finished"]
+    at: datetime
+    contact_name: Optional[str] = None
+    contact_username: Optional[str] = None
+    contact_phone: Optional[str] = None
+    sender_slug: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class CampaignEventsResponse(BaseModel):
+    """Cursor-paginated event page for GET /campaigns/{id}/events."""
+    events: List[CampaignEvent]
+    next_before: Optional[datetime] = None
+    has_more: bool
+
+
 # === Phase 5: Inbox & Analytics (INBX-01..05, AIRC-04) ========================
 
 CONVERSATION_STATUSES = {

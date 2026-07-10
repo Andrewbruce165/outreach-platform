@@ -19,6 +19,7 @@ Endpoints:
 
 import logging
 import zoneinfo
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -39,6 +40,8 @@ from app.models import (
 )
 from app.schemas import (
     CampaignCreate,
+    CampaignEvent,
+    CampaignEventsResponse,
     CampaignListResponse,
     CampaignResponse,
     CampaignSenderAttach,
@@ -1407,3 +1410,129 @@ async def detach_sender(
         f"[campaigns] detached sender={sender_id} campaign={campaign_id}"
     )
     return await _campaign_to_response(db, ctx, c)
+
+
+# ── Campaign event log (quick 260710-cge) ────────────────────────────────────
+
+# llm_calls.tool_calls element name → event type (built-in tools only,
+# app/services/ai_engine.py::BUILT_IN_TOOL_NAMES).
+_TOOL_EVENT_TYPES = {
+    "mark_as_lead": "lead",
+    "transfer_to_manager": "handoff",
+    "finish_conversation": "dialog_finished",
+}
+
+
+@router.get("/{campaign_id}/events", response_model=CampaignEventsResponse)
+async def campaign_events(
+    campaign_id: UUID,
+    before: Optional[datetime] = None,
+    limit: int = Query(50, ge=1, le=100),
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read-only, newest-first campaign event log ("Лог кампании").
+
+    Merges two existing sources — no dedicated events table, no migrations:
+    - message_queue (status sent/failed) → message_sent / message_failed
+    - llm_calls.tool_calls built-in tool invocations → lead / handoff /
+      dialog_finished. tool_calls is the audit source of truth here —
+      conversation.status gets overwritten, the log does not.
+
+    Cursor pagination: ``before`` (ISO datetime, defaults to now) + ``limit``.
+    NOTE: the strict ``< :before`` cursor can theoretically skip events that
+    share the exact same microsecond timestamp across a page boundary —
+    accepted for MVP.
+    """
+    await _load_campaign(db, ctx, campaign_id)  # workspace scope, 404 otherwise
+
+    if before is None:
+        before = datetime.now(timezone.utc)
+    params = {
+        "cid": str(campaign_id),
+        "wid": str(ctx.workspace_id),
+        "before": before,
+        "lim": limit + 1,
+    }
+
+    # Source 1 — message events. Only sent/failed rows are events; pending/
+    # processing/cancelled are queue state, not history.
+    queue_rows = (await db.execute(text("""
+        SELECT COALESCE(q.finished_at, q.created_at) AS at,
+               q.status::text                        AS status,
+               COALESCE(q.result_recipient_name, q.recipient_name) AS contact_name,
+               q.result_recipient_username           AS contact_username,
+               q.recipient_phone                     AS contact_phone,
+               q.error_message                       AS error_message,
+               s.slug                                AS sender_slug,
+               q.id::text                            AS row_id
+        FROM message_queue q
+        JOIN senders s ON s.id = q.sender_id
+        WHERE q.campaign_id = :cid
+          AND q.workspace_id = :wid
+          AND q.status IN ('sent', 'failed')
+          AND COALESCE(q.finished_at, q.created_at) < :before
+        ORDER BY COALESCE(q.finished_at, q.created_at) DESC
+        LIMIT :lim
+    """), params)).all()
+
+    # Source 2 — AI signal events from the llm_calls tool-call audit log.
+    # jsonb_typeof(...) = 'array' in WHERE is MANDATORY: some rows store JSON
+    # null (jsonb 'null', not SQL NULL) and jsonb_array_elements over a scalar
+    # raises — this bug bit the campaign-detail redesign before.
+    llm_rows = (await db.execute(text("""
+        SELECT lc.created_at        AS at,
+               tc.value->>'name'      AS tool_name,
+               tc.value->>'arguments' AS arguments,
+               conv.contact_name    AS contact_name,
+               conv.contact_phone   AS contact_phone,
+               s.slug               AS sender_slug,
+               lc.id::text          AS row_id
+        FROM llm_calls lc
+        JOIN conversations conv ON conv.id = lc.conversation_id
+        LEFT JOIN senders s ON s.id = lc.sender_id
+        CROSS JOIN LATERAL jsonb_array_elements(lc.tool_calls) AS tc
+        WHERE lc.campaign_id = :cid
+          AND lc.workspace_id = :wid
+          AND jsonb_typeof(lc.tool_calls) = 'array'
+          AND tc.value->>'name' IN ('mark_as_lead', 'transfer_to_manager',
+                                    'finish_conversation')
+          AND lc.created_at < :before
+        ORDER BY lc.created_at DESC
+        LIMIT :lim
+    """), params)).all()
+
+    events: list[tuple] = []  # (at, tie_break, CampaignEvent)
+    for r in queue_rows:
+        etype = "message_sent" if r.status == "sent" else "message_failed"
+        events.append((r.at, f"{etype}:{r.row_id}", CampaignEvent(
+            type=etype,
+            at=r.at,
+            contact_name=r.contact_name,
+            contact_username=r.contact_username,
+            contact_phone=r.contact_phone,
+            sender_slug=r.sender_slug,
+            detail=r.error_message if etype == "message_failed" else None,
+        )))
+    for r in llm_rows:
+        args = (r.arguments or "").strip()
+        events.append((r.at, f"{r.tool_name}:{r.row_id}", CampaignEvent(
+            type=_TOOL_EVENT_TYPES[r.tool_name],
+            at=r.at,
+            contact_name=r.contact_name,
+            contact_username=None,
+            contact_phone=r.contact_phone,
+            sender_slug=r.sender_slug,
+            detail=args[:200] if args else None,
+        )))
+
+    # Newest first; the tie-break string keeps ordering deterministic for
+    # events sharing the same timestamp.
+    events.sort(key=lambda e: (e[0], e[1]), reverse=True)
+    has_more = len(events) > limit
+    page = [e[2] for e in events[:limit]]
+    return CampaignEventsResponse(
+        events=page,
+        next_before=page[-1].at if page else None,
+        has_more=has_more,
+    )
