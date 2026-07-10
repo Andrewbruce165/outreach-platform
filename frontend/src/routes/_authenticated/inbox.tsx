@@ -718,7 +718,7 @@ function ConvList({
             <option value="all">All senders</option>
             {senders.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name} (@{s.slug})
+                {s.phone ? `${s.name} (${s.phone})` : `${s.name} (@${s.slug})`}
               </option>
             ))}
           </select>
@@ -1258,6 +1258,18 @@ function Thread({
     },
   });
 
+  const markLeadMut = useMutation({
+    mutationFn: () =>
+      api<Conversation>(`/api/v1/conversations/${conversationId}/mark-lead`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+
   const sendMut = useMutation({
     mutationFn: (text: string) =>
       api(`/api/v1/conversations/${conversationId}/send`, {
@@ -1449,6 +1461,22 @@ function Thread({
           />
         </div>
 
+        {conv && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            style={
+              conv.status === "lead"
+                ? { background: "var(--success, #4dcd5e)", color: "white" }
+                : undefined
+            }
+            onClick={() => markLeadMut.mutate()}
+            disabled={markLeadMut.isPending || conv.status === "lead"}
+            title={conv.status === "lead" ? "Already marked as lead" : "Mark as lead"}
+          >
+            <Flag size={14} /> {conv.status === "lead" ? "Lead" : "Mark lead"}
+          </button>
+        )}
         {conv &&
           (conv.ai_enabled ? (
             <button
