@@ -30,6 +30,7 @@ type Agent = components["schemas"]["AgentResponse"];
 type Folder = components["schemas"]["FolderResponse"];
 type Sender = components["schemas"]["SenderResponse"];
 type PoolHealth = components["schemas"]["PoolHealth"];
+type EtaShortfall = components["schemas"]["EtaShortfall"];
 type AttachedSender = components["schemas"]["CampaignSenderAttach"];
 
 // Quick 260710-cge: local types for GET /campaigns/{id}/events — the generated
@@ -39,7 +40,8 @@ type CampaignEventType =
   | "message_failed"
   | "lead"
   | "handoff"
-  | "dialog_finished";
+  | "dialog_finished"
+  | "campaign_paused";
 
 interface CampaignEventItem {
   type: CampaignEventType;
@@ -190,6 +192,106 @@ function NoBackupNotice({ health }: { health: PoolHealth | null | undefined }) {
         <strong style={{ fontWeight: 600 }}>No backup account.</strong>{" "}
         If this single connected account hits a restriction, the campaign will
         stop sending. Attach a second account as a failover.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Variant 2 (deadline-mass-fail fix, D-11 v2): the campaign auto-paused
+ * because stop_date passed. The pending queue was PRESERVED (no items were
+ * failed) — extend stop_date + Resume to continue sending with no data loss.
+ * Distinct from the 029 no-eligible-sender auto-pause (different pause_reason).
+ */
+function DeadlinePausedNotice({
+  status,
+  pauseReason,
+}: {
+  status: string | undefined;
+  pauseReason: string | null | undefined;
+}) {
+  if (status !== "paused" || pauseReason !== "past_stop_date") return null;
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "10px 12px",
+        marginBottom: 14,
+        borderRadius: 8,
+        border: "1px solid var(--warning)",
+        background: "color-mix(in oklab, var(--warning) 10%, transparent)",
+        color: "var(--text)",
+        fontSize: 13,
+        lineHeight: 1.45,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0,
+          width: 8,
+          height: 8,
+          marginTop: 6,
+          borderRadius: "50%",
+          background: "var(--warning)",
+        }}
+      />
+      <div>
+        <strong style={{ fontWeight: 600 }}>Paused — deadline reached.</strong> The
+        campaign&apos;s stop_date passed, so sending paused automatically. The pending
+        queue is intact — nothing was lost. Edit the stop_date and hit Resume to keep
+        going, or Stop to close it out.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Variant 1 (deadline-mass-fail fix): live "will we make the deadline?"
+ * warning, computed on every read from the CURRENT pool + backlog. Shown
+ * whenever there's a projected shortfall — before the D-11 v2 auto-pause
+ * would ever fire, not just at launch.
+ */
+function EtaShortfallNotice({ eta }: { eta: EtaShortfall | null | undefined }) {
+  if (!eta || eta.on_track) return null;
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "10px 12px",
+        marginBottom: 14,
+        borderRadius: 8,
+        border: "1px solid var(--warning)",
+        background: "color-mix(in oklab, var(--warning) 10%, transparent)",
+        color: "var(--text)",
+        fontSize: 13,
+        lineHeight: 1.45,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0,
+          width: 8,
+          height: 8,
+          marginTop: 6,
+          borderRadius: "50%",
+          background: "var(--warning)",
+        }}
+      />
+      <div>
+        <strong style={{ fontWeight: 600 }}>
+          ~{eta.shortfall_contacts} contacts won&apos;t make the deadline.
+        </strong> At the current pace ({eta.daily_capacity}/day across active senders,{" "}
+        {eta.work_days_left} work day{eta.work_days_left === 1 ? "" : "s"} left) vs.{" "}
+        {eta.remaining_contacts} remaining, extend the stop date, attach more senders,
+        or trim the audience.
       </div>
     </div>
   );
@@ -375,6 +477,8 @@ function CampaignDetailPage() {
         </div>
 
         {c && <NoBackupNotice health={c.pool_health} />}
+        {c && <DeadlinePausedNotice status={c.status} pauseReason={c.pause_reason} />}
+        {c && <EtaShortfallNotice eta={c.eta_shortfall} />}
 
 
 
@@ -829,6 +933,8 @@ const EVENT_BADGE: Record<
   lead: { label: "Лид", variant: "default" },
   handoff: { label: "Передан менеджеру", variant: "secondary" },
   dialog_finished: { label: "Диалог завершён", variant: "outline" },
+  // D-11 v2 (deadline-mass-fail fix): stop_date passed → auto-paused, queue kept.
+  campaign_paused: { label: "Пауза: дедлайн", variant: "outline" },
 };
 
 function eventContactLabel(e: CampaignEventItem): string {
@@ -938,7 +1044,8 @@ function CampaignEventLog({ campaignId }: { campaignId: string }) {
                       }}
                     >
                       <Badge variant={badge.variant}>{badge.label}</Badge>
-                      <span>{eventContactLabel(e)}</span>
+                      {/* campaign_paused has no contact — campaign-level event */}
+                      {e.type !== "campaign_paused" && <span>{eventContactLabel(e)}</span>}
                       <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
                         {eventTimeLabel(e.at)}
                       </span>
@@ -958,6 +1065,12 @@ function CampaignEventLog({ campaignId }: { campaignId: string }) {
                         }}
                       >
                         {e.detail}
+                      </div>
+                    )}
+                    {e.type === "campaign_paused" && (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                        Дедлайн (stop_date) наступил — рассылка приостановлена, очередь сохранена.
+                        Продлите дату и нажмите Resume, чтобы продолжить без потерь.
                       </div>
                     )}
                   </TimelineContent>

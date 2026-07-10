@@ -3264,6 +3264,8 @@ export interface components {
              */
             failed_count: number;
             pool_health: components["schemas"]["PoolHealth"];
+            /** Eta Shortfall */
+            eta_shortfall?: components["schemas"]["EtaShortfall"] | null;
             /**
              * Created At
              * Format: date-time
@@ -3274,6 +3276,23 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * EtaShortfall
+         * @description Variant 1 (deadline-mass-fail fix): live "will we make the deadline?" forecast,
+         * recomputed on every read from current pool/backlog state (nothing stored).
+         */
+        EtaShortfall: {
+            /** Remaining Contacts */
+            remaining_contacts: number;
+            /** Daily Capacity */
+            daily_capacity: number;
+            /** Work Days Left */
+            work_days_left: number;
+            /** Shortfall Contacts */
+            shortfall_contacts: number;
+            /** On Track */
+            on_track: boolean;
         };
         /**
          * CampaignSenderAttach
