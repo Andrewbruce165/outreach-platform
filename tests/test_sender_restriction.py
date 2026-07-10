@@ -303,7 +303,8 @@ async def test_restriction_tick_uses_spambot_release_date(monkeypatch):
 
 
 async def test_restriction_tick_bans_on_suspended(monkeypatch):
-    rows = [("sid-1", "s1", "frozen")]
+    # A genuinely-suspended sender that is NOT frozen → real ban.
+    rows = [("sid-1", "s1", "spam_limited")]
     listener, session = _setup_listener(monkeypatch, rows, "suspended")
 
     summary = await listener._restriction_reconcile_tick()
@@ -311,6 +312,40 @@ async def test_restriction_tick_bans_on_suspended(monkeypatch):
     assert summary["banned"] == 1
     sqls = " ".join(s for s, _ in session.executed)
     assert "auth_status = 'banned'" in sqls
+
+
+async def test_restriction_tick_suspended_on_frozen_does_not_ban(monkeypatch):
+    """frozen-spambot-check-error.md: Telegram's reversible read-only FREEZE is
+    reported by SpamBot with "blocked" wording → classify='suspended'. A sender
+    already flagged 'frozen' must NOT be escalated to auth_status='banned'
+    (that would flip derived status frozen→error and demand reauth on a live
+    session). It stays frozen (mechanical recheck bump)."""
+    rows = [("sid-1", "s1", "frozen")]
+    listener, session = _setup_listener(monkeypatch, rows, "suspended")
+
+    summary = await listener._restriction_reconcile_tick()
+
+    assert summary["banned"] == 0
+    assert summary["extended"] == 1  # still-restricted → recheck bumped
+    sqls = " ".join(s for s, _ in session.executed)
+    assert "auth_status = 'banned'" not in sqls
+    assert "restricted_until = :next" in sqls
+
+
+async def test_restriction_tick_frozen_verdict_flags_frozen(monkeypatch):
+    """An explicit 'frozen' SpamBot verdict on a sender not yet flagged frozen
+    (e.g. previously spam_limited) sets restriction_status='frozen' and keeps it
+    restricted — never touches auth_status."""
+    rows = [("sid-1", "s1", "spam_limited")]
+    listener, session = _setup_listener(monkeypatch, rows, "frozen")
+
+    summary = await listener._restriction_reconcile_tick()
+
+    assert summary["banned"] == 0
+    assert summary["extended"] == 1
+    sqls = " ".join(s for s, _ in session.executed)
+    assert "restriction_status = 'frozen'" in sqls
+    assert "auth_status = 'banned'" not in sqls
 
 
 async def test_restriction_tick_skips_disconnected(monkeypatch):

@@ -237,3 +237,21 @@ async def test_classify_spambot_text_russian_free_reply():
     ) == "limited"
     # English clean reply unchanged
     assert classify_spambot_text("Good news, no limits — you're free as a bird!") == "free"
+
+
+async def test_classify_spambot_text_frozen_beats_suspended():
+    """frozen-spambot-check-error.md: Telegram's 2025 read-only FREEZE is reversible
+    and session-intact — distinct from a permanent ban. SpamBot reports it with
+    freeze/read-only wording, but such a reply can ALSO carry the generic 'blocked'
+    keyword. 'frozen' is evaluated before 'suspended', so a freeze reply must classify
+    as 'frozen' (not 'suspended' → auth_status='banned' → error + reauth prompt)."""
+    from app.services.telegram import classify_spambot_text
+
+    # explicit freeze wording — even when the generic 'blocked' keyword is present
+    assert classify_spambot_text(
+        "Your account has been frozen and is now read-only. It was blocked for violations."
+    ) == "frozen"
+    assert classify_spambot_text("Ваш аккаунт заморожен (только для чтения).") == "frozen"
+    # a genuine permanent suspension WITHOUT freeze wording still classifies as suspended
+    assert classify_spambot_text("Your account was blocked for violations of the Terms.") == "suspended"
+    assert classify_spambot_text("Ваш аккаунт заблокирован.") == "suspended"

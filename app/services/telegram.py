@@ -95,6 +95,15 @@ def parse_spambot_limit_until(text: str) -> Optional[datetime]:
 # limits … free as a bird!" reply was flagged spam_limited for 6h — see
 # .planning/debug/checker-false-spam-limited.md).
 _SPAMBOT_FREE_PHRASES = ("good news", "no limits", "нет ограничений", "всё хорошо", "free as a bird", "свободен от", "свободна от")
+# Telegram's 2025 read-only "freeze" is a REVERSIBLE, session-intact state (distinct
+# from a permanent ban). SpamBot reports it with freeze/read-only wording. These must
+# be classified BEFORE _SPAMBOT_SUSPENDED_PHRASES because a freeze reply can also carry
+# the generic "blocked"/"заблокирован" keyword — the freeze signal has to win so we
+# don't escalate a reversible freeze to a permanent 'suspended' verdict.
+_SPAMBOT_FROZEN_PHRASES = (
+    "frozen", "freeze", "read-only", "read only",
+    "заморож", "только для чтения", "только чтение",
+)
 _SPAMBOT_LIMITED_PHRASES = ("limited", "restrict", "ограничен")
 _SPAMBOT_SUSPENDED_PHRASES = (
     "suspended", "blocked", "banned",
@@ -103,16 +112,21 @@ _SPAMBOT_SUSPENDED_PHRASES = (
 
 
 def classify_spambot_text(text: str) -> str:
-    """Classify a @SpamBot reply body → 'free' | 'limited' | 'suspended' | 'unknown'.
+    """Classify a @SpamBot reply body → 'free' | 'frozen' | 'limited' | 'suspended' | 'unknown'.
 
     'free' is checked FIRST: a "good news, no limits" reply must win even though it
-    can incidentally contain a restriction keyword in boilerplate. 'unknown' (no
-    recognised phrase) is NOT a restriction — callers must only act restrictively on
-    'limited'/'suspended'.
+    can incidentally contain a restriction keyword in boilerplate. 'frozen' is checked
+    BEFORE 'limited'/'suspended' — Telegram's read-only freeze is reversible and
+    session-intact, and its reply can carry a generic "blocked" keyword, so the freeze
+    signal must win over 'suspended' (see .planning/debug/frozen-spambot-check-error.md).
+    'unknown' (no recognised phrase) is NOT a restriction — callers must only act
+    restrictively on 'frozen'/'limited'/'suspended'.
     """
     text_lower = (text or "").lower()
     if any(p in text_lower for p in _SPAMBOT_FREE_PHRASES):
         return "free"
+    if any(p in text_lower for p in _SPAMBOT_FROZEN_PHRASES):
+        return "frozen"
     if any(p in text_lower for p in _SPAMBOT_LIMITED_PHRASES):
         return "limited"
     if any(p in text_lower for p in _SPAMBOT_SUSPENDED_PHRASES):
@@ -406,7 +420,7 @@ class TelegramService:
                 within this process (see TelegramService.is_spambot_selfcheck).
 
         Returns dict with:
-            status: 'free' | 'limited' | 'suspended' | 'unknown'
+            status: 'free' | 'frozen' | 'limited' | 'suspended' | 'unknown'
             raw_text: full SpamBot response
             limit_until: optional date string if limited
         """

@@ -1151,12 +1151,19 @@ class TelegramListener:
         # as 'unknown' and likewise skipped here (they are not antispam warnings).
         from app.services.telegram import classify_spambot_text
         verdict = classify_spambot_text(message_text)
-        if verdict not in ("limited", "suspended"):
+        if verdict not in ("frozen", "limited", "suspended"):
             logger.info(
                 f"🔕 [{sender_slug}] SpamBot message classified '{verdict}' "
                 f"(not a restriction) — skip auto-cancel/flag"
             )
             return
+        # frozen-spambot-check-error.md: an unsolicited freeze notice (Telegram's
+        # reversible read-only freeze) is flagged as 'frozen' — a hard restriction —
+        # NOT the soft 'spam_limited' bucket. 'limited'/'suspended' remain the soft
+        # antispam-signal bucket (this receive-path net never writes auth_status=banned;
+        # a real ban surfaces on the auth path, so misclassified freeze text here can
+        # only ever over-restrict softly, never demand reauth).
+        target_status = "frozen" if verdict == "frozen" else "spam_limited"
 
         try:
             # Mirror of the PEER_FLOOD soft-restriction write (queue.py:739-754).
@@ -1181,18 +1188,20 @@ class TelegramListener:
                 )
                 paused_count = len(paused.fetchall())
 
-                # 2. Flag the sender spam_limited. The '<> frozen' guard preserves
-                #    frozen-precedence: a soft signal must not downgrade a hard freeze.
+                # 2. Flag the sender (spam_limited for limited/suspended; frozen for a
+                #    freeze notice). The '<> frozen' guard preserves frozen-precedence:
+                #    a soft signal must not downgrade a hard freeze, and a 'frozen'
+                #    verdict on an already-frozen sender is a no-op (no duplicate event).
                 #    RETURNING id: only write the audit event when the row actually changed.
                 flagged = await session.execute(
                     text("""
                         UPDATE senders
-                        SET restriction_status = 'spam_limited',
+                        SET restriction_status = :status,
                             restricted_until = :recheck_at
                         WHERE id = :sid AND restriction_status <> 'frozen'
                         RETURNING id
                     """),
-                    {"recheck_at": recheck_at, "sid": str(sender_id)},
+                    {"status": target_status, "recheck_at": recheck_at, "sid": str(sender_id)},
                 )
 
                 # 3. Phase 9 (FAIL-02): the spam_limited flag is now set on this
@@ -1209,7 +1218,7 @@ class TelegramListener:
                 # a frozen sender's no-op must not produce a false state-change event.
                 if flagged.fetchone() is not None:
                     await record_restriction_event(
-                        sender_id, "spam_limited", "antispam_signal",
+                        sender_id, target_status, "antispam_signal",
                         recheck_at, message_text, db=session,
                     )
 
@@ -1218,7 +1227,7 @@ class TelegramListener:
             logger.warning(
                 f"🚨 ANTISPAM [{sender_slug}] ({bot_name} id={bot_id}): "
                 f"поставлено на паузу {paused_count} задач очереди (+24h), "
-                f"sender помечен spam_limited (recheck "
+                f"sender помечен {target_status} (recheck "
                 f"{recheck_at.strftime('%Y-%m-%d %H:%M UTC')}). AI оставлен включённым."
             )
 
@@ -1751,6 +1760,17 @@ class TelegramListener:
             checked += 1
             next_recheck = datetime.now(timezone.utc) + timedelta(seconds=recheck)
 
+            # Guard (frozen-spambot-check-error.md): Telegram's read-only FREEZE is
+            # reversible + session-intact, but SpamBot reports it with "blocked"/
+            # «заблокирован» wording that classify_spambot_text maps to 'suspended'.
+            # An already-frozen sender (r[2] from the batch SELECT) must NOT be
+            # escalated to a permanent auth_status='banned' by ambiguous text — that
+            # flips derived status frozen→error and demands reauth on a live session.
+            # A real hard ban surfaces on the AUTH path (SessionAuthError in
+            # get_client), not via a SpamBot reply body. Treat it as still-frozen.
+            if verdict == "suspended" and r[2] == "frozen":
+                verdict = "frozen"
+
             async with AsyncSessionLocal() as db:
                 # D-01 gate atomicity (B-1): read the CURRENT restricted_until INSIDE
                 # this per-sender transaction (NOT from the outer batch SELECT, which
@@ -1760,6 +1780,15 @@ class TelegramListener:
                     text("SELECT restricted_until FROM senders WHERE id = :sid"),
                     {"sid": str(r[0])},
                 )).scalar_one_or_none()
+
+                # A 'frozen' verdict (explicit freeze wording, or the guard above) is a
+                # still-restricted state handled by the mechanical-recheck else-branch;
+                # ensure the column reflects it if SpamBot reports a freeze on a sender
+                # not yet flagged frozen (e.g. previously spam_limited).
+                if verdict == "frozen" and r[2] != "frozen":
+                    await db.execute(
+                        text("UPDATE senders SET restriction_status = 'frozen' WHERE id = :sid"),
+                        {"sid": str(r[0])})
 
                 if verdict == "free":
                     await db.execute(

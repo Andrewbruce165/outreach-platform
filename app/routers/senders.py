@@ -975,13 +975,35 @@ async def check_spambot(
 
         # Migration 028: map SpamBot verdict onto the right column.
         #   free      → clear restriction (restriction_status='none')
+        #   frozen    → restriction_status='frozen' (reversible read-only, session intact)
         #   limited   → restriction_status='spam_limited' + recheck window
         #   suspended → real ban → auth_status='banned' (auth-level, not restriction)
         # Previously this wrote a bogus auth_status='limited' (not a valid enum value).
         from app.config import get_settings
 
         verdict = spambot_result["status"]
-        if verdict == "suspended" and sender.auth_status != "banned":
+        recheck_at = datetime.now(timezone.utc) + timedelta(
+            seconds=get_settings().restriction_recheck_interval_seconds
+        )
+        # Guard (frozen-spambot-check-error.md): Telegram's read-only FREEZE is
+        # reversible and session-intact, but SpamBot reports it with "blocked"/
+        # «заблокирован» wording that classify_spambot_text maps to 'suspended'. A
+        # sender already flagged 'frozen' (set by a reliable FROZEN_* RPC signal in
+        # queue.py) must NOT be escalated to a permanent auth_status='banned' by an
+        # ambiguous SpamBot text — that would flip derived status frozen→error and
+        # demand reauth on a live session. The check itself succeeding proves the
+        # session authenticates; a genuine hard ban surfaces on the AUTH path
+        # (SessionAuthError below), not here. Treat it as still-frozen.
+        if verdict == "suspended" and sender.restriction_status == "frozen":
+            verdict = "frozen"
+        if verdict == "frozen":
+            if sender.restriction_status != "frozen":
+                sender.restriction_status = "frozen"
+            sender.restricted_until = recheck_at
+            await db.commit()
+            spambot_result["status"] = "frozen"
+            spambot_result["restriction_status_updated"] = "frozen"
+        elif verdict == "suspended" and sender.auth_status != "banned":
             sender.auth_status = "banned"
             await db.commit()
             spambot_result["auth_status_updated"] = "banned"
