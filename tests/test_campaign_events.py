@@ -268,3 +268,61 @@ async def test_events_cursor_pagination(
     phones = [e["contact_phone"]
               for e in p1["events"] + p2["events"] + p3["events"]]
     assert len(phones) == len(set(phones)) == 5
+
+
+# ── Test 5: D-11 v2 deadline auto-pause surfaces as campaign_paused ───────────
+
+
+async def test_events_includes_campaign_paused_for_deadline_pause(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """D-11 v2 (deadline-mass-fail fix): a campaign paused with
+    pause_reason='past_stop_date' surfaces a synthetic campaign_paused event
+    (Source 3) sourced directly from campaigns.paused_at, no contact fields."""
+    camp = await test_campaign_factory(name="DeadlinePauseCamp", status="running")
+    await _bind(async_db_session, test_workspace.id, "u-events-pause")
+
+    await async_db_session.execute(text("""
+        UPDATE campaigns
+        SET status = 'paused', pause_reason = 'past_stop_date', paused_at = NOW()
+        WHERE id = :cid
+    """), {"cid": str(camp["id"])})
+    await async_db_session.commit()
+
+    r = await async_client.get(
+        f"/api/v1/campaigns/{camp['id']}/events",
+        headers=_auth_headers(valid_supabase_jwt, "u-events-pause"),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["events"]) == 1
+    ev = body["events"][0]
+    assert ev["type"] == "campaign_paused"
+    assert ev["detail"] == "past_stop_date"
+    assert ev["contact_name"] is None
+    assert ev["contact_phone"] is None
+
+
+async def test_events_excludes_non_deadline_pause_reason(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory,
+):
+    """A 029 no-eligible-sender auto-pause (pause_reason != 'past_stop_date')
+    must NOT be surfaced as a campaign_paused event — only the deadline one is."""
+    camp = await test_campaign_factory(name="OtherPauseCamp", status="running")
+    await _bind(async_db_session, test_workspace.id, "u-events-other-pause")
+
+    await async_db_session.execute(text("""
+        UPDATE campaigns
+        SET status = 'paused', pause_reason = 'senders_unavailable', paused_at = NOW()
+        WHERE id = :cid
+    """), {"cid": str(camp["id"])})
+    await async_db_session.commit()
+
+    r = await async_client.get(
+        f"/api/v1/campaigns/{camp['id']}/events",
+        headers=_auth_headers(valid_supabase_jwt, "u-events-other-pause"),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["events"] == []
