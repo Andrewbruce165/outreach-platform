@@ -69,6 +69,7 @@ from app.schemas import (
     SendMessageFromUIRequest,
 )
 from app.services.telegram import telegram_service
+from app.services.webhook_notify import notify_signal
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -875,6 +876,81 @@ async def enable_ai(
         WHERE id = :cid AND workspace_id = :wid
     """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
     await db.commit()
+    return await get_conversation(conversation_id, ctx, db)
+
+
+@router.post("/{conversation_id}/mark-lead", response_model=ConversationResponse)
+async def mark_lead(
+    conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> ConversationResponse:
+    """Manual 'mark as lead' from the inbox UI.
+
+    Mirrors ai_engine._handle_builtin_signal(mark_as_lead): set status='lead'
+    (ai_enabled UNCHANGED — lead is a marker, the conversation continues) and
+    fire the campaign lead webhook (fire-and-forget). 404 if not in this
+    workspace. The existing PATCH /{id} only sets status and does NOT fire the
+    webhook, so downstream (n8n) consumers need this dedicated endpoint to see
+    the same 'lead' event the AI's mark_as_lead signal produces.
+    """
+    await _load_conversation_or_404(db, ctx, conversation_id)
+
+    # UPDATE status only — never touch ai_enabled (matches auto-lead flow).
+    await db.execute(text("""
+        UPDATE conversations SET status='lead', updated_at=NOW()
+        WHERE id = :cid AND workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+    await db.commit()
+
+    # Lean SELECT of just the webhook + contact fields notify_signal needs.
+    # No contact_id FK: LEFT JOIN contacts on (workspace_id, phone).
+    row = (await db.execute(text("""
+        SELECT c.campaign_id,
+               camp.id AS camp_id, camp.name AS camp_name,
+               camp.workspace_id AS camp_wid,
+               camp.lead_webhook_url, camp.webhook_url,
+               c.contact_phone, c.contact_telegram_id, c.contact_name,
+               ct.full_name AS ct_full_name, ct.username AS ct_username,
+               ct.source AS ct_source, ct.custom AS ct_custom
+        FROM conversations c
+        LEFT JOIN campaigns camp ON camp.id = c.campaign_id
+        LEFT JOIN contacts ct
+            ON ct.workspace_id = c.workspace_id AND ct.phone = c.contact_phone
+        WHERE c.id = :cid AND c.workspace_id = :wid
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})).first()
+
+    campaign: dict = {}
+    contact: dict = {}
+    if row is not None:
+        if row.camp_id is not None:
+            campaign = {
+                "id": row.camp_id,
+                "name": row.camp_name,
+                "workspace_id": row.camp_wid,
+                "lead_webhook_url": row.lead_webhook_url,
+                "webhook_url": row.webhook_url,
+            }
+        contact = {
+            "phone": row.contact_phone,
+            "telegram_id": row.contact_telegram_id,
+            "full_name": row.ct_full_name or row.contact_name,
+            "username": row.ct_username,
+            "source": row.ct_source,
+            "custom": row.ct_custom or {},
+        }
+
+    # Fire-and-forget AFTER commit (never await webhook inside a txn).
+    # notify_signal itself no-ops when both URLs are None.
+    await notify_signal(
+        event_type="lead",
+        campaign=campaign,
+        conversation_id=conversation_id,
+        contact=contact,
+        reason="Marked as lead manually via UI",
+        db=db,
+    )
+
     return await get_conversation(conversation_id, ctx, db)
 
 

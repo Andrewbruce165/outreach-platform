@@ -134,3 +134,50 @@ async def test_enable_ai_reverses_manual_preserves_others(
     assert body["status"] == expected_status
     assert body["paused_at"] is None
     assert body["paused_reason"] is None
+
+
+# ── Test 11: mark-lead sets status='lead' without touching ai_enabled ─────────
+
+
+async def test_mark_lead_sets_status_and_keeps_ai_enabled(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_sender_factory, test_conversation_factory, test_campaign_factory,
+):
+    """POST /mark-lead on an active conversation:
+       - returns 200 with body.status == 'lead'
+       - body.ai_enabled unchanged (still True — lead is a marker, the
+         conversation continues, mirroring the auto-lead flow)
+       - no httpx mock needed: the factory campaign has no webhook URL so
+         notify_signal short-circuits before any HTTP call.
+    """
+    camp = await test_campaign_factory()
+    sender = await test_sender_factory()
+    conv = await test_conversation_factory(
+        sender=sender, contact_phone="+79991902002", campaign_id=camp["id"],
+        status="active", ai_enabled=True,
+    )
+
+    await _bind(async_db_session, test_workspace.id, "u-mark-lead")
+
+    r = await async_client.post(
+        f"/api/v1/conversations/{conv['id']}/mark-lead",
+        headers=_auth_headers(valid_supabase_jwt, "u-mark-lead"),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "lead"
+    assert body["ai_enabled"] is True
+
+
+async def test_mark_lead_cross_workspace_404(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_conversation_factory,
+):
+    """POST /mark-lead on an unknown/cross-workspace id → 404 CONVERSATION_NOT_FOUND."""
+    await _bind(async_db_session, test_workspace.id, "u-mark-lead-404")
+    r = await async_client.post(
+        f"/api/v1/conversations/{_uuid.uuid4()}/mark-lead",
+        headers=_auth_headers(valid_supabase_jwt, "u-mark-lead-404"),
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"]["code"] == "CONVERSATION_NOT_FOUND"
