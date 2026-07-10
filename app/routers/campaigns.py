@@ -19,11 +19,10 @@ Endpoints:
 
 import logging
 import zoneinfo
-from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, func as sql_func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -39,13 +38,8 @@ from app.models import (
     Sender,
 )
 from app.schemas import (
-    CampaignAttachmentMeta,
-    CampaignAttachmentsResponse,
-    CampaignAttachmentUploadResponse,
     CampaignCreate,
     CampaignListResponse,
-    CampaignLogEvent,
-    CampaignLogsResponse,
     CampaignResponse,
     CampaignSenderAttach,
     CampaignSenderAttachRequest,
@@ -611,170 +605,6 @@ async def get_campaign(
     return await _campaign_to_response(db, ctx, c)
 
 
-@router.get("/{campaign_id}/logs", response_model=CampaignLogsResponse)
-async def campaign_logs(
-    campaign_id: UUID,
-    limit: int = Query(default=50, ge=1, le=200),
-    before: Optional[datetime] = Query(default=None),
-    ctx: AuthCtx = Depends(auth_dep),
-    db: AsyncSession = Depends(get_db),
-):
-    """Chronological event feed of a campaign (redesign brief — Logs tab MVP).
-
-    No new tables: a UNION of the two sources that already carry campaign_id:
-      * message_queue — one event per queue row: sent / failed(+error_message) /
-        cancelled at finished_at, still-pending/processing at created_at;
-      * llm_calls.tool_calls — built-in trigger calls mark_as_lead /
-        transfer_to_manager / finish_conversation (more reliable than
-        conversations.status, which later transitions overwrite).
-
-    Newest-first, cursor pagination via ?before=<ts of last event> (strict `<`;
-    microsecond timestamps make ties practically impossible for MVP).
-    Workspace-scoped through _load_campaign (cross-workspace → 404).
-    """
-    await _load_campaign(db, ctx, campaign_id)
-
-    params: dict = {
-        "cid": str(campaign_id),
-        "wid": str(ctx.workspace_id),
-        "limit": limit + 1,  # +1 — detect "has more" without a COUNT query
-    }
-    before_clause = ""
-    if before is not None:
-        before_clause = "WHERE ts < :before"
-        params["before"] = before
-
-    rows = (await db.execute(text(f"""
-        SELECT * FROM (
-            -- 1. Queue outcomes. Timestamp: finished_at for terminal rows,
-            --    created_at while the row still waits in the queue.
-            SELECT
-                COALESCE(mq.finished_at, mq.created_at) AS ts,
-                CASE mq.status
-                    WHEN 'sent'      THEN 'message_sent'
-                    WHEN 'failed'    THEN 'message_failed'
-                    WHEN 'cancelled' THEN 'message_cancelled'
-                    ELSE 'message_queued'
-                END AS type,
-                COALESCE(mq.result_recipient_name, mq.recipient_name)
-                    AS contact_name,
-                mq.recipient_phone AS contact_phone,
-                NULL::uuid AS conversation_id,
-                CASE WHEN mq.status = 'failed' THEN mq.error_message END
-                    AS detail
-            FROM message_queue mq
-            WHERE mq.campaign_id = :cid AND mq.workspace_id = :wid
-
-            UNION ALL
-
-            -- 2. Built-in trigger tool-calls out of the LLM audit log.
-            SELECT
-                lc.created_at AS ts,
-                CASE tc->>'name'
-                    WHEN 'mark_as_lead'        THEN 'lead'
-                    WHEN 'transfer_to_manager' THEN 'handoff'
-                    WHEN 'finish_conversation' THEN 'dialog_finished'
-                END AS type,
-                cv.contact_name,
-                cv.contact_phone,
-                lc.conversation_id,
-                NULL AS detail
-            FROM llm_calls lc
-            JOIN LATERAL jsonb_array_elements(lc.tool_calls) tc ON TRUE
-            LEFT JOIN conversations cv ON cv.id = lc.conversation_id
-            WHERE lc.campaign_id = :cid AND lc.workspace_id = :wid
-              -- Prod llm_calls stores JSON null (jsonb 'null', NOT SQL NULL)
-              -- for plain-text responses — jsonb_array_elements() errors on
-              -- any scalar, so gate on jsonb_typeof, not IS NOT NULL.
-              AND jsonb_typeof(lc.tool_calls) = 'array'
-              AND tc->>'name' IN ('mark_as_lead', 'transfer_to_manager',
-                                  'finish_conversation')
-        ) ev
-        {before_clause}
-        ORDER BY ts DESC
-        LIMIT :limit
-    """), params)).mappings().all()
-
-    has_more = len(rows) > limit
-    page = rows[:limit]
-    events = [CampaignLogEvent(**dict(r)) for r in page]
-    return CampaignLogsResponse(
-        events=events,
-        next_before=page[-1]["ts"] if has_more and page else None,
-    )
-
-
-@router.get("/{campaign_id}/attachment", response_model=CampaignAttachmentsResponse)
-async def list_attachments(
-    campaign_id: UUID,
-    ctx: AuthCtx = Depends(auth_dep),
-    db: AsyncSession = Depends(get_db),
-):
-    """Attachment metadata for the detail-page preview (redesign brief item 4).
-
-    Metadata only — the BYTEA blob stays out of this SELECT (Pitfall 7 mirror);
-    bytes are served per-file by GET /{campaign_id}/attachment/{attachment_id}.
-    """
-    await _load_campaign(db, ctx, campaign_id)
-    rows = (await db.execute(
-        select(
-            CampaignAttachment.id,
-            CampaignAttachment.file_name,
-            CampaignAttachment.content_type,
-            CampaignAttachment.size_bytes,
-            CampaignAttachment.position,
-        )
-        .where(CampaignAttachment.campaign_id == campaign_id)
-        .order_by(CampaignAttachment.position)
-    )).all()
-    return CampaignAttachmentsResponse(
-        attachments=[CampaignAttachmentMeta.model_validate(r) for r in rows],
-    )
-
-
-@router.get("/{campaign_id}/attachment/{attachment_id}")
-async def get_attachment_content(
-    campaign_id: UUID,
-    attachment_id: UUID,
-    ctx: AuthCtx = Depends(auth_dep),
-    db: AsyncSession = Depends(get_db),
-):
-    """Raw bytes of one attachment (image preview / download on the detail page).
-
-    Frontend fetches with the Bearer header and renders via an object URL —
-    a plain <img src> cannot carry Authorization, so no unauthenticated path
-    is offered here.
-    """
-    await _load_campaign(db, ctx, campaign_id)
-    row = (await db.execute(
-        select(
-            CampaignAttachment.file_data,
-            CampaignAttachment.file_name,
-            CampaignAttachment.content_type,
-        ).where(
-            CampaignAttachment.id == attachment_id,
-            CampaignAttachment.campaign_id == campaign_id,
-        )
-    )).first()
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "ATTACHMENT_NOT_FOUND",
-                    "message": "Attachment not found"},
-        )
-    file_data, file_name, content_type = row
-    safe_name = file_name.replace('"', "")
-    return Response(
-        content=file_data,
-        media_type=content_type or "application/octet-stream",
-        headers={
-            # inline — browser can preview images/PDF; filename survives "save as".
-            "Content-Disposition": f'inline; filename="{safe_name}"',
-            "Cache-Control": "private, max-age=3600",
-        },
-    )
-
-
 @router.patch("/{campaign_id}", response_model=CampaignWriteResponse)
 async def patch_campaign(
     campaign_id: UUID,
@@ -1251,7 +1081,7 @@ async def duplicate_campaign(
 # ── Endpoints: first-message attachment (Phase 24 — D-01/D-03/D-19) ──────────
 
 
-@router.post("/{campaign_id}/attachment", response_model=CampaignAttachmentUploadResponse)
+@router.post("/{campaign_id}/attachment")
 async def upload_attachment(
     campaign_id: UUID,
     files: list[UploadFile] = File(default=None),
