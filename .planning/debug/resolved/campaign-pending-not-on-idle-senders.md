@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "campaign 0c28f9b0: 5 healthy senders have 0 pending rows; backlog on other 45. Why no auto-redistribution?"
 created: 2026-07-10
 updated: 2026-07-10
@@ -9,8 +9,8 @@ updated: 2026-07-10
 
 hypothesis: CONFIRMED — no continuous even-split rebalance exists. rebalance_on_attach is edge-triggered (attach / restriction-clear only) and computes fair-share against the cold-pending pool AT THAT MOMENT; the enqueue worker only assigns NOT-YET-ASSIGNED contacts and never revisits existing cold-pending rows. Idle-but-eligible senders are never topped up from the standing backlog.
 test: Confirmed via prod DB timeline (single-tick enqueue at 12:40:18) + code trace of every rebalance caller.
-expecting: Option A APPROVED and IMPLEMENTED (rebalance_campaign_even + per-tick worker call). 58 targeted tests green. NOT deployed.
-next_action: User deploys (cd /root/apps/aimly/tg-outreach && docker compose up -d --build api) and confirms the 214 pending rows spread across all ~50 eligible senders on the first worker tick.
+expecting: RESOLVED. Deployed 2026-07-10 (HEAD=5f35952). First tick 08:30:20 logged "rebalance: even-split moved 27 cold-pending rows across 50 eligible senders in campaign 0c28f9b0...". DB verified: all 50 eligible senders hold 4–5 pending each (±1 spread), incl. all 5 formerly-idle senders (4 each); ineligible senders hold 0.
+next_action: none — session archived.
 
 ## Symptoms
 
@@ -115,9 +115,11 @@ verification: |
   New tests cover: idle-sender backfill (3-way even), idempotency (2nd pass = 0 moves),
   scheduled_at preservation, non-cold rows (sent/processing/engaged) never move, frozen
   attached sender receives nothing, P<2 no-op, worker pass skips paused campaigns.
-  PENDING human verification: deploy api, watch first tick log
-  ("rebalance: even-split moved N cold-pending rows...") and re-run the distribution SQL
-  on campaign 0c28f9b0 — the 5 idle senders must pick up ~4 pending rows each.
+  HUMAN-VERIFIED 2026-07-10 (deploy HEAD=5f35952): first worker tick at 08:30:20 logged
+  "rebalance: even-split moved 27 cold-pending rows across 50 eligible senders in campaign
+  0c28f9b0...". Prod DB re-check: all 50 eligible senders hold 4–5 pending rows each
+  (spread ±1), including the 5 formerly-idle senders (8098841232, 8812666662, 8702513506,
+  8455819832, 8820014103 — 4 pending each); ineligible senders correctly hold 0.
 files_changed:
   - app/services/rebalance.py (new rebalance_campaign_even)
   - app/services/campaign_enqueue.py (_rebalance_even_running_campaigns + _tick wiring)
