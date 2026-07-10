@@ -396,6 +396,47 @@ async def test_preview_pairing():
     assert "+491234567" in _basenames(result["malformed"])
 
 
+async def test_preview_rejects_tdata_archive_with_clear_message():
+    """A Telegram Desktop **tdata** export (no .json/.session pairs) raises a clear
+    ``UnsupportedArchiveError`` (code UNSUPPORTED_ARCHIVE) mentioning tdata — never a mute
+    all-empty result. Reproduces the 2026-07-10 vendor archive shape (folders
+    ``+<phone>/tdata/`` with ``key_datas`` / ``D877F783D5D3EF8C…`` / ``TDF$`` magic)."""
+    import pytest as _pytest
+
+    from app.services.account_import import UnsupportedArchiveError, unpack_and_pair
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for phone in ("+19154552285", "+19185263432"):
+            zf.writestr(f"{phone}/tdata/key_datas", b"TDF$\x00\x00\x00\x00tdata-blob")
+            zf.writestr(f"{phone}/tdata/D877F783D5D3EF8Cs", b"\x00blob")
+            zf.writestr(f"{phone}/tdata/D877F783D5D3EF8C/maps", b"\x00maps")
+
+    with _pytest.raises(UnsupportedArchiveError) as ei:
+        unpack_and_pair(buf.getvalue())
+    assert ei.value.code == "UNSUPPORTED_ARCHIVE"
+    assert ei.value.http_status == 422
+    assert "tdata" in str(ei.value).lower()
+
+
+async def test_preview_rejects_archive_with_no_pairs():
+    """An archive with members but zero recognizable .json/.session pairs raises
+    ``UnsupportedArchiveError`` (generic message, not the tdata one)."""
+    import pytest as _pytest
+
+    from app.services.account_import import UnsupportedArchiveError, unpack_and_pair
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("readme.txt", b"just some notes")
+        zf.writestr("accounts.csv", b"phone,name\n+1,foo\n")
+
+    with _pytest.raises(UnsupportedArchiveError) as ei:
+        unpack_and_pair(buf.getvalue())
+    assert ei.value.code == "UNSUPPORTED_ARCHIVE"
+    assert "tdata" not in str(ei.value).lower()
+
+
 # ─── IMPT-01: POST /accounts/import/preview stages the ZIP + returns the summary ──
 
 async def test_preview_endpoint_stages_and_returns(

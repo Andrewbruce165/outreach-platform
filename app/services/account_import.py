@@ -79,6 +79,55 @@ class TooManyAccountsError(ImportZipError):
     http_status = 422
 
 
+class UnsupportedArchiveError(ImportZipError):
+    """A decodable ZIP with members, but not a single ``.json``/``.session`` pair.
+
+    Raised instead of silently returning an all-empty ``{matched, unpaired, malformed}``
+    so the UI shows a clear reason (rather than a mute "0 accounts recognized"). Carries
+    a tailored message when the archive is recognisably a Telegram Desktop **tdata** export
+    (folders ``tdata/`` with ``key_datas`` / ``D877F783D5D3EF8C…`` / magic ``TDF$``) — that
+    format is NOT importable here (the importer only accepts ``<phone>.session`` +
+    ``<phone>.json`` pairs).
+    """
+
+    code = "UNSUPPORTED_ARCHIVE"
+    http_status = 422
+
+
+# Telegram Desktop tdata fingerprints: the ``TDF$`` file magic, plus well-known member
+# basenames written inside a ``tdata/`` folder. Used only to produce a helpful error when
+# NOTHING in the archive is a recognizable .json/.session pair.
+_TDATA_MEMBER_BASENAMES = {"key_datas", "maps", "usertag", "settingss", "configs"}
+_TDATA_MAGIC = b"TDF$"
+
+
+def _looks_like_tdata(zf: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> bool:
+    """True if the archive members look like a Telegram Desktop tdata export.
+
+    Structural check first (path segment ``tdata`` / known basenames / the
+    ``D877F783D5D3EF8C`` account key prefix), then a cheap ``TDF$`` magic-byte fallback on
+    small members. Purely advisory — only consulted when no .json/.session pair was found.
+    """
+    for zi in infos:
+        if zi.is_dir():
+            continue
+        parts = zi.filename.replace("\\", "/").split("/")
+        base = parts[-1]
+        if "tdata" in parts[:-1]:
+            return True
+        if base in _TDATA_MEMBER_BASENAMES or base.startswith("D877F783D5D3EF8C"):
+            return True
+    for zi in infos:
+        if zi.is_dir() or zi.file_size > 4096:
+            continue
+        try:
+            if zf.read(zi)[:4] == _TDATA_MAGIC:
+                return True
+        except Exception:  # noqa: BLE001 — detection must never raise; fall through
+            continue
+    return False
+
+
 # ─── Vendor JSON schema (verified against the real +18646884306.json sample) ────
 
 
@@ -200,6 +249,22 @@ def unpack_and_pair(zip_bytes: bytes) -> dict:
                 f"{len(distinct)} accounts exceed the "
                 f"{settings.max_import_accounts}-account per-batch limit"
             )
+
+        # 3b) Nothing pairable at all → raise a clear reason instead of a mute empty result.
+        # A Telegram Desktop tdata export lands here (no .json/.session members); tell the
+        # user exactly why and what the importer expects.
+        if not distinct:
+            has_members = any(not zi.is_dir() for zi in infos)
+            if _looks_like_tdata(zf, infos):
+                raise UnsupportedArchiveError(
+                    "формат не распознан (похоже на Telegram Desktop tdata) — "
+                    "импортируются только пары <phone>.session + <phone>.json"
+                )
+            if has_members:
+                raise UnsupportedArchiveError(
+                    "в архиве не найдено ни одной пары <phone>.session + <phone>.json"
+                )
+            raise UnsupportedArchiveError("архив пуст")
 
         matched: list[dict] = []
         unpaired: list[dict] = []
