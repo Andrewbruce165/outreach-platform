@@ -41,6 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { api, ApiError, apiBaseUrl } from "@/lib/api";
+import { fmtDateTimeTZ } from "@/lib/datetime";
 import { supabase } from "@/lib/supabase";
 import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { track } from "@/lib/telemetry";
@@ -972,6 +973,7 @@ function ConvList({
                       ? new Date(c.last_message_at).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
+                          timeZoneName: "short",
                         })
                       : ""}
                   </span>
@@ -2360,7 +2362,7 @@ function MessageBubble({
             className="muted"
             style={{ fontSize: 11, marginBottom: 4, paddingLeft: 14 }}
           >
-            {new Date(m.created_at).toLocaleString()}
+            {fmtDateTimeTZ(m.created_at)}
             {m.edited_at && <span> · (edited)</span>}
           </div>
         )}
@@ -2453,7 +2455,7 @@ function MessageBubble({
               justifyContent: "flex-end",
             }}
           >
-            {new Date(m.created_at).toLocaleString()}
+            {fmtDateTimeTZ(m.created_at)}
             {m.edited_at && <span>· (edited)</span>}
             {isAI && <span>· 🤖</span>}
             <Check size={11} />
@@ -2650,7 +2652,7 @@ function DetailsTab({
         <DetailRow label="Status" value={conv.status ?? "—"} />
         <DetailRow
           label="Last active"
-          value={conv.last_message_at ? new Date(conv.last_message_at).toLocaleString() : "—"}
+          value={conv.last_message_at ? fmtDateTimeTZ(conv.last_message_at) : "—"}
         />
       </DetailSection>
     </div>
@@ -2791,7 +2793,7 @@ function TraceCard({ call, latest }: { call: LLMCall; latest: boolean }) {
             {call.model}
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-            {new Date(call.created_at).toLocaleTimeString()} ·{" "}
+            {new Date(call.created_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" })} ·{" "}
             {call.latency_ms != null ? `${call.latency_ms}ms` : "—"} ·{" "}
             {call.total_tokens ?? 0} tok
           </div>

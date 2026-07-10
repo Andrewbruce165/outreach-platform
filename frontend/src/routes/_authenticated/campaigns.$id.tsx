@@ -21,6 +21,7 @@ import {
   TimelineTitle,
 } from "@/components/ui/timeline";
 import { api, ApiError } from "@/lib/api";
+import { fmtDateTimeTZ } from "@/lib/datetime";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
 
@@ -94,6 +95,7 @@ function fmtUntil(iso: string | null | undefined): string {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZoneName: "short",
   });
 }
 
@@ -517,11 +519,11 @@ function CampaignDetailPage() {
                     ["Правила кампании", c.campaign_rules],
                     [
                       "Created",
-                      new Date(c.created_at).toLocaleString(),
+                      fmtDateTimeTZ(c.created_at),
                     ],
                     [
                       "Updated",
-                      new Date(c.updated_at).toLocaleString(),
+                      fmtDateTimeTZ(c.updated_at),
                     ],
                   ]}
                 />
@@ -542,13 +544,13 @@ function CampaignDetailPage() {
                     [
                       "Start",
                       c.start_date
-                        ? new Date(c.start_date).toLocaleString()
+                        ? fmtDateTimeTZ(c.start_date)
                         : "—",
                     ],
                     [
                       "Stop",
                       c.stop_date
-                        ? new Date(c.stop_date).toLocaleString()
+                        ? fmtDateTimeTZ(c.stop_date)
                         : "—",
                     ],
                   ]}
@@ -851,6 +853,7 @@ function eventTimeLabel(iso: string): string {
   return new Date(iso).toLocaleTimeString("ru-RU", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZoneName: "short",
   });
 }
 

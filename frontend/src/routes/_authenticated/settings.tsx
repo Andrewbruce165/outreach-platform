@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Copy, Plus, Trash2, LogOut, Loader2 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { api, ApiError } from "@/lib/api";
+import { fmtDateTimeTZ } from "@/lib/datetime";
 import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { supabase } from "@/lib/supabase";
 import { track } from "@/lib/telemetry";
@@ -853,7 +854,7 @@ function ApiKeysTab() {
                 <tr key={k.id}>
                   <td>{k.name}</td>
                   <td className="mono">{k.prefix}…</td>
-                  <td className="muted">{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : "Never"}</td>
+                  <td className="muted">{k.last_used_at ? fmtDateTimeTZ(k.last_used_at) : "Never"}</td>
                   <td style={{ textAlign: "right" }}>
                     <button
                       className="btn btn--ghost btn--sm"

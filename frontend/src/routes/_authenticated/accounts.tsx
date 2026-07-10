@@ -506,6 +506,7 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
           day: "numeric",
           hour: "2-digit",
           minute: "2-digit",
+          timeZoneName: "short",
         })
       : null;
 
@@ -811,6 +812,7 @@ function eventTime(iso: string): string {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZoneName: "short",
   });
 }
 
@@ -823,6 +825,7 @@ function untilTime(iso: string | null | undefined): string | null {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZoneName: "short",
   });
 }
 
