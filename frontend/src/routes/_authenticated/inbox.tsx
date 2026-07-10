@@ -12,6 +12,7 @@ import {
   Sparkles,
   MessageCircle,
   Check,
+  CheckCheck,
   X,
   Flag,
   Trash2,
@@ -1270,6 +1271,18 @@ function Thread({
     onError: (e) => toast.error(errMsg(e)),
   });
 
+  const finishMut = useMutation({
+    mutationFn: () =>
+      api<Conversation>(`/api/v1/conversations/${conversationId}/finish`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+
   const sendMut = useMutation({
     mutationFn: (text: string) =>
       api(`/api/v1/conversations/${conversationId}/send`, {
@@ -1475,6 +1488,22 @@ function Thread({
             title={conv.status === "lead" ? "Already marked as lead" : "Mark as lead"}
           >
             <Flag size={14} /> {conv.status === "lead" ? "Lead" : "Mark lead"}
+          </button>
+        )}
+        {conv && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            style={
+              conv.status === "finished"
+                ? { background: "var(--muted, #6b7280)", color: "white" }
+                : undefined
+            }
+            onClick={() => finishMut.mutate()}
+            disabled={finishMut.isPending || conv.status === "finished"}
+            title={conv.status === "finished" ? "Already finished" : "Finish conversation (turns AI off)"}
+          >
+            <CheckCheck size={14} /> {conv.status === "finished" ? "Finished" : "Finish"}
           </button>
         )}
         {conv &&
