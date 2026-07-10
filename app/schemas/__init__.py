@@ -722,6 +722,28 @@ class PoolHealth(BaseModel):
     has_backup: bool = False
 
 
+class EtaShortfall(BaseModel):
+    """Variant 1 (deadline-mass-fail fix, campaign-deadline-mass-fail): live
+    "will we make the deadline?" forecast so a user is warned BEFORE the
+    D-11 v2 auto-pause kicks in, rather than discovering it after the fact.
+
+    Recomputed on every read from CURRENT state — nothing is stored, so it
+    tracks the pool/backlog live as senders freeze/thaw or work is added.
+    ``daily_capacity`` sums the Phase 22 grade-ladder budget (workspace ladder,
+    per-sender current_level) over the campaign's CURRENTLY eligible senders
+    (same predicate as ``PoolHealth.active``) — NOT a hardcoded per-account
+    number. ``work_days_left`` counts campaign-timezone calendar days (today
+    inclusive) up to stop_date whose weekday bit is set in work_days_mask —
+    an approximation (ignores partial-day hours), good enough for a warning.
+    ``on_track`` is a convenience alias for ``shortfall_contacts == 0``.
+    """
+    remaining_contacts: int
+    daily_capacity: int
+    work_days_left: int
+    shortfall_contacts: int
+    on_track: bool
+
+
 class CampaignSenderAttach(BaseModel):
     """Read-only sender entry inside CampaignResponse.attached_senders[].
 
@@ -982,7 +1004,9 @@ class CampaignResponse(BaseModel):
     style_examples: Optional[str] = None
     # 029: auto-pause visibility. pause_reason is NULL for a manual / never-paused
     # campaign; 'no_senders_attached' | 'senders_unavailable' when the worker
-    # auto-paused it because it could no longer send.
+    # auto-paused it because it could no longer send; 'past_stop_date' (D-11 v2,
+    # deadline-mass-fail fix) when the campaign's stop_date passed — the pending
+    # queue tail is preserved, extend stop_date + resume to continue sending.
     pause_reason: Optional[str] = None
     paused_at: Optional[datetime] = None
     attached_senders: List[CampaignSenderAttach] = Field(default_factory=list)
@@ -998,6 +1022,9 @@ class CampaignResponse(BaseModel):
     # resume horizon). Computed in one pass in _campaign_to_response; badge color
     # derived on the frontend (presentation-free API).
     pool_health: PoolHealth
+    # Variant 1 (deadline-mass-fail fix): live "will we make the deadline?"
+    # forecast. None when stop_date or folder_id is unset — nothing to forecast.
+    eta_shortfall: Optional[EtaShortfall] = None
     created_at: datetime
     updated_at: datetime
 
@@ -1049,12 +1076,19 @@ class CampaignListResponse(BaseModel):
 class CampaignEvent(BaseModel):
     """Quick 260710-cge: one entry of the campaign event log ("Лог кампании").
 
-    Read-only merge of two existing sources — no dedicated events table:
+    Read-only merge of three existing sources — no dedicated events table:
     - message_queue rows (status sent/failed) → message_sent / message_failed
     - llm_calls.tool_calls built-in tool invocations → lead / handoff /
       dialog_finished (audit log survives conversation.status overwrites)
+    - campaigns.paused_at/pause_reason (D-11 v2, deadline-mass-fail fix) →
+      campaign_paused, ONLY when pause_reason='past_stop_date' — reflects the
+      CURRENT pause (not a history of every past pause, since the columns are
+      overwritten on each pause/resume — same limitation as the source columns).
     """
-    type: Literal["message_sent", "message_failed", "lead", "handoff", "dialog_finished"]
+    type: Literal[
+        "message_sent", "message_failed", "lead", "handoff", "dialog_finished",
+        "campaign_paused",
+    ]
     at: datetime
     contact_name: Optional[str] = None
     contact_username: Optional[str] = None

@@ -247,7 +247,8 @@ class QueueWorker:
           * ``c.start_date IS NULL OR NOW() >= c.start_date``
 
         Python-side post-filter (``zoneinfo`` is awkward in SQL):
-          * ``stop_date`` past → mark item as failed (D-11 soft skip).
+          * ``stop_date`` past → auto-pause the CAMPAIGN, leave the item pending
+            (D-11 v2, deadline-mass-fail fix — was "mark item as failed").
           * working-hours window per campaign timezone + work_days_mask.
         """
         async with AsyncSessionLocal() as db:
@@ -282,14 +283,18 @@ class QueueWorker:
             fetched = rows.fetchall()
 
             now_utc = datetime.now(timezone.utc)
-            items_to_fail: list = []
+            deadline_campaign_ids: set = set()
             eligible_sender_ids: list = []
             seen_senders: set = set()
 
             for r in fetched:
-                # D-11 (soft skip) — past stop_date → mark failed.
+                # D-11 v2 (deadline-mass-fail fix): past stop_date → pause the
+                # CAMPAIGN, don't touch the item — it stays 'pending'. Extending
+                # stop_date + resume then continues sending it, no reanimation of
+                # failed rows needed. See _pause_expired_campaigns for the guard
+                # that makes this idempotent (fires once, not every tick).
                 if r.c_stop is not None and now_utc >= r.c_stop:
-                    items_to_fail.append(r.item_id)
+                    deadline_campaign_ids.add(r.c_id)
                     continue
                 in_window = _campaign_in_working_window(
                     campaign_tz=r.c_tz,
@@ -305,12 +310,12 @@ class QueueWorker:
                     seen_senders.add(r.sender_id)
                     eligible_sender_ids.append(r.sender_id)
 
-            if items_to_fail:
-                await self._fail_past_stop_date_items(db, items_to_fail)
+            if deadline_campaign_ids:
+                await self._pause_expired_campaigns(db, deadline_campaign_ids)
                 await db.commit()
                 logger.info(
-                    f"Marked up to {len(items_to_fail)} queue items as failed "
-                    f"(past campaign.stop_date)"
+                    f"Auto-paused {len(deadline_campaign_ids)} campaign(s) past "
+                    f"their stop_date (pending queue preserved)"
                 )
 
         for sender_id in eligible_sender_ids:
@@ -496,6 +501,7 @@ class QueueWorker:
                 text("""
                     SELECT
                         mq.id AS item_id,
+                        c.id AS c_id,
                         c.timezone AS c_tz,
                         c.work_hour_start AS c_whs,
                         c.work_hour_end AS c_whe,
@@ -553,10 +559,13 @@ class QueueWorker:
 
             now_utc = datetime.now(timezone.utc)
             item_id = None
-            stop_date_failed_ids: list = []
+            deadline_campaign_ids: set = set()
             for r in rows.fetchall():
+                # D-11 v2 (deadline-mass-fail fix): pause the campaign instead of
+                # failing the item — mirrors _tick's identical branch (same
+                # rationale, same idempotent guard in _pause_expired_campaigns).
                 if r.c_stop is not None and now_utc >= r.c_stop:
-                    stop_date_failed_ids.append(r.item_id)
+                    deadline_campaign_ids.add(r.c_id)
                     continue
                 if _campaign_in_working_window(
                     campaign_tz=r.c_tz,
@@ -568,8 +577,8 @@ class QueueWorker:
                     item_id = r.item_id
                     break
 
-            if stop_date_failed_ids:
-                await self._fail_past_stop_date_items(db, stop_date_failed_ids)
+            if deadline_campaign_ids:
+                await self._pause_expired_campaigns(db, deadline_campaign_ids)
 
             if item_id is None:
                 await db.commit()
@@ -1421,57 +1430,39 @@ class QueueWorker:
                     ))
                 await self._fail_item(db, item, str(exc))
 
-    async def _fail_past_stop_date_items(self, db: AsyncSession, item_ids: list) -> None:
-        """IN-07: fail past-stop_date queue items and fire a per-item callback.
+    async def _pause_expired_campaigns(self, db: AsyncSession, campaign_ids) -> None:
+        """D-11 v2 (deadline-mass-fail fix): pause campaigns whose stop_date has
+        passed instead of failing their pending queue tail (superseded IN-07,
+        which marked the whole tail 'failed' + fired a per-item n8n callback with
+        error='past_stop_date' — confirmed no external consumer depends on that
+        callback, see .planning/debug/resolved/campaign-deadline-mass-fail.md).
 
-        (a) The UPDATE carries an ``AND status = 'pending'`` guard so a row that
-            was cancelled (or otherwise moved off 'pending') concurrently between
-            the pick-time SELECT and this UPDATE is NOT clobbered back to 'failed'.
-        (b) For every row that WAS failed and has a non-null ``callback_url`` a
-            fire-and-forget ``_fire_callback(status="failed")`` task is scheduled,
-            mirroring the SessionAuthError branch. ``sender_slug`` is resolved in
-            one query (it is not a column on ``message_queue``).
+        Idempotent by construction: the UPDATE is guarded by ``status = 'running'``
+        AND the caller's own SELECT (in ``_tick`` / ``_process_next_for_sender``)
+        already filters on ``c.status = 'running'`` — once a campaign is paused
+        here it stops being returned by that SELECT on the next tick, so this
+        never re-fires and never fights a user's manual pause/resume/stop.
+
+        ``pause_reason='past_stop_date'`` reuses the same column/response field as
+        the no-eligible-sender auto-pause (029,
+        ``campaign_enqueue.py::_maybe_autopause``) so the UI surfaces why sending
+        stopped. The pending queue tail is left untouched — extending stop_date +
+        resume continues sending it, no "reanimation" of failed rows required.
+        Closing a permanently-stuck tail is the existing explicit Stop/Finish path
+        (``_cancel_pending_queue``), unchanged by this fix.
 
         Does NOT commit — the caller owns the transaction.
         """
-        if not item_ids:
+        if not campaign_ids:
             return
-        failed = (await db.execute(
+        await db.execute(
             text("""
-                UPDATE message_queue
-                SET status = 'failed',
-                    error_message = 'past_stop_date',
-                    finished_at = NOW()
-                WHERE id = ANY(:ids) AND status = 'pending'
-                RETURNING id, callback_url, recipient_phone, extra_data, sender_id
+                UPDATE campaigns
+                SET status = 'paused', pause_reason = 'past_stop_date', paused_at = NOW()
+                WHERE id = ANY(:ids) AND status = 'running'
             """),
-            {"ids": [str(i) for i in item_ids]},
-        )).fetchall()
-        if not failed:
-            return
-
-        # Resolve sender slugs in one query (sender_slug is not on message_queue).
-        sender_ids = list({str(r.sender_id) for r in failed if r.sender_id is not None})
-        slug_by_id: dict = {}
-        if sender_ids:
-            srows = (await db.execute(
-                text("SELECT id, slug FROM senders WHERE id = ANY(:sids)"),
-                {"sids": sender_ids},
-            )).fetchall()
-            slug_by_id = {str(sr.id): sr.slug for sr in srows}
-
-        for r in failed:
-            if not r.callback_url:
-                continue
-            asyncio.create_task(self._fire_callback(
-                url=r.callback_url,
-                queue_id=str(r.id),
-                status="failed",
-                sender_slug=slug_by_id.get(str(r.sender_id), ""),
-                recipient_phone=r.recipient_phone,
-                error="past_stop_date",
-                extra_data=r.extra_data,
-            ))
+            {"ids": [str(i) for i in campaign_ids]},
+        )
 
     async def _stamp_resolve_fail(self, db: AsyncSession, item: MessageQueue, sender: Sender, code: str):
         """T2 (quick 260706-e8s): merge the resolve-fail marker into

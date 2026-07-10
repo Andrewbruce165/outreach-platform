@@ -4,7 +4,10 @@ Tests cover the rewritten `QueueWorker._tick` / `_process_next_for_sender`:
 JOIN to campaigns, filter by status='running', start_date/stop_date window,
 per-campaign working hours / days mask.
 
-D-11: items past stop_date → status='failed', error_message='past_stop_date'.
+D-11 v2 (deadline-mass-fail fix): items past stop_date stay pending — the
+CAMPAIGN is auto-paused (status='paused', pause_reason='past_stop_date')
+instead of failing the queue tail. Supersedes the original D-11 ("mark item
+as failed").
 D-15: paused campaigns SKIP items in queue (listener.py не модифицируется).
 H4 (revision): NULL campaign_id items must NOT be picked up by the worker.
 """
@@ -174,7 +177,8 @@ async def test_queue_skips_done_campaign_items(
 async def test_queue_skips_past_stop_date(
     async_db_session, test_running_campaign_factory
 ):
-    """D-11: NOW() >= campaign.stop_date → item НЕ берётся в обработку."""
+    """D-11 v2: NOW() >= campaign.stop_date → item НЕ берётся в обработку
+    (campaign auto-pauses out from under the 'running' SELECT filter)."""
     past_stop = datetime.now(timezone.utc) - timedelta(hours=1)
     camp, senders = await test_running_campaign_factory(
         sender_count=1,
@@ -199,10 +203,13 @@ async def test_queue_skips_past_stop_date(
     )
 
 
-async def test_queue_marks_past_stop_date_failed(
+async def test_queue_marks_past_stop_date_campaign_paused(
     async_db_session, test_running_campaign_factory
 ):
-    """D-11: item с истёкшим stop_date → status='failed', error_message='past_stop_date'."""
+    """D-11 v2 (deadline-mass-fail fix): a campaign with an expired stop_date is
+    auto-paused (status='paused', pause_reason='past_stop_date') and its pending
+    queue item is left untouched — NOT failed. Supersedes the old
+    test_queue_marks_past_stop_date_failed (IN-07 fail behaviour, removed)."""
     past_stop = datetime.now(timezone.utc) - timedelta(hours=1)
     camp, senders = await test_running_campaign_factory(
         sender_count=1,
@@ -223,8 +230,53 @@ async def test_queue_marks_past_stop_date_failed(
         await worker._tick()
 
     status, err = await _queue_status(async_db_session, qid)
-    assert status == "failed", f"expected failed, got {status}"
-    assert err == "past_stop_date", f"expected error_message='past_stop_date', got {err}"
+    assert status == "pending", f"pending queue tail must be preserved, got {status}"
+    assert err is None
+
+    camp_row = (await async_db_session.execute(text(
+        "SELECT status, pause_reason FROM campaigns WHERE id = :id"
+    ), {"id": str(camp["id"])})).first()
+    assert camp_row.status == "paused"
+    assert camp_row.pause_reason == "past_stop_date"
+
+
+async def test_process_next_for_sender_pauses_on_past_stop_date(
+    async_db_session, test_running_campaign_factory
+):
+    """D-11 v2: the SAME auto-pause fires from the per-sender pick path
+    (`_process_next_for_sender`), not just `_tick` — both duplicate the
+    stop_date check and must agree. Item stays pending, nothing dispatched."""
+    past_stop = datetime.now(timezone.utc) - timedelta(hours=1)
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1,
+        work_hour_start=0, work_hour_end=24, work_days_mask=127,
+        stop_date=past_stop,
+    )
+    sid = senders[0].id
+
+    qid = await _insert_queue_item(
+        async_db_session,
+        workspace_id=camp["workspace_id"],
+        sender_id=sid,
+        campaign_id=camp["id"],
+    )
+
+    worker = QueueWorker()
+    cm_rate = patch.object(worker, "_check_rate_limits", new=AsyncMock(return_value=True))
+    cm_pause = patch.object(worker, "_get_long_pause_seconds", new=AsyncMock(return_value=None))
+    with cm_rate, cm_pause, patch.object(worker, "_send_item", new=AsyncMock()) as fake_send:
+        await worker._process_next_for_sender(sid)
+        fake_send.assert_not_called()
+
+    status, err = await _queue_status(async_db_session, qid)
+    assert status == "pending", f"pending item must be preserved, got {status}"
+    assert err is None
+
+    camp_row = (await async_db_session.execute(text(
+        "SELECT status, pause_reason FROM campaigns WHERE id = :id"
+    ), {"id": str(camp["id"])})).first()
+    assert camp_row.status == "paused"
+    assert camp_row.pause_reason == "past_stop_date"
 
 
 async def test_queue_skips_before_start_date(

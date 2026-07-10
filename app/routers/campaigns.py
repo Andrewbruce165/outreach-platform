@@ -19,7 +19,7 @@ Endpoints:
 
 import logging
 import zoneinfo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -48,10 +48,12 @@ from app.schemas import (
     CampaignSenderAttachRequest,
     CampaignUpdate,
     CampaignWriteResponse,
+    EtaShortfall,
     PoolHealth,
     SenderAttachWarning,
     WarningItem,
 )
+from app.services import grade_ladder
 from app.services.rebalance import rebalance_on_attach
 from app.services.campaign_enqueue import rerender_pending_queue
 from app.utils.auth import AuthCtx, auth_dep
@@ -212,6 +214,116 @@ async def _compute_is_exhausted(
     return unassigned_count == 0 and pending_count == 0
 
 
+def _count_work_days(
+    *, campaign_tz: str, work_days_mask: int, stop_date: datetime,
+    now: Optional[datetime] = None,
+) -> int:
+    """Variant 1 (deadline-mass-fail fix): count campaign work-days remaining
+    between now and stop_date (today inclusive) in the campaign's timezone,
+    filtered by work_days_mask (same Mo=1..Su=64 bit mapping as
+    ``queue._campaign_in_working_window``). Used ONLY by the ETA forecast below
+    — NOT by the dispatch hot path in queue.py.
+
+    Approximation: counts a day as "available" regardless of how much of
+    work_hour_start..work_hour_end is left in it — fine for a warning, not for
+    precise scheduling. Returns 0 if stop_date is already in the past (mirrors
+    the D-11 v2 pause trigger: no work days left to send) or on an invalid
+    timezone (conservative).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        tz = zoneinfo.ZoneInfo(campaign_tz)
+    except Exception as exc:  # noqa: BLE001 — any tz resolution failure
+        logger.warning(f"Invalid campaign timezone '{campaign_tz}' in ETA forecast: {exc}")
+        return 0
+
+    local_now = now.astimezone(tz)
+    local_stop = stop_date.astimezone(tz)
+    if local_stop <= local_now:
+        return 0
+
+    day = local_now.date()
+    stop_day = local_stop.date()
+    count = 0
+    guard = 0
+    while day <= stop_day and guard < 400:  # guard: defensive cap, not expected in practice
+        if work_days_mask & (1 << day.weekday()):
+            count += 1
+        day += timedelta(days=1)
+        guard += 1
+    return count
+
+
+async def _compute_eta_shortfall(
+    db: AsyncSession, campaign: Campaign
+) -> Optional[EtaShortfall]:
+    """Variant 1 (deadline-mass-fail fix): forecast contacts-left vs. deadline
+    capacity, so the UI can warn BEFORE the D-11 v2 auto-pause fires.
+
+    None when there's no stop_date (nothing to miss) or no folder (nothing to
+    count remaining contacts against) — mirrors the is_exhausted short-circuit.
+
+    remaining = unassigned registered contacts in the folder + pending/processing
+    queue rows (same counting as ``_compute_is_exhausted``, unified here).
+    daily_capacity = sum of the Phase 22 grade-ladder budget over the pool's
+    CURRENTLY eligible senders (restriction_status='none' AND auth_status='ok'
+    AND lifecycle_status='active' — same predicate as POOLV-01's `active`), so
+    it reflects the live pool, not a hardcoded per-account number (the
+    per-campaign daily cap column was dropped in migration 059).
+    """
+    if campaign.stop_date is None or campaign.folder_id is None:
+        return None
+
+    unassigned_count = (await db.execute(text("""
+        SELECT COUNT(*)
+        FROM contacts c
+        WHERE c.folder_id = :fid
+          AND c.tg_status = 'registered'
+          AND (c.phone IS NOT NULL OR c.username IS NOT NULL)
+          AND NOT EXISTS (
+              SELECT 1 FROM campaign_contact_assignments cca
+              WHERE cca.campaign_id = :cid
+                AND cca.contact_phone = COALESCE(c.phone, '@' || c.username)
+          )
+    """), {"fid": str(campaign.folder_id), "cid": str(campaign.id)})).scalar() or 0
+
+    pending_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM message_queue
+        WHERE campaign_id = :cid AND status IN ('pending', 'processing')
+    """), {"cid": str(campaign.id)})).scalar() or 0
+    remaining = unassigned_count + pending_count
+
+    ladder = await grade_ladder.load_ladder(db, campaign.workspace_id)
+    level_rows = (await db.execute(text("""
+        SELECT s.current_level
+        FROM campaign_senders cs
+        JOIN senders s ON s.id = cs.sender_id
+        WHERE cs.campaign_id = :cid
+          AND s.restriction_status = 'none'
+          AND s.auth_status = 'ok'
+          AND s.lifecycle_status = 'active'
+    """), {"cid": str(campaign.id)})).fetchall()
+    daily_capacity = sum(
+        grade_ladder.budget_for_level(ladder, r.current_level) for r in level_rows
+    )
+
+    work_days_left = _count_work_days(
+        campaign_tz=campaign.timezone,
+        work_days_mask=campaign.work_days_mask,
+        stop_date=campaign.stop_date,
+    )
+
+    shortfall = max(0, remaining - daily_capacity * work_days_left)
+    return EtaShortfall(
+        remaining_contacts=remaining,
+        daily_capacity=daily_capacity,
+        work_days_left=work_days_left,
+        shortfall_contacts=shortfall,
+        on_track=shortfall == 0,
+    )
+
+
 async def _build_attached_senders(
     db: AsyncSession, ctx: AuthCtx, campaign_id: UUID
 ) -> list[CampaignSenderAttach]:
@@ -312,6 +424,8 @@ async def _campaign_to_response(
         "SELECT COUNT(*) FROM campaign_attachments WHERE campaign_id = :cid"
     ), {"cid": str(campaign.id)})).scalar() or 0
     has_attachment = attachment_count > 0
+    # Variant 1 (deadline-mass-fail fix): live ETA-vs-deadline forecast.
+    eta_shortfall = await _compute_eta_shortfall(db, campaign)
     return CampaignResponse(
         id=campaign.id,
         workspace_id=campaign.workspace_id,
@@ -363,6 +477,7 @@ async def _campaign_to_response(
         is_exhausted=is_exhausted,
         failed_count=failed_count,
         pool_health=pool_health,
+        eta_shortfall=eta_shortfall,
         # Phase 24 D-13/D-19 + 260709-dbl: variation toggle + computed attachment
         # presence/count.
         variation_enabled=campaign.variation_enabled,
@@ -1433,11 +1548,13 @@ async def campaign_events(
 ):
     """Read-only, newest-first campaign event log ("Лог кампании").
 
-    Merges two existing sources — no dedicated events table, no migrations:
+    Merges three existing sources — no dedicated events table, no migrations:
     - message_queue (status sent/failed) → message_sent / message_failed
     - llm_calls.tool_calls built-in tool invocations → lead / handoff /
       dialog_finished. tool_calls is the audit source of truth here —
       conversation.status gets overwritten, the log does not.
+    - campaigns.paused_at/pause_reason (D-11 v2, deadline-mass-fail fix) →
+      campaign_paused (current pause state only, not history).
 
     Cursor pagination: ``before`` (ISO datetime, defaults to now) + ``limit``.
     NOTE: the strict ``< :before`` cursor can theoretically skip events that
@@ -1502,6 +1619,19 @@ async def campaign_events(
         LIMIT :lim
     """), params)).all()
 
+    # Source 3 — D-11 v2 deadline auto-pause (deadline-mass-fail fix). At most
+    # one row: reflects the CURRENT pause state, not a history of every past
+    # pause (paused_at/pause_reason are overwritten on each pause/resume — same
+    # limitation as the source columns, accepted for MVP like the `before`
+    # cursor edge case above).
+    pause_row = (await db.execute(text("""
+        SELECT paused_at AS at, pause_reason AS detail
+        FROM campaigns
+        WHERE id = :cid AND workspace_id = :wid
+          AND status = 'paused' AND pause_reason = 'past_stop_date'
+          AND paused_at IS NOT NULL AND paused_at < :before
+    """), params)).first()
+
     events: list[tuple] = []  # (at, tie_break, CampaignEvent)
     for r in queue_rows:
         etype = "message_sent" if r.status == "sent" else "message_failed"
@@ -1524,6 +1654,16 @@ async def campaign_events(
             contact_phone=r.contact_phone,
             sender_slug=r.sender_slug,
             detail=args[:200] if args else None,
+        )))
+    if pause_row is not None:
+        events.append((pause_row.at, f"campaign_paused:{campaign_id}", CampaignEvent(
+            type="campaign_paused",
+            at=pause_row.at,
+            contact_name=None,
+            contact_username=None,
+            contact_phone=None,
+            sender_slug=None,
+            detail=pause_row.detail,
         )))
 
     # Newest first; the tie-break string keeps ordering deterministic for

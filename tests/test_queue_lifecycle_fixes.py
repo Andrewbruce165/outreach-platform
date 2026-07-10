@@ -3,12 +3,11 @@
 Covers:
   * WR-12a — a cold terminal fail (no prior 'sent' for campaign+phone) releases the
     sticky campaign_contact_assignments row; a warm fail (prior 'sent') keeps it.
-  * IN-07  — the past_stop_date fail path carries an `AND status='pending'` guard
-    (never clobbers a concurrently-cancelled row) and fires a per-item callback.
+  * D-11 v2 (deadline-mass-fail fix, superseded IN-07) — past-stop_date campaigns
+    are auto-PAUSED (pause_reason='past_stop_date'), not failed. The pending queue
+    tail is left untouched and the pause is idempotent (guarded by status='running').
   * IN-12  — dispatcher-sent outbound messages are logged with sent_by='ai'.
 """
-
-import asyncio
 
 import pytest
 from sqlalchemy import text
@@ -166,92 +165,81 @@ async def test_fail_item_null_campaign_does_not_touch_cca(
     assert status == "failed"
 
 
-# ─── IN-07: past_stop_date fail guard + callback ─────────────────────────────
+# ─── D-11 v2: past-stop_date campaigns auto-PAUSE (deadline-mass-fail fix) ───
 
 
-async def test_past_stop_date_fail_skips_cancelled_row(
-    async_db_session, test_workspace, test_sender_factory,
+async def test_pause_expired_campaigns_pauses_running_campaign(
+    async_db_session, test_workspace, test_campaign_factory,
 ):
-    """IN-07: the status='pending' guard means a concurrently-cancelled row is NOT
-    flipped to 'failed' by the stop_date fail path; a pending row still fails."""
-    sender = await test_sender_factory()
-    cancelled_id = await _insert_queue_row(
-        async_db_session, test_workspace.id, sender.id, "+79996660001",
-        status="cancelled",
-    )
-    pending_id = await _insert_queue_row(
-        async_db_session, test_workspace.id, sender.id, "+79996660002",
-        status="pending",
-    )
+    """D-11 v2: a running campaign flips to paused/pause_reason='past_stop_date'
+    when its id is passed to _pause_expired_campaigns — the trigger queue.py
+    itself no longer decides here (it just detects and hands off campaign ids)."""
+    camp = await test_campaign_factory(status="running")
 
     worker = QueueWorker()
-    await worker._fail_past_stop_date_items(async_db_session, [cancelled_id, pending_id])
+    await worker._pause_expired_campaigns(async_db_session, [camp["id"]])
     await async_db_session.commit()
 
-    cancelled_status = (await async_db_session.execute(text(
-        "SELECT status FROM message_queue WHERE id = :id"
-    ), {"id": str(cancelled_id)})).scalar()
-    pending_status = (await async_db_session.execute(text(
-        "SELECT status FROM message_queue WHERE id = :id"
-    ), {"id": str(pending_id)})).scalar()
-
-    assert cancelled_status == "cancelled"  # untouched — not clobbered
-    assert pending_status == "failed"
+    row = (await async_db_session.execute(text(
+        "SELECT status, pause_reason, paused_at FROM campaigns WHERE id = :id"
+    ), {"id": str(camp["id"])})).first()
+    assert row.status == "paused"
+    assert row.pause_reason == "past_stop_date"
+    assert row.paused_at is not None
 
 
-async def test_past_stop_date_fail_fires_callback(
-    async_db_session, test_workspace, test_sender_factory, monkeypatch,
+async def test_pause_expired_campaigns_preserves_pending_queue(
+    async_db_session, test_workspace, test_sender_factory, test_campaign_factory,
 ):
-    """IN-07: a past_stop_date fail fires a status='failed' callback for a row with
-    a non-null callback_url, resolving the sender_slug."""
+    """D-11 v2 core fix: unlike the superseded IN-07 fail path, the pending queue
+    tail is left completely untouched — extend stop_date + resume continues
+    sending it, no reanimation of failed rows required."""
     sender = await test_sender_factory()
+    camp = await test_campaign_factory(status="running")
     item_id = await _insert_queue_row(
-        async_db_session, test_workspace.id, sender.id, "+79996660003",
-        status="pending", callback_url="http://callback.test/hook",
+        async_db_session, test_workspace.id, sender.id, "+79996660005",
+        status="pending", campaign_id=camp["id"],
     )
 
     worker = QueueWorker()
-    calls: list = []
-
-    async def _fake_fire(**kwargs):
-        calls.append(kwargs)
-
-    monkeypatch.setattr(worker, "_fire_callback", _fake_fire)
-
-    await worker._fail_past_stop_date_items(async_db_session, [item_id])
+    await worker._pause_expired_campaigns(async_db_session, [camp["id"]])
     await async_db_session.commit()
-    await asyncio.sleep(0)  # let the fire-and-forget create_task run
 
-    assert len(calls) == 1
-    assert calls[0]["status"] == "failed"
-    assert calls[0]["error"] == "past_stop_date"
-    assert calls[0]["sender_slug"] == sender.slug
-    assert calls[0]["recipient_phone"] == "+79996660003"
+    status = (await async_db_session.execute(text(
+        "SELECT status FROM message_queue WHERE id = :id"
+    ), {"id": str(item_id)})).scalar()
+    assert status == "pending", "pending queue tail must survive the deadline pause"
 
 
-async def test_past_stop_date_fail_no_callback_when_url_null(
-    async_db_session, test_workspace, test_sender_factory, monkeypatch,
+async def test_pause_expired_campaigns_idempotent_on_already_paused(
+    async_db_session, test_workspace, test_campaign_factory,
 ):
-    """IN-07: no callback is scheduled when the failed row has no callback_url."""
-    sender = await test_sender_factory()
-    item_id = await _insert_queue_row(
-        async_db_session, test_workspace.id, sender.id, "+79996660004",
-        status="pending", callback_url=None,
-    )
+    """D-11 v2: the UPDATE is guarded by status='running', so a campaign already
+    paused (by this path, manually, or by the 029 no-sender auto-pause) is left
+    untouched — no repeated churn, no clobbering an unrelated pause_reason."""
+    camp = await test_campaign_factory(status="paused")
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET pause_reason = 'no_senders_attached' WHERE id = :id"
+    ), {"id": str(camp["id"])})
+    await async_db_session.commit()
 
     worker = QueueWorker()
-    calls: list = []
-
-    async def _fake_fire(**kwargs):
-        calls.append(kwargs)
-
-    monkeypatch.setattr(worker, "_fire_callback", _fake_fire)
-
-    await worker._fail_past_stop_date_items(async_db_session, [item_id])
+    await worker._pause_expired_campaigns(async_db_session, [camp["id"]])
     await async_db_session.commit()
-    await asyncio.sleep(0)
 
-    assert calls == []
+    row = (await async_db_session.execute(text(
+        "SELECT status, pause_reason FROM campaigns WHERE id = :id"
+    ), {"id": str(camp["id"])})).first()
+    assert row.status == "paused"
+    assert row.pause_reason == "no_senders_attached", (
+        "an already-paused campaign's pause_reason must NOT be clobbered"
+    )
+
+
+async def test_pause_expired_campaigns_empty_list_is_noop(async_db_session):
+    """D-11 v2: an empty campaign_ids list must not raise or touch the DB."""
+    worker = QueueWorker()
+    await worker._pause_expired_campaigns(async_db_session, [])  # must not raise
 
 
 # ─── IN-12: dispatcher message logged as sent_by='ai' ────────────────────────

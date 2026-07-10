@@ -26,3 +26,4 @@ barter_roma_registered.csv
 # so Lovable has a stable URL/commit to ingest), but rebuild artifacts on every
 # release. Keep these lines as documentation; do NOT add an ignore here.
 # (intentionally no ignore patterns for lovable-handoff/* — committed by design)
+.planning/notes/10сшаа.zip
