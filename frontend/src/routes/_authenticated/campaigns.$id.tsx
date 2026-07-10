@@ -1,10 +1,25 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useState } from "react";
 import { ArrowLeft, Edit3, Lock, Pause, Play, Plus, StopCircle, X } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 
 import { EditCampaignModal } from "@/components/EditCampaignModal";
+import { Badge } from "@/components/ui/badge";
+import {
+  Timeline,
+  TimelineContent,
+  TimelineHeader,
+  TimelineIndicator,
+  TimelineItem,
+  TimelineSeparator,
+  TimelineTitle,
+} from "@/components/ui/timeline";
 import { api, ApiError } from "@/lib/api";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
@@ -15,6 +30,31 @@ type Folder = components["schemas"]["FolderResponse"];
 type Sender = components["schemas"]["SenderResponse"];
 type PoolHealth = components["schemas"]["PoolHealth"];
 type AttachedSender = components["schemas"]["CampaignSenderAttach"];
+
+// Quick 260710-cge: local types for GET /campaigns/{id}/events — the generated
+// openapi types (@/types/api) are NOT regenerated, so define them here.
+type CampaignEventType =
+  | "message_sent"
+  | "message_failed"
+  | "lead"
+  | "handoff"
+  | "dialog_finished";
+
+interface CampaignEventItem {
+  type: CampaignEventType;
+  at: string;
+  contact_name: string | null;
+  contact_username: string | null;
+  contact_phone: string | null;
+  sender_slug: string | null;
+  detail: string | null;
+}
+
+interface CampaignEventsResponse {
+  events: CampaignEventItem[];
+  next_before: string | null;
+  has_more: boolean;
+}
 
 export const Route = createFileRoute("/_authenticated/campaigns/$id")({
   component: CampaignDetailPage,
@@ -447,6 +487,8 @@ function CampaignDetailPage() {
                   ]}
                 />
               </section>
+
+              <CampaignEventLog campaignId={id} />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -770,6 +812,170 @@ function SendersPanel({
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+/* ---------------- Лог кампании (quick 260710-cge) ---------------- */
+
+const EVENT_BADGE: Record<
+  CampaignEventType,
+  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
+> = {
+  message_sent: { label: "Отправлено", variant: "secondary" },
+  message_failed: { label: "Ошибка", variant: "destructive" },
+  lead: { label: "Лид", variant: "default" },
+  handoff: { label: "Передан менеджеру", variant: "secondary" },
+  dialog_finished: { label: "Диалог завершён", variant: "outline" },
+};
+
+function eventContactLabel(e: CampaignEventItem): string {
+  if (e.contact_name) return e.contact_name;
+  if (e.contact_username) return `@${e.contact_username}`;
+  return e.contact_phone ?? "—";
+}
+
+function eventDayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function eventDayLabel(iso: string): string {
+  return new Date(iso).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long",
+  });
+}
+
+function eventTimeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Newest-first campaign event log assembled read-only on the backend from
+ * message_queue (sent/failed) and llm_calls.tool_calls (lead/handoff/finish).
+ * Cursor pagination: next page = events strictly older than `next_before`.
+ */
+function CampaignEventLog({ campaignId }: { campaignId: string }) {
+  const eventsQ = useInfiniteQuery({
+    queryKey: ["campaign-events", campaignId],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      api<CampaignEventsResponse>(`/api/v1/campaigns/${campaignId}/events`, {
+        query: { limit: 50, ...(pageParam ? { before: pageParam } : {}) },
+      }),
+    getNextPageParam: (last) =>
+      last.has_more ? (last.next_before ?? undefined) : undefined,
+  });
+
+  const events = eventsQ.data?.pages.flatMap((p) => p.events) ?? [];
+
+  // Cheap day grouping: split the flat newest-first list into per-day chunks,
+  // each rendered as its own <Timeline> under a muted day header.
+  const dayGroups: Array<{ key: string; label: string; items: CampaignEventItem[] }> = [];
+  for (const e of events) {
+    const key = eventDayKey(e.at);
+    const last = dayGroups[dayGroups.length - 1];
+    if (last && last.key === key) {
+      last.items.push(e);
+    } else {
+      dayGroups.push({ key, label: eventDayLabel(e.at), items: [e] });
+    }
+  }
+
+  return (
+    <section className="card" style={{ padding: 20 }}>
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
+        Лог кампании
+      </h3>
+
+      {eventsQ.isLoading && (
+        <div className="muted" style={{ fontSize: 13 }}>Загрузка…</div>
+      )}
+      {eventsQ.error != null && (
+        <div style={{ color: "var(--danger)", fontSize: 13 }}>
+          {errMsg(eventsQ.error)}
+        </div>
+      )}
+      {!eventsQ.isLoading && !eventsQ.error && events.length === 0 && (
+        <div className="muted" style={{ fontSize: 13 }}>Событий пока нет</div>
+      )}
+
+      {dayGroups.map((group) => (
+        <div key={group.key} style={{ marginBottom: 8 }}>
+          <div
+            className="muted text-xs"
+            style={{
+              margin: "6px 0 10px",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            {group.label}
+          </div>
+          <Timeline value={group.items.length} style={{ marginLeft: 8 }}>
+            {group.items.map((e, i) => {
+              const badge = EVENT_BADGE[e.type];
+              return (
+                <TimelineItem key={`${e.type}-${e.at}-${i}`} step={i + 1}>
+                  <TimelineHeader>
+                    <TimelineSeparator />
+                    <TimelineIndicator />
+                    <TimelineTitle
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        margin: 0,
+                      }}
+                    >
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                      <span>{eventContactLabel(e)}</span>
+                      <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
+                        {eventTimeLabel(e.at)}
+                      </span>
+                    </TimelineTitle>
+                  </TimelineHeader>
+                  <TimelineContent>
+                    {e.sender_slug && (
+                      <span className="muted text-xs">via {e.sender_slug}</span>
+                    )}
+                    {e.type === "message_failed" && e.detail && (
+                      <div
+                        style={{
+                          color: "var(--danger)",
+                          fontSize: 12,
+                          marginTop: 2,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {e.detail}
+                      </div>
+                    )}
+                  </TimelineContent>
+                </TimelineItem>
+              );
+            })}
+          </Timeline>
+        </div>
+      ))}
+
+      {eventsQ.hasNextPage && (
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          disabled={eventsQ.isFetchingNextPage}
+          onClick={() => void eventsQ.fetchNextPage()}
+          style={{ marginTop: 4 }}
+        >
+          {eventsQ.isFetchingNextPage ? "Загрузка…" : "Показать ещё"}
+        </button>
+      )}
     </section>
   );
 }
