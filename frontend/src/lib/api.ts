@@ -118,4 +118,20 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
   return payload as T;
 }
 
+/**
+ * Fetch a binary resource (e.g. campaign attachment bytes) with the auth
+ * header. A plain <img src> cannot carry Authorization — callers turn the
+ * Blob into an object URL (and revoke it on unmount).
+ */
+export async function apiBlob(path: string): Promise<Blob> {
+  const token = await waitForAccessToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(buildUrl(path), { headers });
+  if (!res.ok) {
+    throw new ApiError(res.status, "FETCH_FAILED", `Request failed (${res.status})`);
+  }
+  return res.blob();
+}
+
 export const apiBaseUrl = BACKEND_URL;
