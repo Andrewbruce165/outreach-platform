@@ -45,6 +45,7 @@ import { supabase } from "@/lib/supabase";
 import { errorMessageFromEnvelope } from "@/lib/error-codes";
 import { track } from "@/lib/telemetry";
 import type { components } from "@/types/api";
+import { deriveSenderHealth } from "@/lib/sender-health";
 
 type Conversation = components["schemas"]["ConversationResponse"];
 type ConversationList = components["schemas"]["ConversationListResponse"];
@@ -619,6 +620,11 @@ function ConvList({
     obs.observe(node);
     return () => obs.disconnect();
   }, [hasMore, onLoadMore, items.length]);
+  const senderBySlug = useMemo(() => {
+    const m = new Map<string, Sender>();
+    for (const s of senders) m.set(s.slug, s);
+    return m;
+  }, [senders]);
   return (
     <aside
       style={{
@@ -970,20 +976,27 @@ function ConvList({
                       : ""}
                   </span>
                 </div>
-                {c.sender_slug && (
-                  <div
-                    style={{
-                      fontSize: 11.5,
-                      color: "var(--text-muted)",
-                      marginBottom: 4,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    via @{c.sender_slug}
-                  </div>
-                )}
+                {c.sender_slug && (() => {
+                  const s = senderBySlug.get(c.sender_slug);
+                  const info = s ? deriveSenderHealth(s) : null;
+                  return (
+                    <div
+                      title={info ? info.label : undefined}
+                      style={{
+                        fontSize: 11.5,
+                        color: info ? info.color : "var(--text-muted)",
+                        fontWeight: info && info.health !== "green" ? 600 : 500,
+                        marginBottom: 4,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      via @{c.sender_slug}
+                      {s?.phone ? ` — ${s.phone}` : ""}
+                    </div>
+                  );
+                })()}
                 <div
                   style={{
                     fontSize: 12,
