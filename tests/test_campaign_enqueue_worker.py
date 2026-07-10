@@ -714,3 +714,67 @@ async def test_sweep_idempotent(
     assert first == 3, "first sweep drains the stranded backlog"
     assert second == 0, "second sweep must move 0 rows"
     assert dist_after_second == dist_after_first, "distribution must be unchanged"
+
+
+# ─── EVEN-split worker pass: idle eligible senders picked up every tick ───────
+# (debug: campaign-pending-not-on-idle-senders, 2026-07-10)
+
+
+async def test_worker_even_split_backfills_idle_senders(
+    async_db_session,
+    test_running_campaign_factory,
+    test_queue_item_factory,
+):
+    """The per-tick even-split pass redistributes a standing cold-pending backlog
+    onto eligible-but-idle senders of a RUNNING campaign — the exact production
+    symptom: healthy senders sat at 0 pending while the backlog stayed stuck on
+    the rest of the pool, because nothing evened load among eligible senders."""
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    loaded, idle = senders[0], senders[1]
+
+    phones = [f"+7990062{i:04d}" for i in range(4)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], loaded.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+
+    moved = await campaign_enqueue_worker._rebalance_even_running_campaigns()
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert moved == 2, "half of the backlog must move onto the idle sender"
+    assert sum(after.values()) == 4, "even-split must not create or drop rows"
+    assert after.get(str(loaded.id), 0) == 2
+    assert after.get(str(idle.id), 0) == 2
+    # Moved rows keep scheduled_at (no reset — donors are healthy) and CCA syncs.
+    for ph in phones:
+        row = (await async_db_session.execute(text("""
+            SELECT sender_id FROM message_queue
+            WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'pending'
+        """), {"cid": str(camp["id"]), "phone": ph})).first()
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(row[0])
+
+
+async def test_worker_even_split_skips_non_running_campaign(
+    async_db_session,
+    test_running_campaign_factory,
+    test_queue_item_factory,
+):
+    """A paused campaign's backlog is NOT touched by the even-split pass — the
+    worker only iterates campaigns with status='running'."""
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    loaded, idle = senders[0], senders[1]
+
+    for i in range(4):
+        await test_queue_item_factory(camp["id"], loaded.id, f"+7990063{i:04d}",
+                                      status="pending", with_cca=True,
+                                      with_conversation=False)
+    await async_db_session.execute(text(
+        "UPDATE campaigns SET status = 'paused' WHERE id = :cid"
+    ), {"cid": str(camp["id"])})
+    await async_db_session.commit()
+
+    moved = await campaign_enqueue_worker._rebalance_even_running_campaigns()
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert moved == 0, "paused campaign must not be rebalanced"
+    assert after.get(str(loaded.id), 0) == 4
+    assert after.get(str(idle.id), 0) == 0

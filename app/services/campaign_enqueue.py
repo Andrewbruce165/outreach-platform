@@ -132,6 +132,44 @@ class CampaignEnqueueWorker:
             )
         return total
 
+    async def _rebalance_even_running_campaigns(self) -> int:
+        """Continuous even-split of standing cold-pending backlog across ALL
+        eligible senders of every running campaign (debug:
+        campaign-pending-not-on-idle-senders, 2026-07-10).
+
+        Closes the gap the sweep cannot: the sweep only evacuates rows OFF
+        ineligible senders; nothing evened load AMONG already-eligible senders,
+        so a sender attached late (or under-picked at enqueue) idled at 0
+        pending while the backlog sat on the rest of the pool.
+        rebalance_campaign_even is idempotent (minimal-move targets → an even
+        pool moves 0 rows), so running it every tick is a cheap no-op in steady
+        state. Runs in the same slot as the sweep — AFTER it, so evacuated rows
+        are already on the eligible pool when the even-split counts load.
+
+        Self-contained: own session; commits per campaign so each campaign's
+        moves (queue row + CCA in lock-step inside rebalance_campaign_even) land
+        atomically and locks are released before the next campaign."""
+        from app.services.rebalance import rebalance_campaign_even
+        total = 0
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                text("SELECT id FROM campaigns WHERE status = 'running'")
+            )).fetchall()
+            for r in rows:
+                moved = await rebalance_campaign_even(r.id, db)
+                # Commit per campaign: releases FOR UPDATE locks promptly and
+                # keeps each campaign's move-set atomic (CR-01 — the callee
+                # never commits).
+                await db.commit()
+                total += moved
+        if total:
+            # PII-safe: COUNT only, never recipient_phone (CLAUDE.md).
+            logger.info(
+                "📤 even-split: rebalanced %d cold-pending rows across eligible senders",
+                total,
+            )
+        return total
+
     async def _tick(self) -> int:
         """One tick — process all running campaigns. Returns total enqueued count."""
         # Continuous invariant enforcement (EVAC-03): before enqueueing, drain any
@@ -142,6 +180,13 @@ class CampaignEnqueueWorker:
             await self._sweep_stranded_cold_backlog()
         except Exception as exc:  # noqa: BLE001 — sweep must not starve enqueue
             logger.error("📤 sweep error: %s", exc, exc_info=True)
+        # Even-split AFTER the sweep (evacuated rows are then counted on their
+        # new eligible senders) and BEFORE enqueue. Same worker-must-not-die
+        # discipline: a rebalance failure never aborts the tick.
+        try:
+            await self._rebalance_even_running_campaigns()
+        except Exception as exc:  # noqa: BLE001 — rebalance must not starve enqueue
+            logger.error("📤 even-split rebalance error: %s", exc, exc_info=True)
         async with AsyncSessionLocal() as db:
             campaigns_rows = await db.execute(text("""
                 SELECT id, workspace_id, folder_id, message_template, start_date,

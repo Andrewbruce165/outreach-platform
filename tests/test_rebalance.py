@@ -349,3 +349,199 @@ async def test_rebalance_evacuation_idempotent(
     assert first == 4, "first call evacuates the whole cold backlog"
     assert second == 0, "second call must move 0 rows"
     assert dist_after_second == dist_after_first, "distribution must be unchanged"
+
+
+# ═══ EVEN-split: continuous rebalance across ALL eligible senders ═════════════
+# (debug: campaign-pending-not-on-idle-senders, 2026-07-10 — idle healthy senders
+#  were never topped up from the standing backlog because rebalance_on_attach is
+#  edge-triggered and one-sender-only.)
+
+
+async def test_even_split_backfills_idle_eligible_senders(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """EVEN-01: A holds the whole cold backlog, B and C are eligible but idle at 0.
+    rebalance_campaign_even evens the pool to total/P each and keeps CCA in sync."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=3)
+    a, b, c = senders[0], senders[1], senders[2]
+
+    phones = [f"+7990070{i:04d}" for i in range(6)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], a.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+
+    moved = await rebalance_campaign_even(camp["id"], async_db_session)
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert moved == 4, "4 of A's 6 rows must move (2 to B, 2 to C)"
+    assert sum(after.values()) == 6, "even-split must not create or drop rows"
+    assert after.get(str(a.id), 0) == 2
+    assert after.get(str(b.id), 0) == 2
+    assert after.get(str(c.id), 0) == 2
+
+    # CCA sync invariant: every recipient's CCA matches its queue row's sender.
+    for ph in phones:
+        row = (await async_db_session.execute(text("""
+            SELECT sender_id FROM message_queue
+            WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'pending'
+        """), {"cid": str(camp["id"]), "phone": ph})).first()
+        assert row is not None
+        assert await _cca_sender_for(async_db_session, camp["id"], ph) == str(row[0])
+
+
+async def test_even_split_idempotent(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """EVEN-02: a second even-split pass moves 0 rows and leaves the distribution
+    unchanged (minimal-move targets: an already-even pool has zero surplus)."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=3)
+    a = senders[0]
+
+    for i in range(7):  # total=7, P=3 → targets 3/2/2 (remainder stays put)
+        await test_queue_item_factory(camp["id"], a.id, f"+7990071{i:04d}",
+                                      status="pending", with_cca=True,
+                                      with_conversation=False)
+
+    first = await rebalance_campaign_even(camp["id"], async_db_session)
+    dist_after_first = await _pending_counts(async_db_session, camp["id"])
+
+    second = await rebalance_campaign_even(camp["id"], async_db_session)
+    dist_after_second = await _pending_counts(async_db_session, camp["id"])
+
+    assert first == 4, "7 rows on A → A keeps ceil(7/3)=3, moves 2+2"
+    assert second == 0, "second pass must move 0 rows"
+    assert dist_after_second == dist_after_first, "distribution must be unchanged"
+
+
+async def test_even_split_preserves_scheduled_at(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """EVEN-03: moved rows keep their scheduled_at (NO reset — donors are healthy,
+    so there is no inherited freeze-pause to shed; contrast with evacuation)."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a, b = senders[0], senders[1]
+
+    phones = [f"+7990072{i:04d}" for i in range(4)]
+    for ph in phones:
+        await test_queue_item_factory(camp["id"], a.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+    # Give A's rows a distinctive FUTURE scheduled_at — a reset would clobber it.
+    await async_db_session.execute(text("""
+        UPDATE message_queue SET scheduled_at = NOW() + INTERVAL '3 hours'
+        WHERE campaign_id = :cid AND sender_id = :sid AND status = 'pending'
+    """), {"cid": str(camp["id"]), "sid": str(a.id)})
+    await async_db_session.commit()
+
+    moved = await rebalance_campaign_even(camp["id"], async_db_session)
+    assert moved == 2, "P=2, total=4 → 2 rows move to B"
+
+    horizon = (await async_db_session.execute(
+        text("SELECT NOW() + INTERVAL '2 hours'")
+    )).scalar()
+    rows = (await async_db_session.execute(text("""
+        SELECT scheduled_at FROM message_queue
+        WHERE campaign_id = :cid AND sender_id = :sid AND status = 'pending'
+    """), {"cid": str(camp["id"]), "sid": str(b.id)})).fetchall()
+    assert len(rows) == 2
+    for r in rows:
+        assert r[0] > horizon, (
+            "even-split must PRESERVE scheduled_at (no NOW() reset for healthy donors)"
+        )
+
+
+async def test_even_split_skips_non_cold(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """EVEN-04: sent / processing / engaged rows never move — only true cold-pending
+    rows participate in the even-split (same predicate as rebalance_on_attach)."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a, b = senders[0], senders[1]
+
+    sent_phone = "+79900730001"
+    processing_phone = "+79900730002"
+    engaged_phone = "+79900730003"   # pending BUT has a conversation
+    cold_1 = "+79900730004"
+    cold_2 = "+79900730005"
+
+    await test_queue_item_factory(camp["id"], a.id, sent_phone, status="sent",
+                                  with_cca=True, with_conversation=False)
+    await test_queue_item_factory(camp["id"], a.id, processing_phone,
+                                  status="processing", with_cca=True,
+                                  with_conversation=False)
+    await test_queue_item_factory(camp["id"], a.id, engaged_phone, status="pending",
+                                  with_cca=True, with_conversation=True)
+    await test_queue_item_factory(camp["id"], a.id, cold_1, status="pending",
+                                  with_cca=True, with_conversation=False)
+    await test_queue_item_factory(camp["id"], a.id, cold_2, status="pending",
+                                  with_cca=True, with_conversation=False)
+
+    moved = await rebalance_campaign_even(camp["id"], async_db_session)
+    assert moved == 1, "cold total=2, P=2 → exactly 1 cold row moves to B"
+
+    async def _sender_of(phone, status):
+        row = (await async_db_session.execute(text("""
+            SELECT sender_id FROM message_queue
+            WHERE campaign_id = :cid AND recipient_phone = :phone AND status = :st
+        """), {"cid": str(camp["id"]), "phone": phone, "st": status})).first()
+        return str(row[0]) if row else None
+
+    assert await _sender_of(sent_phone, "sent") == str(a.id)
+    assert await _sender_of(processing_phone, "processing") == str(a.id)
+    assert await _sender_of(engaged_phone, "pending") == str(a.id)
+    assert await _cca_sender_for(async_db_session, camp["id"], engaged_phone) == str(a.id)
+
+
+async def test_even_split_never_targets_ineligible_sender(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """EVEN-05: a restricted attached sender is neither donor nor receiver — the
+    even-split runs over the ELIGIBLE pool only (frozen C gets 0; B gets its half)."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=3)
+    a, b, frozen = senders[0], senders[1], senders[2]
+
+    for i in range(6):
+        await test_queue_item_factory(camp["id"], a.id, f"+7990074{i:04d}",
+                                      status="pending", with_cca=True,
+                                      with_conversation=False)
+    await _freeze_sender(async_db_session, frozen.id)
+
+    moved = await rebalance_campaign_even(camp["id"], async_db_session)
+
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert moved == 3, "eligible P=2 → half of A's 6 rows move to B"
+    assert after.get(str(a.id), 0) == 3
+    assert after.get(str(b.id), 0) == 3
+    assert after.get(str(frozen.id), 0) == 0, "frozen sender must receive nothing"
+
+
+async def test_even_split_noop_below_two_eligible(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """EVEN-06: with fewer than 2 eligible senders there is nothing to even out —
+    returns 0 and touches nothing (stranded-on-ineligible rows are the sweep's job)."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=1)
+    a = senders[0]
+
+    for i in range(3):
+        await test_queue_item_factory(camp["id"], a.id, f"+7990075{i:04d}",
+                                      status="pending", with_cca=True,
+                                      with_conversation=False)
+
+    before = await _pending_counts(async_db_session, camp["id"])
+    moved = await rebalance_campaign_even(camp["id"], async_db_session)
+    after = await _pending_counts(async_db_session, camp["id"])
+
+    assert moved == 0, "P<2 → no-op"
+    assert after == before, "distribution must be unchanged"
