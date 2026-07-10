@@ -6,6 +6,8 @@ completed: 2026-07-10
 commits:
   - 20d58f1  # backend mark-lead endpoint + tests
   - e0fabc3  # frontend sender-phone label + Lead button
+  - 51f4ca6  # backend finish endpoint + tests (follow-on)
+  - 5c37c17  # frontend Finish button (follow-on)
 ---
 
 # Quick Task 260709-hgn — Inbox sender-phone + Lead button — SUMMARY
@@ -53,8 +55,22 @@ Two Inbox UI improvements plus the backend endpoint the second one needed.
 - `contacts` has no `contact_id` FK on `conversations`; the endpoint LEFT JOINs contacts on
   `(workspace_id, phone)` to populate the webhook payload.
 
-## Not deployed yet
+## Follow-on (2026-07-10): manual Finish button
 
-Changes are committed to `main` but **not yet deployed**. To ship:
-- Backend: `docker compose up -d --build api`
-- Frontend: `./deploy-frontend.sh`
+Same pattern extended per user request — a **"Finish"** button beside Lead.
+- New endpoint `POST /api/v1/conversations/{id}/finish` mirrors
+  `ai_engine._handle_builtin_signal(finish_conversation)`: sets
+  `status='finished'`, **`ai_enabled=false`** + `paused_at`/`paused_reason='Finished
+  manually via UI'` (finishing ENDS the conversation, so the AI is turned off —
+  unlike lead, which leaves AI running), then fires the campaign **finish** webhook.
+- Frontend `finishMut` + button (CheckCheck icon), muted-grey active state,
+  disabled when `status==='finished'`.
+- Tests: `-k "mark_lead or finish"` → **5 passed**; frontend build clean.
+- **Deployed** 2026-07-10 (api rebuild + `./deploy-frontend.sh`); `/finish` route
+  live (POST→401 auth-gated).
+
+## Deployment
+
+**All changes deployed to prod** 2026-07-10:
+- Backend: `docker compose up -d --build api` (clean start, routes registered).
+- Frontend: `./deploy-frontend.sh` (published to `/var/www/aimly`).
