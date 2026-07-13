@@ -22,10 +22,12 @@ import {
   Phone as PhoneIcon,
   Search,
   ShieldAlert,
+  MessageSquare,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
 import { AccountImportModal } from "@/components/AccountImportModal";
+import { SpambotChatPanel } from "@/components/SpambotChatPanel";
 import { api, ApiError, apiBaseUrl } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -402,6 +404,7 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [spambotResult, setSpambotResult] = useState<SpambotResult | null>(null);
+  const [spambotChatOpen, setSpambotChatOpen] = useState(false);
 
   const spambotMut = useMutation({
     mutationFn: () =>
@@ -625,6 +628,14 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
                 <button
                   onClick={() => {
                     setOpen(false);
+                    setSpambotChatOpen(true);
+                  }}
+                >
+                  <MessageSquare size={13} /> Написать SpamBot
+                </button>
+                <button
+                  onClick={() => {
+                    setOpen(false);
                     setHistoryOpen(true);
                   }}
                 >
@@ -775,6 +786,12 @@ function SenderCard({ sender, onReauth }: { sender: Sender; onReauth: () => void
           onClose={() => setSpambotResult(null)}
         />
       )}
+      <SpambotChatPanel
+        slug={sender.slug}
+        senderLabel={sender.name || sender.phone}
+        open={spambotChatOpen}
+        onOpenChange={setSpambotChatOpen}
+      />
     </div>
   );
 }
