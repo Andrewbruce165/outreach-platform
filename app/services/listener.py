@@ -4,6 +4,7 @@ Telegram Listener Service
 """
 
 import asyncio
+import json
 import random
 import logging
 import uuid
@@ -147,6 +148,30 @@ def compute_typing_hold(reply_len: int, elapsed: float, cps: float) -> float:
     """
     target = min(max(reply_len / cps, TYPING_HOLD_MIN), TYPING_HOLD_MAX)
     return max(0.0, target - elapsed)
+
+
+def serialize_reply_markup(reply_markup) -> Optional[list]:
+    """Flatten a Telethon reply_markup into a 2D array of ``{"text": str}``.
+
+    Rows → cols mirrors Telethon's own row/col addressing (the same indices
+    ``message.click(row, col)`` uses), so the click endpoint can address a button
+    purely by ``(row, col)`` without re-parsing Telegram's raw markup. Returns
+    ``None`` when the markup is falsy or carries no rows (plain-text message).
+    NEVER raises — on any structural surprise it returns ``None`` and logs; the
+    caller must not let a markup-parse failure crash the listener loop.
+    """
+    try:
+        rows = getattr(reply_markup, "rows", None)
+        if not rows:
+            return None
+        out: list[list[dict]] = []
+        for row in rows:
+            buttons = getattr(row, "buttons", None) or []
+            out.append([{"text": getattr(b, "text", "") or ""} for b in buttons])
+        return out or None
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error("reply_markup serialize failed: %s", e, exc_info=True)
+        return None
 
 
 class TelegramListener:
@@ -1470,18 +1495,27 @@ class TelegramListener:
                 else:
                     conv_id = existing.id
 
+                # 260713-jmp: capture any inline/reply keyboard @SpamBot attached
+                # so the panel can render clickable buttons. reply_markup absent
+                # (plain text) → buttons stays NULL (no behavior change).
+                buttons = serialize_reply_markup(
+                    getattr(event.message, "reply_markup", None)
+                )
+
                 # Save inbound message history so the panel can read SpamBot's reply.
                 await session.execute(text("""
                     INSERT INTO messages
                         (workspace_id, conversation_id, direction, message_text,
-                         sent_by, telegram_message_id)
-                    VALUES (:wid, :cid, 'inbound', :txt, 'contact', :tmid)
+                         sent_by, telegram_message_id, buttons)
+                    VALUES (:wid, :cid, 'inbound', :txt, 'contact', :tmid,
+                            CAST(:buttons AS JSONB))
                     ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
                 """), {
                     "wid": str(sender_info["workspace_id"]),
                     "cid": str(conv_id),
                     "txt": event.text or "<media>",
                     "tmid": event.id,
+                    "buttons": json.dumps(buttons) if buttons else None,
                 })
                 await session.commit()
 

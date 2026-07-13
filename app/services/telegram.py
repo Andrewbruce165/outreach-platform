@@ -1897,6 +1897,76 @@ class TelegramService:
             if client:
                 await self.disconnect_client(client)
 
+    async def click_message_button_by_telegram_id(
+        self,
+        sender_slug: str,
+        sender_id: str,
+        encrypted_session: str,
+        telegram_id: int,
+        telegram_message_id: int,
+        row: int,
+        col: int,
+        proxy: dict | None = None,
+        fingerprint: dict | None = None,
+    ) -> dict:
+        """Click a button on a message using THIS sender's own Telethon session
+        (quick task 260713-jmp).
+
+        `message.click(row, col)` transparently handles BOTH inline callback-query
+        buttons (fires the callback) AND custom reply-keyboard text-buttons (sends
+        the button's label as a normal message) — we do NOT branch on button type.
+        Whatever @SpamBot sends back arrives through the UNCHANGED listener antispam
+        path exactly like any other inbound message; there is no special response
+        handling here.
+        """
+        client = None
+        try:
+            client = await self.get_client(
+                sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint
+            )
+            peer = await self._resolve_peer_by_telegram_id(client, telegram_id)
+            msg = await client.get_messages(peer, ids=telegram_message_id)
+            if msg is None:
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "MESSAGE_NOT_FOUND",
+                        "message": "Сообщение не найдено в Telegram"
+                    }
+                }
+            await msg.click(row, col)
+            return {"success": True}
+        except FloodWaitError as e:
+            return {
+                "success": False,
+                "error": {
+                    "code": "FLOOD_WAIT",
+                    "message": f"Rate limited. Retry after {e.seconds} seconds",
+                    "retry_after": e.seconds
+                }
+            }
+        except Exception as e:
+            if is_frozen_error(e):
+                logger.critical(f"Account frozen while clicking button: {e}")
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "ACCOUNT_FROZEN",
+                        "message": "Аккаунт заморожен Telegram (FROZEN_*). Требуется аппеляция."
+                    }
+                }
+            logger.error(f"Error clicking message button by telegram_id: {e}")
+            return {
+                "success": False,
+                "error": {
+                    "code": "TELEGRAM_OP_FAILED",
+                    "message": str(e)
+                }
+            }
+        finally:
+            if client:
+                await self.disconnect_client(client)
+
     async def send_file_by_telegram_id(
         self,
         sender_slug: str,
