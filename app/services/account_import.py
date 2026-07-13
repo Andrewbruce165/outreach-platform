@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from telethon.crypto import AuthKey
 from telethon.errors import UserDeactivatedBanError
 from telethon.sessions import StringSession
+from telethon.tl.functions.auth import ResetAuthorizationsRequest
 
 from app.config import get_settings
 from app.models import AccountImportJob, ProxyPool, Sender
@@ -616,6 +617,19 @@ async def import_one_account(db, item) -> str:
                     logger.warning("[account-import] not_authorized for %s", masked)
                     return "not_authorized"
                 me = await client.get_me()
+                # Terminate all OTHER active sessions on this account (best-effort,
+                # always-on, no role gate). A vendor who kept their own client logged
+                # in with the same auth_key from a different IP triggers Telegram's
+                # concurrent-use auth_key kill; resetting here claims exclusive
+                # ownership. Any failure (FloodWait / RPCError / "already reset within
+                # 24h") is swallowed so it can never change this function's result.
+                try:
+                    await client(ResetAuthorizationsRequest())
+                    logger.info("[account-import] reset other sessions for %s", masked)
+                except Exception as exc:  # noqa: BLE001 — best-effort; never change result
+                    logger.warning(
+                        "[account-import] reset authorizations failed for %s: %s", masked, exc
+                    )
             except AUTH_ERRORS as exc:
                 logger.warning("[account-import] auth_failed for %s: %s", masked, exc)
                 return "auth_failed"
