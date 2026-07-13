@@ -633,6 +633,80 @@ async def test_partial_success_and_start_state(
     assert created["restriction_status"] == "none"
 
 
+# ─── quick-260713-h7z: terminate OTHER active sessions on import (best-effort) ──────
+
+async def _seed_good_import_item(
+    async_db_session, test_workspace, tmp_path, build_vendor_sqlite_session, tg_id, phone
+):
+    """Insert a job + one valid (importable) item and return the fetched item dict."""
+    good_path = build_vendor_sqlite_session(tmp_path, dc_id=2, auth_key_byte=0x22)
+    with open(good_path, "rb") as f:
+        good_blob = f.read()
+    job_id, item_id = str(uuid.uuid4()), str(uuid.uuid4())
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_jobs (id, workspace_id, role, status, total)
+        VALUES (:id, :ws, 'sender', 'running', 1)
+    """), {"id": job_id, "ws": str(test_workspace.id)})
+    await async_db_session.execute(_t("""
+        INSERT INTO account_import_items
+            (id, job_id, workspace_id, basename, session_blob, vendor_json)
+        VALUES (:id, :job, :ws, :phone, :blob, '{}'::jsonb)
+    """), {"id": item_id, "job": job_id, "ws": str(test_workspace.id),
+           "phone": phone, "blob": good_blob})
+    await async_db_session.commit()
+    return dict((await async_db_session.execute(_t(
+        "SELECT * FROM account_import_items WHERE id = :id"), {"id": item_id})).mappings().first())
+
+
+async def test_import_resets_other_sessions_on_success(
+    async_db_session, test_workspace, stub_import_telethon, tmp_path, build_vendor_sqlite_session
+):
+    """On a successful import, auth.ResetAuthorizations is invoked exactly once (right
+    after get_me) and the result is still 'imported'."""
+    from telethon.tl.functions.auth import ResetAuthorizationsRequest
+    import app.services.account_import as ai_mod
+    from app.services.account_import import import_one_account
+
+    stub_import_telethon.install(ai_mod)
+    stub_import_telethon.client.get_me.return_value.id = 556001
+
+    item = await _seed_good_import_item(
+        async_db_session, test_workspace, tmp_path, build_vendor_sqlite_session,
+        tg_id=556001, phone="+15550100001",
+    )
+    result = await import_one_account(async_db_session, item)
+
+    assert result == "imported"
+    assert stub_import_telethon.reset_authorizations.await_count == 1
+    passed_req = stub_import_telethon.reset_authorizations.await_args.args[0]
+    assert isinstance(passed_req, ResetAuthorizationsRequest)
+
+
+async def test_import_reset_failure_is_best_effort(
+    async_db_session, test_workspace, stub_import_telethon, tmp_path, build_vendor_sqlite_session
+):
+    """When ResetAuthorizations raises (e.g. FloodWaitError), the import STILL returns
+    'imported' and no exception propagates — the reset is strictly best-effort."""
+    from telethon.errors import FloodWaitError
+    import app.services.account_import as ai_mod
+    from app.services.account_import import import_one_account
+
+    stub_import_telethon.install(ai_mod)
+    stub_import_telethon.client.get_me.return_value.id = 556002
+    stub_import_telethon.reset_authorizations.side_effect = FloodWaitError(
+        request=None, capture=3600
+    )
+
+    item = await _seed_good_import_item(
+        async_db_session, test_workspace, tmp_path, build_vendor_sqlite_session,
+        tg_id=556002, phone="+15550100002",
+    )
+    result = await import_one_account(async_db_session, item)
+
+    assert result == "imported"
+    assert stub_import_telethon.reset_authorizations.await_count == 1
+
+
 # ─── IMPT-10 (21-02): 2FA autofill uses the stored password + account fingerprint ──
 
 async def test_2fa_autofill_uses_stored_password(

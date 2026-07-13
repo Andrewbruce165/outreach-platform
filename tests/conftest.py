@@ -1250,6 +1250,13 @@ def stub_import_telethon(monkeypatch):
       * ``.install(module)`` — monkeypatch ``make_telegram_client`` on the given module
         object to return ``.client``. Call it after the (deferred) import of the
         account-import module lands, so the import routine never touches the network.
+
+    The ``.client`` is ALSO directly callable/awaitable — ``await client(request)`` is
+    valid, for raw Telethon requests like ``ResetAuthorizationsRequest``. Every such
+    direct call is recorded by ``.reset_authorizations`` (an AsyncMock, default returns
+    ``None``); assert ``.reset_authorizations.await_count`` and inspect the passed
+    request, or set ``.reset_authorizations.side_effect = <exception>`` to simulate a
+    failing reset (FloodWaitError / RPCError / "already reset within 24h").
     """
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
@@ -1267,10 +1274,18 @@ def stub_import_telethon(monkeypatch):
     session.save = MagicMock(return_value=_valid_string_session_blob())
     client.session = session
 
+    # Make the client directly callable/awaitable: ``await client(request)`` delegates
+    # to this AsyncMock, so raw requests (e.g. ResetAuthorizationsRequest) are recorded
+    # and a ``side_effect`` can be assigned to exercise the best-effort failure path.
+    reset_authorizations = AsyncMock(return_value=None)
+    client.side_effect = reset_authorizations
+
     def _install(module):
         def _factory(session, proxy=None, **kwargs):
             return client
         monkeypatch.setattr(module, "make_telegram_client", _factory, raising=False)
         return client
 
-    return SimpleNamespace(client=client, install=_install)
+    return SimpleNamespace(
+        client=client, install=_install, reset_authorizations=reset_authorizations
+    )
