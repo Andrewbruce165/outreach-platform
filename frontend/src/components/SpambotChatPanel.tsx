@@ -77,6 +77,26 @@ export function SpambotChatPanel({
       toast.error(e instanceof ApiError ? e.message : "Не удалось отправить"),
   });
 
+  // 260713-jmp: click a button on an inbound @SpamBot message. Telethon's
+  // message.click(row, col) handles both inline (callback) and reply-keyboard
+  // (text) buttons; SpamBot's reply arrives via the same 10s poll / invalidate.
+  const clickMut = useMutation({
+    mutationFn: (v: { messageId: string; row: number; col: number }) =>
+      api(
+        `/api/v1/conversations/${conversationId}/messages/${v.messageId}/click`,
+        { method: "POST", body: { row: v.row, col: v.col } },
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["messages", conversationId] });
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.message : "Не удалось нажать кнопку"),
+  });
+
+  const clickingMessageId = clickMut.isPending
+    ? clickMut.variables?.messageId
+    : undefined;
+
   const canSend = !!conversationId && !sendMut.isPending && draft.trim().length > 0;
 
   const submit = () => {
@@ -111,16 +131,50 @@ export function SpambotChatPanel({
             <div className="flex flex-col gap-2">
               {messages.map((m) => {
                 const isOutbound = m.direction === "outbound";
+                const buttons = m.buttons ?? [];
+                const isClicking = clickingMessageId === m.id;
                 return (
                   <div
                     key={m.id}
                     className={
                       isOutbound
-                        ? "ml-auto max-w-[80%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground"
-                        : "mr-auto max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground"
+                        ? "ml-auto flex max-w-[80%] flex-col items-end gap-1"
+                        : "mr-auto flex max-w-[80%] flex-col items-start gap-1"
                     }
                   >
-                    {m.message_text ?? "<media>"}
+                    <div
+                      className={
+                        isOutbound
+                          ? "rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground"
+                          : "rounded-lg bg-muted px-3 py-2 text-sm text-foreground"
+                      }
+                    >
+                      {m.message_text ?? "<media>"}
+                    </div>
+                    {buttons.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        {buttons.map((rowBtns, row) => (
+                          <div key={row} className="flex gap-1">
+                            {rowBtns.map((b, col) => (
+                              <button
+                                key={col}
+                                type="button"
+                                disabled={isClicking}
+                                onClick={() =>
+                                  clickMut.mutate({ messageId: m.id, row, col })
+                                }
+                                className="inline-flex items-center gap-1 rounded-md border bg-secondary px-2 py-1 text-xs text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+                              >
+                                {isClicking && (
+                                  <Loader2 className="animate-spin" size={12} />
+                                )}
+                                {b.text}
+                              </button>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
