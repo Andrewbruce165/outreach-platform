@@ -4245,6 +4245,8 @@ export interface components {
             size_bytes?: number | null;
             /** Edited At */
             edited_at?: string | null;
+            /** Buttons — inbound @SpamBot inline/reply-keyboard layout (rows -> cols -> {text}) */
+            buttons?: ({ text: string })[][] | null;
             /**
              * Created At
              * Format: date-time

@@ -55,6 +55,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Conversation
 from app.schemas import (
+    ClickButtonRequest,
+    ClickButtonResponse,
     ConversationListResponse,
     ConversationResponse,
     ConversationUpdate,
@@ -408,7 +410,8 @@ async def get_messages(
     rows = (await db.execute(text("""
         SELECT m.id, m.conversation_id, m.direction, m.message_text,
                m.sent_by, m.telegram_message_id, m.created_at,
-               m.message_type, m.file_name, m.mime_type, m.size_bytes, m.edited_at
+               m.message_type, m.file_name, m.mime_type, m.size_bytes, m.edited_at,
+               m.buttons
         FROM messages m
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.id = :cid AND c.workspace_id = :wid
@@ -528,6 +531,70 @@ async def delete_message(
     )
     await db.commit()
     return None
+
+
+# ── 260713-jmp: click a button on an inbound @SpamBot message ─────────────────
+
+
+@router.post(
+    "/{conversation_id}/messages/{message_id}/click",
+    response_model=ClickButtonResponse,
+)
+async def click_message_button(
+    conversation_id: UUID,
+    message_id: UUID,
+    payload: ClickButtonRequest,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> ClickButtonResponse:
+    """260713-jmp — click a button on a persisted @SpamBot message.
+
+    The button-bearing message is INBOUND from @SpamBot, so this does NOT reuse
+    _load_message_for_mutation (which filters direction='outbound'). A workspace-
+    scoped join gates tenant isolation; a foreign/missing message → opaque 404
+    MESSAGE_NOT_FOUND (no existence leak). The sender must be usable
+    (lifecycle_status='active' AND auth_status='ok').
+
+    A button click is NOT a manual message: no takeover, no queue-cancel, no
+    status flip. @SpamBot's reply flows back through the UNCHANGED listener
+    antispam path exactly like today.
+    """
+    row = (await db.execute(text("""
+        SELECT m.telegram_message_id, c.contact_telegram_id,
+               s.slug AS sender_slug, s.id AS sender_id, s.session_string,
+               s.proxy, s.client_fingerprint
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        JOIN senders s ON s.id = c.sender_id
+        WHERE m.id = :mid AND m.conversation_id = :cid AND c.workspace_id = :wid
+          AND s.lifecycle_status = 'active' AND s.auth_status = 'ok'
+        -- TODO(v2-rls): replaced by RLS policy app.workspace_id
+    """), {
+        "mid": str(message_id),
+        "cid": str(conversation_id),
+        "wid": str(ctx.workspace_id),
+    })).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "MESSAGE_NOT_FOUND", "message": "Message not found"},
+        )
+
+    result = await telegram_service.click_message_button_by_telegram_id(
+        sender_slug=row.sender_slug,
+        sender_id=str(row.sender_id),
+        encrypted_session=row.session_string,
+        telegram_id=row.contact_telegram_id,
+        telegram_message_id=row.telegram_message_id,
+        row=payload.row,
+        col=payload.col,
+        proxy=row.proxy,
+        fingerprint=row.client_fingerprint,
+    )
+    if not result.get("success"):
+        _raise_inbox_message_error(result)
+
+    return ClickButtonResponse(success=True)
 
 
 # ── Phase 23: send a file from inbox (NEW outbound → auto-takeover, D-12) ──────

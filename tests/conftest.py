@@ -324,6 +324,15 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_062.exists():
             await asyncpg_conn.execute(_mig_062.read_text())
 
+        # 063 (260713-jmp): messages.buttons JSONB column — the persisted @SpamBot
+        # inline/reply-keyboard layout. `messages` is raw-SQL (mig 017), NO ORM
+        # model, so create_all never builds `buttons` — apply the migration here or
+        # the button tests fail with "column buttons does not exist". Exists-guard
+        # keeps this green until migrations/063_messages_buttons.sql lands.
+        _mig_063 = PROJECT_ROOT / "migrations" / "063_messages_buttons.sql"
+        if _mig_063.exists():
+            await asyncpg_conn.execute(_mig_063.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.

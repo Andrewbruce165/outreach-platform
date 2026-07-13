@@ -1193,12 +1193,30 @@ class MessageResponse(BaseModel):
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
     edited_at: Optional[datetime] = None    # (изменено) marker (D-07)
+    # 260713-jmp: inbound @SpamBot inline/reply-keyboard layout, a 2D array of
+    # {text} (rows → cols). Optional/defaulted so SELECTs that omit it still
+    # construct the model; NULL for plain-text messages.
+    buttons: Optional[list] = None
     created_at: datetime
 
 
 class MessageListResponse(BaseModel):
     messages: List[MessageResponse]
     total: int
+
+
+class ClickButtonRequest(BaseModel):
+    """POST /conversations/{id}/messages/{message_id}/click body (260713-jmp).
+
+    Addresses a button on a persisted @SpamBot message by its Telethon row/col
+    indices (the same indices `message.click(row, col)` uses)."""
+
+    row: int = Field(..., ge=0)
+    col: int = Field(..., ge=0)
+
+
+class ClickButtonResponse(BaseModel):
+    success: bool
 
 
 class SendMessageFromUIRequest(BaseModel):
