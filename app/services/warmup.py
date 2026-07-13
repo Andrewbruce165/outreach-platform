@@ -221,7 +221,14 @@ class WarmupWorker:
                   OR s.restricted_until IS NULL
                   OR s.restricted_until <= NOW()
               )
-        """))
+              -- proxy-switch-listener-lag (mig 062): skip a sender whose proxy switch
+              -- is still pending listener reconnect confirmation, so warmup never opens
+              -- a connection on the NEW IP while the listener may still hold the OLD
+              -- one (double-IP → auth_key kill). TTL fallback lifts a stale flag.
+              AND (s.proxy_switch_pending_at IS NULL
+                   OR s.proxy_switch_pending_at
+                      < NOW() - make_interval(secs => :proxy_switch_ttl))
+        """), {"proxy_switch_ttl": settings.proxy_switch_pending_ttl_seconds})
         rows = result.fetchall()
         now = datetime.now(timezone.utc)
         return [

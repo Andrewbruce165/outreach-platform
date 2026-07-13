@@ -111,6 +111,14 @@ class Sender(Base):
     # the pause survives a process restart (re-read from DB each tick, no in-memory
     # state) and doubles as the "already paused, don't re-trigger" guard.
     long_pause_until = Column(DateTime(timezone=True), nullable=True)  # WR-04: durable non-blocking long-pause marker
+    # Migration 062 (proxy-switch-listener-lag): set by assign-proxy the moment a new
+    # proxy is committed. While set (< proxy_switch_pending_ttl_seconds old) the
+    # send/warmup/checker selection SKIPS the sender so it never opens a temp
+    # connection on the NEW proxy while the listener may still hold the OLD IP
+    # (double-IP → Telegram auth_key kill). Listener clears it on a confirmed
+    # reconnect; a reconcile-loop TTL sweep lifts a stale flag so a sender is never
+    # blocked forever. NOT a restriction — orthogonal to restriction_status/lifecycle.
+    proxy_switch_pending_at = Column(DateTime(timezone=True), nullable=True)  # mig 062: proxy-switch coordination marker
     # Migration 036 (quick-260629-b7j): per-checker CONSECUTIVE contacts-API trip
     # counter for the ESCALATING backoff. Each spam_limited trip increments it; the
     # cooldown is base * 2^(trip-1) capped at contact_check_max_backoff_seconds; a

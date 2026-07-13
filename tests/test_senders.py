@@ -485,6 +485,17 @@ async def test_assign_proxy_from_workspace_pool(
     assert body["proxy"]["port"] == 1080
     assert body["proxy"]["type"] == "socks5"
 
+    # proxy-switch-listener-lag (mig 062): assign-proxy stamps proxy_switch_pending_at
+    # in the SAME commit as the new proxy, so send/warmup/checker pause the sender
+    # until the listener confirms a reconnect on the new IP (avoids double-IP).
+    row = (
+        await async_db_session.execute(
+            text("SELECT proxy_switch_pending_at FROM senders WHERE slug = :s"),
+            {"s": "assignee-1"},
+        )
+    ).fetchone()
+    assert row.proxy_switch_pending_at is not None
+
 
 async def test_assign_proxy_cross_tenant_returns_404(
     async_client, async_db_session, valid_supabase_jwt

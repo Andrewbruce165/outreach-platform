@@ -275,10 +275,18 @@ class QueueWorker:
                       -- Re-read from the DB every tick (no in-memory state) so the
                       -- pause survives a process restart; other senders keep sending.
                       AND (s.long_pause_until IS NULL OR s.long_pause_until <= NOW())
+                      -- proxy-switch-listener-lag (mig 062): skip a sender whose proxy
+                      -- switch is still pending listener reconnect confirmation, so we
+                      -- never open a send connection on the NEW IP while the listener
+                      -- may still hold the OLD one. TTL fallback lifts a stale flag.
+                      AND (s.proxy_switch_pending_at IS NULL
+                           OR s.proxy_switch_pending_at
+                              < NOW() - make_interval(secs => :proxy_switch_ttl))
                     ORDER BY mq.scheduled_at ASC
                     LIMIT :batch
                 """),
-                {"batch": QUEUE_TICK_BATCH},
+                {"batch": QUEUE_TICK_BATCH,
+                 "proxy_switch_ttl": get_settings().proxy_switch_pending_ttl_seconds},
             )
             fetched = rows.fetchall()
 
@@ -618,7 +626,8 @@ class QueueWorker:
             text("""
                 SELECT rate_per_min, rate_per_hour,
                        lifecycle_status, auth_status,
-                       restriction_status, restricted_until
+                       restriction_status, restricted_until,
+                       proxy_switch_pending_at
                 FROM senders WHERE id = :sid
             """),
             {"sid": str(sender_id)},
@@ -627,6 +636,23 @@ class QueueWorker:
         if not sender_row:
             logger.warning(f"Sender {sender_id}: row missing — skipping tick")
             return False
+
+        # proxy-switch-listener-lag (mig 062): TOCTOU-safe gate right before send.
+        # assign-proxy could have flipped the flag between the _tick batch SELECT
+        # and here. While a proxy switch is pending listener reconnect confirmation
+        # (flag set and younger than the TTL fallback) skip this sender's tick — it
+        # must not open a connection on the NEW IP while the listener may still hold
+        # the OLD one (double-IP → auth_key kill). Listener clears it on reconnect;
+        # TTL lifts a stale flag so a sender is never blocked forever.
+        pending_at = sender_row.proxy_switch_pending_at
+        if pending_at is not None:
+            ttl = get_settings().proxy_switch_pending_ttl_seconds
+            if (now - pending_at).total_seconds() < ttl:
+                logger.debug(
+                    f"Sender {sender_id}: proxy switch pending "
+                    f"(since={pending_at}) — skipping tick until listener reconnects"
+                )
+                return False
 
         # Phase 2 D-11/D-12: derived 'error' / paused — пропускаем.
         if sender_row.lifecycle_status != "active" or sender_row.auth_status != "ok":

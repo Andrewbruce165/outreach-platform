@@ -140,6 +140,22 @@ class Settings(BaseSettings):
         validation_alias="RESTRICTION_RECONCILE_INTERVAL",
         description="Cadence of the listener background sweep that re-checks restricted senders (seconds).",
     )
+    # proxy-switch-listener-lag (Approach A): how long assign-proxy pauses a sender's
+    # send/warmup/checker paths after committing a new proxy, until the listener
+    # confirms a reconnect on the new IP (it clears senders.proxy_switch_pending_at).
+    # This is the TTL fallback ceiling: if the listener never comes up, the flag is
+    # treated as expired after this many seconds (selection queries lift it and the
+    # reconcile loop sweeps it with a warning) so a sender is never blocked forever.
+    # MUST comfortably exceed ~2 × LISTENER_RECONCILE_INTERVAL (disconnect tick +
+    # reconnect tick) — default 180s = 6 × the 30s reconcile default.
+    proxy_switch_pending_ttl_seconds: int = Field(
+        default=180,
+        validation_alias="PROXY_SWITCH_PENDING_TTL_SECONDS",
+        description="Max seconds a sender's send/warmup/checker paths stay paused after a "
+                    "proxy switch waiting for listener reconnect confirmation. TTL fallback "
+                    "so a stale flag never blocks a sender forever. Keep > 2 × "
+                    "LISTENER_RECONCILE_INTERVAL.",
+    )
 
     # Phase 14 (RESV-02 / D-10): contact-resolution rate knobs for the checker pool.
     # Conservative defaults keep resolve volume under the ~45–50 empirical shadow-ban

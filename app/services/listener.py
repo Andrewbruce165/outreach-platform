@@ -47,6 +47,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 import os
+import json
 import signal
 import tempfile
 import httpx
@@ -1611,11 +1612,63 @@ class TelegramListener:
         while self.running:
             client = None
             try:
+                # proxy-switch-listener-lag (fix A): re-read the CURRENT proxy from the
+                # DB on EVERY (re)connect attempt. The internal reconnect loop must NOT
+                # reuse the stale in-memory sender_info["proxy"] captured at first start.
+                # After an assign-proxy the reconcile tick disconnects us; this loop
+                # re-runs and MUST come back up on the NEW proxy — the same one the
+                # send/warmup/checker paths already read fresh from the DB — otherwise
+                # the account is live on two IPs simultaneously (auth_key kill).
+                #
+                # HARD RULE (project memory "never probe live sessions without assigned
+                # proxy" — two-IP auth_key kill): an account MUST always connect through
+                # its assigned proxy. NEVER proxy=None, NEVER a stale/default fallback.
+                # If we cannot obtain a valid proxy from the DB (error / missing row /
+                # NULL / empty), we do NOT connect: log a warning and DEFER to the
+                # reconcile supervisor by returning. Reconcile is the single re-spawner
+                # (it re-launches any desired sender not currently connected on the next
+                # tick), so returning — instead of sleep+continue — avoids a
+                # duplicate-task leak while still guaranteeing a retry.
+                active_proxy = None
+                proxy_read_ok = False
+                try:
+                    async with AsyncSessionLocal() as db_session:
+                        row = (await db_session.execute(
+                            text("SELECT proxy FROM senders WHERE id = :sid"),
+                            {"sid": sender_info["id"]},
+                        )).first()
+                    if row is not None:
+                        active_proxy = row[0]
+                        proxy_read_ok = True
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        f"⚠️ {sender_info['slug']}: не удалось перечитать proxy из БД "
+                        f"перед (ре)коннектом — НЕ подключаюсь без прокси, отдаю "
+                        f"reconcile-супервизору (повтор на следующем тике): {e}"
+                    )
+
+                if not active_proxy:
+                    if proxy_read_ok:
+                        logger.warning(
+                            f"⚠️ {sender_info['slug']}: назначенный proxy в БД пуст/NULL "
+                            f"— НЕ подключаюсь без прокси (риск two-IP auth_key kill). "
+                            f"Отдаю reconcile-супервизору, повтор на следующем тике."
+                        )
+                    # Defer to the reconcile supervisor: drop reconcile bookkeeping
+                    # (idempotent — may already be absent) so the next tick re-spawns us,
+                    # and exit WITHOUT ever opening a proxy-less connection.
+                    self._connected_sender_ids.discard(str(sender_info["id"]))
+                    self._proxy_snapshot.pop(str(sender_info["id"]), None)
+                    self.clients.pop(sender_info["slug"], None)
+                    return
+
+                sender_info["proxy"] = active_proxy
+
                 session_string = decrypt_session(sender_info["session_string"])
 
                 client = make_telegram_client(
                     StringSession(session_string),
-                    proxy=sender_info.get("proxy"),
+                    proxy=active_proxy,
                     client_class=ResilientTelegramClient,
                     fingerprint=sender_info.get("client_fingerprint"),
                 )
@@ -1642,18 +1695,44 @@ class TelegramListener:
                 self.clients[sender_info["slug"]] = client
                 # Phase 2 (D-18): track for reconcile diff.
                 self._connected_sender_ids.add(str(sender_info["id"]))
-                self._proxy_snapshot[str(sender_info["id"])] = sender_info.get("proxy")
+                # fix A: snapshot the proxy we ACTUALLY connected with (freshly
+                # re-read above), so reconcile's proxy-diff compares against reality.
+                self._proxy_snapshot[str(sender_info["id"])] = active_proxy
                 self._sender_id_to_slug[str(sender_info["id"])] = sender_info["slug"]
 
                 me = await client.get_me()
                 logger.info(f"✅ {sender_info['slug']} ({me.first_name}) — слушаем сообщения")
 
-                # Сохраняем telegram_id аккаунта в БД — нужен для фильтрации warmup-диалогов
+                # Сохраняем telegram_id аккаунта в БД — нужен для фильтрации warmup-диалогов.
+                # proxy-switch-listener-lag (mig 062, fix B): в этом же UPDATE снимаем
+                # proxy_switch_pending_at, НО ТОЛЬКО если прокси, на котором мы реально
+                # подключились (active_proxy), совпадает с текущим sender.proxy в БД.
+                # get_me() подтверждает лишь ЖИВОСТЬ соединения — но если listener
+                # переподключился на СТАРОМ прокси (а в БД уже новый), снимать флаг
+                # нельзя: send/warmup/checker пойдут на новый прокси, пока listener на
+                # старом → double-IP. IS NOT DISTINCT FROM корректно матчит и NULL-прокси;
+                # jsonb-сравнение порядок-независимо. Для первичного коннекта флаг и так
+                # NULL → CASE = no-op. TOCTOU-safe: если прокси сменился МЕЖДУ re-read и
+                # этим UPDATE, DB-прокси != active_proxy → флаг НЕ снимется, следующий
+                # reconcile-тик переподключит на актуальный прокси.
+                connected_proxy_json = (
+                    json.dumps(active_proxy) if active_proxy is not None else None
+                )
                 try:
                     async with AsyncSessionLocal() as db_session:
                         await db_session.execute(
-                            text("UPDATE senders SET telegram_id = :tg_id WHERE id = :sid"),
-                            {"tg_id": me.id, "sid": sender_info["id"]}
+                            text(
+                                "UPDATE senders SET telegram_id = :tg_id, "
+                                "proxy_switch_pending_at = CASE "
+                                "  WHEN proxy IS NOT DISTINCT FROM CAST(:connected_proxy AS jsonb) "
+                                "  THEN NULL ELSE proxy_switch_pending_at END "
+                                "WHERE id = :sid"
+                            ),
+                            {
+                                "tg_id": me.id,
+                                "connected_proxy": connected_proxy_json,
+                                "sid": sender_info["id"],
+                            },
                         )
                         await db_session.commit()
                     logger.debug(f"📝 telegram_id={me.id} сохранён для {sender_info['slug']}")
@@ -1741,6 +1820,12 @@ class TelegramListener:
         Public-ish (single underscore) so unit tests can drive it directly
         without spinning up the background loop. Returns counts for tests/logging.
         """
+        # proxy-switch-listener-lag (mig 062) TTL fallback: lift any stale
+        # proxy_switch_pending_at BEFORE diffing, so a sender whose reconnect never
+        # confirmed (listener stuck / process was down / role='checker' never held
+        # here) is not blocked from send/warmup/checker forever.
+        await self._sweep_stale_proxy_switch_flags()
+
         desired_list = await self.get_active_senders()
         desired = {str(s["id"]): s for s in desired_list}
         current = set(self._connected_sender_ids)
@@ -1791,6 +1876,39 @@ class TelegramListener:
             "reproxied": reproxied,
             "total": len(self.clients),
         }
+
+    async def _sweep_stale_proxy_switch_flags(self) -> int:
+        """proxy-switch-listener-lag (mig 062) TTL fallback.
+
+        Clear ``proxy_switch_pending_at`` for any sender whose flag is older than
+        ``proxy_switch_pending_ttl_seconds``. The normal path clears the flag on a
+        confirmed reconnect (``start_client``), but if the listener never brings the
+        account back up (stuck / process was down / a role='checker' the listener
+        does not hold), the send/warmup/checker selection would keep skipping it. The
+        query-side TTL already lets the sender through once the flag ages out; this
+        sweep also NULLs the column and logs a warning so the state stays clean and
+        the stall is observable. Returns the number of flags swept.
+        """
+        ttl = get_settings().proxy_switch_pending_ttl_seconds
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                text(
+                    "UPDATE senders SET proxy_switch_pending_at = NULL "
+                    "WHERE proxy_switch_pending_at IS NOT NULL "
+                    "  AND proxy_switch_pending_at < NOW() - make_interval(secs => :ttl) "
+                    "RETURNING slug"
+                ),
+                {"ttl": ttl},
+            )).fetchall()
+            if rows:
+                await db.commit()
+        for r in rows:
+            logger.warning(
+                f"⚠️ [reconcile] proxy-switch pending flag on sender={r.slug} exceeded "
+                f"TTL {ttl}s without a confirmed reconnect — clearing (listener may be "
+                f"lagging or the account is not held here)."
+            )
+        return len(rows)
 
     async def _reconcile_loop(self):
         """Periodic reconcile (D-18) — every ``reconcile_interval`` seconds."""

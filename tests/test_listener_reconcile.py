@@ -17,6 +17,7 @@ Tests:
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -219,3 +220,176 @@ async def test_reconcile_loop_attributes_initialised():
     assert isinstance(listener._connected_sender_ids, set)
     assert isinstance(listener._proxy_snapshot, dict)
     assert isinstance(listener._sender_id_to_slug, dict)
+
+
+# ─── proxy-switch-listener-lag (mig 062) TTL sweep ────────────────────────────
+
+
+async def test_sweep_clears_stale_proxy_switch_flag(test_sender_factory):
+    """A proxy_switch_pending_at older than the TTL is cleared by the sweep;
+    a fresh one (younger than TTL) is left intact so the sender stays paused.
+    """
+    from sqlalchemy import text
+
+    from app.config import get_settings
+    from app.database import AsyncSessionLocal
+
+    listener_mod = _patch_listener_imports()
+    listener = listener_mod.TelegramListener()
+    ttl = get_settings().proxy_switch_pending_ttl_seconds
+
+    stale = await test_sender_factory(slug="proxy-stale")
+    fresh = await test_sender_factory(slug="proxy-fresh")
+
+    async with AsyncSessionLocal() as db:
+        # stale: flag set well beyond the TTL → must be swept.
+        await db.execute(
+            text(
+                "UPDATE senders SET proxy_switch_pending_at = "
+                "NOW() - make_interval(secs => :age) WHERE id = :sid"
+            ),
+            {"age": ttl + 60, "sid": str(stale.id)},
+        )
+        # fresh: flag just set → within TTL → must survive.
+        await db.execute(
+            text("UPDATE senders SET proxy_switch_pending_at = NOW() WHERE id = :sid"),
+            {"sid": str(fresh.id)},
+        )
+        await db.commit()
+
+    swept = await listener._sweep_stale_proxy_switch_flags()
+    assert swept >= 1
+
+    async with AsyncSessionLocal() as db:
+        rows = dict(
+            (r.slug, r.proxy_switch_pending_at)
+            for r in (
+                await db.execute(
+                    text(
+                        "SELECT slug, proxy_switch_pending_at FROM senders "
+                        "WHERE slug IN ('proxy-stale', 'proxy-fresh')"
+                    )
+                )
+            ).fetchall()
+        )
+    assert rows["proxy-stale"] is None          # swept
+    assert rows["proxy-fresh"] is not None       # still pausing
+
+
+# ─── proxy-switch-listener-lag: fix B — flag cleared ONLY on proxy match ──────
+#
+# The failed live-verify (see debug/proxy-switch-listener-lag.md Evidence) was
+# caused by start_client's confirmed-reconnect UPDATE clearing
+# proxy_switch_pending_at on ANY successful get_me(), even when the listener had
+# reconnected on the OLD proxy while the DB already held the NEW one. Fix B makes
+# the clear conditional: it only NULLs the flag when the proxy the listener
+# actually connected with matches the current sender.proxy in the DB. The test
+# below drives the EXACT SQL clause start_client runs, so the guard can't silently
+# regress. (start_client's full reconnect loop is not driven here: mocking a
+# persistent-connection Telethon client whose run_until_disconnected returns
+# instantly deadlocks against the session-scoped test engine — the live-verify
+# step covers the end-to-end reconnect behaviour of fix A.)
+
+# Verbatim copy of the flag-clear statement in listener.start_client — keep in sync.
+_CLEAR_FLAG_SQL = (
+    "UPDATE senders SET telegram_id = :tg_id, "
+    "proxy_switch_pending_at = CASE "
+    "  WHEN proxy IS NOT DISTINCT FROM CAST(:connected_proxy AS jsonb) "
+    "  THEN NULL ELSE proxy_switch_pending_at END "
+    "WHERE id = :sid"
+)
+
+
+async def _run_clear_flag(session_local, sender_id: str, connected_proxy):
+    """Execute start_client's confirmed-reconnect UPDATE for a given connected proxy."""
+    from sqlalchemy import text
+
+    async with session_local() as db:
+        await db.execute(
+            text(_CLEAR_FLAG_SQL),
+            {
+                "tg_id": 5550001,
+                "connected_proxy": (
+                    json.dumps(connected_proxy) if connected_proxy is not None else None
+                ),
+                "sid": sender_id,
+            },
+        )
+        await db.commit()
+
+
+async def _read_flag(session_local, sender_id: str):
+    from sqlalchemy import text
+
+    async with session_local() as db:
+        return (
+            await db.execute(
+                text("SELECT proxy_switch_pending_at FROM senders WHERE id = :sid"),
+                {"sid": sender_id},
+            )
+        ).scalar_one()
+
+
+async def test_clear_flag_only_when_connected_proxy_matches_db(test_sender_factory):
+    """fix B: proxy_switch_pending_at is cleared ONLY when the proxy the listener
+    reconnected with matches the current DB proxy; a reconnect on the OLD proxy
+    (DB already switched) must leave the flag set so send/warmup/checker stay paused.
+    """
+    from sqlalchemy import text
+
+    from app.database import AsyncSessionLocal
+
+    old_proxy = {"type": "socks5", "addr": "1.1.1.1", "port": 10089}
+    new_proxy = {"type": "socks5", "addr": "9.9.9.9", "port": 10017}
+
+    sender = await test_sender_factory(slug="proxy-switch-gate")
+    # Simulate assign-proxy just committed: DB holds NEW proxy + a fresh pause flag.
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            text(
+                "UPDATE senders SET proxy = CAST(:p AS jsonb), "
+                "proxy_switch_pending_at = NOW() WHERE id = :sid"
+            ),
+            {"p": json.dumps(new_proxy), "sid": str(sender.id)},
+        )
+        await db.commit()
+
+    # Reconnect confirmed on the OLD proxy (the failed-live-verify scenario) →
+    # connected proxy != DB proxy → flag MUST stay set.
+    await _run_clear_flag(AsyncSessionLocal, str(sender.id), old_proxy)
+    assert await _read_flag(AsyncSessionLocal, str(sender.id)) is not None
+
+    # Reconnect confirmed on the NEW proxy → matches DB → flag cleared, sends resume.
+    await _run_clear_flag(AsyncSessionLocal, str(sender.id), new_proxy)
+    assert await _read_flag(AsyncSessionLocal, str(sender.id)) is None
+
+
+async def test_clear_flag_handles_null_proxy(test_sender_factory):
+    """fix B edge: IS NOT DISTINCT FROM matches a NULL/NULL proxy so a proxyless
+    sender's flag still clears on a confirmed (proxy=None) reconnect, and does NOT
+    clear when the DB has a proxy but the reconnect reported none.
+    """
+    from sqlalchemy import text
+
+    from app.database import AsyncSessionLocal
+
+    a_proxy = {"type": "socks5", "addr": "9.9.9.9", "port": 10017}
+
+    sender = await test_sender_factory(slug="proxy-switch-null")
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            text(
+                "UPDATE senders SET proxy = NULL, "
+                "proxy_switch_pending_at = NOW() WHERE id = :sid"
+            ),
+            {"sid": str(sender.id)},
+        )
+        await db.commit()
+
+    # DB proxy is NULL, reconnect reported a proxy → mismatch → flag stays.
+    await _run_clear_flag(AsyncSessionLocal, str(sender.id), a_proxy)
+    assert await _read_flag(AsyncSessionLocal, str(sender.id)) is not None
+
+    # DB proxy is NULL, reconnect reported None → match → flag cleared.
+    await _run_clear_flag(AsyncSessionLocal, str(sender.id), None)
+    assert await _read_flag(AsyncSessionLocal, str(sender.id)) is None

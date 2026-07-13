@@ -31,7 +31,7 @@ from typing import List, Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -920,6 +920,14 @@ async def assign_proxy(
         "password": proxy_row.password,
     }
     proxy_row.assigned_to_sender_id = sender.id
+    # proxy-switch-listener-lag (mig 062): mark the switch pending in the SAME
+    # transaction as the new proxy. Until the listener confirms a reconnect on the
+    # new IP (it clears this) the send/warmup/checker selection paths skip this
+    # sender, so it never opens a temp connection on the NEW proxy while the
+    # listener may still hold the OLD IP (double-IP → Telegram auth_key kill).
+    # DB-clock now() (not app time) so it compares cleanly against the NOW()/TTL
+    # gate in the selection queries. A reconcile-loop TTL sweep lifts a stale flag.
+    sender.proxy_switch_pending_at = func.now()
     await db.commit()
     await db.refresh(sender)
 

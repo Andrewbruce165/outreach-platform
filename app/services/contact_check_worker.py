@@ -277,6 +277,15 @@ class ContactCheckWorker:
                               -- never restricted_until, and carries NO restriction state.
                               AND (checker_rest_until IS NULL
                                    OR checker_rest_until <= NOW())
+                              -- proxy-switch-listener-lag (mig 062): skip a checker whose
+                              -- proxy switch is still pending confirmation, so it never
+                              -- opens a resolve connection on the NEW IP while the OLD one
+                              -- may still be live. TTL fallback lifts a stale flag (a
+                              -- checker is not held by the listener, so only the TTL and
+                              -- the reconcile-loop sweep clear it).
+                              AND (proxy_switch_pending_at IS NULL
+                                   OR proxy_switch_pending_at
+                                      < NOW() - make_interval(secs => :proxy_switch_ttl))
                               -- RESV-02/D-10 durable daily-cap: count today's
                               -- contacts_cache writes by this checker (NOT an
                               -- in-memory counter, Pitfall 5). Over-quota → excluded.
@@ -307,6 +316,7 @@ class ContactCheckWorker:
                     {
                         "n": self.batch_size,
                         "daily_cap": get_settings().contact_check_daily_cap,
+                        "proxy_switch_ttl": get_settings().proxy_switch_pending_ttl_seconds,
                     },
                 )
                 rows = result.fetchall()
@@ -552,8 +562,16 @@ class ContactCheckWorker:
                           WHERE cc.sender_id = senders.id
                             AND cc.updated_at >= date_trunc('day', now())
                       ) < :daily_cap
+                      -- proxy-switch-listener-lag (mig 062): a probe DOES open a resolve
+                      -- connection, so skip a checker whose proxy switch is still pending
+                      -- (never live on the NEW IP while the OLD may still be up). TTL
+                      -- fallback lifts a stale flag.
+                      AND (proxy_switch_pending_at IS NULL
+                           OR proxy_switch_pending_at
+                              < NOW() - make_interval(secs => :proxy_switch_ttl))
                 """),
-                {"daily_cap": settings.contact_check_daily_cap},
+                {"daily_cap": settings.contact_check_daily_cap,
+                 "proxy_switch_ttl": settings.proxy_switch_pending_ttl_seconds},
             )).fetchall()
         # quick-260629-b7j (PROBE-02): probe each eligible checker at most once per
         # contact_check_probe_interval_seconds. The inline 14-05 anomaly detector
@@ -1112,7 +1130,13 @@ async def select_eligible_checkers(workspace_id: str) -> list[str]:
                   AND restriction_status = 'none'
                   AND lifecycle_status <> 'paused'
                   AND (restricted_until IS NULL OR restricted_until <= NOW())
+                  -- proxy-switch-listener-lag (mig 062): exclude a checker mid proxy
+                  -- switch (pending listener/TTL confirmation) from the eligible count.
+                  AND (proxy_switch_pending_at IS NULL
+                       OR proxy_switch_pending_at
+                          < NOW() - make_interval(secs => :proxy_switch_ttl))
             """),
-            {"wid": workspace_id},
+            {"wid": workspace_id,
+             "proxy_switch_ttl": get_settings().proxy_switch_pending_ttl_seconds},
         )).fetchall()
     return [str(r.id) for r in rows]
