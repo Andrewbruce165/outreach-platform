@@ -454,10 +454,14 @@ async def _handle_builtin_signal(
 
     if signal_name == "mark_as_lead":
         # ai_enabled stays True — lead is a marker, conversation continues.
+        # Lands in 'lead_pending' (not 'lead' directly) — a human confirms or
+        # dismisses it from the inbox "Lead detected" banner. pre_lead_status
+        # captures the status to revert to on Dismiss.
         await db.execute(
             text(
                 """
-                UPDATE conversations SET status='lead', updated_at=NOW()
+                UPDATE conversations
+                SET pre_lead_status = status, status='lead_pending', updated_at=NOW()
                 WHERE id = :cid
                 """
             ),
@@ -472,7 +476,7 @@ async def _handle_builtin_signal(
             reason=reason or "",
             db=db,
         )
-        return "lead"
+        return "lead_pending"
 
     if signal_name == "transfer_to_manager":
         await db.execute(

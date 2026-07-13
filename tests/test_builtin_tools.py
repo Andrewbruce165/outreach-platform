@@ -71,7 +71,8 @@ async def test_built_in_description_fallback_when_hint_null():
 async def test_mark_as_lead_updates_conversation_status(
     async_db_session, test_workspace, test_sender_factory, test_campaign_factory
 ):
-    """LLM calls mark_as_lead → UPDATE conversations.status='lead', ai_enabled stays true."""
+    """LLM calls mark_as_lead → UPDATE conversations.status='lead_pending' (awaiting
+    human Confirm/Dismiss), pre_lead_status captures the prior status, ai_enabled stays true."""
     sender = await test_sender_factory()
     camp = await test_campaign_factory()
     conv_id = uuid.uuid4()
@@ -107,15 +108,16 @@ async def test_mark_as_lead_updates_conversation_status(
         signal_name="mark_as_lead",
         reason="Клиент сказал что готов купить",
     )
-    assert status == "lead"
+    assert status == "lead_pending"
 
     row = (
         await async_db_session.execute(
-            _t("SELECT status, ai_enabled FROM conversations WHERE id = :id"),
+            _t("SELECT status, pre_lead_status, ai_enabled FROM conversations WHERE id = :id"),
             {"id": str(conv_id)},
         )
     ).first()
-    assert row.status == "lead"
+    assert row.status == "lead_pending"
+    assert row.pre_lead_status == "active"
     assert row.ai_enabled is True  # lead не закрывает диалог
 
 

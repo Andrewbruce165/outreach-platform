@@ -306,6 +306,15 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_060.exists():
             await asyncpg_conn.execute(_mig_060.read_text())
 
+        # 061: conversations.pre_lead_status column + 'lead_pending' in the status
+        # CHECK. `pre_lead_status` has NO ORM model (conversations is raw-SQL), so
+        # create_all never builds it — apply the migration so confirm-lead/dismiss-lead
+        # round-trips work in the test DB. Exists-guard keeps this green until
+        # migrations/061_lead_pending_status.sql lands.
+        _mig_061 = PROJECT_ROOT / "migrations" / "061_lead_pending_status.sql"
+        if _mig_061.exists():
+            await asyncpg_conn.execute(_mig_061.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.

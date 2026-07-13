@@ -97,6 +97,7 @@ async def test_disable_ai_cancels_pending_queue(
 # finished/bot_ignored are outcomes and stay put so they are never destroyed.
 @pytest.mark.parametrize("initial_status,expected_status", [
     ("lead", "lead"),
+    ("lead_pending", "lead_pending"),
     ("handoff", "active"),  # AI auto-transfer reversed — else bot stays mute + badge sticks
     ("finished", "finished"),
     ("bot_ignored", "bot_ignored"),
@@ -136,7 +137,7 @@ async def test_enable_ai_reverses_manual_preserves_others(
     assert body["paused_reason"] is None
 
 
-# ── Test 11: mark-lead sets status='lead' without touching ai_enabled ─────────
+# ── Test 11: mark-lead sets status='lead_pending' without touching ai_enabled ──
 
 
 async def test_mark_lead_sets_status_and_keeps_ai_enabled(
@@ -144,9 +145,10 @@ async def test_mark_lead_sets_status_and_keeps_ai_enabled(
     test_sender_factory, test_conversation_factory, test_campaign_factory,
 ):
     """POST /mark-lead on an active conversation:
-       - returns 200 with body.status == 'lead'
+       - returns 200 with body.status == 'lead_pending' (awaiting human
+         Confirm/Dismiss in the inbox banner — mirrors the auto-lead flow)
        - body.ai_enabled unchanged (still True — lead is a marker, the
-         conversation continues, mirroring the auto-lead flow)
+         conversation continues)
        - no httpx mock needed: the factory campaign has no webhook URL so
          notify_signal short-circuits before any HTTP call.
     """
@@ -165,8 +167,60 @@ async def test_mark_lead_sets_status_and_keeps_ai_enabled(
     )
     assert r.status_code == 200, r.text
     body = r.json()
+    assert body["status"] == "lead_pending"
+    assert body["ai_enabled"] is True
+
+
+async def test_confirm_lead_finalizes_status(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_sender_factory, test_conversation_factory, test_campaign_factory,
+):
+    """POST /confirm-lead on a 'lead_pending' conversation -> status='lead'."""
+    camp = await test_campaign_factory()
+    sender = await test_sender_factory()
+    conv = await test_conversation_factory(
+        sender=sender, contact_phone="+79991902003", campaign_id=camp["id"],
+        status="lead_pending", ai_enabled=True,
+    )
+
+    await _bind(async_db_session, test_workspace.id, "u-confirm-lead")
+
+    r = await async_client.post(
+        f"/api/v1/conversations/{conv['id']}/confirm-lead",
+        headers=_auth_headers(valid_supabase_jwt, "u-confirm-lead"),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
     assert body["status"] == "lead"
     assert body["ai_enabled"] is True
+
+
+async def test_dismiss_lead_reverts_to_pre_lead_status(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_sender_factory, test_conversation_factory, test_campaign_factory,
+):
+    """POST /dismiss-lead on a 'lead_pending' conversation whose pre_lead_status
+    was 'active' -> reverts status to 'active'."""
+    camp = await test_campaign_factory()
+    sender = await test_sender_factory()
+    conv = await test_conversation_factory(
+        sender=sender, contact_phone="+79991902004", campaign_id=camp["id"],
+        status="lead_pending", ai_enabled=True,
+    )
+    await async_db_session.execute(text("""
+        UPDATE conversations SET pre_lead_status = 'active' WHERE id = :cid
+    """), {"cid": str(conv["id"])})
+    await async_db_session.commit()
+
+    await _bind(async_db_session, test_workspace.id, "u-dismiss-lead")
+
+    r = await async_client.post(
+        f"/api/v1/conversations/{conv['id']}/dismiss-lead",
+        headers=_auth_headers(valid_supabase_jwt, "u-dismiss-lead"),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "active"
 
 
 async def test_mark_lead_cross_workspace_404(

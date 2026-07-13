@@ -1111,6 +1111,7 @@ CONVERSATION_STATUSES = {
     "manual",
     "paused",
     "lead",
+    "lead_pending",
     "handoff",
     "finished",
     "bot_ignored",

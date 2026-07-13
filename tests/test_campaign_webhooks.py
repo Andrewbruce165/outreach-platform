@@ -207,7 +207,7 @@ async def test_finish_webhook_called_on_finish_conversation(
 async def test_null_webhook_url_no_error_status_still_updated(
     async_db_session, test_workspace, test_sender_factory, test_campaign_factory
 ):
-    """CAMP-14: lead_webhook_url=NULL — webhook не вызывается, но conversation.status='lead'."""
+    """CAMP-14: lead_webhook_url=NULL — webhook не вызывается, но conversation.status='lead_pending'."""
     sender = await test_sender_factory()
     camp = await test_campaign_factory(lead_webhook_url=None)
     conv_id = uuid.uuid4()
@@ -256,13 +256,13 @@ async def test_null_webhook_url_no_error_status_still_updated(
         await asyncio.sleep(0.05)
 
     # status updated even when URL is NULL
-    assert status == "lead"
+    assert status == "lead_pending"
     row = (
         await async_db_session.execute(
             _t("SELECT status FROM conversations WHERE id = :id"), {"id": str(conv_id)}
         )
     ).first()
-    assert row.status == "lead"
+    assert row.status == "lead_pending"
 
     # no webhook posted
     assert posted_urls == []

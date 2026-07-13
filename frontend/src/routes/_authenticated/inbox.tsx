@@ -497,6 +497,11 @@ function StatusPill({ status }: { status: string }) {
   const s = (status || "").toLowerCase();
   const map: Record<string, { bg: string; fg: string; label: string }> = {
     lead: { bg: "var(--success-soft)", fg: "#1e8a3a", label: "Lead" },
+    lead_pending: {
+      bg: "var(--warning-soft, #fff4d6)",
+      fg: "#a86200",
+      label: "Lead · pending",
+    },
     handoff: {
       bg: "color-mix(in oklab, var(--ai-purple, #8774e1) 16%, transparent)",
       fg: "var(--ai-purple, #8774e1)",
@@ -1286,6 +1291,30 @@ function Thread({
     onError: (e) => toast.error(errMsg(e)),
   });
 
+  const confirmLeadMut = useMutation({
+    mutationFn: () =>
+      api<Conversation>(`/api/v1/conversations/${conversationId}/confirm-lead`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+
+  const dismissLeadMut = useMutation({
+    mutationFn: () =>
+      api<Conversation>(`/api/v1/conversations/${conversationId}/dismiss-lead`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+
   const finishMut = useMutation({
     mutationFn: () =>
       api<Conversation>(`/api/v1/conversations/${conversationId}/finish`, {
@@ -1496,13 +1525,30 @@ function Thread({
             style={
               conv.status === "lead"
                 ? { background: "var(--success, #4dcd5e)", color: "white" }
-                : undefined
+                : conv.status === "lead_pending"
+                  ? { background: "var(--warning-soft, #fff4d6)", color: "#a86200" }
+                  : undefined
             }
             onClick={() => markLeadMut.mutate()}
-            disabled={markLeadMut.isPending || conv.status === "lead"}
-            title={conv.status === "lead" ? "Already marked as lead" : "Mark as lead"}
+            disabled={
+              markLeadMut.isPending ||
+              conv.status === "lead" ||
+              conv.status === "lead_pending"
+            }
+            title={
+              conv.status === "lead"
+                ? "Already marked as lead"
+                : conv.status === "lead_pending"
+                  ? "Awaiting confirmation below"
+                  : "Mark as lead"
+            }
           >
-            <Flag size={14} /> {conv.status === "lead" ? "Lead" : "Mark lead"}
+            <Flag size={14} />{" "}
+            {conv.status === "lead"
+              ? "Lead"
+              : conv.status === "lead_pending"
+                ? "Pending confirm"
+                : "Mark lead"}
           </button>
         )}
         {conv && (
@@ -1556,13 +1602,14 @@ function Thread({
       {/* keep name available for downstream refs */}
       {false && <span>{name}</span>}
 
-      {/* Lead banner */}
-      {conv?.status === "lead" && (
+      {/* Lead banner — status='lead_pending' means AI or a manual click flagged
+          this conversation but no one has confirmed or dismissed it yet. */}
+      {conv?.status === "lead_pending" && (
         <div
           style={{
             padding: "10px 20px",
             background:
-              "linear-gradient(90deg, var(--success-soft, #e6f7ec), var(--tg-blue-softer, #f3f8fe))",
+              "linear-gradient(90deg, var(--warning-soft, #fff4d6), var(--tg-blue-softer, #f3f8fe))",
             borderBottom: "1px solid var(--border)",
             display: "flex",
             alignItems: "center",
@@ -1574,7 +1621,7 @@ function Thread({
               width: 24,
               height: 24,
               borderRadius: 7,
-              background: "var(--success, #4dcd5e)",
+              background: "var(--warning, #d68d00)",
               color: "white",
               display: "flex",
               alignItems: "center",
@@ -1584,17 +1631,24 @@ function Thread({
             <Flag size={13} />
           </div>
           <div style={{ fontSize: 12.5 }}>
-            <b>Lead detected</b> in this conversation
+            <b>Lead detected</b> in this conversation — awaiting confirmation
           </div>
           <span style={{ flex: 1 }} />
           <button
             type="button"
             className="btn btn--sm"
             style={{ background: "var(--success, #4dcd5e)", color: "white" }}
+            onClick={() => confirmLeadMut.mutate()}
+            disabled={confirmLeadMut.isPending || dismissLeadMut.isPending}
           >
             <Check size={12} /> Confirm
           </button>
-          <button type="button" className="btn btn--sm btn--ghost">
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            onClick={() => dismissLeadMut.mutate()}
+            disabled={confirmLeadMut.isPending || dismissLeadMut.isPending}
+          >
             <X size={12} /> Dismiss
           </button>
         </div>

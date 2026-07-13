@@ -259,6 +259,10 @@ async def list_conversations(
     # D-17: hide bot_ignored + telegram_service unless caller explicitly asks.
     if status is None:
         where_clauses.append("c.status NOT IN ('bot_ignored', 'telegram_service')")
+    elif status == "lead":
+        # Leads tab also surfaces 'lead_pending' (AI/manual-detected, awaiting
+        # human Confirm/Dismiss in the inbox banner).
+        where_clauses.append("c.status IN ('lead', 'lead_pending')")
     else:
         where_clauses.append("c.status = :status")
         params["status"] = status
@@ -887,18 +891,25 @@ async def mark_lead(
 ) -> ConversationResponse:
     """Manual 'mark as lead' from the inbox UI.
 
-    Mirrors ai_engine._handle_builtin_signal(mark_as_lead): set status='lead'
-    (ai_enabled UNCHANGED — lead is a marker, the conversation continues) and
-    fire the campaign lead webhook (fire-and-forget). 404 if not in this
-    workspace. The existing PATCH /{id} only sets status and does NOT fire the
-    webhook, so downstream (n8n) consumers need this dedicated endpoint to see
-    the same 'lead' event the AI's mark_as_lead signal produces.
+    Mirrors ai_engine._handle_builtin_signal(mark_as_lead): set
+    status='lead_pending' (ai_enabled UNCHANGED — lead is a marker, the
+    conversation continues) and fire the campaign lead webhook
+    (fire-and-forget). 404 if not in this workspace. The existing PATCH /{id}
+    only sets status and does NOT fire the webhook, so downstream (n8n)
+    consumers need this dedicated endpoint to see the same 'lead' event the
+    AI's mark_as_lead signal produces.
+
+    Lands in 'lead_pending', not 'lead' directly — a human then confirms
+    (POST .../confirm-lead) or dismisses (POST .../dismiss-lead) from the
+    inbox "Lead detected" banner. pre_lead_status captures the status to
+    revert to on dismiss.
     """
     await _load_conversation_or_404(db, ctx, conversation_id)
 
     # UPDATE status only — never touch ai_enabled (matches auto-lead flow).
     await db.execute(text("""
-        UPDATE conversations SET status='lead', updated_at=NOW()
+        UPDATE conversations
+        SET pre_lead_status = status, status='lead_pending', updated_at=NOW()
         WHERE id = :cid AND workspace_id = :wid
     """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
     await db.commit()
@@ -950,6 +961,51 @@ async def mark_lead(
         reason="Marked as lead manually via UI",
         db=db,
     )
+
+    return await get_conversation(conversation_id, ctx, db)
+
+
+@router.post("/{conversation_id}/confirm-lead", response_model=ConversationResponse)
+async def confirm_lead(
+    conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> ConversationResponse:
+    """Confirm a 'lead_pending' conversation as a real lead — from the inbox
+    "Lead detected" banner. No-op (still 404s if not in this workspace) if the
+    conversation isn't currently 'lead_pending' — avoids clobbering a status
+    that has moved on since the banner was rendered.
+    """
+    await _load_conversation_or_404(db, ctx, conversation_id)
+
+    await db.execute(text("""
+        UPDATE conversations SET status='lead', pre_lead_status=NULL, updated_at=NOW()
+        WHERE id = :cid AND workspace_id = :wid AND status='lead_pending'
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+    await db.commit()
+
+    return await get_conversation(conversation_id, ctx, db)
+
+
+@router.post("/{conversation_id}/dismiss-lead", response_model=ConversationResponse)
+async def dismiss_lead(
+    conversation_id: UUID,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+) -> ConversationResponse:
+    """Dismiss a 'lead_pending' conversation as a false positive — from the
+    inbox "Lead detected" banner. Reverts status to pre_lead_status (the
+    status active right before the AI/manual detection), falling back to
+    'active' if that was never captured. No-op if not currently 'lead_pending'.
+    """
+    await _load_conversation_or_404(db, ctx, conversation_id)
+
+    await db.execute(text("""
+        UPDATE conversations
+        SET status = COALESCE(pre_lead_status, 'active'), pre_lead_status=NULL, updated_at=NOW()
+        WHERE id = :cid AND workspace_id = :wid AND status='lead_pending'
+    """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
+    await db.commit()
 
     return await get_conversation(conversation_id, ctx, db)
 
