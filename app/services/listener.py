@@ -815,6 +815,14 @@ class TelegramListener:
                         "🚨 Antispam bot ID detected (%s) → delegating to safety net",
                         sender.id,
                     )
+                    # 260713-hiw: persist @SpamBot (178220800) messages to a
+                    # dedicated status='spambot' conversation for the account-page
+                    # live chat — ADDITIVE, runs for ALL SpamBot replies (incl.
+                    # "free"), BEFORE the unchanged restriction safety net below.
+                    if sender.id == 178220800:
+                        await self._persist_spambot_message(
+                            sender_info, sender, event, name, phone
+                        )
                     await self._handle_antispam_signal(
                         sender_info, name, sender.id, event.text or ""
                     )
@@ -839,6 +847,11 @@ class TelegramListener:
                     f"🚨 Сообщение от antispam бота ({name}, id={sender.id}) для аккаунта {sender_info['slug']}! "
                     f"Отключаем AI и ставим очередь на паузу."
                 )
+                # 260713-hiw: same additive persistence on the keyword-backup path.
+                if sender.id == 178220800:
+                    await self._persist_spambot_message(
+                        sender_info, sender, event, name, phone
+                    )
                 await self._handle_antispam_signal(sender_info, name, sender.id, event.text or "")
                 return
 
@@ -1398,6 +1411,86 @@ class TelegramListener:
                 )
         except Exception as e:
             logger.error("Telegram service message store failed: %s", e, exc_info=True)
+
+    async def _persist_spambot_message(
+        self,
+        sender_info: dict,
+        sender,           # Telethon User object (id 178220800 / @SpamBot)
+        event,            # Telethon NewMessage event
+        name: str,
+        phone: str,
+    ) -> None:
+        """Persist an inbound @SpamBot (id 178220800) message under a dedicated
+        status='spambot' conversation so the account-page "Text to SpamBot" side
+        panel can render it (quick task 260713-hiw).
+
+        Mirrors _handle_telegram_service_message: NO AI dispatch, NO enqueue,
+        NEVER touches sender restriction_status/lifecycle_status (the existing
+        `_handle_antispam_signal` — called separately, right after this — remains
+        the sole owner of restriction parsing/paths). This method is ADDITIVE and
+        purely persistence.
+
+        Get-or-create by (sender_id, contact_telegram_id=178220800): a new row
+        gets a sentinel contact_phone ('spambot:178220800', matching no real
+        recipient so the send path's queue-cancel is a harmless no-op), ai_enabled
+        =false, status='spambot'. An existing row is reused as-is — status is NEVER
+        downgraded here (get-or-create keeps whatever the endpoint/prior run set).
+        Isolated AsyncSessionLocal so a transient failure never poisons the loop.
+        """
+        try:
+            async with AsyncSessionLocal() as session:
+                existing = (await session.execute(text("""
+                    SELECT id FROM conversations
+                    WHERE sender_id = :sid AND contact_telegram_id = :tid
+                      AND status = 'spambot'
+                    ORDER BY created_at DESC LIMIT 1
+                """), {
+                    "sid": str(sender_info["id"]),
+                    "tid": sender.id,
+                })).fetchone()
+
+                if existing is None:
+                    conv_id = uuid.uuid4()
+                    await session.execute(text("""
+                        INSERT INTO conversations (
+                            id, workspace_id, sender_id, contact_phone, contact_name,
+                            contact_telegram_id, ai_enabled, status, paused_at, paused_reason
+                        )
+                        VALUES (
+                            :id, :wid, :sid, :phone, '@SpamBot', :tid,
+                            false, 'spambot', NOW(), 'SpamBot manual chat'
+                        )
+                    """), {
+                        "id": str(conv_id),
+                        "wid": str(sender_info["workspace_id"]),
+                        "sid": str(sender_info["id"]),
+                        "phone": "spambot:178220800",
+                        "tid": sender.id,
+                    })
+                else:
+                    conv_id = existing.id
+
+                # Save inbound message history so the panel can read SpamBot's reply.
+                await session.execute(text("""
+                    INSERT INTO messages
+                        (workspace_id, conversation_id, direction, message_text,
+                         sent_by, telegram_message_id)
+                    VALUES (:wid, :cid, 'inbound', :txt, 'contact', :tmid)
+                    ON CONFLICT (conversation_id, telegram_message_id) DO NOTHING
+                """), {
+                    "wid": str(sender_info["workspace_id"]),
+                    "cid": str(conv_id),
+                    "txt": event.text or "<media>",
+                    "tmid": event.id,
+                })
+                await session.commit()
+
+                logger.info(
+                    "📥 SpamBot message stored: %s → conv=%s",
+                    sender_info["slug"], str(conv_id)[:8],
+                )
+        except Exception as e:
+            logger.error("SpamBot message store failed: %s", e, exc_info=True)
 
     async def handle_outgoing_message(self, event, sender_info: dict):
         """Обработка исходящего сообщения (отправленного вручную)"""

@@ -28,7 +28,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import select, text
@@ -1077,6 +1077,57 @@ async def check_spambot(
     finally:
         if client:
             await telegram_service.disconnect_client(client)
+
+
+@router.post("/senders/{slug}/spambot-conversation")
+async def get_or_create_spambot_conversation(
+    slug: str,
+    ctx: AuthCtx = Depends(auth_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get-or-create the per-sender live chat with @SpamBot (id 178220800).
+
+    Backing store for the account-page "Text to SpamBot" side panel (quick task
+    260713-hiw). Returns the conversation id the frontend then polls
+    (GET /conversations/{id}/messages) and sends into (POST /conversations/{id}/send).
+
+    Workspace-scoped via _load_sender_by_slug (cross-tenant slug → 404). The
+    conversation gets a dedicated status='spambot' so it is EXCLUDED from the
+    normal Inbox list, ai_enabled=false (no AI dispatch), and a sentinel
+    contact_phone that matches no real recipient (so the send path's queue-cancel
+    is a harmless no-op). No Telethon call here — entity cold-start is handled by
+    the send path's get_dialogs fallback.
+    """
+    sender = await _load_sender_by_slug(db, ctx, slug)
+
+    existing = (await db.execute(text("""
+        SELECT id FROM conversations
+        WHERE sender_id = :sid AND contact_telegram_id = 178220800
+          AND status = 'spambot'
+        ORDER BY created_at DESC LIMIT 1
+    """), {"sid": str(sender.id)})).fetchone()
+
+    if existing is not None:
+        return {"conversation_id": str(existing.id), "status": "spambot"}
+
+    conv_id = uuid4()
+    await db.execute(text("""
+        INSERT INTO conversations (
+            id, workspace_id, sender_id, contact_phone, contact_name,
+            contact_telegram_id, ai_enabled, status, paused_at, paused_reason
+        )
+        VALUES (
+            :id, :wid, :sid, 'spambot:178220800', '@SpamBot', 178220800,
+            false, 'spambot', NOW(), 'SpamBot manual chat'
+        )
+    """), {
+        "id": str(conv_id),
+        "wid": str(sender.workspace_id),
+        "sid": str(sender.id),
+    })
+    await db.commit()
+
+    return {"conversation_id": str(conv_id), "status": "spambot"}
 
 
 # ─── Restriction event history (HLTH-03) ─────────────────────────────────────

@@ -315,6 +315,15 @@ async def _build_outreach_schema(raw_dsn: str, sa_url: str) -> None:
         if _mig_061.exists():
             await asyncpg_conn.execute(_mig_061.read_text())
 
+        # 062 (260713-hiw): conversations_status_check gains 'spambot' — the
+        # per-sender @SpamBot live-chat conversation. SQL-only (conversations is
+        # raw-SQL, no ORM CHECK), so apply the migration here or the new tests
+        # violate the constraint when inserting status='spambot'. Exists-guard
+        # keeps this green until migrations/062_conversations_status_spambot.sql lands.
+        _mig_062 = PROJECT_ROOT / "migrations" / "062_conversations_status_spambot.sql"
+        if _mig_062.exists():
+            await asyncpg_conn.execute(_mig_062.read_text())
+
         # Migration 018 uses ADD COLUMN IF NOT EXISTS ... DEFAULT, but create_all already
         # created these columns (ORM has them) — IF NOT EXISTS skips, defaults never apply.
         # Set them explicitly post-migration so raw-SQL tests get the expected defaults.

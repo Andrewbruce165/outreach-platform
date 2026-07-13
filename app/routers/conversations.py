@@ -257,8 +257,10 @@ async def list_conversations(
     params: dict = {"wid": str(ctx.workspace_id), "limit": limit, "offset": offset}
 
     # D-17: hide bot_ignored + telegram_service unless caller explicitly asks.
+    # 260713-hiw: 'spambot' (per-sender @SpamBot manual chat) is likewise hidden —
+    # it is only reachable via the account-page side panel, never the Inbox.
     if status is None:
-        where_clauses.append("c.status NOT IN ('bot_ignored', 'telegram_service')")
+        where_clauses.append("c.status NOT IN ('bot_ignored', 'telegram_service', 'spambot')")
     elif status == "lead":
         # Leads tab also surfaces 'lead_pending' (AI/manual-detected, awaiting
         # human Confirm/Dismiss in the inbox banner).
@@ -1141,6 +1143,8 @@ async def send_message_from_ui(
         )
 
     # 2. Auto-takeover UPDATE (D-04).
+    # 260713-hiw: never clobber a dedicated 'spambot' conversation to 'manual' —
+    # that would flip status and leak the @SpamBot chat into the Inbox list.
     await db.execute(text("""
         UPDATE conversations
         SET ai_enabled = false,
@@ -1148,7 +1152,7 @@ async def send_message_from_ui(
             paused_at = NOW(),
             paused_reason = 'Manager sent message via UI',
             updated_at = NOW()
-        WHERE id = :cid AND workspace_id = :wid
+        WHERE id = :cid AND workspace_id = :wid AND status <> 'spambot'
     """), {"cid": str(conversation_id), "wid": str(ctx.workspace_id)})
 
     # 3. Cancel pending queue items (D-02 pattern).
