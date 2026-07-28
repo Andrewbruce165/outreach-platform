@@ -1,5 +1,5 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "cnc-followup-campaign-100pct-not-registered — campaign bb654c73-41a5-442b-b6b7-14cdcb97475d got RECIPIENT_NOT_IN_TELEGRAM on 100% of 20 queue items, across up to 8 different senders each"
 created: 2026-07-27T07:45:00Z
 updated: 2026-07-28T00:00:00Z
@@ -222,9 +222,32 @@ root_cause: |
   `warmup_messages` keeps recording ~100 phantom rows/hour. `_load_contact_verdict`'s own
   docstring says "callers treat a None verdict permissively"; the code does the opposite.
 
-fix: NOT APPLIED — read-only investigation, proposal below awaiting approval
-verification:
-files_changed: []
+fix: |
+  APPLIED 2026-07-28 (commit 2e3b62d), all 5 proposed items:
+  1. _get_cached_contact — newest-row + verdict-recency (vs contacts.tg_checked_at)
+     on both the per-sender and cross-sender false reads; D-12 suspect gate kept.
+  2. _flag_checker_degraded (+ REST-ONLY branch) purges the checker's fresh
+     is_registered=false cache rows in the same TX (SUSPECT_RESOLVE_WINDOW_MINUTES).
+  3. send_message/send_file stamp from_cache on RECIPIENT_NOT_IN_TELEGRAM;
+     queue skips _reroute_resolve_fail for cache-sourced fails.
+  4. warmup: fallback resolve via senders.telegram_id + get_dialogs entity warm-up,
+     resolve cached; phantom warmup_messages row + session counters rolled back
+     when Telethon did not deliver.
+  5. failover clears error_message/attempts/started_at on row move.
+  OPS: 120 poisoned cache rows purged from prod (backup outreach_20260728_111705).
+  Campaign bb654c73 left PAUSED per user instruction — resume is manual.
+verification: |
+  tests/test_poisoned_cache_recency.py — 5 new regression tests (incident shape,
+  preserved fresh-false behavior, newest-true supersede, degrade purge, from_cache
+  flag) + send/queue/checker/warmup/failover suites green (only pre-existing
+  test_restricted_sender_excluded failure, stale vs deliberate spam_limited warmup).
+files_changed:
+  - app/services/telegram.py
+  - app/services/queue.py
+  - app/services/contact_check_worker.py
+  - app/services/warmup.py
+  - app/services/failover.py
+  - tests/test_poisoned_cache_recency.py
 
 ## Proposed fix (NOT applied)
 
