@@ -423,7 +423,8 @@ class WarmupWorker:
         result = await db.execute(
             text("""
                 SELECT id, slug, phone, session_string, lifecycle_status, auth_status,
-                       workspace_id, restriction_status, restricted_until, client_fingerprint
+                       workspace_id, restriction_status, restricted_until, client_fingerprint,
+                       telegram_id
                 FROM senders WHERE id = ANY(:ids)
             """),
             {"ids": [from_id, to_id]}
@@ -456,6 +457,10 @@ class WarmupWorker:
                 # Phase 21 IMPT-04: per-account fingerprint (NULL for phone-onboarded
                 # senders → strict global fallback in make_telegram_client).
                 "client_fingerprint": r[9],
+                # Warmup peers are OUR OWN senders — telegram_id (migration 006)
+                # is the resolve fallback when the phone ladder yields nothing
+                # (warmup targets have no `contacts` row, so tier-3 never fires).
+                "telegram_id": r[10],
                 "is_eligible": (
                     r[4] == "active" and r[5] == "ok"
                     and _warmup_eligible(r[7], r[8])
@@ -571,10 +576,11 @@ class WarmupWorker:
 
         # Пишем в БД ДО отправки (listener проверяет по кэшу телефонов, это дополнительная страховка)
         # Phase 02.1 (CR-04 issue 1): warmup_messages.workspace_id NOT NULL после миграции 012.
-        await db.execute(
+        msg_row_id = (await db.execute(
             text("""
                 INSERT INTO warmup_messages (workspace_id, session_id, from_sender_id, to_sender_id, message_text)
                 VALUES (:wid, :session_id, :from_id, :to_id, :text)
+                RETURNING id
             """),
             {
                 "wid":        from_sender["workspace_id"],
@@ -583,7 +589,7 @@ class WarmupWorker:
                 "to_id":      to_id,
                 "text":       message_text,
             }
-        )
+        )).scalar_one()
 
         # Обновляем сессию
         new_sent   = session["messages_sent"] + 1
@@ -613,7 +619,7 @@ class WarmupWorker:
         await db.commit()
 
         # Отправляем через Telethon
-        success = await self._send_via_telethon(from_sender, to_sender["phone"], message_text)
+        success = await self._send_via_telethon(from_sender, to_sender, message_text)
 
         if success:
             logger.info(
@@ -625,14 +631,36 @@ class WarmupWorker:
         else:
             logger.warning(
                 f"⚠️ Warmup: Telethon не смог отправить от {from_sender['slug']}, "
-                f"запись в БД сохранена"
+                f"откатываем запись и счётчик сессии"
             )
-            # При ошибке отправки откладываем сессию на 15 минут
+            # 2026-07-27 phantom-rows fix: раньше при фейле Telethon строка
+            # warmup_messages и инкремент messages_sent ОСТАВАЛИСЬ — БД копила
+            # ~100 фантомных «отправок»/час, пока доставка была мертва
+            # (~с 2026-07-07). Откатываем строку + счётчик/статус/last_sender,
+            # чтобы warmup-статистика отражала реальные доставки.
             retry_at = datetime.now(timezone.utc) + timedelta(minutes=15)
             async with AsyncSessionLocal() as db2:
                 await db2.execute(
-                    text("UPDATE warmup_sessions SET next_message_at = :t WHERE id = :sid"),
-                    {"t": retry_at, "sid": session["id"]}
+                    text("DELETE FROM warmup_messages WHERE id = :mid"),
+                    {"mid": msg_row_id}
+                )
+                await db2.execute(
+                    text("""
+                        UPDATE warmup_sessions
+                        SET messages_sent   = GREATEST(messages_sent - 1, 0),
+                            status          = 'active',
+                            last_sender_id  = :prev_last,
+                            -- GREATEST: не укорачиваем более длинный FloodWait-
+                            -- reschedule, который _send_via_telethon мог уже выставить
+                            next_message_at = GREATEST(COALESCE(next_message_at, :t), :t),
+                            updated_at      = NOW()
+                        WHERE id = :sid
+                    """),
+                    {
+                        "prev_last": session["last_sender_id"],
+                        "t": retry_at,
+                        "sid": session["id"],
+                    }
                 )
                 await db2.commit()
 
@@ -865,16 +893,26 @@ class WarmupWorker:
     async def _send_via_telethon(
         self,
         from_sender: dict,
-        to_phone: str,
+        to_sender: dict,
         message_text: str,
     ) -> bool:
         """Отправить warmup-сообщение через Telethon.
 
         Переиспользует telegram_service.get_client() с локами — не конфликтует
         с queue_worker, который использует ту же инфраструктуру.
-        """
-        from telethon.tl.types import InputPeerUser
 
+        Резолв (2026-07-27 warmup-dead fix): warmup-цели — НАШИ ЖЕ sender'ы, у
+        которых нет строки в `contacts`, поэтому resolve_contact после D-01/D-03
+        (sender ResolvePhone удалён, tier-3 гейтится вердиктом чекера) для них
+        детерминированно возвращает is_registered=False без единого Telegram-
+        вызова — warmup-доставка была мертва с ~2026-07-07. Кеш пробуем первым
+        (дёшево), затем фолбэк на peer по senders.telegram_id (migration 006) с
+        прогревом entity-cache через get_dialogs (тот же приём, что в
+        send_message_by_telegram_id).
+        """
+        from telethon.tl.types import InputPeerUser, PeerUser
+
+        to_phone = to_sender["phone"]
         client = None
         try:
             client = await telegram_service.get_client(
@@ -884,7 +922,7 @@ class WarmupWorker:
                 fingerprint=from_sender.get("client_fingerprint"),
             )
 
-            # Резолвим получателя (кэш + ResolvePhoneRequest)
+            # 1. Кеш-резолв (после первого удачного диалога — всегда хит)
             contact = await telegram_service.resolve_contact(
                 client,
                 from_sender["workspace_id"],
@@ -892,13 +930,44 @@ class WarmupWorker:
                 to_phone
             )
 
-            if not contact.get("is_registered"):
-                logger.error(f"🔥 Warmup: {to_phone} не зарегистрирован в Telegram")
-                return False
-
-            tg_id       = contact["telegram_id"]
-            access_hash = contact.get("access_hash")
-            peer = InputPeerUser(tg_id, access_hash) if access_hash is not None else tg_id
+            if contact.get("is_registered"):
+                tg_id       = contact["telegram_id"]
+                access_hash = contact.get("access_hash")
+                peer = InputPeerUser(tg_id, access_hash) if access_hash is not None else tg_id
+            else:
+                # 2. Фолбэк: peer по known telegram_id нашего же аккаунта.
+                to_tg_id = to_sender.get("telegram_id")
+                if not to_tg_id:
+                    logger.error(
+                        f"🔥 Warmup: {to_sender['slug']} не резолвится (нет строки в "
+                        f"contacts) и senders.telegram_id пуст — пропускаем"
+                    )
+                    return False
+                try:
+                    peer = await client.get_input_entity(PeerUser(int(to_tg_id)))
+                except ValueError:
+                    # Холодный entity-cache (StringSession не хранит peers) —
+                    # get_dialogs заполняет access_hash для недавних диалогов.
+                    await client.get_dialogs(limit=200)
+                    try:
+                        peer = await client.get_input_entity(PeerUser(int(to_tg_id)))
+                    except ValueError:
+                        logger.error(
+                            f"🔥 Warmup: peer {to_sender['slug']} недоступен даже "
+                            f"после get_dialogs — пропускаем"
+                        )
+                        return False
+                # Кешируем резолв — следующие отправки идут через tier-1 кеш
+                # без get_dialogs.
+                if isinstance(peer, InputPeerUser):
+                    await telegram_service._save_contact_cache(
+                        from_sender["workspace_id"], str(from_sender["id"]), to_phone,
+                        {
+                            "is_registered": True,
+                            "telegram_id": peer.user_id,
+                            "access_hash": peer.access_hash,
+                        },
+                    )
 
             await client.send_message(peer, message_text)
             return True

@@ -464,10 +464,19 @@ class TelegramService:
         по workspace_id чтобы исключить cross-tenant data leak через resolve cache.
         """
         async with AsyncSessionLocal() as db:
-            # 1. Check contacts_cache
+            # 1. Check contacts_cache.
+            # `newer_than_verdict` (2026-07-27 poisoned-cache incident): a cached
+            # false is only trusted when it is NOT older than the newest checker
+            # verdict for this phone — a later healthy re-check supersedes any
+            # earlier false written by a throttle-degraded account. No contacts
+            # row / NULL tg_checked_at → '-infinity' → the guard is permissive.
             row = (await db.execute(
                 text("""
-                    SELECT telegram_id, first_name, last_name, username, is_registered, access_hash
+                    SELECT telegram_id, first_name, last_name, username, is_registered, access_hash,
+                           updated_at >= COALESCE(
+                               (SELECT MAX(c.tg_checked_at) FROM contacts c
+                                 WHERE c.workspace_id = :workspace_id AND c.phone = :phone),
+                               '-infinity'::timestamptz) AS newer_than_verdict
                     FROM contacts_cache
                     WHERE workspace_id = :workspace_id
                       AND sender_id = :sender_id
@@ -509,6 +518,10 @@ class TelegramService:
             if row and row[4] is False:  # known unregistered (per-sender)
                 if suspect:
                     logger.debug(f"Contact {phone}: per-sender false is suspect — forcing live resolve (D-12)")
+                elif not row[6]:
+                    # 2026-07-27 incident: the false predates a newer checker
+                    # verdict — a stale poison row, never serve it.
+                    logger.debug(f"Contact {phone}: per-sender false is older than checker verdict — forcing live resolve")
                 else:
                     return {"is_registered": False, "from_cache": True}
 
@@ -535,13 +548,26 @@ class TelegramService:
             # is_registered=false. Если другой чекер этого workspace'а уже
             # подтвердил что номер не зарегистрирован, пропускаем live resolve.
             # Для зарегистрированных использовать не можем — нужен per-sender access_hash.
+            #
+            # 2026-07-27 poisoned-cache incident: take the NEWEST row for the
+            # (workspace, phone) — not "any false row" — and only rows at least as
+            # recent as the newest checker verdict count. Four throttle-degraded
+            # checkers wrote 30 false rows each; a later healthy re-check stamped
+            # the contacts row registered/high/clean, which CLOSED the D-12 suspect
+            # gate and made the stale falses authoritative for every sender. With
+            # newest-row + verdict-recency semantics the 07:04 true supersedes the
+            # 06:48–06:56 falses and the short-circuit is impossible.
             cross_row = (await db.execute(
                 text("""
                     SELECT is_registered FROM contacts_cache
                     WHERE workspace_id = :workspace_id
                       AND phone = :phone
-                      AND is_registered = false
                       AND updated_at > NOW() - INTERVAL '7 days'
+                      AND updated_at >= COALESCE(
+                          (SELECT MAX(c.tg_checked_at) FROM contacts c
+                            WHERE c.workspace_id = :workspace_id AND c.phone = :phone),
+                          '-infinity'::timestamptz)
+                    ORDER BY updated_at DESC
                     LIMIT 1
                 """),
                 {"workspace_id": workspace_id, "phone": phone}
@@ -550,7 +576,7 @@ class TelegramService:
             # D-12: same suspect gate on the cross-sender false. A suspect-source false
             # (e.g. a throttled checker on another sender) must NOT short-circuit — the
             # sender does a LIVE resolve via the ladder instead.
-            if cross_row and not suspect:
+            if cross_row and cross_row[0] is False and not suspect:
                 logger.debug(f"Contact {phone} found unregistered in cross-sender cache — skipping live resolve")
                 return {"is_registered": False, "from_cache": True}
 
@@ -830,13 +856,16 @@ class TelegramService:
 
             if not contact_info.get("is_registered"):
                 target = phone if is_username_key(phone) else f"Номер {phone}"
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "RECIPIENT_NOT_IN_TELEGRAM",
-                        "message": f"{target} не зарегистрирован в Telegram"
-                    }
+                error = {
+                    "code": "RECIPIENT_NOT_IN_TELEGRAM",
+                    "message": f"{target} не зарегистрирован в Telegram"
                 }
+                # 2026-07-27 incident: a cache-sourced verdict is a workspace-level
+                # DB read — rotating to another sender cannot change it. The queue
+                # uses this flag to SKIP _reroute_resolve_fail (no pool churn).
+                if contact_info.get("from_cache"):
+                    error["from_cache"] = True
+                return {"success": False, "error": error}
 
             telegram_id = contact_info["telegram_id"]
             access_hash = contact_info.get("access_hash")
@@ -1004,13 +1033,15 @@ class TelegramService:
 
             if not contact_info.get("is_registered"):
                 target = phone if is_username_key(phone) else f"Номер {phone}"
-                return {
-                    "success": False,
-                    "error": {
-                        "code": "RECIPIENT_NOT_IN_TELEGRAM",
-                        "message": f"{target} не зарегистрирован в Telegram"
-                    }
+                error = {
+                    "code": "RECIPIENT_NOT_IN_TELEGRAM",
+                    "message": f"{target} не зарегистрирован в Telegram"
                 }
+                # 2026-07-27 incident: cache verdicts are workspace-level — the
+                # queue skips _reroute_resolve_fail on this flag (see send_message).
+                if contact_info.get("from_cache"):
+                    error["from_cache"] = True
+                return {"success": False, "error": error}
 
             telegram_id = contact_info["telegram_id"]
             access_hash = contact_info.get("access_hash")

@@ -44,6 +44,7 @@ from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.services.checker import checker_service
 from app.services.restriction_audit import record_restriction_event
+from app.services.send_suspect import SUSPECT_RESOLVE_WINDOW_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -737,10 +738,29 @@ class ContactCheckWorker:
                     """),
                     {"until": cooldown_until, "id": checker_id},
                 )
+                # 2026-07-27 poisoned-cache incident: the batch this checker burned
+                # while sliding into the throttle already wrote durable
+                # `is_registered=false` rows into contacts_cache (checker.py::
+                # _save_cache runs per phone, BEFORE the batch-level suspect
+                # verdict). The `contacts` rollback below/elsewhere never touched
+                # them, so the poison outlived the degrade for 7 days and
+                # short-circuited every send. Purge them in the SAME TX — mirrors
+                # send_suspect._rollback step 4 (the sender-side twin).
+                purged = (await db.execute(
+                    text("""
+                        DELETE FROM contacts_cache
+                        WHERE sender_id = :id
+                          AND is_registered = false
+                          AND updated_at >= NOW() - make_interval(mins => :win)
+                    """),
+                    {"id": checker_id, "win": SUSPECT_RESOLVE_WINDOW_MINUTES},
+                )).rowcount
         logger.warning(
             "📋 control-probe flagged checker %s spam_limited (%d consecutive misses), "
-            "trip #%d → cooldown %ss (base %ss, cap %ss)",
+            "trip #%d → cooldown %ss (base %ss, cap %ss); purged %d poisoned "
+            "false-negative cache row(s)",
             checker_id, miss_count, new_trip, cooldown, base_cooldown, max_backoff,
+            purged,
         )
 
     async def _maybe_degrade_on_signal(
@@ -779,6 +799,24 @@ class ContactCheckWorker:
                 await self._rest_checker(
                     checker_id, seconds=get_settings().contact_check_cooldown_seconds
                 )
+                # 2026-07-27: REST-ONLY degrade bypasses _flag_checker_degraded, so
+                # purge this checker's fresh false-negative cache rows here too.
+                async with AsyncSessionLocal() as db:
+                    purged = (await db.execute(
+                        text("""
+                            DELETE FROM contacts_cache
+                            WHERE sender_id = :id
+                              AND is_registered = false
+                              AND updated_at >= NOW() - make_interval(mins => :win)
+                        """),
+                        {"id": checker_id, "win": SUSPECT_RESOLVE_WINDOW_MINUTES},
+                    )).rowcount
+                    await db.commit()
+                if purged:
+                    logger.warning(
+                        "checker %s REST-ONLY degrade: purged %d poisoned "
+                        "false-negative cache row(s)", checker_id, purged,
+                    )
                 self._degraded_this_tick.add(checker_id)
             return "suspect"
         if checker_id not in self._degraded_this_tick:

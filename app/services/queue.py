@@ -1353,7 +1353,12 @@ class QueueWorker:
                         # stamp the resolve-fail marker so the reactive rollback
                         # (send_suspect) can claw the row back if the sender is later
                         # flagged spam_limited/frozen within the window.
-                        if await self._reroute_resolve_fail(db, item, sender):
+                        # 2026-07-27 incident: a from_cache NOT_REGISTERED is a
+                        # workspace-level DB read — switching accounts cannot change
+                        # the answer, so re-rotation only burns the pool (20 doomed
+                        # items became 109 attempts across 12 senders and froze one
+                        # mid-run). Finalize immediately instead.
+                        if not error.get("from_cache") and await self._reroute_resolve_fail(db, item, sender):
                             return
                         await self._stamp_resolve_fail(db, item, sender, "RECIPIENT_NOT_IN_TELEGRAM")
                         if item.callback_url:

@@ -198,10 +198,16 @@ async def _failover(frozen_sender_id: UUID, db: AsyncSession) -> int:
         # +24h freeze pause so the row is sendable immediately).
         for row in claimed:
             new_sid = str(await _pick_least_loaded(db, candidate_ids))
+            # 2026-07-27 forensic misattribution: a failed-over row used to keep the
+            # OLD sender's error_message/attempts/started_at, so e.g. an
+            # ACCOUNT_FROZEN text showed up under a healthy receiver. Clear them —
+            # the row starts clean on the new sender (parity with
+            # _reroute_resolve_fail / send_suspect reroutes).
             await db.execute(
                 text("""
                     UPDATE message_queue
-                    SET sender_id = :new, scheduled_at = NOW()
+                    SET sender_id = :new, scheduled_at = NOW(),
+                        attempts = 0, error_message = NULL, started_at = NULL
                     WHERE id = :rid
                 """),
                 {"new": new_sid, "rid": str(row.id)},
