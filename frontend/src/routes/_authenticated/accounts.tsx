@@ -23,6 +23,7 @@ import {
   Search,
   ShieldAlert,
   MessageSquare,
+  Check,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
@@ -45,6 +46,87 @@ export const Route = createFileRoute("/_authenticated/accounts")({
   component: AccountsPage,
 });
 
+// ─── Topbar filters ─────────────────────────────────────────────────────────
+// Client-side narrowing of the already-loaded /senders list (same as the search
+// box) — no backend query params. The status buckets deliberately mirror the six
+// MiniMetric cards at the top of the page, so "Restricted" here means exactly
+// what the "Restricted" card counts: limited + frozen.
+type StatusFilter = "all" | "active" | "warmup" | "paused" | "restricted" | "error";
+type RoleFilter = "all" | "sender" | "checker";
+
+const STATUS_FILTER_OPTIONS: [StatusFilter, string][] = [
+  ["all", "All"],
+  ["active", "Active"],
+  ["warmup", "Warm-up"],
+  ["paused", "Paused"],
+  ["restricted", "Restricted"],
+  ["error", "Error"],
+];
+
+const ROLE_FILTER_OPTIONS: [RoleFilter, string][] = [
+  ["all", "All"],
+  ["sender", "Sender"],
+  ["checker", "Checker"],
+];
+
+function matchesStatusFilter(s: Sender, f: StatusFilter): boolean {
+  if (f === "all") return true;
+  if (f === "restricted") return s.status === "limited" || s.status === "frozen";
+  return s.status === f;
+}
+
+function matchesRoleFilter(s: Sender, f: RoleFilter): boolean {
+  if (f === "all") return true;
+  return (s.role === "checker" ? "checker" : "sender") === f;
+}
+
+/** One labelled radio-style group inside the filters dropdown. */
+function FilterGroup<T extends string>({
+  label,
+  options,
+  value,
+  onSelect,
+}: {
+  label: string;
+  options: [T, string][];
+  value: T;
+  onSelect: (v: T) => void;
+}) {
+  return (
+    <>
+      <div
+        style={{
+          fontSize: 10.5,
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: "var(--text-faint)",
+          padding: "6px 8px 4px",
+        }}
+      >
+        {label}
+      </div>
+      {options.map(([key, text]) => (
+        <button
+          key={key}
+          type="button"
+          className="btn btn--ghost btn--sm"
+          style={{
+            width: "100%",
+            justifyContent: "flex-start",
+            color: value === key ? "var(--tg-blue)" : undefined,
+            fontWeight: value === key ? 600 : 500,
+          }}
+          onClick={() => onSelect(key)}
+        >
+          {value === key ? <Check size={12} /> : <span style={{ width: 12 }} />}
+          {text}
+        </button>
+      ))}
+    </>
+  );
+}
+
 function AccountsPage() {
   const [modal, setModal] = useState<null | {
     mode: "new" | "reauth";
@@ -53,6 +135,9 @@ function AccountsPage() {
   }>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["senders"],
@@ -62,22 +147,26 @@ function AccountsPage() {
 
   const allSenders = data?.senders ?? [];
   const q = search.trim().toLowerCase();
-  const senders = q
-    ? allSenders.filter((s) => {
-        const hay = [s.name, s.tg_username, s.phone]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
-      })
-    : allSenders;
+  const activeFilterCount = (statusFilter !== "all" ? 1 : 0) + (roleFilter !== "all" ? 1 : 0);
+  const isNarrowed = q !== "" || activeFilterCount > 0;
+  // Search and filters compose: a row must satisfy all active narrowings.
+  const senders = allSenders.filter((s) => {
+    if (q) {
+      const hay = [s.name, s.tg_username, s.phone].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return matchesStatusFilter(s, statusFilter) && matchesRoleFilter(s, roleFilter);
+  });
+  // Metric cards intentionally stay whole-fleet totals (never narrowed) — but they
+  // reuse matchesStatusFilter so a card and its filter bucket can never drift apart.
+  const countBy = (f: StatusFilter) => allSenders.filter((s) => matchesStatusFilter(s, f)).length;
   const counts = {
     total: allSenders.length,
-    active: allSenders.filter((s) => s.status === "active").length,
-    warmup: allSenders.filter((s) => s.status === "warmup").length,
-    paused: allSenders.filter((s) => s.status === "paused").length,
-    error: allSenders.filter((s) => s.status === "error").length,
-    restricted: allSenders.filter((s) => s.status === "limited" || s.status === "frozen").length,
+    active: countBy("active"),
+    warmup: countBy("warmup"),
+    paused: countBy("paused"),
+    error: countBy("error"),
+    restricted: countBy("restricted"),
   };
 
   return (
@@ -108,9 +197,68 @@ function AccountsPage() {
                 style={{ width: 200, paddingLeft: 26, height: 28 }}
               />
             </div>
-            <button className="btn btn--ghost btn--sm" type="button">
-              <Filter size={14} /> Filters
-            </button>
+            <div style={{ position: "relative" }}>
+              <button
+                className="btn btn--ghost btn--sm"
+                type="button"
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((v) => !v)}
+                style={activeFilterCount > 0 ? { color: "var(--tg-blue)" } : undefined}
+              >
+                <Filter size={14} /> Filters
+                {activeFilterCount > 0 && (
+                  <span
+                    style={{
+                      marginLeft: 4,
+                      background: "var(--tg-blue)",
+                      color: "white",
+                      borderRadius: 999,
+                      padding: "0 6px",
+                      fontSize: 10,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {activeFilterCount}
+                  </span>
+                )}
+              </button>
+              {filtersOpen && (
+                <>
+                  {/* Scrim closes on outside click. Selecting an option keeps the panel
+                      open on purpose — there are two groups, so the user usually wants
+                      to set both without re-opening. */}
+                  <div className="ob__menuScrim" onClick={() => setFiltersOpen(false)} />
+                  <div
+                    role="menu"
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 4px)",
+                      left: 0,
+                      zIndex: 50,
+                      minWidth: 200,
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 10,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                      padding: 6,
+                    }}
+                  >
+                    <FilterGroup
+                      label="Status"
+                      options={STATUS_FILTER_OPTIONS}
+                      value={statusFilter}
+                      onSelect={setStatusFilter}
+                    />
+                    <FilterGroup
+                      label="Role"
+                      options={ROLE_FILTER_OPTIONS}
+                      value={roleFilter}
+                      onSelect={setRoleFilter}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
             <button
               className="btn btn--ghost btn--sm"
               onClick={() => setImportOpen(true)}
@@ -167,10 +315,14 @@ function AccountsPage() {
           </div>
         )}
 
-        {allSenders.length > 0 && senders.length === 0 && !isLoading && !error ? (
+        {allSenders.length > 0 && senders.length === 0 && isNarrowed && !isLoading && !error ? (
           <div className="card">
             <div className="card__body muted" style={{ textAlign: "center", padding: "32px 24px" }}>
-              No accounts match “{search}”.
+              {q && activeFilterCount > 0
+                ? `No accounts match “${search}” with the selected filters.`
+                : q
+                  ? `No accounts match “${search}”.`
+                  : "No accounts match the selected filters."}
             </div>
           </div>
         ) : (
