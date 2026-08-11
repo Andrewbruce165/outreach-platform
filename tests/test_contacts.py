@@ -218,6 +218,75 @@ async def test_csv_import_applies_mapping(async_client, valid_supabase_jwt):
     assert "+79002220002" in phones  # leading-8 нормализован в +7
 
 
+async def test_csv_import_accepts_name_keyed_mapping_end_to_end(
+    async_client, valid_supabase_jwt
+):
+    """Regression 2026-08-11: name-keyed mapping used to import only auto-detected
+    columns (77 contacts landed with username only). Now every mapped field lands,
+    including custom.<key>, and no mapping warnings are emitted."""
+    headers, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "csv-name-keys"
+    )
+    csv_body = "Телефон,ФИО,Компания\n+79002220003,иван петров,Акме\n".encode("utf-8")
+    files = {"file": ("test.csv", io.BytesIO(csv_body), "text/csv")}
+    preview = await async_client.post(
+        "/api/v1/contacts/import/preview", headers=headers, files=files
+    )
+    assert preview.status_code == 200, preview.text
+    import_id = preview.json()["import_id"]
+
+    response = await async_client.post(
+        "/api/v1/contacts/import",
+        headers=headers,
+        json={
+            "import_id": import_id,
+            "folder_name": "NameKeyed",
+            "mapping": {
+                "Телефон": "phone",
+                "ФИО": "full_name",
+                "Компания": "custom.company",
+            },
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["imported"] == 1
+    assert response.json()["mapping_warnings"] == []
+
+    contacts = await async_client.get("/api/v1/contacts", headers=headers)
+    row = next(c for c in contacts.json() if c["phone"] == "+79002220003")
+    assert row["full_name"] == "Иван Петров"
+    assert row["custom"] == {"company": "Акме"}
+
+
+async def test_csv_import_surfaces_unresolvable_mapping_key(
+    async_client, valid_supabase_jwt
+):
+    """A mapping key matching no CSV column must be reported, never dropped."""
+    headers, _ = await _setup_workspace(
+        async_client, valid_supabase_jwt, "csv-bad-key"
+    )
+    csv_body = b"phone,name\n+79002220004,John\n"
+    files = {"file": ("test.csv", io.BytesIO(csv_body), "text/csv")}
+    preview = await async_client.post(
+        "/api/v1/contacts/import/preview", headers=headers, files=files
+    )
+    import_id = preview.json()["import_id"]
+
+    response = await async_client.post(
+        "/api/v1/contacts/import",
+        headers=headers,
+        json={
+            "import_id": import_id,
+            "folder_name": "BadKey",
+            "mapping": {"0": "phone", "ghost_column": "source"},
+        },
+    )
+    assert response.status_code == 202, response.text
+    warnings = response.json()["mapping_warnings"]
+    assert len(warnings) == 1
+    assert "ghost_column" in warnings[0]
+
+
 async def test_csv_import_mapping_without_phone_or_username_returns_422(
     async_client, valid_supabase_jwt
 ):

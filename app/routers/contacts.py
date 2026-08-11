@@ -430,11 +430,27 @@ async def import_contacts(
     await db.execute(sa_delete(CsvImport).where(CsvImport.id == payload.import_id))
     await db.commit()
 
+    # Mapping entries the service could not apply — surfaced to the UI instead of
+    # being dropped silently (bug 2026-08-11: name-keyed mapping → empty contacts).
+    mapping_warnings: list[str] = [
+        f"Column '{key}' from your mapping was not found in the CSV — skipped"
+        for key in applied.get("unresolved_mapping_keys", [])
+    ] + [
+        f"Mapping '{entry}' targets an unknown field — skipped"
+        for entry in applied.get("unknown_mapping_fields", [])
+    ]
+
     logger.info(
         f"[contacts] import workspace={ctx.workspace_id} folder={folder_id} "
         f"total={applied['total']} imported={dedup_summary['imported']} "
-        f"dup={dedup_summary['skipped_duplicates']} invalid={applied['skipped_invalid']}"
+        f"dup={dedup_summary['skipped_duplicates']} invalid={applied['skipped_invalid']} "
+        f"mapping_warnings={len(mapping_warnings)}"
     )
+    if mapping_warnings:
+        logger.warning(
+            f"[contacts] import workspace={ctx.workspace_id} folder={folder_id} "
+            f"mapping issues: {mapping_warnings}"
+        )
 
     return ContactImportSummary(
         total=applied["total"],
@@ -442,6 +458,7 @@ async def import_contacts(
         skipped_duplicates=dedup_summary["skipped_duplicates"],
         skipped_invalid=applied["skipped_invalid"],
         skipped_phones=dedup_summary["skipped_phones"],
+        mapping_warnings=mapping_warnings,
     )
 
 

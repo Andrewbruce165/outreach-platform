@@ -6,7 +6,12 @@ BOM, delimiters, cp1251, кавычки, no-header heuristic, и mapping.
 
 import pytest
 
-from app.services.csv_import import apply_import, parse_preview, suggest_mapping
+from app.services.csv_import import (
+    apply_import,
+    parse_preview,
+    resolve_mapping,
+    suggest_mapping,
+)
 
 
 # ─── parse_preview ───────────────────────────────────────────────────────────
@@ -180,6 +185,127 @@ def test_apply_import_username_strips_at():
         encoding="utf-8-sig",
     )
     assert result["rows_to_insert"][0]["username"] == "johndoe"
+
+
+# ─── mapping key contract (regression: 2026-08-11 name-keyed mapping bug) ────
+#
+# Root cause: the UI keyed `mapping` by column NAME while the backend contract is
+# column INDEX-as-string; apply_import did int(key) and silently `continue`d, so
+# every user-picked field was dropped (77 contacts imported with username only).
+# See .planning/debug/resolved/csv-contact-mapping-only-username-saved.md
+
+
+def test_apply_import_accepts_name_keyed_mapping():
+    data = "Телефон,Имя,Источник\n+79001234567,иван петров,barter\n".encode("utf-8")
+    result = apply_import(
+        data,
+        mapping={"Телефон": "phone", "Имя": "full_name", "Источник": "source"},
+        delimiter=",",
+        encoding="utf-8",
+    )
+    assert result["unresolved_mapping_keys"] == []
+    rec = result["rows_to_insert"][0]
+    assert rec["phone"] == "+79001234567"
+    assert rec["full_name"] == "Иван Петров"
+    assert rec["source"] == "barter"
+
+
+def test_apply_import_name_keyed_mapping_is_case_insensitive():
+    data = b"Phone,Full Name\n+79001234567,John Doe\n"
+    result = apply_import(
+        data,
+        mapping={"phone": "phone", "full name": "full_name"},
+        delimiter=",",
+        encoding="utf-8-sig",
+    )
+    assert result["unresolved_mapping_keys"] == []
+    assert result["rows_to_insert"][0]["phone"] == "+79001234567"
+    assert result["rows_to_insert"][0]["full_name"] == "John Doe"
+
+
+def test_apply_import_mixed_index_and_name_keys():
+    data = b"phone,company\n+79001234567,Acme\n"
+    result = apply_import(
+        data,
+        mapping={"0": "phone", "company": "custom.company"},
+        delimiter=",",
+        encoding="utf-8-sig",
+    )
+    assert result["unresolved_mapping_keys"] == []
+    assert result["rows_to_insert"][0]["custom"]["company"] == "Acme"
+
+
+def test_apply_import_custom_field_via_name_key_round_trips():
+    data = "phone,Компания,Город\n+79001234567,Акме,Москва\n".encode("utf-8")
+    result = apply_import(
+        data,
+        mapping={
+            "phone": "phone",
+            "Компания": "custom.company",
+            "Город": "custom.city",
+        },
+        delimiter=",",
+        encoding="utf-8",
+    )
+    rec = result["rows_to_insert"][0]
+    assert rec["custom"] == {"company": "Акме", "city": "Москва"}
+
+
+def test_apply_import_reports_unresolvable_key_instead_of_silent_drop():
+    data = b"phone,name\n+79001234567,John\n"
+    result = apply_import(
+        data,
+        mapping={"0": "phone", "no_such_column": "full_name", "42": "source"},
+        delimiter=",",
+        encoding="utf-8-sig",
+    )
+    # phone still imports…
+    assert result["rows_to_insert"][0]["phone"] == "+79001234567"
+    assert result["rows_to_insert"][0]["full_name"] is None
+    # …but the bad keys are surfaced, not swallowed.
+    assert sorted(result["unresolved_mapping_keys"]) == ["42", "no_such_column"]
+
+
+def test_apply_import_reports_unknown_target_field():
+    data = b"phone,whatever\n+79001234567,x\n"
+    result = apply_import(
+        data,
+        mapping={"0": "phone", "1": "not_a_field"},
+        delimiter=",",
+        encoding="utf-8-sig",
+    )
+    assert result["unknown_mapping_fields"] == ["1=not_a_field"]
+    assert result["rows_to_insert"][0]["phone"] == "+79001234567"
+
+
+def test_apply_import_raises_when_phone_key_unresolvable():
+    """Guard: don't import 77 empty contacts when the phone key matches nothing."""
+    data = b"Tel,Name\n+79001234567,John\n"
+    with pytest.raises(ValueError, match="MAPPING_INVALID"):
+        apply_import(
+            data,
+            mapping={"telephone": "phone"},  # neither an index nor a real column
+            delimiter=",",
+            encoding="utf-8-sig",
+        )
+
+
+def test_apply_import_duplicate_column_names_resolve_to_first():
+    data = b"phone,phone\n+79001234567,+79009998877\n"
+    result = apply_import(
+        data,
+        mapping={"phone": "phone"},
+        delimiter=",",
+        encoding="utf-8-sig",
+    )
+    assert result["rows_to_insert"][0]["phone"] == "+79001234567"
+
+
+def test_resolve_mapping_prefers_index_over_name():
+    # A CSV whose header is literally "1" must not shadow the canonical index key.
+    resolved, unresolved, unknown = resolve_mapping({"1": "phone"}, ["1", "name"])
+    assert resolved == [(1, "phone")]
+    assert unresolved == [] and unknown == []
 
 
 def test_apply_import_username_only_record_valid():

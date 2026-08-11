@@ -44,6 +44,20 @@ const TARGET_FIELDS = [
   { key: "source", label: "Source" },
 ] as const;
 
+/** Sentinel <option> value for "map this column into custom.<key>". */
+const CUSTOM_FIELD = "__custom__";
+
+/** Column name → default custom variable key ({{key}} in message templates). */
+function slugifyVarKey(col: string): string {
+  return col
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_а-яё]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
 export const Route = createFileRoute("/_authenticated/contacts")({
   component: ContactsPage,
 });
@@ -1169,7 +1183,10 @@ function ImportModal({
 }) {
   const [stage, setStage] = useState<ImportStage>("upload");
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  // Keyed by CSV column index as string ("0", "1", …) — the backend contract.
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  // Draft custom-variable key per column index (mapping value = `custom.<key>`).
+  const [customKeys, setCustomKeys] = useState<Record<string, string>>({});
   const [folderMode, setFolderMode] = useState<"existing" | "new">(
     defaultFolderId ? "existing" : "new",
   );
@@ -1188,8 +1205,17 @@ function ImportModal({
         method: "POST",
         body: form,
       });
+      const suggested = res.suggested_mapping ?? {};
       setPreview(res);
-      setMapping(res.suggested_mapping ?? {});
+      setMapping(suggested);
+      // Re-hydrate custom drafts so `custom.<key>` rows render in custom mode.
+      setCustomKeys(
+        Object.fromEntries(
+          Object.entries(suggested)
+            .filter(([, field]) => field.startsWith("custom."))
+            .map(([k, field]) => [k, field.slice("custom.".length)]),
+        ),
+      );
       setStage("mapping");
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Upload failed");
@@ -1289,22 +1315,56 @@ function ImportModal({
                 <div className="text-xs muted fw5">CSV column</div>
                 <div className="text-xs muted fw5">aimly field</div>
                 <div className="text-xs muted fw5">Sample</div>
-                {preview.columns.map((col) => (
-                  <RowMap
-                    key={col}
-                    col={col}
-                    sample={String(preview.sample_rows[0]?.[col] ?? "")}
-                    value={mapping[col] ?? ""}
-                    onChange={(v) =>
-                      setMapping((prev) => {
-                        const next = { ...prev };
-                        if (v) next[col] = v;
-                        else delete next[col];
-                        return next;
-                      })
-                    }
-                  />
-                ))}
+                {preview.columns.map((col, idx) => {
+                  // Backend contract: mapping is keyed by column INDEX as string.
+                  // (Keying by column NAME silently dropped every field — see
+                  // .planning/debug/resolved/csv-contact-mapping-only-username-saved.md)
+                  const key = String(idx);
+                  return (
+                    <RowMap
+                      key={key}
+                      col={col}
+                      sample={String(preview.sample_rows[0]?.[col] ?? "")}
+                      value={mapping[key] ?? ""}
+                      customKey={customKeys[key]}
+                      onChange={(v) => {
+                        setMapping((prev) => {
+                          const next = { ...prev };
+                          if (v) next[key] = v;
+                          else delete next[key];
+                          return next;
+                        });
+                      }}
+                      onPickCustom={() => {
+                        const draft = customKeys[key] ?? slugifyVarKey(col);
+                        setCustomKeys((prev) => ({ ...prev, [key]: draft }));
+                        setMapping((prev) => {
+                          const next = { ...prev };
+                          if (draft) next[key] = `custom.${draft}`;
+                          else delete next[key];
+                          return next;
+                        });
+                      }}
+                      onClearCustom={() =>
+                        setCustomKeys((prev) => {
+                          const next = { ...prev };
+                          delete next[key];
+                          return next;
+                        })
+                      }
+                      onCustomKeyChange={(raw) => {
+                        setCustomKeys((prev) => ({ ...prev, [key]: raw }));
+                        const clean = raw.trim();
+                        setMapping((prev) => {
+                          const next = { ...prev };
+                          if (clean) next[key] = `custom.${clean}`;
+                          else delete next[key];
+                          return next;
+                        });
+                      }}
+                    />
+                  );
+                })}
               </div>
 
               <div className="divider-h" />
@@ -1388,6 +1448,16 @@ function ImportModal({
                 <div><b className="num">{summary.skipped_invalid}</b><span className="muted text-sm">Invalid</span></div>
                 <div><b className="num">{summary.total}</b><span className="muted text-sm">Total rows</span></div>
               </div>
+              {(summary.mapping_warnings?.length ?? 0) > 0 && (
+                <div className="ct__warn" style={{ textAlign: "left" }}>
+                  <AlertCircle size={14} />
+                  <div className="col" style={{ gap: 2 }}>
+                    {summary.mapping_warnings?.map((w) => (
+                      <span key={w}>{w}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button className="btn btn--primary" onClick={onClose}>Done</button>
             </div>
           )}
@@ -1401,22 +1471,67 @@ function RowMap({
   col,
   sample,
   value,
+  customKey,
   onChange,
+  onPickCustom,
+  onClearCustom,
+  onCustomKeyChange,
 }: {
   col: string;
   sample: string;
   value: string;
+  /** Draft custom key — defined ⇒ this row is in "custom variable" mode. */
+  customKey?: string;
   onChange: (v: string) => void;
+  onPickCustom: () => void;
+  onClearCustom: () => void;
+  onCustomKeyChange: (raw: string) => void;
 }) {
+  const isCustom = customKey !== undefined || value.startsWith("custom.");
+  const selectValue = isCustom ? CUSTOM_FIELD : value;
   return (
     <>
       <div className="ct__mapCol mono text-sm">{col}</div>
-      <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— skip —</option>
-        {TARGET_FIELDS.map((f) => (
-          <option key={f.key} value={f.key}>{f.label}</option>
-        ))}
-      </select>
+      <div className="col" style={{ gap: 6 }}>
+        <select
+          className="select"
+          value={selectValue}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === CUSTOM_FIELD) {
+              onPickCustom();
+            } else {
+              onClearCustom();
+              onChange(v);
+            }
+          }}
+        >
+          <option value="">— skip —</option>
+          {TARGET_FIELDS.map((f) => (
+            <option key={f.key} value={f.key}>{f.label}</option>
+          ))}
+          <option value={CUSTOM_FIELD}>Custom variable…</option>
+        </select>
+        {isCustom && (
+          <>
+            <input
+              className="input"
+              placeholder="variable name, e.g. company"
+              value={customKey ?? value.slice("custom.".length)}
+              onChange={(e) => onCustomKeyChange(e.target.value)}
+            />
+            <span className="muted text-xs">
+              {value.startsWith("custom.") ? (
+                <>
+                  Use as <code>{`{{${value.slice("custom.".length)}}}`}</code> in templates
+                </>
+              ) : (
+                <>Name the variable to import this column</>
+              )}
+            </span>
+          </>
+        )}
+      </div>
       <div className="muted text-sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {sample || <span className="faint">empty</span>}
       </div>

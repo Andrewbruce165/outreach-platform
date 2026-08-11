@@ -3513,6 +3513,11 @@ export interface components {
              * @default []
              */
             skipped_phones: string[];
+            /**
+             * Mapping Warnings
+             * @default []
+             */
+            mapping_warnings?: string[];
         };
         /** ContactResponse */
         ContactResponse: {

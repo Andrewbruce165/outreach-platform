@@ -385,7 +385,12 @@ class ContactImportRequest(BaseModel):
     import_id: UUID
     folder_id: Optional[UUID] = None
     folder_name: Optional[str] = None
-    # mapping: {"0": "phone", "1": "full_name", "2": "custom.company"}
+    # mapping keys = CSV column INDEX as string (canonical):
+    #   {"0": "phone", "1": "full_name", "2": "custom.company"}
+    # Column NAMES are also accepted as a tolerant fallback
+    #   ({"Телефон": "phone"}) — resolved case-insensitively against the header row.
+    # Anything that resolves to neither is reported in
+    # ContactImportSummary.mapping_warnings, never silently dropped.
     mapping: dict[str, str]
     on_duplicate: Literal["skip"] = "skip"
 
@@ -413,6 +418,10 @@ class ContactImportSummary(BaseModel):
     skipped_duplicates: int
     skipped_invalid: int
     skipped_phones: List[str] = []
+    # Mapping entries that could not be applied (key matched no CSV column, or
+    # an unknown target field). Empty on a healthy import. Never silent — see
+    # .planning/debug/resolved/csv-contact-mapping-only-username-saved.md
+    mapping_warnings: List[str] = []
 
 
 class MoveContactRequest(BaseModel):

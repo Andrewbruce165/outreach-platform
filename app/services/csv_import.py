@@ -52,6 +52,9 @@ _COLUMN_ALIASES = {
 
 _PHONE_LIKE_RE = re.compile(r"^[+\d][\d\s()-]{6,}$")
 
+# Canonical (non-custom) target fields accepted in a mapping VALUE.
+_CANONICAL_FIELDS = frozenset({"phone", "username", "full_name", "source"})
+
 
 def parse_preview(file_bytes: bytes, max_rows: int = 50) -> dict:
     """Парсит CSV — возвращает первые ~max_rows строк + heuristic mapping.
@@ -148,6 +151,83 @@ def suggest_mapping(columns: list[str]) -> dict[str, str]:
     return result
 
 
+def _is_valid_field(field: str) -> bool:
+    """Mapping VALUE sanity: канонический field или непустой `custom.<key>`."""
+    if field in _CANONICAL_FIELDS:
+        return True
+    if field.startswith("custom."):
+        return bool(field[len("custom.") :].strip())
+    return False
+
+
+def resolve_mapping(
+    mapping: dict[str, str], headers: list[str]
+) -> tuple[list[tuple[int, str]], list[str], list[str]]:
+    """Резолвит ключи mapping в индексы колонок — tolerant + loud.
+
+    Канонический контракт — ключ = индекс колонки строкой ("0", "1", …).
+    Но UI исторически присылал ключ = ИМЯ колонки (bug 2026-08-11: все такие
+    записи молча выбрасывались, см. .planning/debug/resolved/
+    csv-contact-mapping-only-username-saved.md). Поэтому принимаем оба
+    key-space'а, а всё что не резолвится — возвращаем наверх, НЕ глотаем.
+
+    Returns:
+        (resolved, unresolved_keys, unknown_fields)
+        resolved: [(col_idx, field), …] — порядок как в mapping, дубликаты убраны
+        unresolved_keys: ключи, не совпавшие ни с индексом, ни с именем колонки
+        unknown_fields: "<key>=<field>" для невалидных field-имён
+    """
+    by_name: dict[str, list[int]] = {}
+    for idx, header in enumerate(headers):
+        by_name.setdefault(header.strip().lower(), []).append(idx)
+
+    resolved: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    unresolved_keys: list[str] = []
+    unknown_fields: list[str] = []
+
+    for raw_key, field in mapping.items():
+        key = str(raw_key).strip()
+        if not _is_valid_field(field):
+            unknown_fields.append(f"{key}={field}")
+            continue
+
+        col_idx: int | None = None
+        # 1) канонический путь — ключ как индекс колонки
+        try:
+            candidate = int(key)
+        except ValueError:
+            candidate = None
+        if candidate is not None and 0 <= candidate < len(headers):
+            col_idx = candidate
+        else:
+            # 2) fallback — ключ как ИМЯ колонки (case-insensitive, trimmed)
+            hits = by_name.get(key.lower())
+            if hits:
+                col_idx = hits[0]
+                if len(hits) > 1:
+                    logger.warning(
+                        "[csv_import] mapping key %r matches %d duplicate columns "
+                        "%s — using the first (index %d). Send index-keyed mapping "
+                        "to disambiguate.",
+                        key,
+                        len(hits),
+                        hits,
+                        col_idx,
+                    )
+
+        if col_idx is None:
+            unresolved_keys.append(key)
+            continue
+
+        pair = (col_idx, field)
+        if pair not in seen:
+            seen.add(pair)
+            resolved.append(pair)
+
+    return resolved, unresolved_keys, unknown_fields
+
+
 def apply_import(
     file_bytes: bytes,
     mapping: dict[str, str],
@@ -158,7 +238,9 @@ def apply_import(
 
     Args:
         file_bytes: байты CSV из csv_imports.file_data
-        mapping: {col_idx_str: field_name}, field_name ∈
+        mapping: {col_key: field_name}, где col_key — индекс колонки строкой
+                 ("0", "1", …; канонический контракт) ИЛИ имя колонки из header'а
+                 (tolerant fallback), field_name ∈
                  {'phone', 'username', 'full_name', 'source', 'custom.<key>'}
         delimiter: detected в parse_preview, переиспользуется здесь
         encoding: detected в parse_preview ("utf-8-sig" или "cp1251")
@@ -168,11 +250,14 @@ def apply_import(
           "rows_to_insert": list[dict],         # phone уже нормализован в E.164
           "skipped_invalid": int,
           "skipped_invalid_reasons": list[dict],  # [{row, reason, value}]
-          "total": int                          # total data rows (header не считаем)
+          "total": int,                         # total data rows (header не считаем)
+          "unresolved_mapping_keys": list[str], # ключи, не найденные в CSV
+          "unknown_mapping_fields": list[str],  # невалидные field-имена
         }
 
     Raises:
-        ValueError("MAPPING_INVALID: ...") — если ни phone, ни username не замаплены
+        ValueError("MAPPING_INVALID: ...") — если ни phone, ни username не замаплены,
+            либо если ключ, несущий phone/username, не резолвится в колонку CSV
     """
     mapped_fields = set(mapping.values())
     has_phone = "phone" in mapped_fields
@@ -191,7 +276,39 @@ def apply_import(
             "skipped_invalid": 0,
             "skipped_invalid_reasons": [],
             "total": 0,
+            "unresolved_mapping_keys": [],
+            "unknown_mapping_fields": [],
         }
+
+    headers = [h.strip() for h in rows[0]]
+    resolved, unresolved_keys, unknown_fields = resolve_mapping(mapping, headers)
+
+    # LOUD: раньше нерезолвящийся ключ молча пропускался (`continue`) и юзер
+    # получал 202 с пустыми полями. Теперь — warning в логах + payload наверх.
+    if unresolved_keys:
+        logger.warning(
+            "[csv_import] %d mapping key(s) did not match any CSV column "
+            "(columns=%s, unresolved=%s) — those fields will NOT be imported",
+            len(unresolved_keys),
+            headers,
+            unresolved_keys,
+        )
+    if unknown_fields:
+        logger.warning(
+            "[csv_import] %d mapping entr(ies) target an unknown field: %s",
+            len(unknown_fields),
+            unknown_fields,
+        )
+
+    resolved_fields = {field for _, field in resolved}
+    if not ("phone" in resolved_fields or "username" in resolved_fields):
+        # phone/username есть в mapping (проверено выше), но его ключ не резолвится
+        # в колонку CSV → fail loudly вместо импорта пустых контактов.
+        raise ValueError(
+            "MAPPING_INVALID: the column mapped to phone/username does not match "
+            f"any CSV column (unresolved keys: {unresolved_keys}, "
+            f"csv columns: {headers})"
+        )
 
     data_rows = rows[1:]
     rows_to_insert: list[dict] = []
@@ -205,11 +322,7 @@ def apply_import(
             "source": None,
             "custom": {},
         }
-        for col_idx_str, field in mapping.items():
-            try:
-                col_idx = int(col_idx_str)
-            except ValueError:
-                continue
+        for col_idx, field in resolved:
             if col_idx >= len(raw_row):
                 continue
             value = raw_row[col_idx].strip()
@@ -257,4 +370,6 @@ def apply_import(
         "skipped_invalid": len(skipped_invalid_reasons),
         "skipped_invalid_reasons": skipped_invalid_reasons,
         "total": len(data_rows),
+        "unresolved_mapping_keys": unresolved_keys,
+        "unknown_mapping_fields": unknown_fields,
     }
