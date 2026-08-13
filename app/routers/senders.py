@@ -364,6 +364,12 @@ def _raise_profile_telegram_error(e: Exception) -> None:
         ("PHOTOEXTINVALID", "PHOTO_FORMAT_INVALID",
          "Неподдерживаемый формат. Загрузите JPG или PNG"),
         # ─── 2FA + recovery email (Phase 20 — PROF-05, D-03/D-04) ───
+        ("NO_2FA_PASSWORD", "NO_2FA_PASSWORD",
+         "Сначала установите облачный пароль (2FA). Recovery email — это способ "
+         "восстановить облачный пароль, его нельзя привязать к аккаунту без него."),
+        ("CURRENT_PASSWORD_REQUIRED", "CURRENT_PASSWORD_REQUIRED",
+         "Введите текущий облачный пароль (2FA) — он нужен, чтобы привязать "
+         "recovery email."),
         ("PASSWORD_HASH_INVALID", "PASSWORD_INVALID", "Неверный текущий пароль 2FA"),
         ("PASSWORDHASHINVALID", "PASSWORD_INVALID", "Неверный текущий пароль 2FA"),
         ("EMAIL_UNCONFIRMED", "EMAIL_CODE_INVALID", "Неверный или просроченный код"),
@@ -1696,7 +1702,14 @@ async def start_sender_recovery_email(
     except Exception as e:  # noqa: BLE001 — mapped to a structured HTTP error
         _raise_profile_telegram_error(e)
     # D-03: nothing written to the DB — password is transient.
-    return {"code": "EMAIL_CONFIRMATION_SENT", "code_length": (res or {}).get("code_length")}
+    res = res or {}
+    code_length = res.get("code_length")
+    if code_length is None:
+        # Telegram did not email a code (benign: the address is already the
+        # confirmed recovery email). Do NOT tell the UI to prompt for a code
+        # that will never arrive — that was the "success but nothing arrived" bug.
+        return {"code": "EMAIL_ALREADY_CONFIRMED", "code_length": None}
+    return {"code": "EMAIL_CONFIRMATION_SENT", "code_length": code_length}
 
 
 @router.post("/senders/{slug}/2fa/recovery-email/confirm")

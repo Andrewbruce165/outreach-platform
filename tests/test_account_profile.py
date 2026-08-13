@@ -302,6 +302,42 @@ async def test_2fa(async_client, async_db_session, valid_supabase_jwt):
     assert body.get("code") == "EMAIL_CONFIRMATION_SENT"
     assert isinstance(body.get("code_length"), int)
 
+    # Recovery-email on an account with NO cloud (2FA) password → the service
+    # raises the NO_2FA_PASSWORD marker; the router maps it to 400 NO_2FA_PASSWORD
+    # with an actionable message (bug recovery-email-password-algo: previously this
+    # leaked the raw telethon 'unsupported password algorithm NoneType' as a 500).
+    with patch.object(
+        telegram_module.telegram_service, "set_recovery_email",
+        new=AsyncMock(side_effect=ValueError("NO_2FA_PASSWORD")), create=True,
+    ):
+        r_no2fa = await async_client.post(
+            "/api/v1/senders/prof-2fa-1/2fa/recovery-email",
+            headers=_auth(token),
+            json={"email": "recover@example.com"},
+        )
+    assert r_no2fa.status_code == 400, r_no2fa.text
+    assert r_no2fa.json()["detail"]["code"] == "NO_2FA_PASSWORD"
+
+    # Fix (recovery-email-password-algo, field-test cycle): when Telegram does NOT
+    # email a code (service returns code_length=None), the router must NOT falsely
+    # claim EMAIL_CONFIRMATION_SENT — otherwise the UI prompts for a code that never
+    # arrives (exactly the "success but nothing arrived" symptom). It returns a
+    # distinct EMAIL_ALREADY_CONFIRMED code instead.
+    with patch.object(
+        telegram_module.telegram_service, "set_recovery_email",
+        new=AsyncMock(return_value={"code_length": None, "already_confirmed": True}),
+        create=True,
+    ):
+        r_none = await async_client.post(
+            "/api/v1/senders/prof-2fa-1/2fa/recovery-email",
+            headers=_auth(token),
+            json={"email": "recover@example.com", "current_password": "s3cret-pass"},
+        )
+    assert r_none.status_code == 200, r_none.text
+    body_none = r_none.json()
+    assert body_none.get("code") == "EMAIL_ALREADY_CONFIRMED"
+    assert body_none.get("code_length") is None
+
 
 # ─── PROF-07: resync cache from Telegram (RED) ─────────────────────────────────
 

@@ -1699,31 +1699,63 @@ class TelegramService:
         PasswordHashInvalidError, PasswordTooFreshError/SessionTooFreshError,
         FloodWaitError). The password is never logged.
         """
+        import os as _os
         from telethon.tl.functions.account import (
             GetPasswordRequest,
             UpdatePasswordSettingsRequest,
         )
         from telethon.tl.types.account import PasswordInputSettings
-        from telethon.password import compute_check
+        from telethon.password import compute_check, compute_digest
         from telethon.errors import EmailUnconfirmedError
 
         client = None
         try:
             client = await self.get_client(sender_slug, sender_id, encrypted_session, proxy=proxy, fingerprint=fingerprint)
             pwd = await client(GetPasswordRequest())
-            srp = compute_check(pwd, current_password or "")
+            # A recovery email is Telegram's mechanism to RESET the cloud (2FA)
+            # password — it cannot exist without one. For a password-less account
+            # GetPasswordRequest returns has_password=False / current_algo=None, and
+            # feeding that to compute_check raises the raw telethon
+            # "unsupported password algorithm NoneType" ValueError. Gate it here and
+            # surface a clear, actionable error instead (router maps NO_2FA_PASSWORD).
+            if not getattr(pwd, "has_password", False):
+                raise ValueError("NO_2FA_PASSWORD")
+            # Telegram only starts the email-confirmation flow when the request
+            # re-submits the (re-hashed) cloud password in ``new_settings``. An
+            # email-ONLY PasswordInputSettings is accepted as a no-op: no
+            # EmailUnconfirmedError, no code emailed — the old code then silently
+            # returned success and the UI falsely claimed a code was sent (bug).
+            # We must re-hash the SAME password, so current_password is required;
+            # without it we'd hash "" and REMOVE 2FA. Mirror telethon's own
+            # edit_2fa: randomise ``new_algo.salt1`` BEFORE hashing, then include
+            # new_algo + new_password_hash + hint + email.
+            if not current_password:
+                raise ValueError("CURRENT_PASSWORD_REQUIRED")
+            srp = compute_check(pwd, current_password)
+            pwd.new_algo.salt1 += _os.urandom(32)
+            new_password_hash = compute_digest(pwd.new_algo, current_password)
             try:
                 await client(
                     UpdatePasswordSettingsRequest(
                         password=srp,
-                        new_settings=PasswordInputSettings(email=email),
+                        new_settings=PasswordInputSettings(
+                            new_algo=pwd.new_algo,
+                            new_password_hash=new_password_hash,
+                            hint=getattr(pwd, "hint", "") or "",
+                            email=email,
+                            new_secure_settings=None,
+                        ),
                     )
                 )
             except EmailUnconfirmedError as e:
                 # Confirmation code sent by Telegram → pivot to step 2 (Code Example 5).
                 return {"code_length": getattr(e, "code_length", None)}
-            # No exception = no confirmation needed (rare) — treat as already set.
-            return {"code_length": None}
+            # No EmailUnconfirmedError means Telegram accepted the settings without
+            # emailing a code. With a real email change this should not happen; the
+            # only benign case is the email already being the confirmed recovery
+            # address. Signal it distinctly so the router does NOT tell the UI to
+            # prompt for a code that will never arrive.
+            return {"code_length": None, "already_confirmed": True}
         finally:
             if client:
                 await self.disconnect_client(client)
