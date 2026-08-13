@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text
 
 from app.models import MessageQueue, QueueItemStatus, QueueItemType
-from app.services.queue import QueueWorker
+from app.services.queue import COLD_FAIL_RELEASE_CAP, QueueWorker
 
 pytestmark = pytest.mark.asyncio
 
@@ -163,6 +163,104 @@ async def test_fail_item_null_campaign_does_not_touch_cca(
         "SELECT status FROM message_queue WHERE id = :id"
     ), {"id": str(item.id)})).scalar()
     assert status == "failed"
+
+
+# ─── WR-15: the cold-fail CCA release is bounded (infinite re-enqueue loop) ──
+
+
+async def _cold_fail_once(db, workspace, sender, camp, phone, prior_failed: int):
+    """Seed `prior_failed` historical terminal fails for (camp, phone) + a live CCA,
+    then drive ONE more terminal fail through _fail_item. Returns surviving CCA count."""
+    await db.execute(text("""
+        INSERT INTO campaign_contact_assignments
+            (workspace_id, campaign_id, contact_phone, sender_id)
+        VALUES (:wid, :cid, :phone, :sid)
+        ON CONFLICT (campaign_id, contact_phone) DO NOTHING
+    """), {"wid": str(workspace.id), "cid": str(camp["id"]),
+           "phone": phone, "sid": str(sender.id)})
+    for _ in range(prior_failed):
+        await _insert_queue_row(
+            db, workspace.id, sender.id, phone,
+            status="failed", campaign_id=camp["id"], message_text="earlier cycle",
+        )
+
+    item = MessageQueue(
+        workspace_id=workspace.id,
+        campaign_id=camp["id"],
+        sender_id=sender.id,
+        item_type=QueueItemType.message,
+        recipient_phone=phone,
+        recipient_name="Cold",
+        message_text="x",
+        status=QueueItemStatus.processing,
+        attempts=2,  # next failure → 3 = MAX_ATTEMPTS → terminal
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+
+    worker = QueueWorker()
+    await worker._fail_item(db, item, "terminal boom")
+
+    return (await db.execute(text("""
+        SELECT COUNT(*) FROM campaign_contact_assignments
+        WHERE campaign_id = :cid AND contact_phone = :phone
+    """), {"cid": str(camp["id"]), "phone": phone})).scalar()
+
+
+async def test_cold_fail_still_releases_cca_below_cap(
+    async_db_session, test_workspace, test_sender_factory, test_campaign_factory,
+):
+    """WR-15 control: one fail short of the cap the release still fires — the bound
+    must not break the retry WR-12a added. Derived from COLD_FAIL_RELEASE_CAP so
+    retuning the cap moves the probe instead of silently un-testing the boundary."""
+    sender = await test_sender_factory()
+    camp = await test_campaign_factory(status="running")
+
+    cca_cnt = await _cold_fail_once(
+        async_db_session, test_workspace, sender, camp, "+79995550010",
+        prior_failed=COLD_FAIL_RELEASE_CAP - 2,  # + this fail → CAP-1 < CAP
+    )
+    assert cca_cnt == 0  # released — contact re-enters the enqueue selector
+
+
+async def test_cold_fail_retains_cca_at_cap(
+    async_db_session, test_workspace, test_sender_factory, test_campaign_factory,
+):
+    """WR-15: this fail makes the running total exactly COLD_FAIL_RELEASE_CAP, so the
+    CCA is RETAINED — the contact stops being re-enqueued and the
+    enqueue → fail → DELETE CCA → enqueue loop terminates."""
+    sender = await test_sender_factory()
+    camp = await test_campaign_factory(status="running")
+
+    cca_cnt = await _cold_fail_once(
+        async_db_session, test_workspace, sender, camp, "+79995550011",
+        prior_failed=COLD_FAIL_RELEASE_CAP - 1,  # + this fail → exactly CAP
+    )
+    assert cca_cnt == 1  # retained — enqueue worker's NOT IN dedup now excludes it
+
+
+async def test_cold_fail_cap_is_scoped_per_campaign(
+    async_db_session, test_workspace, test_sender_factory, test_campaign_factory,
+):
+    """WR-15 scope guard: prior fails of the SAME phone in a DIFFERENT campaign must
+    not count towards this campaign's cap (each campaign gets its own budget)."""
+    sender = await test_sender_factory()
+    other = await test_campaign_factory(status="running")
+    camp = await test_campaign_factory(status="running")
+    phone = "+79995550012"
+
+    # A full cap's worth of terminal fails for the same phone — but on another campaign.
+    for _ in range(COLD_FAIL_RELEASE_CAP):
+        await _insert_queue_row(
+            async_db_session, test_workspace.id, sender.id, phone,
+            status="failed", campaign_id=other["id"], message_text="other campaign",
+        )
+
+    cca_cnt = await _cold_fail_once(
+        async_db_session, test_workspace, sender, camp, phone, prior_failed=0,
+    )
+    assert cca_cnt == 0  # first fail in THIS campaign → still released
 
 
 # ─── D-11 v2: past-stop_date campaigns auto-PAUSE (deadline-mass-fail fix) ───

@@ -108,6 +108,70 @@ async def test_get_campaign_carries_failed_count(
     assert r.json()["failed_count"] == 1
 
 
+async def _seed_failed_cycle(db, wid, cid, sid, phone, marker, age_minutes):
+    """Seed one failed row for (cid, phone) with an explicit created_at age, so the
+    'most recent failed row' is unambiguous regardless of clock resolution."""
+    row = (await db.execute(text("""
+        INSERT INTO message_queue (workspace_id, campaign_id, sender_id, item_type,
+            status, recipient_phone, message_text, error_message, finished_at,
+            attempts, scheduled_at, created_at)
+        VALUES (:wid, :cid, :sid, 'message', 'failed', :phone, :txt, 'boom', NOW(),
+                3, NOW(), NOW() - make_interval(mins => :age))
+        RETURNING id
+    """), {"wid": str(wid), "cid": str(cid), "sid": str(sid), "phone": phone,
+           "txt": marker, "age": age_minutes})).first()
+    await db.commit()
+    return row.id
+
+
+async def test_requeue_failed_dedups_per_recipient(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory,
+):
+    """WR-15: the cold-fail release cap leaves up to CAP failed rows for ONE contact.
+    requeue-failed must re-pend exactly ONE of them (the most recent) — otherwise the
+    operator recovery action the cap's WARNING recommends would send CAP identical
+    openers to the same person. Distinct recipients are still re-pended independently.
+    """
+    await _bind(async_db_session, test_workspace.id, "u-requeue-dedup")
+    camp = await test_campaign_factory(status="running")
+    sender = await test_sender_factory()
+    capped, other = "+79990003001", "+79990003002"
+
+    # 3 loop cycles for the same phone (oldest → newest) + 1 unrelated recipient.
+    await _seed_failed_cycle(async_db_session, test_workspace.id, camp["id"], sender.id,
+                             capped, "cycle-1", 30)
+    await _seed_failed_cycle(async_db_session, test_workspace.id, camp["id"], sender.id,
+                             capped, "cycle-2", 20)
+    await _seed_failed_cycle(async_db_session, test_workspace.id, camp["id"], sender.id,
+                             capped, "cycle-3", 10)
+    await _seed_failed_cycle(async_db_session, test_workspace.id, camp["id"], sender.id,
+                             other, "solo", 15)
+
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/requeue-failed",
+        headers=_auth_headers(valid_supabase_jwt, "u-requeue-dedup"),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["requeued_count"] == 2, "one row per recipient, not per failed row"
+
+    rows = (await async_db_session.execute(text("""
+        SELECT recipient_phone, message_text, status
+        FROM message_queue WHERE campaign_id = :cid
+    """), {"cid": str(camp["id"])})).fetchall()
+
+    pending = {(row.recipient_phone, row.message_text)
+               for row in rows if row.status == "pending"}
+    assert pending == {(capped, "cycle-3"), (other, "solo")}, (
+        "only the most recent failed row per recipient may be re-pended"
+    )
+
+    still_failed = sorted(row.message_text for row in rows if row.status == "failed")
+    assert still_failed == ["cycle-1", "cycle-2"], (
+        "older duplicate cycles stay failed as the audit trail of the loop"
+    )
+
+
 # ─── IN-05: attach lock filter ───────────────────────────────────────────────
 
 

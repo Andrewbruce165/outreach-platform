@@ -847,20 +847,36 @@ async def requeue_failed(
     ctx: AuthCtx = Depends(auth_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """WR-12b: re-pend all status='failed' queue rows for this campaign.
+    """WR-12b: re-pend the failed queue rows of this campaign, one per recipient.
 
     A transient outage / restriction batch can leave items terminally failed;
     this re-pends them (status='pending', attempts=0, error_message/finished_at
     cleared, scheduled_at=NOW()) so the dispatcher retries them without a full
     re-enqueue from the folder. Workspace-scoped (404 for another workspace's
     campaign). Returns {"requeued_count": N}.
+
+    WR-15 (2026-08-13): de-duplicated by ``recipient_phone``. The cold-fail
+    release cap (queue.py ``COLD_FAIL_RELEASE_CAP``) deliberately leaves up to
+    CAP failed rows for the SAME contact, and the dispatcher pick has no
+    phone-level dedup — re-pending all of them would send CAP identical openers
+    to one person once the number becomes reachable. Only the most recent failed
+    row per recipient is re-pended (``created_at`` = the enqueue cycle that
+    produced it; ``id`` breaks same-timestamp ties deterministically). The older
+    duplicates stay 'failed' as the audit trail of the loop. ``recipient_phone``
+    is NOT NULL (it holds either a phone or an '@username' identity key), so
+    DISTINCT ON cannot collapse unrelated rows through a NULL group.
     """
     c = await _load_campaign(db, ctx, campaign_id)
     result = await db.execute(text("""
         UPDATE message_queue
         SET status='pending', attempts=0, error_message=NULL,
             finished_at=NULL, scheduled_at=NOW()
-        WHERE campaign_id = :cid AND status = 'failed'
+        WHERE id IN (
+            SELECT DISTINCT ON (recipient_phone) id
+            FROM message_queue
+            WHERE campaign_id = :cid AND status = 'failed'
+            ORDER BY recipient_phone, created_at DESC, id DESC
+        )
     """), {"cid": str(c.id)})
     await db.commit()
     count = result.rowcount or 0

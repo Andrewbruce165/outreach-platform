@@ -87,6 +87,27 @@ QUEUE_TICK_BATCH = 500
 RESOLVE_ROTATION_CAP = 3
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ── Cold-fail CCA release cap (WR-15, 2026-08-13) ──────────────────────────────
+# WR-12a made a cold terminal fail release the contact's sticky
+# campaign_contact_assignments row so the contact becomes eligible again. That
+# CCA row is the ONLY predicate the enqueue worker uses to exclude a contact
+# (campaign_enqueue.py `NOT IN (SELECT contact_phone FROM cca …)`), and the
+# release carried no memory of prior cycles — so a contact that fails
+# PERMANENTLY (unresolvable number, privacy, block, ALLOW_PAYMENT_REQUIRED)
+# looped forever: enqueue → attempts → terminal fail → DELETE CCA → re-enqueue.
+# Prod evidence: 1700 failed rows across 181 distinct (campaign, contact) pairs;
+# one phone alone burned 1081 cycles (~76 failed rows/day) over 14 days.
+# The cap counts terminal fails for the SAME (campaign_id, recipient_phone) —
+# including the one being written — and stops releasing once it is reached, so a
+# contact costs at most CAP queue rows per campaign. Deliberately class-agnostic:
+# the observed loops span resolve, privacy and payment errors alike, and
+# `_fail_item` only receives the localised error STRING (MEMORY: never classify
+# on localised text — 'ограничен' once substring-matched 'ограничений').
+# Operator escape hatch is unchanged: POST /campaigns/{id}/requeue-failed
+# re-pends the failed rows directly and does not depend on the CCA.
+COLD_FAIL_RELEASE_CAP = 3
+# ──────────────────────────────────────────────────────────────────────────────
+
 # ── Even-pacing config (Phase 13) ───────────────────────────────────────────────
 # Jitter on the derived expected-by-now new-dialog count so cold openings don't
 # form a machine grid across the day (D-08). ±25% spread applied via
@@ -1656,17 +1677,37 @@ class QueueWorker:
             # worker's NOT IN dedup makes it eligible again next tick. Engaged/sent
             # contacts (a prior 'sent' row exists) are left alone. Same transaction as
             # the status UPDATE (before the commit below) so it is atomic.
+            #
+            # WR-15 (2026-08-13): the release is now BOUNDED. Both counters come from
+            # one scan of the (campaign, phone) history; `failed_cnt` already includes
+            # the row whose status this method just UPDATEd to 'failed' (same TX, so
+            # it is visible to this SELECT). Releasing only while
+            # `failed_cnt < COLD_FAIL_RELEASE_CAP` caps a permanently-failing contact
+            # at CAP queue rows per campaign instead of an unbounded enqueue loop.
             if item.campaign_id is not None:
-                has_sent = (await db.execute(text("""
-                    SELECT 1 FROM message_queue
-                    WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'sent'
-                    LIMIT 1
-                """), {"cid": str(item.campaign_id), "phone": item.recipient_phone})).first()
-                if has_sent is None:
-                    await db.execute(text("""
-                        DELETE FROM campaign_contact_assignments
-                        WHERE campaign_id = :cid AND contact_phone = :phone
-                    """), {"cid": str(item.campaign_id), "phone": item.recipient_phone})
+                counts = (await db.execute(text("""
+                    SELECT COUNT(*) FILTER (WHERE status = 'sent')   AS sent_cnt,
+                           COUNT(*) FILTER (WHERE status = 'failed') AS failed_cnt
+                    FROM message_queue
+                    WHERE campaign_id = :cid AND recipient_phone = :phone
+                """), {"cid": str(item.campaign_id), "phone": item.recipient_phone})).one()
+                if counts.sent_cnt == 0:
+                    if counts.failed_cnt < COLD_FAIL_RELEASE_CAP:
+                        await db.execute(text("""
+                            DELETE FROM campaign_contact_assignments
+                            WHERE campaign_id = :cid AND contact_phone = :phone
+                        """), {"cid": str(item.campaign_id), "phone": item.recipient_phone})
+                    else:
+                        # Cap reached — keep the CCA so the enqueue worker's NOT IN
+                        # dedup permanently excludes this contact for this campaign.
+                        # PII discipline: campaign UUID + counts only, never the phone.
+                        logger.warning(
+                            "queue: cold-fail release cap reached for campaign %s "
+                            "(%d terminal fails for one contact) — CCA retained, "
+                            "contact will not be re-enqueued (WR-15). "
+                            "Use POST /campaigns/{id}/requeue-failed to retry manually.",
+                            str(item.campaign_id), counts.failed_cnt,
+                        )
 
         await db.commit()
 
