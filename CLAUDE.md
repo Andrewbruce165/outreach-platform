@@ -95,6 +95,7 @@ SaaS-платформа для автоматизации Telegram-аутрич�
 - **Безопасность**: сессии зашифрованы, API_KEY не в логах
 - **Очередь**: не трогать интервалы без явного обсуждения — подобраны эмпирически
 - **Retry-логика FloodWait**: не ломать без явной просьбы
+- **Никогда не коннектиться к `session_string` без назначенного прокси**: любой скрипт/диагностика/тест, открывающий `TelegramClient` для существующего (или потенциально живого) sender'а, обязан передавать его `proxy` + `client_fingerprint` из БД — как это делает `TelegramService.get_client()`. `proxy=None` (коннект напрямую с сервера) при одновременно активной прод-сессии того же аккаунта — это буквально Telegram-ошибка "used under two different IP addresses simultaneously", убивающая сессию. Подтверждённый инцидент 2026-07-13: диагностика 5 живых аккаунтов с `proxy=None` совпала с уходом 3 из них в `session_expired` через пару минут.
 - **Тесты**: запускать ТОЛЬКО через test-overlay, иначе conftest guard блокирует:
   ```
   docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm api pytest
