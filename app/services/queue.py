@@ -73,6 +73,20 @@ FLOOD_HARD_THRESHOLD = 300        # seconds
 QUEUE_TICK_BATCH = 500
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ── Resolve-rotation cap (2026-08-13 carousel incident) ────────────────────────
+# Hard ceiling on how many DISTINCT senders may return NOT_REGISTERED for one
+# queue row before it finalizes. Pool-exhaustion was the ONLY terminator of the
+# preventive reroute (quick 260706-e8s) and it proved fragile: even-split
+# rebalance kept yanking rerouted rows back onto already-tried senders, so
+# `nr_tried_senders` froze and 7 rows burned ~762 live resolves/hour for ~16h.
+# Three independent NOT_REGISTERED verdicts are enough evidence either way: the
+# phone is really unregistered, or the pool is resolve-throttled — burning more
+# resolves only deepens the throttle. Finalization stays "soft" (resolve_fail
+# marker stamped, NO negative contacts_cache write), so the phone can be
+# re-checked via the checker pool and re-enqueued later.
+RESOLVE_ROTATION_CAP = 3
+# ──────────────────────────────────────────────────────────────────────────────
+
 # ── Even-pacing config (Phase 13) ───────────────────────────────────────────────
 # Jitter on the derived expected-by-now new-dialog count so cold openings don't
 # form a machine grid across the day (D-08). ±25% spread applied via
@@ -1522,8 +1536,9 @@ class QueueWorker:
 
         Re-rotate the row onto an UNTRIED healthy pool sender instead of finalizing
         on THIS account. Returns True if rerouted (row now pending on the new
-        sender, committed), False if the pool is exhausted (caller finalizes —
-        bounded, WR-15). Mirrors failover.py's healthy-pool query
+        sender, committed), False if the pool is exhausted OR the rotation cap is
+        reached (caller finalizes — bounded, WR-15 + RESOLVE_ROTATION_CAP).
+        Mirrors failover.py's healthy-pool query
         (restriction_status='none' excludes the current/flagged sender) and reuses
         rotation._pick_least_loaded. PII discipline: logs COUNT/UUIDs only.
         """
@@ -1534,6 +1549,20 @@ class QueueWorker:
         ed = dict(item.extra_data or {})
         tried_list = list(dict.fromkeys([*(ed.get("nr_tried_senders") or []), str(sender.id)]))
         tried = set(tried_list)
+
+        # 2026-08-13 carousel incident: hard cap on distinct senders tried —
+        # pool-exhaustion alone proved fragile as a terminator (see the
+        # RESOLVE_ROTATION_CAP constant). len(tried_list) counts only senders
+        # that actually FAILED a resolve for this row (dedup, order-preserving),
+        # so the cap fires after CAP independent NOT_REGISTERED verdicts even
+        # while untried pool senders remain.
+        if len(tried_list) >= RESOLVE_ROTATION_CAP:
+            logger.warning(
+                "queue: NOT_REGISTERED rotation cap (%d distinct senders) reached "
+                "for queue item %s — finalizing instead of rerouting (campaign %s)",
+                len(tried_list), str(item.id)[:8], str(item.campaign_id),
+            )
+            return False
 
         pool_rows = (await db.execute(text("""
             SELECT s.id AS sid

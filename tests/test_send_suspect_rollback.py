@@ -489,6 +489,51 @@ async def test_not_registered_finalizes_when_exhausted(
     assert str(a.id) in tried and str(b.id) in tried, "both senders recorded as tried"
 
 
+# ─── Test I2 — rotation cap finalizes even while untried pool senders remain ──
+
+async def test_not_registered_rotation_cap_finalizes(
+    async_db_session, test_running_campaign_factory, monkeypatch,
+):
+    """2026-08-13 carousel incident: pool-exhaustion was the ONLY reroute
+    terminator and rebalance interference kept it from ever firing. The cap
+    (RESOLVE_ROTATION_CAP=3 distinct failed senders) must finalize the row even
+    though healthy UNTRIED senders remain in the pool — this is what
+    distinguishes it from the exhaustion path (test I)."""
+    import app.services.queue as queue_mod
+    from app.services.queue import QueueWorker, RESOLVE_ROTATION_CAP
+
+    camp, senders = await test_running_campaign_factory(sender_count=4)
+    a, b, c, d = senders  # d stays untried — without the cap, reroute would pick it
+    phone = "+79185782287"
+
+    # b + c already failed a resolve for this row; a is the current sender →
+    # tried_list becomes [b, c, a] = CAP. attempts=2 so the terminal _fail_item
+    # finalizes (MAX_ATTEMPTS=3) in this single drive.
+    assert RESOLVE_ROTATION_CAP == 3, "test seeds exactly CAP-1 prior tried senders"
+    item_id = await _seed_processing_item(
+        async_db_session, camp["workspace_id"], camp["id"], a.id, phone,
+        attempts=2,
+        extra_data={"nr_tried_senders": [str(b.id), str(c.id)]},
+        with_cca=True,
+    )
+
+    monkeypatch.setattr(queue_mod, "telegram_service", _FakeTelegram("RECIPIENT_NOT_IN_TELEGRAM"))
+
+    await QueueWorker()._send_item(item_id)
+
+    row = await _row(async_db_session, camp["id"], phone)
+    assert row.status == "failed", (
+        "rotation cap reached → finalize even though sender D was never tried"
+    )
+    assert str(row.sender_id) == str(a.id), "no reroute onto the untried sender D"
+    ed = row.extra_data or {}
+    assert ed.get("resolve_fail_code") == "RECIPIENT_NOT_IN_TELEGRAM"
+    assert ed.get("resolve_fail_sender") == str(a.id)
+    tried = ed.get("nr_tried_senders") or []
+    assert str(d.id) not in tried, "the untried sender must never enter the tried list"
+    assert len(tried) == RESOLVE_ROTATION_CAP
+
+
 # ─── Test J — the 2026-07-06 07:31 incident resolves automatically ────────────
 
 async def test_0731_incident_resolves_automatically(

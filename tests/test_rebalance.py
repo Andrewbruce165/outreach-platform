@@ -545,3 +545,94 @@ async def test_even_split_noop_below_two_eligible(
 
     assert moved == 0, "P<2 → no-op"
     assert after == before, "distribution must be unchanged"
+
+
+# ─── 2026-08-13 resolve-carousel regression: rotation-pinned rows never move ──
+
+async def _stamp_rotation_pin(db, campaign_id, phone, tried_sender_ids):
+    """Stamp a queue row exactly as queue._reroute_resolve_fail does — the
+    presence of extra_data.nr_tried_senders pins the row to its rotation-chosen
+    sender."""
+    import json as _json
+    await db.execute(text("""
+        UPDATE message_queue
+        SET extra_data = CAST(:ed AS JSONB)
+        WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'pending'
+    """), {
+        "ed": _json.dumps({"nr_tried_senders": [str(s) for s in tried_sender_ids]}),
+        "cid": str(campaign_id), "phone": phone,
+    })
+    await db.commit()
+
+
+async def _sender_of(db, campaign_id, phone):
+    row = (await db.execute(text("""
+        SELECT sender_id FROM message_queue
+        WHERE campaign_id = :cid AND recipient_phone = :phone AND status = 'pending'
+    """), {"cid": str(campaign_id), "phone": phone})).first()
+    return str(row[0]) if row else None
+
+
+async def test_even_split_skips_rotation_pinned_rows(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """CAROUSEL-01: a row mid resolve-rotation (nr_tried_senders stamped) is
+    pinned to its rotation-chosen sender — even-split must neither move it nor
+    count it into the load math. Without this, rebalance yanked rerouted rows
+    back onto already-tried senders and the resolve carousel spun forever
+    (2026-08-13 incident: ~762 live resolves/hour, tried-list frozen)."""
+    from app.services.rebalance import rebalance_campaign_even
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a, b = senders[0], senders[1]
+
+    plain = [f"+7990076{i:04d}" for i in range(4)]
+    pinned = ["+79900769001", "+79900769002"]
+    for ph in [*plain, *pinned]:
+        await test_queue_item_factory(camp["id"], a.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+    for ph in pinned:
+        await _stamp_rotation_pin(async_db_session, camp["id"], ph, [b.id])
+
+    moved = await rebalance_campaign_even(camp["id"], async_db_session)
+
+    # Only the 4 unpinned rows participate: total=4, P=2 → 2 move to B.
+    assert moved == 2, "pinned rows must be excluded from the even-split economy"
+    for ph in pinned:
+        assert await _sender_of(async_db_session, camp["id"], ph) == str(a.id), (
+            "rotation-pinned row must stay on its rotation-chosen sender"
+        )
+    after = await _pending_counts(async_db_session, camp["id"])
+    assert after.get(str(b.id), 0) == 2, "B receives only unpinned rows"
+
+
+async def test_attach_backfill_skips_rotation_pinned_rows(
+    async_db_session, test_running_campaign_factory, test_queue_item_factory,
+):
+    """CAROUSEL-02: same pin guard on the attach back-fill path (shared movable
+    predicate, incl. the mq2 donor-load subquery) — the newly-attached sender is
+    back-filled from UNPINNED rows only; pinned rows stay put."""
+    from app.services.rebalance import rebalance_on_attach
+
+    camp, senders = await test_running_campaign_factory(sender_count=2)
+    a, b = senders[0], senders[1]
+
+    plain = [f"+7990077{i:04d}" for i in range(4)]
+    pinned = ["+79900779001", "+79900779002"]
+    for ph in [*plain, *pinned]:
+        await test_queue_item_factory(camp["id"], a.id, ph, status="pending",
+                                      with_cca=True, with_conversation=False)
+    for ph in pinned:
+        await _stamp_rotation_pin(async_db_session, camp["id"], ph, [b.id])
+
+    await rebalance_on_attach(camp["id"], b.id, async_db_session)
+    await async_db_session.commit()
+
+    for ph in pinned:
+        assert await _sender_of(async_db_session, camp["id"], ph) == str(a.id), (
+            "rotation-pinned row must not be donated to the newly-attached sender"
+        )
+    after = await _pending_counts(async_db_session, camp["id"])
+    # Unpinned total=4, P=2 → B back-fills to ceil(4/2)=2; pinned 2 stay on A.
+    assert after.get(str(b.id), 0) == 2
+    assert after.get(str(a.id), 0) == 4

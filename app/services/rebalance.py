@@ -65,6 +65,21 @@ _COLD_PENDING_PREDICATE = """
     )
 """
 
+# 2026-08-13 resolve-carousel incident: a row mid resolve-rotation (queue.py
+# `_reroute_resolve_fail` stamped `extra_data.nr_tried_senders`) is PINNED to
+# its rotation-chosen sender. The even-split/backfill passes used to yank such
+# rows back onto the least-loaded sender — which is exactly the already-tried
+# sender whose resolve keeps failing (it never spends budget), so the row
+# ping-ponged forever: reroute → untried-but-budget-exhausted sender → rebalance
+# back → resolve burn → reroute … (~762 live ResolvePhone/hour against Telegram,
+# `nr_tried_senders` frozen, pool never exhausting → finalize never firing).
+# `->` + IS NULL is NULL-safe: rows with no extra_data at all stay movable.
+# Evacuation (rows stranded on INELIGIBLE senders) deliberately keeps the base
+# predicate — a pinned row must still be rescuable off a dead/restricted sender.
+_MOVABLE_COLD_PENDING_PREDICATE = _COLD_PENDING_PREDICATE + """
+    AND mq.extra_data->'nr_tried_senders' IS NULL
+"""
+
 
 async def rebalance_on_attach(
     campaign_id, new_sender_id, db: AsyncSession
@@ -195,11 +210,13 @@ async def rebalance_on_attach(
             return 0
 
         # Step 2: count current movable cold-pending load per sender (campaign-scoped).
+        # Rotation-pinned rows (nr_tried_senders) are outside the even-split
+        # economy entirely — excluded from both the count and the claim below.
         load_rows = (await db.execute(
             text(f"""
                 SELECT mq.sender_id AS sid, COUNT(*) AS cnt
                 FROM message_queue mq
-                WHERE {_COLD_PENDING_PREDICATE}
+                WHERE {_MOVABLE_COLD_PENDING_PREDICATE}
                 GROUP BY mq.sender_id
             """),
             {"cid": cid},
@@ -247,10 +264,10 @@ async def rebalance_on_attach(
                 JOIN (
                     SELECT mq2.sender_id AS sid, COUNT(*) AS cnt
                     FROM message_queue mq2
-                    WHERE {_COLD_PENDING_PREDICATE.replace('mq.', 'mq2.')}
+                    WHERE {_MOVABLE_COLD_PENDING_PREDICATE.replace('mq.', 'mq2.')}
                     GROUP BY mq2.sender_id
                 ) dl ON dl.sid = mq.sender_id
-                WHERE {_COLD_PENDING_PREDICATE}
+                WHERE {_MOVABLE_COLD_PENDING_PREDICATE}
                   AND mq.sender_id = ANY(:donors)
                 ORDER BY dl.cnt DESC, mq.scheduled_at DESC
                 LIMIT :need
@@ -362,7 +379,7 @@ async def rebalance_campaign_even(campaign_id, db: AsyncSession) -> int:
         text(f"""
             SELECT mq.sender_id AS sid, COUNT(*) AS cnt
             FROM message_queue mq
-            WHERE {_COLD_PENDING_PREDICATE}
+            WHERE {_MOVABLE_COLD_PENDING_PREDICATE}
               AND mq.item_type IN ('message', 'file')
               AND mq.sender_id = ANY(:pool_ids)
             GROUP BY mq.sender_id
@@ -414,7 +431,7 @@ async def rebalance_campaign_even(campaign_id, db: AsyncSession) -> int:
             text(f"""
                 SELECT mq.id AS id, mq.recipient_phone AS phone
                 FROM message_queue mq
-                WHERE {_COLD_PENDING_PREDICATE}
+                WHERE {_MOVABLE_COLD_PENDING_PREDICATE}
                   AND mq.item_type IN ('message', 'file')
                   AND mq.sender_id = :donor
                 ORDER BY mq.scheduled_at DESC
