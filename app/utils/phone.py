@@ -84,6 +84,51 @@ def is_username_key(key: Optional[str]) -> bool:
     return bool(key) and key.startswith("@")
 
 
+# Placeholder strings CSV exports/ETL pipelines emit for "no value". A contact
+# imported from such a CSV literally carries the string "None" in
+# `contacts.username` (observed in prod, folder 6595094a) — resolving `@None`
+# would burn a pointless ResolveUsername call on every send attempt.
+_USERNAME_SENTINELS = frozenset({
+    "none", "null", "nil", "nan", "undefined", "n/a", "na", "-", "—", "empty",
+})
+
+# Telegram handles: letters/digits/underscore, must start with a letter.
+# Official minimum is 5 chars, but legacy/short handles exist, so the lower
+# bound is deliberately permissive (4) — a false accept only costs one
+# ResolveUsername that falls through to tier-3, a false reject re-opens the bug.
+_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
+
+
+def sanitize_username(raw: Optional[str]) -> Optional[str]:
+    """Return a plausible bare Telegram handle, or None if the value is garbage.
+
+    Used by the send-time resolve ladder before it spends a ResolveUsername on a
+    handle that was *declared* at import time (`contacts.username`) rather than
+    captured live by the checker. Rejecting a handle means "skip the tier-2
+    attempt" — it NEVER means "the contact is not registered".
+
+    Rejects: None, empty/whitespace-only, placeholder sentinels ("None", "null",
+    "n/a", …), and anything that is not a syntactically plausible handle.
+
+    Examples:
+        sanitize_username("@Wirbelwind84") → "Wirbelwind84"
+        sanitize_username("  fp_gt  ")     → "fp_gt"
+        sanitize_username("None")          → None
+        sanitize_username("")              → None
+        sanitize_username("+79001234567")  → None
+    """
+    if not raw:
+        return None
+    uname = raw.strip().lstrip("@").strip()
+    if not uname:
+        return None
+    if uname.lower() in _USERNAME_SENTINELS:
+        return None
+    if not _USERNAME_RE.match(uname):
+        return None
+    return uname
+
+
 def username_from_key(key: str) -> str:
     """Extract the bare username (no leading `@`) from a username identity key."""
     return key.lstrip("@")

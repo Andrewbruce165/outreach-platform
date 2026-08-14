@@ -155,20 +155,24 @@ def _raises(exc):
 
 
 async def _seed_contact(db, workspace_id, *, phone, tg_status, tg_username_resolved=None,
-                        tg_probe_state=None, tg_confidence=None):
-    """COMMIT a folder + contact row for `phone` in `workspace_id`."""
+                        tg_probe_state=None, tg_confidence=None, username=None):
+    """COMMIT a folder + contact row for `phone` in `workspace_id`.
+
+    `username` is the handle the operator DECLARED at import time (`contacts.username`),
+    distinct from `tg_username_resolved` which only the ContactCheckWorker writes.
+    """
     suffix = _uuid4().hex[:8]
     folder_id = str(_uuid4())
     await db.execute(text("""
         INSERT INTO folders (id, workspace_id, name) VALUES (:id, :wid, :name)
     """), {"id": folder_id, "wid": str(workspace_id), "name": f"srld-folder-{suffix}"})
     await db.execute(text("""
-        INSERT INTO contacts (id, workspace_id, folder_id, phone, full_name, tg_status,
+        INSERT INTO contacts (id, workspace_id, folder_id, phone, username, full_name, tg_status,
                               tg_username_resolved, tg_probe_state, tg_confidence)
-        VALUES (:id, :wid, :fid, :phone, 'SRLD contact', :st, :uname, :probe, :conf)
+        VALUES (:id, :wid, :fid, :phone, :declared, 'SRLD contact', :st, :uname, :probe, :conf)
     """), {
         "id": str(_uuid4()), "wid": str(workspace_id), "fid": folder_id,
-        "phone": phone, "st": tg_status, "uname": tg_username_resolved,
+        "phone": phone, "declared": username, "st": tg_status, "uname": tg_username_resolved,
         "probe": tg_probe_state, "conf": tg_confidence,
     })
     await db.commit()
@@ -433,6 +437,145 @@ async def test_user_blocked_records_event(
         "a recipient block must surface as the structured USER_IS_BLOCKED code "
         f"(SRLD-08/D-15), not generic SEND_FAILED; got {res['error']}"
     )
+
+
+# ─── Bug send-ignores-import-username (2026-08-14) — declared handle in tier-2 ──
+# The CSV import stamps username-bearing contacts tg_status='registered' so they
+# bypass the ContactCheckWorker — the ONLY writer of `tg_username_resolved`. Tier-2
+# therefore never fired for them and privacy-hidden numbers died in tier-3
+# ImportContacts with a false "not registered". Tier-2 now reads
+# COALESCE(tg_username_resolved, contacts.username), guarded by sanitize_username.
+
+
+async def test_declared_username_resolves_and_is_persisted(
+    async_db_session, test_workspace, mock_telethon_client,
+):
+    """Tier-2 uses the operator-declared `contacts.username` when the checker never
+    captured one, and promotes the proven handle into `tg_username_resolved`."""
+    from app.services.telegram import TelegramService
+
+    phone = "+79990070001"
+    await _seed_contact(
+        async_db_session, test_workspace.id, phone=phone,
+        tg_status="registered", tg_username_resolved=None, username="declared_handle",
+    )
+    client = mock_telethon_client
+    client.set_response("ResolveUsernameRequest", _resolved(telegram_id=666, username="declared_handle"))
+    client.set_response("ImportContactsRequest", _imported(telegram_id=666))
+
+    res = await TelegramService().resolve_contact(
+        client, str(test_workspace.id), str(_uuid4()), phone,
+    )
+
+    names = [c[0] for c in client.calls]
+    assert "ResolveUsernameRequest" in names, (
+        f"tier-2 must fire on the DECLARED handle when none was captured; calls={names}"
+    )
+    resolved_req = next(r for n, r in client.calls if n == "ResolveUsernameRequest")
+    assert resolved_req.username == "declared_handle"
+    assert "ImportContactsRequest" not in names, (
+        "a successful tier-2 must not spend a risky tier-3 import"
+    )
+    assert res.get("is_registered") is True
+
+    # The proven handle is promoted so the next send reads it from the captured column.
+    row = (await async_db_session.execute(text("""
+        SELECT tg_username_resolved, tg_telegram_id, tg_status, tg_confidence, tg_resolved_by
+          FROM contacts WHERE workspace_id = :wid AND phone = :phone
+    """), {"wid": str(test_workspace.id), "phone": phone})).fetchone()
+    assert row[0] == "declared_handle", "declared handle must be persisted after a live resolve"
+    assert row[1] == 666, "telegram_id must be persisted after a live resolve"
+    assert row[2] == "registered", "tg_status must be left alone"
+    assert row[3] is None and row[4] is None, (
+        "checker-provenance fields (confidence/resolved_by) must NOT be forged by a sender resolve"
+    )
+
+
+async def test_captured_username_wins_over_declared(
+    async_db_session, test_workspace, mock_telethon_client,
+):
+    """COALESCE order: the checker-captured handle beats the import-declared one."""
+    from app.services.telegram import TelegramService
+
+    phone = "+79990070002"
+    await _seed_contact(
+        async_db_session, test_workspace.id, phone=phone, tg_status="registered",
+        tg_username_resolved="captured_handle", username="declared_handle",
+    )
+    client = mock_telethon_client
+    client.set_response("ResolveUsernameRequest", _resolved(telegram_id=777, username="captured_handle"))
+
+    await TelegramService().resolve_contact(
+        client, str(test_workspace.id), str(_uuid4()), phone,
+    )
+
+    resolved_req = next(r for n, r in client.calls if n == "ResolveUsernameRequest")
+    assert resolved_req.username == "captured_handle", (
+        "the live checker-captured handle must be preferred over the declared one"
+    )
+
+
+async def test_garbage_declared_username_skips_tier2_not_finalized(
+    async_db_session, test_workspace, mock_telethon_client,
+):
+    """A placeholder handle (the literal "None" a CSV export emits) must NOT be
+    resolved — and skipping tier-2 must NOT finalize the contact as not_registered:
+    the ladder falls through to tier-3 exactly as before the fix."""
+    from app.services.telegram import TelegramService
+
+    phone = "+79990070003"
+    await _seed_contact(
+        async_db_session, test_workspace.id, phone=phone,
+        tg_status="registered", username="None",
+    )
+    client = mock_telethon_client
+    client.set_response("ImportContactsRequest", _imported(telegram_id=888))
+
+    res = await TelegramService().resolve_contact(
+        client, str(test_workspace.id), str(_uuid4()), phone,
+    )
+
+    names = [c[0] for c in client.calls]
+    assert "ResolveUsernameRequest" not in names, (
+        f'the literal "None" must never be resolved as a handle; calls={names}'
+    )
+    assert "ImportContactsRequest" in names, (
+        "a rejected handle means 'skip tier-2', not 'not registered' — tier-3 must still run"
+    )
+    assert res.get("is_registered") is True
+
+
+async def test_stale_declared_username_falls_through_to_import(
+    async_db_session, test_workspace, mock_telethon_client,
+):
+    """A stale DECLARED handle behaves like a stale captured one (D-09): fall through
+    to tier-3, never finalize not_registered, and never persist the dead handle."""
+    from telethon.errors import UsernameNotOccupiedError
+
+    from app.services.telegram import TelegramService
+
+    phone = "+79990070004"
+    await _seed_contact(
+        async_db_session, test_workspace.id, phone=phone,
+        tg_status="registered", username="dead_declared",
+    )
+    client = mock_telethon_client
+    client.set_response("ResolveUsernameRequest", _raises(UsernameNotOccupiedError(request=None)))
+    client.set_response("ImportContactsRequest", _imported(telegram_id=999))
+
+    res = await TelegramService().resolve_contact(
+        client, str(test_workspace.id), str(_uuid4()), phone,
+    )
+
+    names = [c[0] for c in client.calls]
+    assert "ResolveUsernameRequest" in names and "ImportContactsRequest" in names, (
+        f"a stale declared handle must fall through to tier-3; calls={names}"
+    )
+    assert res.get("is_registered") is True
+    row = (await async_db_session.execute(text("""
+        SELECT tg_username_resolved FROM contacts WHERE workspace_id = :wid AND phone = :phone
+    """), {"wid": str(test_workspace.id), "phone": phone})).fetchone()
+    assert row[0] is None, "a stale handle must NOT be promoted into tg_username_resolved"
 
 
 # ── Phase 22 (D-04): daily-message cap removed from _check_rate_limits ─────────

@@ -44,7 +44,7 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.services.encryption import decrypt_session
 from app.database import AsyncSessionLocal
-from app.utils.phone import is_username_key, username_from_key
+from app.utils.phone import is_username_key, sanitize_username, username_from_key
 
 logger = logging.getLogger(__name__)
 
@@ -583,25 +583,30 @@ class TelegramService:
         return None
 
     async def _load_contact_verdict(self, workspace_id: str, phone: str) -> dict:
-        """Load the checker verdict + captured @username for a phone (tier-2/tier-3 inputs).
+        """Load the checker verdict + @usernames for a phone (tier-2/tier-3 inputs).
 
         Reads the existing Phase-14/17 columns on `contacts`:
           - `tg_status` — the checker verdict ('registered' | 'not_registered' | 'pending' | …),
             the gate for the tier-3 ImportContacts (only 'registered' triggers an import, D-03/D-11).
           - `tg_username_resolved` — the public, transferable @handle the checker captured
             (17-02), the input for the sender's tier-2 ResolveUsername (D-07).
+          - `username` — the @handle the OPERATOR declared at import time. The CSV import
+            stamps username-bearing contacts as tg_status='registered' so they bypass the
+            ContactCheckWorker (routers/contacts.py), and the worker is the only writer of
+            `tg_username_resolved` — so for exactly those contacts the captured handle is
+            NULL forever. Without the declared handle tier-2 could never fire for them and
+            privacy-hidden numbers surfaced a false "not registered".
 
         A phone may map to multiple contacts; the ORDER BY prefers a `registered` row
         (conservative — favours reachability) then the most recently updated one. Returns
-        `{"tg_status": None, "captured_username": None}` when there is no contacts row
-        (e.g. a '@handle' identity-key contact or an ad-hoc send) — callers treat a None
-        verdict permissively per the existing send-path semantics, but ONLY 'registered'
-        ever triggers an import.
+        all-None when there is no contacts row (e.g. a '@handle' identity-key contact or an
+        ad-hoc send) — callers treat a None verdict permissively per the existing send-path
+        semantics, but ONLY 'registered' ever triggers an import.
         """
         async with AsyncSessionLocal() as db:
             row = (await db.execute(
                 text("""
-                    SELECT tg_status, tg_username_resolved
+                    SELECT tg_status, tg_username_resolved, username
                       FROM contacts
                      WHERE workspace_id = :workspace_id AND phone = :phone
                      ORDER BY (tg_status = 'registered') DESC, updated_at DESC
@@ -613,7 +618,43 @@ class TelegramService:
         return {
             "tg_status": row[0] if row else None,
             "captured_username": row[1] if row else None,
+            "declared_username": row[2] if row else None,
         }
+
+    async def _persist_resolved_handle(
+        self, workspace_id: str, phone: str, username: str, telegram_id: Optional[int]
+    ) -> None:
+        """Promote a live-verified declared handle into `contacts.tg_username_resolved`.
+
+        Only called after a SUCCESSFUL tier-2 ResolveUsername on an operator-declared
+        handle, so the value is proven live. Makes the next send cheap (the captured
+        handle is read first) and gives the operator visible provenance.
+
+        Deliberately does NOT touch tg_status / tg_confidence / tg_resolved_by /
+        tg_probe_state — those are checker-provenance fields (D-09) and a sender-side
+        resolve is not a checker verdict. Failures are swallowed: persistence is an
+        optimisation, never a reason to fail a send.
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    text("""
+                        UPDATE contacts
+                           SET tg_username_resolved = :uname,
+                               tg_telegram_id = COALESCE(:tg_id, tg_telegram_id),
+                               updated_at = NOW()
+                         WHERE workspace_id = :workspace_id AND phone = :phone
+                    """),
+                    {
+                        "workspace_id": workspace_id,
+                        "phone": phone,
+                        "uname": username[:50],
+                        "tg_id": telegram_id,
+                    },
+                )
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to persist resolved handle for {phone}: {e}")
 
     async def _save_contact_cache(self, workspace_id: str, sender_id: str, phone: str, contact_info: dict):
         """Save contact lookup result to DB cache."""
@@ -686,19 +727,37 @@ class TelegramService:
         # the transferable top tier (captured @username) and an import fallback.
         verdict = await self._load_contact_verdict(workspace_id, phone)
 
-        # Tier-2: ResolveUsername on the captured @username (D-07). The cheapest,
-        # safest transferable resolve — a public handle resolves identically on any
-        # account. A stale handle (Task 3) falls through to the import tier (D-09),
-        # it is NEVER finalized as not_registered.
-        captured = verdict.get("captured_username")
-        if captured:
+        # Tier-2: ResolveUsername on COALESCE(captured, declared) @username (D-07).
+        # The cheapest, safest transferable resolve — a public handle resolves
+        # identically on any account.
+        #   1. `tg_username_resolved` — captured live by the checker (preferred).
+        #   2. `contacts.username` — declared by the operator at import time. The
+        #      import shortcut routes username-bearing contacts around the checker, so
+        #      the captured handle stays NULL for them; without this fallback tier-2 was
+        #      skipped and privacy-hidden numbers died in tier-3 with a false
+        #      "not registered" (bug send-ignores-import-username, 2026-08-14).
+        # Both are sanitized: a garbage/placeholder handle (the literal "None" a CSV
+        # export can emit) is SKIPPED, not resolved — skipping tier-2 never finalizes
+        # not_registered. A stale handle likewise falls through to tier-3 (D-09).
+        captured = sanitize_username(verdict.get("captured_username"))
+        declared = sanitize_username(verdict.get("declared_username"))
+        handle = captured or declared
+        if handle:
             res = await self._resolve_username(
-                client, workspace_id, sender_id, "@" + captured.lstrip("@")
+                client, workspace_id, sender_id, "@" + handle
             )
             if res.get("is_registered"):
                 # Cache the access_hash under the PHONE key so follow-up sends are
                 # phone-cache hits (the @handle key is also cached by _resolve_username).
                 await self._save_contact_cache(workspace_id, sender_id, phone, res)
+                if not captured:
+                    # Declared handle proven live → promote it so the next send reads
+                    # it from the captured column and skips this branch.
+                    await self._persist_resolved_handle(
+                        workspace_id, phone,
+                        sanitize_username(res.get("username")) or handle,
+                        res.get("telegram_id"),
+                    )
                 return res
             # res.get("stale_username") → fall through to tier-3 import (D-09).
             # (any FloodWait/frozen would have propagated out of _resolve_username)

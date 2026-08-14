@@ -133,6 +133,13 @@ async def _insert_contacts_with_dedup(
     ContactCheckWorker выбирает только tg_status='pending', так что
     registered-контакты автоматически минуют чекер.
 
+    NB (2026-08-14): именно поэтому у таких контактов `tg_username_resolved`
+    навсегда NULL — единственный его писатель это ContactCheckWorker. Send-путь
+    обязан читать заявленный `contacts.username` (tier-2 лестницы резолва,
+    telegram.py::resolve_contact, COALESCE(tg_username_resolved, username)),
+    иначе приватные по номеру контакты падают в tier-3 ImportContacts и дают
+    ложное «не зарегистрирован».
+
     Returns {imported, skipped_duplicates, skipped_phones}.
     """
     default_tg_status = "pending" if has_checker else "unchecked"
