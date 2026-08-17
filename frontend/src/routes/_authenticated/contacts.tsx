@@ -449,7 +449,14 @@ function FolderDetail({
   });
 
   const deleteMut = useMutation({
-    mutationFn: () => api(`/api/v1/folders/${folder!.id}`, { method: "DELETE" }),
+    // force=true: the confirm dialog already tells the user contacts get removed,
+    // and contacts cascade at the DB level (contacts_folder_id_fkey ON DELETE CASCADE).
+    // Without it the backend 409s on any non-empty folder (FOLDER_NOT_EMPTY).
+    mutationFn: () =>
+      api(`/api/v1/folders/${folder!.id}`, {
+        method: "DELETE",
+        query: { force: true },
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["folders"] });
       toast.success("Folder deleted");
@@ -595,18 +602,40 @@ function FolderDetail({
               style={{ display: "flex", gap: 8 }}
               onSubmit={(e) => {
                 e.preventDefault();
-                if (renameValue.trim()) renameMut.mutate(renameValue.trim());
+                const next = renameValue.trim();
+                if (!next) return;
+                if (next === folder.name) {
+                  setRenaming(false);
+                  return;
+                }
+                renameMut.mutate(next);
               }}
             >
+              {/* NB: no onBlur cancel here — clicking "Save" blurs the input first,
+                  which used to unmount the form before submit fired, so the PATCH
+                  was never sent (0 PATCH requests in the API log). Cancel via Esc. */}
               <input
                 className="input"
                 autoFocus
                 value={renameValue}
                 onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={() => setRenaming(false)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setRenaming(false);
+                }}
               />
-              <button type="submit" className="btn btn--primary btn--sm">
-                Save
+              <button
+                type="submit"
+                className="btn btn--primary btn--sm"
+                disabled={renameMut.isPending}
+              >
+                {renameMut.isPending ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setRenaming(false)}
+              >
+                Cancel
               </button>
             </form>
           ) : (
@@ -646,7 +675,11 @@ function FolderDetail({
           className="btn btn--ghost btn--sm"
           style={{ color: "var(--danger)" }}
           onClick={() => {
-            if (confirm(`Delete folder "${folder.name}"? Contacts will be removed.`)) {
+            const n = folder.contact_count;
+            const warning = n > 0
+              ? `Delete folder "${folder.name}" and its ${n.toLocaleString()} contact(s)? This cannot be undone.`
+              : `Delete folder "${folder.name}"?`;
+            if (confirm(warning)) {
               deleteMut.mutate();
             }
           }}
