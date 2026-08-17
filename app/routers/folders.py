@@ -291,11 +291,15 @@ async def delete_folder(
             detail={"code": "FOLDER_NOT_FOUND", "message": "Folder not found"},
         )
 
-    # Phase 4 close (D-06 carry-over): block delete если есть running campaign на этой папке.
-    # FK ON DELETE RESTRICT enforces at DB level, but explicit 409 is friendlier UX.
+    # Phase 4 close (D-06 carry-over): block delete если есть campaign на этой папке.
+    # campaigns.folder_id is FK ON DELETE RESTRICT, so ANY referencing campaign
+    # (not just 'running') makes the DELETE fail at the DB level. Previously only
+    # status='running' was checked, so a draft/paused/done campaign escaped this
+    # guard and surfaced as an unhandled 500 IntegrityError instead of a clear 409.
+    # Workspace-scoped: cross-tenant campaigns can never be reported or block here.
     active_campaigns = (await db.execute(text("""
-        SELECT id, name FROM campaigns
-        WHERE folder_id = :fid AND workspace_id = :wid AND status = 'running'
+        SELECT id, name, status FROM campaigns
+        WHERE folder_id = :fid AND workspace_id = :wid
         ORDER BY name
     """), {"fid": str(folder_id), "wid": str(ctx.workspace_id)})).fetchall()
     if active_campaigns:
@@ -303,9 +307,13 @@ async def delete_folder(
             status_code=409,
             detail={
                 "code": "FOLDER_USED_BY_RUNNING_CAMPAIGN",
-                "message": "Cannot delete folder — used by running campaign(s)",
+                "message": (
+                    "Cannot delete folder — it is used by campaign(s). "
+                    "Delete or repoint those campaigns first."
+                ),
                 "campaigns": [
-                    {"id": str(r[0]), "name": r[1]} for r in active_campaigns
+                    {"id": str(r[0]), "name": r[1], "status": r[2]}
+                    for r in active_campaigns
                 ],
             },
         )

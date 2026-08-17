@@ -177,6 +177,132 @@ async def test_delete_folder_force_cascades_contacts(
     assert rows.scalar() == 0
 
 
+async def test_rename_folder_with_contacts_is_never_blocked(
+    async_client, valid_supabase_jwt, async_db_session
+):
+    """Regression (debug folder-delete-blocked-contacts): renaming a NON-EMPTY folder
+    must succeed. Contained contacts gate DELETE only — never PATCH.
+    """
+    from sqlalchemy import text
+
+    token = valid_supabase_jwt(
+        sub=f"folders-rename-full-{uuid4()}", email=f"rf-{uuid4()}@x.com"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    create = await async_client.post(
+        "/api/v1/folders", headers=headers, json={"name": "RenameMeFull"}
+    )
+    fid = create.json()["id"]
+    ws = await async_client.get("/api/v1/workspace", headers=headers)
+    wid = ws.json()["id"]
+    await async_db_session.execute(
+        text(
+            """
+            INSERT INTO contacts (workspace_id, folder_id, phone, tg_status)
+            VALUES (:wid, :fid, :p1, 'pending'), (:wid, :fid, :p2, 'pending')
+            """
+        ),
+        {"wid": wid, "fid": fid, "p1": "+79004440001", "p2": "+79004440002"},
+    )
+    await async_db_session.commit()
+
+    response = await async_client.patch(
+        f"/api/v1/folders/{fid}", headers=headers, json={"name": "RenamedFull"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "RenamedFull"
+    # Rename must not touch the contacts.
+    assert body["contact_count"] == 2
+
+
+async def test_delete_folder_used_by_draft_campaign_returns_409_not_500(
+    async_client, valid_supabase_jwt, async_db_session
+):
+    """Regression: campaigns.folder_id is FK ON DELETE RESTRICT, so ANY referencing
+    campaign blocks the delete. The guard used to filter status='running' only, so a
+    draft campaign slipped past it and raised an unhandled 500 IntegrityError.
+    force=true must NOT override this (contacts cascade; campaigns restrict).
+    """
+    from sqlalchemy import text
+
+    token = valid_supabase_jwt(
+        sub=f"folders-draft-camp-{uuid4()}", email=f"dc-{uuid4()}@x.com"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    create = await async_client.post(
+        "/api/v1/folders", headers=headers, json={"name": "UsedByDraft"}
+    )
+    fid = create.json()["id"]
+    ws = await async_client.get("/api/v1/workspace", headers=headers)
+    wid = ws.json()["id"]
+    await async_db_session.execute(
+        text(
+            """
+            INSERT INTO campaigns (workspace_id, folder_id, name, status)
+            VALUES (:wid, :fid, 'DraftCamp', 'draft')
+            """
+        ),
+        {"wid": wid, "fid": fid},
+    )
+    await async_db_session.commit()
+
+    response = await async_client.delete(
+        f"/api/v1/folders/{fid}?force=true", headers=headers
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "FOLDER_USED_BY_RUNNING_CAMPAIGN"
+    assert [c["name"] for c in detail["campaigns"]] == ["DraftCamp"]
+    assert detail["campaigns"][0]["status"] == "draft"
+
+
+async def test_delete_folder_campaign_guard_is_workspace_scoped(
+    async_client, valid_supabase_jwt, async_db_session
+):
+    """A campaign in ANOTHER workspace must never appear in the guard's payload
+    (multi-tenant leak check on the new SQL).
+    """
+    from sqlalchemy import text
+
+    token_a = valid_supabase_jwt(
+        sub=f"folders-scope-a-{uuid4()}", email=f"pa-{uuid4()}@x.com"
+    )
+    ha = {"Authorization": f"Bearer {token_a}"}
+    create = await async_client.post(
+        "/api/v1/folders", headers=ha, json={"name": "ScopedFolder"}
+    )
+    fid = create.json()["id"]
+
+    # Workspace B exists but owns no campaign on this folder.
+    token_b = valid_supabase_jwt(
+        sub=f"folders-scope-b-{uuid4()}", email=f"pb-{uuid4()}@x.com"
+    )
+    hb = {"Authorization": f"Bearer {token_b}"}
+    ws_b = await async_client.get("/api/v1/workspace", headers=hb)
+    wid_b = ws_b.json()["id"]
+
+    # Workspace B's campaign points at its OWN folder, not A's.
+    create_b = await async_client.post(
+        "/api/v1/folders", headers=hb, json={"name": "BFolder"}
+    )
+    fid_b = create_b.json()["id"]
+    await async_db_session.execute(
+        text(
+            """
+            INSERT INTO campaigns (workspace_id, folder_id, name, status)
+            VALUES (:wid, :fid, 'BCamp', 'running')
+            """
+        ),
+        {"wid": wid_b, "fid": fid_b},
+    )
+    await async_db_session.commit()
+
+    # A's folder has no campaigns of its own → delete proceeds.
+    response = await async_client.delete(f"/api/v1/folders/{fid}", headers=ha)
+    assert response.status_code == 204
+
+
 async def test_folder_stats_breakdown(
     async_client, valid_supabase_jwt, async_db_session
 ):
