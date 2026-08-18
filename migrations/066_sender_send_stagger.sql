@@ -1,0 +1,26 @@
+-- 066: B4 (burst desync) — per-sender "not before T" marker for the FIRST cold
+-- dialog after a campaign transitions to running.
+--
+-- Why: the send queue times sends only WITHIN a sender (PROTECTED base interval
+-- 20-55s + fatigue, pace jitter, per-sender 4/min-20/hour-150/day). Nothing
+-- phase-shifts the FIRST send BETWEEN senders, and on start/resume every
+-- attached sender's last_used_at sits far in the past, so the whole pool becomes
+-- due in the same tick and opens cold dialogs seconds apart — a confirmed
+-- Telegram ferm-cluster signature (mass-ban campaign 24658b65: ~20 accounts one
+-- message each ~2s apart on 12-08 10:49; all 32 accounts within minutes on
+-- 17-08 15:38-15:43).
+--
+-- app/services/send_stagger.py lays these timestamps out across the campaign's
+-- attached ELIGIBLE senders on every transition to running; the send worker
+-- gates ONLY the new-dialog branch of its candidate SELECT on the marker
+-- (follow-ups to existing dialogs are never delayed).
+--
+-- NOT a restriction: orthogonal to restriction_status / lifecycle_status /
+-- restricted_until, writes no sender_restriction_events row, and changes no
+-- rate limit or interval. The marker expires by itself (<= NOW()).
+--
+-- Nullable, NO DEFAULT on purpose: a `default=`-only ORM column comes back
+-- WITHOUT a DB default after create_all on a fresh DB
+-- (project-orm-default-vs-server-default-drift); nullable-no-default cannot drift.
+
+ALTER TABLE senders ADD COLUMN IF NOT EXISTS send_stagger_until TIMESTAMPTZ;

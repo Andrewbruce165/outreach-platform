@@ -257,6 +257,21 @@ class Settings(BaseSettings):
                     "single bulk-import ZIP. Over the cap → 422 TOO_MANY_ACCOUNTS.",
     )
 
+    # B4 (quick-260818-s0k): start/resume burst desync. app/services/send_stagger.py
+    # spreads senders.send_stagger_until across the campaign's attached eligible
+    # senders on every transition to running; the send worker skips a sender for NEW
+    # dialogs while its marker is in the future (follow-ups are never delayed).
+    send_stagger_window_seconds: int = Field(
+        default=3600,
+        validation_alias="SEND_STAGGER_WINDOW_SECONDS",
+        description=(
+            "B4 burst desync: width (seconds) of the window across which the FIRST "
+            "cold-dialog send of each attached eligible sender is spread when a "
+            "campaign starts/resumes. 0 disables the feature entirely (no stagger "
+            "written, send-worker gate always passes) — this is the kill switch."
+        ),
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Парсит CORS_ALLOWED_ORIGINS в list для FastAPI CORSMiddleware."""
