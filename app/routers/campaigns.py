@@ -56,6 +56,7 @@ from app.schemas import (
 from app.services import grade_ladder
 from app.services.rebalance import rebalance_on_attach
 from app.services.campaign_enqueue import rerender_pending_queue
+from app.services.send_stagger import apply_send_stagger
 from app.utils.auth import AuthCtx, auth_dep
 
 logger = logging.getLogger(__name__)
@@ -994,6 +995,7 @@ async def start_campaign(
     c.status = "running"
     c.pause_reason = None  # 029: clear any stale auto-pause reason on (re)start
     c.paused_at = None
+    await apply_send_stagger(db, c.id)  # B4: desync the pool's first cold dialog on every transition to running
     await db.commit()
     await db.refresh(c)
     logger.info(f"[campaigns] started id={campaign_id}")
@@ -1045,6 +1047,7 @@ async def resume_campaign(
     c.status = "running"
     c.pause_reason = None  # 029: clear auto-pause reason — user is taking it back live
     c.paused_at = None
+    await apply_send_stagger(db, c.id)  # B4: desync the pool's first cold dialog on every transition to running
     await db.commit()
     await db.refresh(c)
     logger.info(f"[campaigns] resumed id={campaign_id}")

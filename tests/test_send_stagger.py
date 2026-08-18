@@ -253,3 +253,199 @@ async def test_send_stagger_window_seconds_default():
     value = get_settings().send_stagger_window_seconds
     assert isinstance(value, int)
     assert value == 3600
+
+
+# ── Task 2: layout service wired into /start + /resume ───────────────────────
+
+
+async def test_start_lays_out_distinct_markers_inside_window(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Test 4 — /start writes a marker on every eligible attached sender; the
+    values are DISTINCT and all land inside [NOW(), NOW()+W]."""
+    agent = await test_agent_factory()
+    senders = [await test_sender_factory() for _ in range(4)]
+    await _bind(async_db_session, test_workspace.id, "u-b4-start")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-start",
+                             agent.id, test_folder.id,
+                             sender_ids=[s.id for s in senders], name="B4-start")
+
+    r = await async_client.post(f"/api/v1/campaigns/{c['id']}/start",
+                                headers=_auth_headers(valid_supabase_jwt, "u-b4-start"))
+    assert r.status_code == 200, r.text
+
+    offsets = await _stagger_offsets(async_db_session, [s.id for s in senders])
+    assert len(offsets) == 4
+    assert all(v is not None for v in offsets.values()), offsets
+    values = list(offsets.values())
+    assert len(set(values)) == 4, f"markers collided: {values}"
+    w = get_settings().send_stagger_window_seconds
+    # Measured against a LATER NOW() than the UPDATE used, so allow a little slack
+    # downward; the upper bound is structural (slot i < (i+1)*W/N <= W).
+    assert all(-10.0 <= v <= w for v in values), values
+
+
+async def test_start_layout_is_even_split_one_per_slot(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Test 5 — D-3 even split: the i-th smallest offset sits in its own
+    [i*W/N, (i+1)*W/N] slot, i.e. the pool is spread, not clustered."""
+    agent = await test_agent_factory()
+    senders = [await test_sender_factory() for _ in range(4)]
+    await _bind(async_db_session, test_workspace.id, "u-b4-slots")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-slots",
+                             agent.id, test_folder.id,
+                             sender_ids=[s.id for s in senders], name="B4-slots")
+    r = await async_client.post(f"/api/v1/campaigns/{c['id']}/start",
+                                headers=_auth_headers(valid_supabase_jwt, "u-b4-slots"))
+    assert r.status_code == 200, r.text
+
+    offsets = sorted((await _stagger_offsets(async_db_session, [s.id for s in senders])).values())
+    w = get_settings().send_stagger_window_seconds
+    n = len(offsets)
+    slot = w / n
+    slack = 10.0
+    for i, off in enumerate(offsets):
+        assert i * slot - slack <= off <= (i + 1) * slot + slack, (
+            f"offset #{i} = {off}s outside slot [{i * slot}, {(i + 1) * slot}]: {offsets}"
+        )
+
+
+async def test_resume_relays_the_stagger(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Test 6 — D-2: the stagger is re-laid on EVERY transition to running, so a
+    resume (where the whole pool is due again) desyncs afresh."""
+    agent = await test_agent_factory()
+    senders = [await test_sender_factory() for _ in range(4)]
+    sender_ids = [s.id for s in senders]
+    await _bind(async_db_session, test_workspace.id, "u-b4-resume")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-resume",
+                             agent.id, test_folder.id,
+                             sender_ids=sender_ids, name="B4-resume")
+    h = _auth_headers(valid_supabase_jwt, "u-b4-resume")
+    assert (await async_client.post(f"/api/v1/campaigns/{c['id']}/start", headers=h)).status_code == 200
+    first = await _stagger_offsets(async_db_session, sender_ids)
+
+    assert (await async_client.post(f"/api/v1/campaigns/{c['id']}/pause", headers=h)).status_code == 200
+    r = await async_client.post(f"/api/v1/campaigns/{c['id']}/resume", headers=h)
+    assert r.status_code == 200, r.text
+
+    second = await _stagger_offsets(async_db_session, sender_ids)
+    assert all(v is not None for v in second.values()), second
+    assert len(set(second.values())) == 4, second
+    w = get_settings().send_stagger_window_seconds
+    assert all(-10.0 <= v <= w for v in second.values()), second
+    assert any(second[k] != first[k] for k in second), (
+        "resume did not re-lay the stagger", first, second
+    )
+
+
+async def test_ineligible_attached_sender_gets_no_marker_and_no_slot(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Test 7 — an attached-but-ineligible sender (spam_limited) keeps NULL and
+    consumes no slot: the 3 remaining eligible senders still get a full split."""
+    agent = await test_agent_factory()
+    senders = [await test_sender_factory() for _ in range(4)]
+    blocked = senders[0]
+    eligible_ids = [s.id for s in senders[1:]]
+    await _bind(async_db_session, test_workspace.id, "u-b4-inelig")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-inelig",
+                             agent.id, test_folder.id,
+                             sender_ids=[s.id for s in senders], name="B4-inelig")
+    await async_db_session.execute(text(
+        "UPDATE senders SET restriction_status = 'spam_limited' WHERE id = :sid"
+    ), {"sid": str(blocked.id)})
+    await async_db_session.commit()
+
+    r = await async_client.post(f"/api/v1/campaigns/{c['id']}/start",
+                                headers=_auth_headers(valid_supabase_jwt, "u-b4-inelig"))
+    assert r.status_code == 200, r.text
+
+    all_offsets = await _stagger_offsets(async_db_session, [s.id for s in senders])
+    assert all_offsets[str(blocked.id)] is None, "ineligible sender was staggered"
+    eligible_offsets = sorted(all_offsets[str(sid)] for sid in eligible_ids)
+    assert all(v is not None for v in eligible_offsets), all_offsets
+    assert len(set(eligible_offsets)) == 3, eligible_offsets
+
+    # The split is over N=3 (the ineligible sender consumed no slot).
+    w = get_settings().send_stagger_window_seconds
+    slot = w / 3
+    slack = 10.0
+    for i, off in enumerate(eligible_offsets):
+        assert i * slot - slack <= off <= (i + 1) * slot + slack, (i, off, eligible_offsets)
+
+
+async def test_window_zero_disables_the_layout(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Test 8 — D-1 kill switch: W=0 writes nothing at all."""
+    agent = await test_agent_factory()
+    senders = [await test_sender_factory() for _ in range(3)]
+    await _bind(async_db_session, test_workspace.id, "u-b4-off")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-off",
+                             agent.id, test_folder.id,
+                             sender_ids=[s.id for s in senders], name="B4-off")
+    with _window_seconds(0):
+        r = await async_client.post(f"/api/v1/campaigns/{c['id']}/start",
+                                    headers=_auth_headers(valid_supabase_jwt, "u-b4-off"))
+        assert r.status_code == 200, r.text
+
+    offsets = await _stagger_offsets(async_db_session, [s.id for s in senders])
+    assert all(v is None for v in offsets.values()), offsets
+
+
+async def test_single_eligible_sender_is_a_noop(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """Test 9 — D-6: nothing to desync with N<2, and delaying a solo sender by up
+    to an hour would just look like a broken start."""
+    agent = await test_agent_factory()
+    sender = await test_sender_factory()
+    await _bind(async_db_session, test_workspace.id, "u-b4-solo")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-solo",
+                             agent.id, test_folder.id,
+                             sender_ids=[sender.id], name="B4-solo")
+    r = await async_client.post(f"/api/v1/campaigns/{c['id']}/start",
+                                headers=_auth_headers(valid_supabase_jwt, "u-b4-solo"))
+    assert r.status_code == 200, r.text
+
+    offsets = await _stagger_offsets(async_db_session, [sender.id])
+    assert offsets[str(sender.id)] is None, offsets
+
+
+async def test_stale_marker_cleared_when_sender_becomes_ineligible(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_agent_factory, test_folder, test_sender_factory,
+):
+    """A sender that carried a marker and has since gone ineligible must not keep
+    a stale future timestamp — otherwise it would stay blocked for new dialogs
+    after recovering."""
+    agent = await test_agent_factory()
+    senders = [await test_sender_factory() for _ in range(3)]
+    await _bind(async_db_session, test_workspace.id, "u-b4-stale")
+    c = await _make_campaign(async_client, valid_supabase_jwt, "u-b4-stale",
+                             agent.id, test_folder.id,
+                             sender_ids=[s.id for s in senders], name="B4-stale")
+    h = _auth_headers(valid_supabase_jwt, "u-b4-stale")
+    assert (await async_client.post(f"/api/v1/campaigns/{c['id']}/start", headers=h)).status_code == 200
+    first = await _stagger_offsets(async_db_session, [s.id for s in senders])
+    assert all(v is not None for v in first.values()), first
+
+    await async_db_session.execute(text(
+        "UPDATE senders SET restriction_status = 'spam_limited' WHERE id = :sid"
+    ), {"sid": str(senders[0].id)})
+    await async_db_session.commit()
+
+    assert (await async_client.post(f"/api/v1/campaigns/{c['id']}/pause", headers=h)).status_code == 200
+    assert (await async_client.post(f"/api/v1/campaigns/{c['id']}/resume", headers=h)).status_code == 200
+
+    after = await _stagger_offsets(async_db_session, [s.id for s in senders])
+    assert after[str(senders[0].id)] is None, ("stale marker survived", after)
