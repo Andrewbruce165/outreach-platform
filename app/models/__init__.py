@@ -119,6 +119,16 @@ class Sender(Base):
     # reconnect; a reconcile-loop TTL sweep lifts a stale flag so a sender is never
     # blocked forever. NOT a restriction — orthogonal to restriction_status/lifecycle.
     proxy_switch_pending_at = Column(DateTime(timezone=True), nullable=True)  # mig 062: proxy-switch coordination marker
+    # Migration 066 (B4 burst desync): per-sender "not before T" marker laid out by
+    # app/services/send_stagger.py on EVERY campaign transition to running, so the
+    # attached pool does not open its FIRST cold dialogs in the same tick (confirmed
+    # cluster signature, mass-ban campaign 24658b65). The send worker gates ONLY the
+    # NEW-DIALOG branch of its candidate SELECT on it — follow-ups to existing
+    # dialogs are never delayed. NOT a restriction: orthogonal to restriction_status/
+    # lifecycle_status/restricted_until, writes no sender_restriction_events row, and
+    # touches no rate limit or interval. Nullable, NO default= / server_default (the
+    # marker simply expires; nullable-no-default cannot create_all-drift).
+    send_stagger_until = Column(DateTime(timezone=True), nullable=True)  # mig 066 (B4): start/resume burst-desync marker
     # Migration 036 (quick-260629-b7j): per-checker CONSECUTIVE contacts-API trip
     # counter for the ESCALATING backoff. Each spam_limited trip increments it; the
     # cooldown is base * 2^(trip-1) capped at contact_check_max_backoff_seconds; a
