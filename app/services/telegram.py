@@ -16,6 +16,8 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.contacts import (
     ImportContactsRequest,
+    DeleteContactsRequest,
+    DeleteByPhonesRequest,
     GetContactsRequest,
     ResolveUsernameRequest,
 )
@@ -621,6 +623,30 @@ class TelegramService:
             "declared_username": row[2] if row else None,
         }
 
+    async def _sender_import_healthy(self, sender_id: str) -> bool:
+        """Whether a sender is healthy enough to spend a send-time ImportContacts (H3).
+
+        The import is the confirmed freeze vector; it must never be fired from a
+        VULNERABLE account. A sender is import-healthy only when it has a proxy
+        assigned (never the bare server IP) and carries no active restriction
+        (`restriction_status='none'`, i.e. not spam_limited/frozen). The gate BLOCKS
+        only on positive evidence of unhealth (a real row showing no proxy or a
+        restriction). A missing row is ambiguous — in prod resolve_contact always
+        runs for a live queue sender, so a missing row arises only in edge/test cases
+        and fails OPEN (nothing to block on).
+        """
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(
+                text("""
+                    SELECT (proxy IS NOT NULL) AS has_proxy, restriction_status
+                      FROM senders WHERE id = :sid
+                """),
+                {"sid": sender_id},
+            )).fetchone()
+        if not row:
+            return True  # no positive evidence of unhealth → fail open
+        return bool(row[0]) and row[1] == "none"
+
     async def _persist_resolved_handle(
         self, workspace_id: str, phone: str, username: str, telegram_id: Optional[int]
     ) -> None:
@@ -767,8 +793,24 @@ class TelegramService:
         # that ResolvePhone misses; we only spend a (risky) import when the checker
         # has already confirmed the number is registered. A 'not_registered' (or any
         # non-'registered') verdict → skip the import entirely (D-03).
-        if verdict.get("tg_status") == "registered":
+        #
+        # Kill-switch: SEND_TIME_IMPORT_ENABLED=False stops this call entirely — the
+        # freeze vector in the C&C mass-ban (both frozen accounts died on this exact
+        # ImportContactsRequest). Off = deliver only via cache + @username (tier-1/2).
+        if verdict.get("tg_status") == "registered" and settings.send_time_import_enabled:
+            # H3 health-gate: never spend the (freeze-prone) import from a vulnerable
+            # account — unproxied or under an active restriction. Skip → let the
+            # checker finalize; the send fails cleanly as unresolved rather than
+            # freezing a fragile sender on ImportContacts.
+            if not await self._sender_import_healthy(sender_id):
+                logger.info(
+                    f"Contact {phone}: tier-3 ImportContacts SKIPPED — sender "
+                    f"{sender_id} not import-healthy (no proxy or restricted)"
+                )
+                return {"is_registered": False}
             logger.info(f"Contact {phone}: tier-3 ImportContacts (registered, no live username)")
+            imported_user = None
+            import_completed = False
             try:
                 result = await client(ImportContactsRequest(
                     contacts=[InputPhoneContact(
@@ -778,17 +820,19 @@ class TelegramService:
                         last_name="",
                     )]
                 ))
-                # D-04: the SENDER KEEPS the imported contact (hot entity-cache for
-                # follow-ups) — NO DeleteContactsRequest here (unlike the checker).
+                # The import HAS completed (Telegram saved the phone as a contact) the
+                # moment the RPC returns, even when no user surfaced — mark BEFORE
+                # inspecting result.users so the finally cleans up in BOTH branches.
+                import_completed = True
                 if result and result.users:
-                    user = result.users[0]
+                    imported_user = result.users[0]
                     contact_info = {
                         "is_registered": True,
-                        "telegram_id": user.id,
-                        "access_hash": user.access_hash,
-                        "first_name": user.first_name,
-                        "last_name": user.last_name,
-                        "username": user.username,
+                        "telegram_id": imported_user.id,
+                        "access_hash": imported_user.access_hash,
+                        "first_name": imported_user.first_name,
+                        "last_name": imported_user.last_name,
+                        "username": imported_user.username,
                     }
                     await self._save_contact_cache(workspace_id, sender_id, phone, contact_info)
                     return contact_info
@@ -800,6 +844,23 @@ class TelegramService:
                 return {"is_registered": False, "error": "Invalid phone number"}
             # FloodWait / frozen / network errors propagate (do NOT mask) so the
             # queue worker records the real error and retries.
+            finally:
+                # Mandatory cleanup — mirror the checker's WR-07 contract. Reverses
+                # D-04: the sender no longer HOARDS the imported contact. Follow-ups
+                # rebuild InputPeerUser from the access_hash we cache in contacts_cache
+                # (tier-1), so keeping the Telegram-side saved contact bought nothing
+                # but a growing saved-contacts list — the shadow-ban accelerator that
+                # WR-07 exists to prevent. Clean BOTH branches (surfaced user vs empty
+                # import that still saved the phone). Cleanup failure is logged, never
+                # fatal, and never masks the real send error propagating above.
+                if import_completed:
+                    try:
+                        if imported_user is not None:
+                            await client(DeleteContactsRequest(id=[imported_user]))
+                        else:
+                            await client(DeleteByPhonesRequest(phones=[phone]))
+                    except Exception as exc:  # noqa: BLE001 — cleanup best-effort
+                        logger.warning(f"tier-3 import cleanup failed for {phone}: {exc}")
 
         # Verdict is 'not_registered' (or 'pending'/None with no captured username):
         # skip the import (D-03) and report not-registered WITHOUT caching False —

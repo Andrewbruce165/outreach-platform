@@ -19,6 +19,7 @@ from app.services.kb_ingest_worker import kb_ingest_worker  # Phase 16 — KB in
 from app.services.follow_up import follow_up_worker  # Phase 19 — no-reply follow-up + auto-finish
 from app.services.account_import_worker import account_import_worker  # Phase 21 — bulk account import
 from app.services.grade_progression import grade_progression_worker  # Phase 22 — grade auto-progression (D-14/D-17)
+from app.services.proxy_reclaim import proxy_reclaim_worker  # reclaim dead senders' proxy ports
 from app.routers import (
     account_import,  # Phase 21 — bulk Telegram account import
     agents,
@@ -76,11 +77,19 @@ async def lifespan(app: FastAPI):
     logger.info("Account import worker started")
     grade_progression_worker.start()  # Phase 22 — grade auto-progression (D-14/D-17)
     logger.info("Grade progression worker started")
+    # Reclaim any proxy ports still held by already-dead senders BEFORE the worker's
+    # first interval — an immediate sweep frees the historical backlog on deploy so
+    # freshly imported accounts get a proxy instead of connecting from the bare IP.
+    reclaimed = await proxy_reclaim_worker._tick()
+    logger.info(f"Proxy reclaim startup sweep: {reclaimed} port(s) freed")
+    proxy_reclaim_worker.start()
+    logger.info("Proxy reclaim worker started")
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await proxy_reclaim_worker.stop()  # reclaim dead senders' proxy ports
     await grade_progression_worker.stop()  # Phase 22 — grade auto-progression (D-14/D-17)
     await account_import_worker.stop()  # Phase 21 — bulk Telegram account import
     await follow_up_worker.stop()  # Phase 19 — no-reply follow-up + auto-finish

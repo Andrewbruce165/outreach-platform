@@ -258,13 +258,13 @@ async def test_import_gate_registered_only(
     assert not res_b.get("is_registered")
 
 
-async def test_lazy_import_no_delete_on_sender(
+async def test_lazy_import_cleans_up_on_sender(
     async_db_session, test_workspace, mock_telethon_client,
 ):
-    """SRLD-05 (D-04): when the sender imports a contact it KEEPS it — no
-    DeleteContactsRequest on the sender path (unlike the checker, which deletes).
-
-    RED today: no import tier exists, so the import-then-keep behavior is not built.
+    """Reverses SRLD-05/D-04 (C&C mass-ban remediation): the sender now CLEANS UP
+    after a send-time import, like the checker (WR-07). Follow-ups rebuild the peer
+    from the cached access_hash (tier-1), so hoarding the Telegram-side saved
+    contact only grew the shadow-ban-accelerating contacts list for no benefit.
     """
     from app.services.telegram import TelegramService
 
@@ -275,14 +275,16 @@ async def test_lazy_import_no_delete_on_sender(
     client = mock_telethon_client
     client.set_response("ImportContactsRequest", _imported(telegram_id=333))
 
+    # A random-UUID sender has no row → the H3 import-health gate fails open, so the
+    # import still fires here and the cleanup (WR-07 parity) is what we assert.
     await TelegramService().resolve_contact(
         client, str(test_workspace.id), str(_uuid4()), phone,
     )
     names = [c[0] for c in client.calls]
     assert "ImportContactsRequest" in names, "the import tier must fire for a registered contact"
-    assert "DeleteContactsRequest" not in names, (
-        "the SENDER keeps the imported contact (hot entity-cache for follow-ups) — "
-        f"no DeleteContacts (SRLD-05/D-04); calls={names}"
+    assert "DeleteContactsRequest" in names, (
+        "the sender now cleans up the imported contact (WR-07 parity); "
+        f"calls={names}"
     )
 
 
@@ -620,6 +622,9 @@ async def test_no_daily_message_cap_but_rate_limits_still_gate(
         phone="+79994440000", session_string="enc", role="sender",
         auth_status="ok", lifecycle_status="active",
         rate_per_min=4, rate_per_hour=20,
+        # H1 no-proxy-no-send guard skips a proxy-less sender; this test exercises
+        # the rate gate, so give it a proxy.
+        proxy={"type": "socks5", "host": "h", "port": 1080, "username": "u", "password": "p"},
     )
     async_db_session.add(sender)
     await async_db_session.commit()

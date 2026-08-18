@@ -38,6 +38,7 @@ from app.database import AsyncSessionLocal
 from app.services.rotation import get_or_assign_sender
 from app.services.recontact import protected_conversation_sql
 from app.services.template import render_template
+from app.services.ai_engine import ai_engine
 from app.utils.phone import contact_identity_key
 
 logger = logging.getLogger(__name__)
@@ -431,6 +432,17 @@ class CampaignEnqueueWorker:
                         campaign_id=str(c.id),
                         phone=identity,
                     )
+
+                    # H5: per-recipient visible paraphrase of the opener (meaning
+                    # preserved) so a campaign does not send N byte-identical openers —
+                    # the top clustering signal in the C&C mass-ban. Opt-in per campaign;
+                    # fail-open (returns the original on any LLM error) so enqueue never
+                    # stalls. Runs before the snapshot INSERT so the stored opener is the
+                    # variant actually sent.
+                    if getattr(c, "opener_paraphrase_enabled", False):
+                        rendered = await ai_engine.paraphrase_opener(
+                            db, c.workspace_id, rendered
+                        )
 
                     # 3. INSERT queue item.
                     # workspace_id from campaign (defence-in-depth Pitfall 8).

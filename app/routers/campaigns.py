@@ -481,6 +481,7 @@ async def _campaign_to_response(
         # Phase 24 D-13/D-19 + 260709-dbl: variation toggle + computed attachment
         # presence/count.
         variation_enabled=campaign.variation_enabled,
+        opener_paraphrase_enabled=campaign.opener_paraphrase_enabled,
         has_attachment=has_attachment,
         attachment_count=attachment_count,
         created_at=campaign.created_at,
@@ -603,6 +604,8 @@ async def create_campaign(
         recontact_min_age_days=payload.recontact_min_age_days,
         # Phase 24 D-13: invisible anti-spam text-variation toggle (default ON).
         variation_enabled=payload.variation_enabled,
+        # H5: LLM opener paraphrase toggle (opt-in, default OFF).
+        opener_paraphrase_enabled=payload.opener_paraphrase_enabled,
         # Phase 19 NORP-02/NORP-05: follow-up + auto-finish (D-08/D-12).
         follow_up_enabled=payload.follow_up_enabled,
         follow_up_interval_hours=payload.follow_up_interval_hours,
@@ -1151,6 +1154,8 @@ async def duplicate_campaign(
         recontact_min_age_days=src.recontact_min_age_days,
         # Phase 24 D-20: copy the variation flag so the duplicate is send-ready.
         variation_enabled=src.variation_enabled,
+        # H5: copy the opener-paraphrase flag for parity with the source.
+        opener_paraphrase_enabled=src.opener_paraphrase_enabled,
         # Phase 19 NORP-02/NORP-05: follow-up + auto-finish — copy for parity with src.
         follow_up_enabled=src.follow_up_enabled,
         follow_up_interval_hours=src.follow_up_interval_hours,
@@ -1375,6 +1380,42 @@ async def _recent_restriction_warnings(
     )]
 
 
+# Below this many lifetime warmup messages a sender is "cold" for cold outreach.
+# The C&C mass-ban batch had 0; healthy senders carried 1000-1800. 100 cleanly
+# separates a freshly-imported account from a warmed one.
+_WARMUP_COLD_MIN_MESSAGES = 100
+
+
+async def _warmup_stats(
+    db: AsyncSession, ctx: AuthCtx, sender_id: UUID
+) -> Optional[tuple[int, float, int]]:
+    """Return (lifetime warmup messages, account age in days, current_level) for a
+    sender, or None if it isn't in the workspace. Shared by the hard warmup gate
+    and the advisory warning."""
+    row = (await db.execute(text("""
+        SELECT COALESCE(SUM(ws.messages_sent), 0) AS w_msgs,
+               EXTRACT(EPOCH FROM (now() - s.created_at)) / 86400.0 AS age_days,
+               s.current_level
+          FROM senders s
+          LEFT JOIN warmup_sessions ws
+            ON (ws.sender_a_id = s.id OR ws.sender_b_id = s.id)
+         WHERE s.id = :sid AND s.workspace_id = :wid
+         GROUP BY s.id, s.created_at, s.current_level
+    """), {"sid": str(sender_id), "wid": str(ctx.workspace_id)})).first()
+    if row is None:
+        return None
+    return int(row[0]), float(row[1] or 0.0), row[2]
+
+
+def _warmup_cold_message(w_msgs: int, age_days: float, level: int) -> str:
+    return (
+        f"Account is weakly warmed ({w_msgs} warmup messages, ~{age_days:.1f} "
+        f"days old, level {level}). Cold outreach from a freshly-imported, "
+        "un-warmed account is the pattern that mass-banned the C&C batch — "
+        "warm it up before attaching to a cold campaign."
+    )
+
+
 @router.post("/{campaign_id}/senders", response_model=CampaignResponse)
 async def attach_sender(
     campaign_id: UUID,
@@ -1450,6 +1491,28 @@ async def attach_sender(
                     "conflicts": conflicts},
         )
 
+    # Hard warmup gate (C&C mass-ban remediation): block attaching a weakly-warmed
+    # sender to a campaign unless the operator explicitly forces it. Cold outreach
+    # from a freshly-imported, un-warmed account is a confirmed mass-ban vector.
+    # Placed AFTER the lock check (a real lock conflict still takes precedence);
+    # rolls back the just-inserted row on block so nothing is persisted. force=true
+    # overrides (surfaced + audited below).
+    warmup_stats = await _warmup_stats(db, ctx, payload.sender_id)
+    sender_is_cold = warmup_stats is not None and warmup_stats[0] < _WARMUP_COLD_MIN_MESSAGES
+    if sender_is_cold and not payload.force:
+        await db.rollback()
+        w_msgs, age_days, level = warmup_stats
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "WARMUP_COLD_BLOCKED",
+                "message": _warmup_cold_message(w_msgs, age_days, level)
+                + " Pass force=true to override.",
+                "sender_id": str(payload.sender_id),
+                "warmup_messages": w_msgs,
+            },
+        )
+
     # D-08: back-fill the new sender from overloaded ones only on a running pool.
     if c.status == "running":
         await rebalance_on_attach(c.id, payload.sender_id, db)
@@ -1463,6 +1526,17 @@ async def attach_sender(
 
     # PFH-01/PFH-02: advisory (non-blocking) warnings on the successful attach.
     warnings = await _recent_restriction_warnings(db, ctx, payload.sender_id)
+    if sender_is_cold:  # reached only with force=true — surface + audit the override
+        w_msgs, age_days, level = warmup_stats
+        logger.warning(
+            f"[campaigns] WARMUP_COLD override: force-attached weakly-warmed "
+            f"sender={payload.sender_id} ({w_msgs} warmup msgs) to campaign={campaign_id}"
+        )
+        warnings.append(SenderAttachWarning(
+            code="WARMUP_COLD",
+            sender_id=payload.sender_id,
+            message=_warmup_cold_message(w_msgs, age_days, level),
+        ))
     if sender_is_checker:  # reached only with force=true
         warnings.append(SenderAttachWarning(
             code="CHECKER_FORCE_ATTACHED",

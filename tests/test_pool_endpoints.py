@@ -22,6 +22,20 @@ from sqlalchemy import text
 pytestmark = pytest.mark.asyncio
 
 
+async def _warm_for_attach(db, ws_id, sender_id, messages=150):
+    """Seed warmup so the sender clears the hard WARMUP_COLD attach gate (>=100 msgs)."""
+    from sqlalchemy import text as _t
+    await db.execute(_t("""
+        INSERT INTO warmup_sessions
+            (workspace_id, sender_a_id, sender_b_id, topic, status,
+             messages_sent, target_messages)
+        VALUES (:wid, :sid, :sid, 'warm', 'done', :msgs, :msgs)
+    """), {"wid": str(ws_id), "sid": str(sender_id), "msgs": messages})
+    await db.commit()
+
+
+
+
 def _auth_headers(jwt_factory, sub: str = "pool-user") -> dict:
     return {"Authorization": f"Bearer {jwt_factory(sub=sub)}"}
 
@@ -62,6 +76,7 @@ async def test_attach_adds_sender(
     await _bind(async_db_session, test_workspace.id, "pool-add")
     camp = await test_campaign_factory(status="draft")
     sender = await test_sender_factory()
+    await _warm_for_attach(async_db_session, test_workspace.id, sender.id)
 
     r = await async_client.post(
         f"/api/v1/campaigns/{camp['id']}/senders",

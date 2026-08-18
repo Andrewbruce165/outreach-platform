@@ -31,7 +31,7 @@ from typing import List, Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -622,6 +622,11 @@ async def create_sender(
             .where(
                 ProxyPool.workspace_id == ctx.workspace_id,
                 ProxyPool.assigned_to_sender_id.is_(None),
+                # Skip ports quarantined after reclaim from a dead sender (H4).
+                or_(
+                    ProxyPool.quarantined_until.is_(None),
+                    ProxyPool.quarantined_until <= func.now(),
+                ),
             )
             .limit(1)
         )

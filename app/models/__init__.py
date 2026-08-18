@@ -564,6 +564,9 @@ class ProxyPool(Base):
     assigned_to_sender_id = Column(UUID(as_uuid=True),
                                    ForeignKey("senders.id", ondelete="SET NULL"),
                                    nullable=True)
+    # Cooldown after being reclaimed from a dead (banned/session_expired) sender —
+    # a burned static IP is not reissued to a live sender until this passes (mig 064).
+    quarantined_until     = Column(DateTime(timezone=True), nullable=True)
     created_at            = Column(DateTime(timezone=True), server_default=func.now())
 
     sender = relationship("Sender")
@@ -852,6 +855,9 @@ class Campaign(Base):
     # server_default="true" duplicates the migration-054 DB default for the
     # create_all rebuild path. API enforces the type (bool); no DB CHECK.
     variation_enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # H5 (C&C mass-ban remediation): LLM meaning-preserving paraphrase of the opener at
+    # enqueue so recipients get visibly distinct text (mig 065). Opt-in, default off.
+    opener_paraphrase_enabled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     # 029: auto-pause visibility. NULL = manual pause / never paused; a machine
     # code ('no_senders_attached' | 'senders_unavailable') = auto-paused by the
     # enqueue worker because the campaign could no longer send. Cleared on start/resume.

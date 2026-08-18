@@ -801,6 +801,11 @@ class SenderAttachWarning(BaseModel):
       CHECKER_FORCE_ATTACHED  — a role='checker' account was force-attached as a
                                 campaign sender (force=true); it will leave the
                                 contact-check pool once it sends.
+      WARMUP_COLD             — surfaced only when a weakly-warmed sender (< 100
+                                lifetime warmup messages) is FORCE-attached
+                                (force=true). Without force the attach is hard-blocked
+                                with 409 WARMUP_COLD_BLOCKED (cold outreach from an
+                                un-warmed account is the C&C mass-ban pattern).
 
     Returned ONLY by attach_sender; every other endpoint leaves attach_warnings
     defaulting to [] (backward-compatible).
@@ -860,6 +865,8 @@ class CampaignCreate(BaseModel):
     auto_finish_hours: int = Field(default=72, ge=24, le=720)
     # ── Phase 24 (D-13): invisible anti-spam text-variation toggle, default ON. ──
     variation_enabled: bool = True
+    # ── H5 (C&C mass-ban remediation): LLM opener paraphrase, opt-in default OFF. ──
+    opener_paraphrase_enabled: bool = False
     # ── Phase 11 campaign fields (D-04/D-12/D-14). ──
     # dialogue_flow: ordered conversation stages (max 7 — T2 size guard).
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
@@ -931,6 +938,8 @@ class CampaignUpdate(BaseModel):
     auto_finish_hours: Optional[int] = Field(default=None, ge=24, le=720)
     # ── Phase 24 (D-13): variation toggle — partial PATCH. ──
     variation_enabled: Optional[bool] = None
+    # ── H5: LLM opener paraphrase toggle — partial PATCH. ──
+    opener_paraphrase_enabled: Optional[bool] = None
     # ── Phase 11 campaign fields (D-04/D-12/D-14) — partial PATCH. ──
     dialogue_flow: Optional[conlist(DialogueStage, max_length=7)] = None
     arguments_facts: Optional[str] = None
@@ -997,6 +1006,8 @@ class CampaignResponse(BaseModel):
     # (EXISTS on campaign_attachments), NOT a campaigns column — keeps the blob off
     # every SELECT campaigns (Pitfall 7).
     variation_enabled: bool = True
+    # H5: LLM opener paraphrase toggle (real column).
+    opener_paraphrase_enabled: bool = False
     has_attachment: bool = False
     # ── 260709-dbl: number of first-message attachments (album). has_attachment
     # stays = attachment_count > 0. Computed by the router (COUNT on

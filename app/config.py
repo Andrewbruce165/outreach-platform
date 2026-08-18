@@ -186,6 +186,25 @@ class Settings(BaseSettings):
         description="How long a degraded checker rests before a fresh control-probe "
                     "is attempted (D-04 checker recovery).",
     )
+    proxy_quarantine_days: int = Field(
+        default=7,
+        validation_alias="PROXY_QUARANTINE_DAYS",
+        description="Cooldown (days) a proxy port rests after being reclaimed from a "
+                    "dead sender before it can be reissued. A static residential IP "
+                    "burned by a banned account keeps that reputation, so live senders "
+                    "must not inherit it immediately (C&C mass-ban remediation).",
+    )
+    send_time_import_enabled: bool = Field(
+        default=True,
+        validation_alias="SEND_TIME_IMPORT_ENABLED",
+        description="Kill-switch for the send-time tier-3 ImportContacts fallback in "
+                    "TelegramService.resolve_contact. When False, a sender never runs "
+                    "ImportContacts at send time — it relies on cache + captured/declared "
+                    "@username only (tier-1/2). Set False to fully stop the import-driven "
+                    "freeze vector at the cost of dropping delivery to registered-but-"
+                    "privacy-hidden numbers with no public username (the C&C mass-ban "
+                    "froze accounts on this exact call).",
+    )
     contact_check_daily_cap: int = Field(
         default=400,
         validation_alias="CONTACT_CHECK_DAILY_CAP",

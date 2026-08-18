@@ -40,7 +40,7 @@ import zipfile
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from telethon.crypto import AuthKey
 from telethon.errors import UserDeactivatedBanError
@@ -485,6 +485,11 @@ async def resolve_import_proxy(db, workspace_id, json_proxy: Any = None):
             .where(
                 ProxyPool.workspace_id == workspace_id,
                 ProxyPool.assigned_to_sender_id.is_(None),
+                # Skip ports quarantined after reclaim from a dead sender (H4).
+                or_(
+                    ProxyPool.quarantined_until.is_(None),
+                    ProxyPool.quarantined_until <= func.now(),
+                ),
             )
             .limit(1)
         )

@@ -69,6 +69,19 @@ async def _insert_restriction_event(
     await db.commit()
 
 
+async def _warm_sender(db, ws_id, sender_id, messages=150):
+    """Seed a warmup_sessions row so the sender clears the WARMUP_COLD threshold
+    (>= 100 lifetime warmup messages) — keeps these tests focused on the specific
+    warning under test without the advisory cold-account warning firing."""
+    await db.execute(text("""
+        INSERT INTO warmup_sessions
+            (workspace_id, sender_a_id, sender_b_id, topic, status,
+             messages_sent, target_messages)
+        VALUES (:wid, :sid, :sid, 'warm', 'done', :msgs, :msgs)
+    """), {"wid": str(ws_id), "sid": str(sender_id), "msgs": messages})
+    await db.commit()
+
+
 # ─── PFH-01: clean attach ─────────────────────────────────────────────────────
 
 async def test_attach_clean_sender_no_warnings(
@@ -79,6 +92,7 @@ async def test_attach_clean_sender_no_warnings(
     await _bind(async_db_session, test_workspace.id, "pf-clean")
     camp = await test_campaign_factory(status="draft")
     sender = await test_sender_factory()
+    await _warm_sender(async_db_session, test_workspace.id, sender.id)
 
     r = await async_client.post(
         f"/api/v1/campaigns/{camp['id']}/senders",
@@ -101,6 +115,7 @@ async def test_attach_recent_restriction_warns(
     await _bind(async_db_session, test_workspace.id, "pf-recent")
     camp = await test_campaign_factory(status="draft")
     sender = await test_sender_factory()
+    await _warm_sender(async_db_session, test_workspace.id, sender.id)
     await _insert_restriction_event(
         async_db_session, test_workspace.id, sender.id,
         event_type="spam_limited", age_days=0,
@@ -132,6 +147,7 @@ async def test_attach_old_restriction_no_warn(
     await _bind(async_db_session, test_workspace.id, "pf-old")
     camp = await test_campaign_factory(status="draft")
     sender = await test_sender_factory()
+    await _warm_sender(async_db_session, test_workspace.id, sender.id)
     await _insert_restriction_event(
         async_db_session, test_workspace.id, sender.id,
         event_type="spam_limited", age_days=10,
@@ -156,6 +172,7 @@ async def test_attach_cleared_event_no_warn(
     await _bind(async_db_session, test_workspace.id, "pf-cleared")
     camp = await test_campaign_factory(status="draft")
     sender = await test_sender_factory()
+    await _warm_sender(async_db_session, test_workspace.id, sender.id)
     await _insert_restriction_event(
         async_db_session, test_workspace.id, sender.id,
         event_type="cleared", source="reconcile", age_days=0,
@@ -276,3 +293,67 @@ async def test_flip_to_checker_not_in_running_campaign_ok(
     )
     assert r.status_code == 200, r.text
     assert await _db_role(async_db_session, sender.id) == "checker"
+
+
+# ─── WARMUP_COLD advisory (C&C mass-ban remediation) ──────────────────────────
+
+async def test_attach_cold_sender_hard_blocked(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory,
+):
+    """A freshly-created sender with no warmup → 409 WARMUP_COLD_BLOCKED and NO
+    campaign_senders row (hard gate, not advisory)."""
+    await _bind(async_db_session, test_workspace.id, "pf-cold")
+    camp = await test_campaign_factory(status="draft")
+    sender = await test_sender_factory()  # 0 warmup messages
+
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/senders",
+        json={"sender_id": str(sender.id)},
+        headers=_auth_headers(valid_supabase_jwt, "pf-cold"),
+    )
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    code = detail["code"] if isinstance(detail, dict) else detail
+    assert code == "WARMUP_COLD_BLOCKED"
+    assert await _count_campaign_senders(async_db_session, camp["id"], sender.id) == 0
+
+
+async def test_attach_cold_sender_force_override(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory,
+):
+    """force=true overrides the warmup gate → 200, row created, WARMUP_COLD surfaced."""
+    await _bind(async_db_session, test_workspace.id, "pf-cold-force")
+    camp = await test_campaign_factory(status="draft")
+    sender = await test_sender_factory()  # 0 warmup messages
+
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/senders",
+        json={"sender_id": str(sender.id), "force": True},
+        headers=_auth_headers(valid_supabase_jwt, "pf-cold-force"),
+    )
+    assert r.status_code == 200, r.text
+    codes = [w["code"] for w in r.json()["attach_warnings"]]
+    assert "WARMUP_COLD" in codes, f"forced cold attach must surface warning; codes={codes}"
+    assert await _count_campaign_senders(async_db_session, camp["id"], sender.id) == 1
+
+
+async def test_attach_warm_sender_no_warmup_warning(
+    async_client, valid_supabase_jwt, async_db_session, test_workspace,
+    test_campaign_factory, test_sender_factory,
+):
+    """A sender past the warmup threshold → no WARMUP_COLD warning."""
+    await _bind(async_db_session, test_workspace.id, "pf-warm")
+    camp = await test_campaign_factory(status="draft")
+    sender = await test_sender_factory()
+    await _warm_sender(async_db_session, test_workspace.id, sender.id, messages=150)
+
+    r = await async_client.post(
+        f"/api/v1/campaigns/{camp['id']}/senders",
+        json={"sender_id": str(sender.id)},
+        headers=_auth_headers(valid_supabase_jwt, "pf-warm"),
+    )
+    assert r.status_code == 200, r.text
+    codes = [w["code"] for w in r.json()["attach_warnings"]]
+    assert "WARMUP_COLD" not in codes, f"warm sender must not warn; codes={codes}"

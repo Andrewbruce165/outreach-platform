@@ -1939,6 +1939,73 @@ class AIEngine:
             )
             return None
 
+    async def paraphrase_opener(
+        self,
+        session: AsyncSession,
+        workspace_id,
+        text: str,
+    ) -> str:
+        """Rephrase a campaign opener into a meaning-identical variant (H5).
+
+        594 byte-identical openers were a top clustering signal in the C&C mass-ban;
+        invisible zero-width variation (Phase 24) leaves the VISIBLE text identical.
+        This produces a per-recipient visible variant while a STRICT prompt preserves
+        the exact meaning, facts, names, offer, call-to-action, language and tone —
+        only wording and sentence structure change.
+
+        Fail-open: any empty/failed generation returns the ORIGINAL text unchanged so
+        enqueue is never blocked and a contact never loses its opener. Uses the
+        workspace's resolved provider/model (platform default when unconfigured).
+        """
+        original = text or ""
+        if not original.strip():
+            return original
+        try:
+            if workspace_id:
+                llm_cfg = await resolve_llm_config(session, workspace_id)
+            else:
+                llm_cfg = platform_fallback_config(settings)
+                llm_cfg.key_source = "platform"
+
+            system_prompt = (
+                "You rewrite cold-outreach opening messages to reduce anti-spam "
+                "clustering. Rewrite the message so the WORDING and sentence structure "
+                "differ from the original, while keeping the MEANING exactly the same. "
+                "Hard rules: preserve every fact, name, company, number, offer and "
+                "call-to-action; keep the SAME language as the input; keep the same "
+                "register and tone; keep roughly the same length; do NOT add, remove "
+                "or invent information; do NOT add greetings, signatures, notes or "
+                "quotes that were not there. Output ONLY the rewritten message text — "
+                "no preamble, no explanation, no surrounding quotes."
+            )
+            messages = [{"role": "user", "content": original}]
+
+            provider = get_provider(llm_cfg)
+            if isinstance(provider, OpenAIProvider) and llm_cfg.key_source != "byok":
+                provider.client = client
+
+            # Small budget + minimal reasoning: a paraphrase is short and cheap; some
+            # temperature so repeated calls diverge in wording.
+            _res = await provider.complete(
+                system=system_prompt,
+                messages=messages,
+                tools=None,
+                max_tokens=llm_cfg.max_tokens or 1000,
+                temperature=llm_cfg.temperature if llm_cfg.temperature is not None else 0.8,
+                reasoning_effort=llm_cfg.reasoning_effort or "minimal",
+            )
+            out = (_res.text or "").strip() if _res else ""
+            # Strip a stray wrapping quote pair the model may add.
+            if len(out) >= 2 and out[0] == out[-1] and out[0] in "\"'«":
+                out = out[1:-1].strip()
+            if not out:
+                logger.warning("paraphrase_opener: empty result — using original opener")
+                return original
+            return out
+        except Exception as e:
+            logger.warning(f"paraphrase_opener failed ({type(e).__name__}) — using original opener")
+            return original
+
     async def transcribe_audio(self, audio_path: str) -> Optional[str]:
         """
         Транскрибировать аудио файл в текст через OpenAI Whisper API

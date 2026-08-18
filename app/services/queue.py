@@ -662,7 +662,7 @@ class QueueWorker:
                 SELECT rate_per_min, rate_per_hour,
                        lifecycle_status, auth_status,
                        restriction_status, restricted_until,
-                       proxy_switch_pending_at
+                       proxy_switch_pending_at, proxy
                 FROM senders WHERE id = :sid
             """),
             {"sid": str(sender_id)},
@@ -694,6 +694,18 @@ class QueueWorker:
             logger.debug(
                 f"Sender {sender_id}: not eligible "
                 f"(lifecycle={sender_row.lifecycle_status} auth={sender_row.auth_status})"
+            )
+            return False
+
+        # Runtime invariant "no proxy → no send" (C&C mass-ban remediation): NEVER
+        # connect a live session from the bare server IP. B1 keeps active senders
+        # proxied and parks proxy-less imports, but this hard gate closes the window
+        # where a sender somehow reaches send time without a proxy (the exact hole
+        # that clustered the vendor batch on one datacenter IP and killed sessions).
+        if not sender_row.proxy:
+            logger.warning(
+                f"Sender {sender_id}: no proxy assigned — skipping tick "
+                "(no-proxy-no-send guard)"
             )
             return False
 
