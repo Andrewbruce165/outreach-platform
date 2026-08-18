@@ -449,3 +449,145 @@ async def test_stale_marker_cleared_when_sender_becomes_ineligible(
 
     after = await _stagger_offsets(async_db_session, [s.id for s in senders])
     assert after[str(senders[0].id)] is None, ("stale marker survived", after)
+
+
+# ── Task 3: new-dialog-only gate in the send worker ──────────────────────────
+
+
+async def _drive_worker(async_db_session, *, campaign, sender_id):
+    """Run one `_process_next_for_sender` pass with the pacing + budget knobs
+    neutralised, so the ONLY variable is the B4 stagger gate."""
+    worker = QueueWorker()
+    captured, cm_rate, cm_pause, cm_send = _run_worker_capturing_picked(worker)
+    window_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    with cm_rate, cm_pause, cm_send, _pin_pacing(window_start_utc=window_start, frac=1.0):
+        await worker._process_next_for_sender(sender_id)
+    return captured["picked"]
+
+
+async def _cold_campaign(test_running_campaign_factory, async_db_session):
+    """A running campaign with a 24/7 working window and a high account budget, so
+    neither the working-window post-filter nor the grade cap can bind."""
+    camp, senders = await test_running_campaign_factory(
+        sender_count=1, work_hour_start=0, work_hour_end=24, work_days_mask=127,
+    )
+    await _set_budget(async_db_session, campaign_id=camp["id"], cap=100)
+    return camp, senders[0]
+
+
+async def test_new_dialog_picked_when_no_stagger_marker(
+    async_db_session, test_running_campaign_factory
+):
+    """Test 10 (baseline) — with send_stagger_until NULL the pending new-dialog
+    item IS picked. Guards the gate tests from passing for the wrong reason."""
+    camp, sender = await _cold_campaign(test_running_campaign_factory, async_db_session)
+    qid = await _insert_pending_item(
+        async_db_session, workspace_id=camp["workspace_id"], sender_id=sender.id,
+        campaign_id=camp["id"], recipient_phone="+79001110001",
+    )
+
+    picked = await _drive_worker(async_db_session, campaign=camp, sender_id=sender.id)
+    assert picked == [qid], picked
+
+
+async def test_new_dialog_blocked_while_stagger_unexpired(
+    async_db_session, test_running_campaign_factory
+):
+    """Test 11 (the gate) — an unexpired marker keeps the sender out of NEW
+    dialogs; the item stays pending for a later tick."""
+    camp, sender = await _cold_campaign(test_running_campaign_factory, async_db_session)
+    qid = await _insert_pending_item(
+        async_db_session, workspace_id=camp["workspace_id"], sender_id=sender.id,
+        campaign_id=camp["id"], recipient_phone="+79001110002",
+    )
+    await _set_stagger(async_db_session, sender.id, "NOW() + INTERVAL '30 minutes'")
+
+    picked = await _drive_worker(async_db_session, campaign=camp, sender_id=sender.id)
+    assert picked == [], picked
+    assert await _item_status(async_db_session, qid) == "pending"
+
+
+async def test_follow_up_bypasses_the_stagger(
+    async_db_session, test_running_campaign_factory
+):
+    """Test 12 (load-bearing, D-5) — a follow-up to an EXISTING dialog is picked
+    even while the sender's stagger marker is in the future. The stagger must
+    never delay a live conversation."""
+    camp, sender = await _cold_campaign(test_running_campaign_factory, async_db_session)
+    phone = "+79001110003"
+    await _seed_sent_dialog(
+        async_db_session, workspace_id=camp["workspace_id"], sender_id=sender.id,
+        campaign_id=camp["id"], recipient_phone=phone,
+    )
+    qid = await _insert_pending_item(
+        async_db_session, workspace_id=camp["workspace_id"], sender_id=sender.id,
+        campaign_id=camp["id"], recipient_phone=phone,
+    )
+    await _set_stagger(async_db_session, sender.id, "NOW() + INTERVAL '30 minutes'")
+
+    picked = await _drive_worker(async_db_session, campaign=camp, sender_id=sender.id)
+    assert picked == [qid], picked
+
+
+async def test_new_dialog_picked_after_stagger_expired(
+    async_db_session, test_running_campaign_factory
+):
+    """Test 13 — the marker expires by itself; no sweeper needed."""
+    camp, sender = await _cold_campaign(test_running_campaign_factory, async_db_session)
+    qid = await _insert_pending_item(
+        async_db_session, workspace_id=camp["workspace_id"], sender_id=sender.id,
+        campaign_id=camp["id"], recipient_phone="+79001110004",
+    )
+    await _set_stagger(async_db_session, sender.id, "NOW() - INTERVAL '1 minute'")
+
+    picked = await _drive_worker(async_db_session, campaign=camp, sender_id=sender.id)
+    assert picked == [qid], picked
+
+
+async def test_kill_switch_bypasses_the_gate(
+    async_db_session, test_running_campaign_factory
+):
+    """Test 14 — D-1: with the window knob at 0 the `:stagger_on` bind turns the
+    predicate off, so even a stale unexpired marker cannot block anything
+    (instant rollback via env, no code release)."""
+    camp, sender = await _cold_campaign(test_running_campaign_factory, async_db_session)
+    qid = await _insert_pending_item(
+        async_db_session, workspace_id=camp["workspace_id"], sender_id=sender.id,
+        campaign_id=camp["id"], recipient_phone="+79001110005",
+    )
+    await _set_stagger(async_db_session, sender.id, "NOW() + INTERVAL '30 minutes'")
+
+    with _window_seconds(0):
+        picked = await _drive_worker(async_db_session, campaign=camp, sender_id=sender.id)
+    assert picked == [qid], picked
+
+
+async def test_protected_send_pacing_untouched_and_gate_scope_is_new_dialog_only():
+    """Test 15 (PROTECTED regression) — B4 is purely additive.
+
+    * the empirically-tuned constants keep their values;
+    * the base-interval computation still lives in `_check_rate_limits`;
+    * `send_stagger_until` appears ONLY in `_process_next_for_sender` — putting it
+      in `_tick` or `_check_rate_limits` would skip the sender's WHOLE tick and
+      starve follow-ups (D-5).
+    """
+    assert (MIN_SEND_INTERVAL, MAX_SEND_INTERVAL) == (20, 55)
+    assert SEND_INTERVAL_FATIGUE == 0.5
+    assert MAX_NEW_CONTACTS_PER_HOUR == 15
+    assert (PACE_JITTER_LOW, PACE_JITTER_HIGH) == (0.75, 1.25)
+
+    # The 4/min + 20/hour green corridor lives on the sender row (Phase 2 D-13).
+    assert Sender.__table__.c.rate_per_min.server_default.arg == "4"
+    assert Sender.__table__.c.rate_per_hour.server_default.arg == "20"
+
+    rate_src = inspect.getsource(QueueWorker._check_rate_limits)
+    assert "random.uniform(MIN_SEND_INTERVAL, MAX_SEND_INTERVAL)" in rate_src
+    assert "SEND_INTERVAL_FATIGUE" in rate_src
+    assert "send_stagger_until" not in rate_src
+
+    tick_src = inspect.getsource(QueueWorker._tick)
+    assert "send_stagger_until" not in tick_src
+
+    pick_src = inspect.getsource(QueueWorker._process_next_for_sender)
+    assert "send_stagger_until" in pick_src
+    assert ":stagger_on" in pick_src

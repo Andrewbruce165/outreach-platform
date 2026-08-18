@@ -576,6 +576,16 @@ class QueueWorker:
                            SELECT because _check_rate_limits skips its whole tick) — and only if under BOTH the Phase 22
                            SENDER-WIDE trailing-24h account-budget cap (D-01/D-03/D-06) … */
                         (s.restriction_status <> 'spam_limited'
+                         /* B4 (mig 066): start/resume burst desync. Skip this sender for NEW
+                            dialogs until its staggered first-send time arrives, so a pool that
+                            all becomes due in the same tick on campaign start/resume does not
+                            open cold dialogs within seconds of each other. Follow-ups (the
+                            EXISTS branch above) bypass this exactly as they bypass cap+pace.
+                            :stagger_on = false (config knob 0) disables the gate entirely.
+                            Base interval 20-55s / fatigue / limits are NOT touched. */
+                         AND (NOT CAST(:stagger_on AS BOOLEAN)
+                              OR s.send_stagger_until IS NULL
+                              OR s.send_stagger_until <= NOW())
                          AND ((SELECT COUNT(DISTINCT opened.recipient_phone)
                            FROM message_queue opened
                           WHERE opened.sender_id = mq.sender_id
@@ -597,6 +607,8 @@ class QueueWorker:
                     "window_start_utc": window_start_utc,
                     "expected_now": expected_now,
                     "account_budget": account_budget,
+                    # B4 kill switch (D-1): window knob 0 → the stagger predicate is a no-op.
+                    "stagger_on": get_settings().send_stagger_window_seconds > 0,
                 }
             )
 
